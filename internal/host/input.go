@@ -17,7 +17,7 @@ const (
 // keyTracker classifies stdin as it streams through. It is a byte-level state machine so escape
 // sequences split across reads are handled.
 type keyTracker struct {
-	esc    []byte // an escape sequence in progress
+	esc     []byte // an escape sequence in progress
 	inPaste bool   // inside a bracketed paste (ESC[200~ … ESC[201~)
 }
 

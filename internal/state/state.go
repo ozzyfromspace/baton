@@ -61,6 +61,8 @@ type State struct {
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
 	CheckpointOwed bool `json:"checkpoint_owed,omitempty"`
+	// Run is what the hooks observe about the live session.
+	Run Runtime `json:"run"`
 }
 
 // New is the state of a project with no plan attached.
@@ -70,17 +72,22 @@ func New() State {
 
 // Attach starts a fresh run of p: the first phase becomes active.
 func Attach(p plan.Plan, now time.Time, head string) State {
-	return attachKeeping(nil, p, now, head)
+	return attachKeeping(nil, nil, p, now, head)
 }
 
 // Reattach is Attach for a project that may already have an owner: ownership survives a new plan.
 func Reattach(prev State, p plan.Plan, now time.Time, head string) State {
-	return attachKeeping(prev.Owner, p, now, head)
+	run := prev.Run
+	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
+	return attachKeeping(prev.Owner, &run, p, now, head)
 }
 
-func attachKeeping(owner *Owner, p plan.Plan, now time.Time, head string) State {
+func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, head string) State {
 	st := New()
 	st.Owner = owner
+	if prev != nil {
+		st.Run = *prev
+	}
 	st.Mode = ModeRunning
 	for _, ph := range p.Phases {
 		st.Phases[ph.ID] = &PhaseState{Status: PhasePending}

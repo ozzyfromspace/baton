@@ -33,14 +33,14 @@ func TestMain(m *testing.M) {
 
 // rig runs host.Run against fakeclaude with pipes standing in for the user's terminal.
 type rig struct {
-	t            *testing.T
-	out          string // fakeclaude's record directory
-	stdinW       *os.File
-	screen       *strings.Builder
-	screenMu     sync.Mutex
-	done         chan struct{}
-	code         int
-	err          error
+	t        *testing.T
+	out      string // fakeclaude's record directory
+	stdinW   *os.File
+	screen   *strings.Builder
+	screenMu sync.Mutex
+	done     chan struct{}
+	code     int
+	err      error
 }
 
 func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {

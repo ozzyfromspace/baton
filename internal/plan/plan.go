@@ -29,11 +29,11 @@ type Phase struct {
 
 // Plan is the content of .baton/plan.json.
 type Plan struct {
-	Version  int     `json:"version"`
-	Title    string  `json:"title"`
-	File     string  `json:"plan_file"`
-	SHA256   string  `json:"plan_sha256"`
-	Phases   []Phase `json:"phases"`
+	Version int     `json:"version"`
+	Title   string  `json:"title"`
+	File    string  `json:"plan_file"`
+	SHA256  string  `json:"plan_sha256"`
+	Phases  []Phase `json:"phases"`
 	// RulesAnchor optionally starts a "standing rules" section that is repeated in every brief.
 	RulesAnchor string `json:"rules_anchor,omitempty"`
 	// EndAnchor optionally ends the last phase's section (e.g. "## Verification").
