@@ -107,8 +107,3 @@ func runHook(args []string, io IO) (code int) {
 // hookHandlers maps event names to handlers; populated as the boundary loop is built.
 var hookHandlers = map[string]hooks.Handler{}
 
-// runHost starts the PTY host. Implemented in P4.
-func runHost(args []string, io IO) int {
-	fmt.Fprintln(io.Err, "baton: hosting claude is not implemented yet")
-	return 1
-}
