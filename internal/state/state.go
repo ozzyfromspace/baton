@@ -51,6 +51,7 @@ type Wait struct {
 // State is the content of .baton/state.json.
 type State struct {
 	Version int                    `json:"version"`
+	Owner   *Owner                 `json:"owner,omitempty"`
 	Mode    string                 `json:"mode"`
 	Current string                 `json:"current,omitempty"`
 	Phases  map[string]*PhaseState `json:"phases"`
@@ -69,7 +70,17 @@ func New() State {
 
 // Attach starts a fresh run of p: the first phase becomes active.
 func Attach(p plan.Plan, now time.Time, head string) State {
+	return attachKeeping(nil, p, now, head)
+}
+
+// Reattach is Attach for a project that may already have an owner: ownership survives a new plan.
+func Reattach(prev State, p plan.Plan, now time.Time, head string) State {
+	return attachKeeping(prev.Owner, p, now, head)
+}
+
+func attachKeeping(owner *Owner, p plan.Plan, now time.Time, head string) State {
 	st := New()
+	st.Owner = owner
 	st.Mode = ModeRunning
 	for _, ph := range p.Phases {
 		st.Phases[ph.ID] = &PhaseState{Status: PhasePending}

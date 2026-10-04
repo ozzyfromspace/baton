@@ -182,3 +182,31 @@ func TestExcludeFromGitFollowsWorktreeFile(t *testing.T) {
 		t.Fatalf("exclude in common dir: %q %v", b, err)
 	}
 }
+
+func TestOwnership(t *testing.T) {
+	st := New()
+	if err := Claim(&st, "a", 1, t0); err != nil || !st.IsOwner("a", t0) {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := Claim(&st, "b", 2, t0.Add(time.Second)); err == nil {
+		t.Fatal("a second live host took over")
+	}
+	if err := Claim(&st, "a", 1, t0.Add(10*time.Second)); err != nil || !st.Owner.Heartbeat.Equal(t0.Add(10*time.Second)) {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if err := Claim(&st, "b", 2, t0.Add(10*time.Second+OwnerTTL)); err != nil || !st.IsOwner("b", t0.Add(10*time.Second+OwnerTTL)) {
+		t.Fatalf("stale owner not replaced: %v", err)
+	}
+	Release(&st, "a") // not the owner any more: no effect
+	if st.Owner == nil {
+		t.Fatal("release by a non-owner")
+	}
+	Release(&st, "b")
+	if st.Owner != nil {
+		t.Fatal("release")
+	}
+	re := Reattach(State{Owner: &Owner{Instance: "x"}}, threePhases(), t0, "")
+	if re.Owner == nil || re.Owner.Instance != "x" {
+		t.Fatal("reattach dropped the owner")
+	}
+}

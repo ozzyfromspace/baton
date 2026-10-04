@@ -101,7 +101,7 @@ func cmdAttach(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	head := gitHead(filepath.Dir(s.Dir))
-	if _, err := s.Update(func(st *state.State) error { *st = state.Attach(pl, io.Now(), head); return nil }); err != nil {
+	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), head); return nil }); err != nil {
 		return fail(io, "%v", err)
 	}
 	if err := state.ExcludeFromGit(s.Dir); err != nil {
