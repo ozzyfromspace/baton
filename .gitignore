@@ -25,3 +25,5 @@ cc-strings.txt
 *.swp
 .idea/
 .vscode/
+spikes/**/work/
+spikes/**/hookbin
