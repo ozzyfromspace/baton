@@ -8,7 +8,7 @@ import (
 // hookEvents are the Claude Code events baton listens to in the sessions it hosts. Hooks call the baton
 // binary directly (exec form, no shell), so a hook costs ~4ms and always matches the running version.
 var hookEvents = []string{
-	"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
+	"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest",
 	"PermissionDenied", "Notification", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
 	"PreCompact", "PostCompact",
 }

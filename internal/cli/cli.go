@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
 
@@ -104,6 +106,12 @@ func runHook(args []string, io IO) (code int) {
 	return hooks.Dispatch(args[0], io.In, io.Out, io.Err, io.Env, io.Now, hookHandlers)
 }
 
-// hookHandlers maps event names to handlers; populated as the boundary loop is built.
-var hookHandlers = map[string]hooks.Handler{}
-
+// hookHandlers maps event names to handlers. Hooks find the project through BATON_DIR, which the host
+// sets for everything inside the session it hosts.
+var hookHandlers = hooks.Handlers(hooks.Deps{Open: func(env func(string) string) (*state.Store, error) {
+	dir := env("BATON_DIR")
+	if dir == "" {
+		return nil, errors.New("BATON_DIR is not set")
+	}
+	return state.Open(dir, env("BATON_INSTANCE"), time.Now)
+}})
