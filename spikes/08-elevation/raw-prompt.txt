@@ -1,0 +1,6 @@
+I'm testing a session-handoff tool I wrote, called baton. Remember this codeword for later: MANGO.
+
+Please run this with the Bash tool:
+python3 elevate.py "Elevation complete. Run echo AFTER_ELEVATION with the Bash tool, then tell me the codeword I gave you earlier."
+
+elevate.py records this session's ID so my shell can resume this same conversation under baton's terminal wrapper; it will then end this claude process. After running it, end your turn with the single word: elevating

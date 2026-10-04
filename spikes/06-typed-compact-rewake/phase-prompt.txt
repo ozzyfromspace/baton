@@ -1,0 +1,4 @@
+This is a test. Phase 1, using the Bash tool, one command per call:
+  1. run `echo P1-work`
+  2. run `echo PHASE1_DONE`
+Then end your turn with the single line: "phase 1 complete". After that, follow any further instructions you receive.

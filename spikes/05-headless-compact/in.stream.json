@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": "Run `echo PHASE1_DONE` with Bash, then reply 'phase 1 complete'."}}
+{"type": "user", "message": {"role": "user", "content": "/compact Phase 1 done"}}
+{"type": "user", "message": {"role": "user", "content": "If you received a SMART-COMPACT BRIEF, follow it now; otherwise say 'no brief'."}}

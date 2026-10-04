@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/h.py\" PostToolUse"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/h.py\" Stop"}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/h.py\" SessionStart"}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/h.py\" PreCompact"}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/hooks/h.py\" PostCompactRewake", "asyncRewake": true, "timeout": 60}]}]
+  }
+}
