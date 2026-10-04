@@ -1,0 +1,15 @@
+{
+  "name": "baton",
+  "description": "baton: run multi-phase Claude Code plans unattended, compacting at every phase boundary.",
+  "owner": {
+    "name": "Oswald Chisala",
+    "url": "https://github.com/ozzyfromspace"
+  },
+  "plugins": [
+    {
+      "name": "baton",
+      "source": "./plugin",
+      "description": "Run multi-phase Claude Code plans unattended, compacting at every phase boundary in one live terminal session."
+    }
+  ]
+}

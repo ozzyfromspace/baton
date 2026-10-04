@@ -1,0 +1,13 @@
+{
+  "name": "baton",
+  "version": "0.0.0-dev",
+  "description": "Run multi-phase Claude Code plans unattended, compacting at every phase boundary in one live terminal session.",
+  "author": {
+    "name": "Oswald Chisala",
+    "url": "https://github.com/ozzyfromspace"
+  },
+  "homepage": "https://github.com/ozzyfromspace/baton",
+  "repository": "https://github.com/ozzyfromspace/baton",
+  "license": "MIT",
+  "keywords": ["compaction", "plans", "autonomous", "long-running", "context"]
+}

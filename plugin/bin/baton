@@ -1,0 +1,14 @@
+#!/bin/sh
+# baton launcher. It runs the baton binary for this machine:
+#   1. $BATON_BIN, which baton sets inside the sessions it hosts (so the CLI always matches the host),
+#      and which developers can point at a local build;
+#   2. the installed binary in ~/.baton/bin.
+# Downloading a release binary on first use is added with the release tooling.
+if [ -n "${BATON_BIN:-}" ] && [ -x "$BATON_BIN" ]; then
+  exec "$BATON_BIN" "$@"
+fi
+if [ -x "$HOME/.baton/bin/baton" ]; then
+  exec "$HOME/.baton/bin/baton" "$@"
+fi
+echo "baton: the baton binary is not installed yet; run /baton setup" >&2
+exit 1
