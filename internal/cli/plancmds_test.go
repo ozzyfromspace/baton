@@ -37,6 +37,12 @@ func (s *session) run(stdin string, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+// startNext does what the post-compaction hook does at a phase boundary: start the next phase.
+func (s *session) startNext() {
+	st, _ := state.Open(s.env["BATON_DIR"], "", func() time.Time { return s.now })
+	st.Update(func(x *state.State) error { state.Start(x, s.now, ""); return nil })
+}
+
 func (s *session) must(stdin string, args ...string) string {
 	s.t.Helper()
 	code, out, errs := s.run(stdin, args...)
@@ -93,7 +99,11 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 	s.mustFail("only apply while a plan is running", "checkpoint")
 	s.must("", "resume")
 
+	// done refuses the next phase until the boundary compaction has started it.
+	s.mustFail("has not started yet", "done", "P1")
+	s.startNext()
 	s.must("", "done", "P1")
+	s.startNext()
 	if out := s.must("", "done", "R1"); !strings.Contains(out, "the plan is complete") {
 		t.Fatalf("final done: %s", out)
 	}

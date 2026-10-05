@@ -37,6 +37,9 @@ func TestPhaseLifecycle(t *testing.T) {
 	if _, err := Done(&st, p, "P0", t0, false); err == nil || !strings.Contains(err.Error(), "already done") {
 		t.Fatalf("done twice: %v", err)
 	}
+	if _, err := Done(&st, p, "P1", t0, false); err == nil || !strings.Contains(err.Error(), "has not started yet") {
+		t.Fatalf("finishing the next phase before the boundary compaction: %v", err)
+	}
 	Start(&st, t0.Add(2*time.Hour), "def")
 	if st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P1"].StartHead != "def" {
 		t.Fatalf("after start: %+v", st)

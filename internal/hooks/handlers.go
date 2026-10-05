@@ -26,7 +26,7 @@ func Handlers(d Deps) map[string]Handler {
 		"SessionStart":       h.sessionStart,
 		"SessionEnd":         h.sessionEnd,
 		"UserPromptSubmit":   h.userPromptSubmit,
-		"PreToolUse":         h.activity,
+		"PreToolUse":         h.preToolUse,
 		"PostToolUse":        h.toolDone,
 		"PostToolUseFailure": h.toolDone,
 		"PermissionRequest":  h.permissionRequest,
@@ -39,6 +39,7 @@ func Handlers(d Deps) map[string]Handler {
 		"PreCompact":         h.preCompact,
 		"PostCompact":        h.postCompact,
 		"PostCompactRewake":  h.postCompactRewake,
+		"SessionStartRewake": h.sessionStartRewake,
 	}
 }
 
@@ -80,6 +81,46 @@ func ok(err error) error {
 	return err
 }
 
+// preToolUse holds the model at a compaction it owes. After `baton done` or `baton checkpoint`, the turn
+// must end so the host can compact; a model that carries on would start the next phase (or keep going)
+// in the old context. So until then every main-agent tool call except baton's own CLI is denied, with
+// the reason. Subagents are not held: they cannot end the main turn.
+func (h *handlers) preToolUse(c Context) (Result, error) {
+	var owed string
+	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
+			return nil
+		}
+		switch {
+		case st.BoundaryOwed:
+			owed = "the phase is done and baton must compact the context before " + st.Current + " begins"
+		case st.CheckpointOwed:
+			owed = "you asked for a checkpoint and baton must compact the context first"
+		}
+		return nil
+	})
+	if err != nil || owed == "" {
+		return Result{}, ok(err)
+	}
+	return Result{Output: map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "deny",
+			"permissionDecisionReason": NudgePrefix + " End your turn now: " + owed + ". Do not start further work in this turn.",
+		},
+	}}, nil
+}
+
+// isBatonCommand reports a Bash call that runs baton's own CLI (always allowed).
+func isBatonCommand(in map[string]any) bool {
+	if str(in, "tool_name") != "Bash" {
+		return false
+	}
+	ti, _ := in["tool_input"].(map[string]any)
+	cmd := strings.TrimSpace(str(ti, "command"))
+	return cmd == "baton" || strings.HasPrefix(cmd, "baton ")
+}
+
 func (h *handlers) activity(c Context) (Result, error) {
 	_, _, err := h.update(c, func(*state.State, *state.Store) error { return nil })
 	return Result{}, ok(err)
@@ -116,6 +157,27 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 			"additionalContext": Primer(pl, st),
 		},
 	}}, nil
+}
+
+// sessionStartRewake runs in the background when a session resumes. After an elevation it wakes the model
+// with what it was about to do (BATON_PENDING, set by the relaunch), exactly once.
+func (h *handlers) sessionStartRewake(c Context) (Result, error) {
+	pending := strings.TrimSpace(c.Env("BATON_PENDING"))
+	if pending == "" || str(c.Input, "source") != "resume" {
+		return Result{}, nil
+	}
+	deliver := false
+	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if st.Run.PendingDone != pending {
+			st.Run.PendingDone, deliver = pending, true
+		}
+		return nil
+	})
+	if err != nil || !deliver {
+		return Result{}, ok(err)
+	}
+	s.Event("pending_delivered", map[string]any{"pending": pending})
+	return Result{Rewake: NudgePrefix + " This session is now hosted by baton (same conversation). Continue with: " + pending}, nil
 }
 
 // Primer tells the model, at the start of a hosted session, how baton expects it to report progress.

@@ -121,12 +121,19 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 	if id != st.Current && !force {
 		return "", fmt.Errorf("phase %s is not the current phase (%s); finish %s first, or pass --force", id, st.Current, st.Current)
 	}
+	if st.BoundaryOwed && !force {
+		return "", fmt.Errorf("phase %s has not started yet: end your turn now, so baton can compact the context before %s begins", id, id)
+	}
 	ps.Status, ps.DoneAt = PhaseDone, now
 	st.Blocked, st.Waiting, st.CheckpointOwed = nil, nil, false
 	next = nextPending(st, p)
 	if next == "" {
 		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
 		return "", nil
+	}
+	if ns := st.Phases[next]; ns != nil && ns.Status == PhaseActive {
+		st.Current = next // a phase finished out of order (--force); the one already underway carries on
+		return next, nil
 	}
 	st.Current, st.BoundaryOwed = next, true
 	return next, nil

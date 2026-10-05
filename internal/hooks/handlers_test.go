@@ -235,3 +235,23 @@ func TestContextNudgeOncePerCompaction(t *testing.T) {
 		t.Fatal("the re-armed nudge did not fire")
 	}
 }
+
+func TestToolsAreHeldWhileACompactionIsOwed(t *testing.T) {
+	f := newFixture(t, true)
+	if out := f.fire("PreToolUse", map[string]any{"tool_name": "Edit"}); out != nil {
+		t.Fatalf("held with nothing owed: %v", out)
+	}
+	pl, _ := f.store.LoadPlan()
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+	out := f.fire("PreToolUse", map[string]any{"tool_name": "Edit"})
+	hso, _ := out["hookSpecificOutput"].(map[string]any)
+	if hso["permissionDecision"] != "deny" || !strings.Contains(hso["permissionDecisionReason"].(string), "End your turn now") {
+		t.Fatalf("not held: %v", out)
+	}
+	if out := f.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "baton status"}}); out != nil {
+		t.Fatalf("baton's own CLI was held: %v", out)
+	}
+	if out := f.fire("PreToolUse", map[string]any{"tool_name": "Edit", "agent_id": "sub"}); out != nil {
+		t.Fatalf("a subagent was held: %v", out)
+	}
+}

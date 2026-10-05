@@ -68,6 +68,7 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "plan complete notifies once",
 			setup: func(st *state.State) {
 				state.Done(st, pl, "P0", tStop, false)
+				state.Start(st, tStop, "") // the boundary compaction happened
 				state.Done(st, pl, "P1", tStop, false)
 			},
 			say: "plan complete", notice: "plan_complete"},
