@@ -1,17 +1,16 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	goio "io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -100,7 +99,7 @@ func cmdAttach(args []string, io IO) int {
 	if err := s.SavePlan(pl); err != nil {
 		return fail(io, "%v", err)
 	}
-	head := gitHead(filepath.Dir(s.Dir))
+	head := gitx.Head(filepath.Dir(s.Dir))
 	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), head); return nil }); err != nil {
 		return fail(io, "%v", err)
 	}
@@ -202,7 +201,7 @@ func cmdDone(args []string, io IO) int {
 	}
 	s.AppendHandoff(id, p.vals["notes"])
 	s.Event("phase_done", map[string]any{"phase": id, "next": next})
-	if startHead != "" && startHead == gitHead(filepath.Dir(s.Dir)) {
+	if startHead != "" && startHead == gitx.Head(filepath.Dir(s.Dir)) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
 	}
 	if st.Mode == state.ModeComplete {
@@ -309,16 +308,4 @@ func storeAndPlan(io IO) (*state.Store, plan.Plan, bool) {
 		return nil, plan.Plan{}, false
 	}
 	return s, pl, true
-}
-
-// gitHead returns the commit at HEAD for the repository at dir, or "" if git or the repository is missing.
-// It only feeds a warning, so git stays an optional dependency.
-func gitHead(dir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
