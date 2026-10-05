@@ -119,8 +119,10 @@ func signingTrap(t *testing.T) (marker string) {
 	home := os.Getenv("HOME")
 	marker = filepath.Join(home, "gpg-was-called")
 	gpg := filepath.Join(home, "fake-gpg")
-	os.WriteFile(gpg, []byte("#!/bin/sh\ntouch '"+marker+"'\necho 'gpg: signing failed: Timeout' >&2\nexit 2\n"), 0o755)
-	cfg := "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = " + gpg + "\n[user]\n\tuseConfigOnly = true\n"
+	// Forward slashes: git reads a backslash in a config value as an escape (C:\Users\… is a bad config
+	// line on Windows), and sh takes either.
+	os.WriteFile(gpg, []byte("#!/bin/sh\ntouch '"+filepath.ToSlash(marker)+"'\necho 'gpg: signing failed: Timeout' >&2\nexit 2\n"), 0o755)
+	cfg := "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = \"" + filepath.ToSlash(gpg) + "\"\n[user]\n\tuseConfigOnly = true\n"
 	os.WriteFile(os.Getenv("GIT_CONFIG_GLOBAL"), []byte(cfg), 0o644)
 	return marker
 }
@@ -201,11 +203,14 @@ func TestRestoreCommandBringsTheWorkBack(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"a.txt": "changed\n", "b.txt": "staged\n", "new/c.txt": "untracked\n", "skip.log": "ignored\n",
-		"later.txt": "untracked, made after the snapshot\n", "e.txt": "<open " + filepath.Join(dir, "e.txt") + ": no such file or directory>",
+		"later.txt": "untracked, made after the snapshot\n",
 	} {
 		if got := read(t, dir, name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "e.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("e.txt was deleted before the snapshot, and the restore brought it back: %v", err)
 	}
 	if staged := git(t, dir, "diff", "--cached", "--name-only"); staged != "" {
 		t.Errorf("the restore changed the index: %s", staged)
