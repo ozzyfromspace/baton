@@ -95,6 +95,11 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 	if st := s.must("", "status"); !strings.Contains(st, "blocked: need a product decision\n  tried: the spec and the issue tracker") || strings.Contains(st, "waiting:") {
 		t.Fatalf("status when blocked: %s", st)
 	}
+	// The model cannot clear its own block: only the human, by taking part, lets it act again.
+	for _, args := range [][]string{{"resume"}, {"done", "P1"}, {"checkpoint"}, {"waiting", "x", "--until", "1m"}, {"blocked", "x", "--tried", "y"}} {
+		s.mustFail("only they can clear that", args...)
+	}
+	s.human()
 	s.must("", "resume")
 	s.must("", "checkpoint", "--notes", "half way")
 	s.must("", "pause")

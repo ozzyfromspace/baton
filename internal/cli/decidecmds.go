@@ -112,6 +112,9 @@ func cmdPropose(args []string, io IO) int {
 	}
 	d.Question = q.Text
 	_, err = s.Update(func(st *state.State) error {
+		if err := guard(io, st, "not recorded", false); err != nil {
+			return err
+		}
 		switch pending := st.PendingProposal(); {
 		case st.Mode != state.ModeRunning:
 			return refusal{"not running", fmt.Sprintf("not recorded — baton is not running the plan (mode: %s), so nothing would go ahead with a proposal. Ask the human directly.", st.Mode)}
@@ -149,11 +152,28 @@ func cmdPropose(args []string, io IO) int {
 	return 0
 }
 
+// guard turns down a command the model could use to get out of a halt only the human may clear (a hard
+// block, a proposal held for them, a review), or to move on before its proposal is put to the human.
+// verb is how the refusal starts ("not done", "not recorded"). A command run outside the hosted session
+// is the human's own, and is never held.
+func guard(io IO, st *state.State, verb string, proposalToo bool) error {
+	if !hosted(io) {
+		return nil
+	}
+	if what, since, held := st.Held(); held {
+		return refusal{"held for the human", fmt.Sprintf("%s — the run is waiting on the human (%s, since %s), and only they can clear that. "+
+			"End your turn now: baton has brought them in, and their answer will reach you here.", verb, what, since.Local().Format("15:04"))}
+	}
+	if p := st.PendingProposal(); proposalToo && p != nil && !p.Asked {
+		return refusal{"proposal not asked", verb + " — " + decide.AskFirst(p.ID, p.Question) + "."}
+	}
+	return nil
+}
+
 // pendingRefusal turns down a second proposal while one waits for its answer.
 func pendingRefusal(p state.Decision) string {
 	if !p.Asked {
-		return fmt.Sprintf("not recorded — your proposal %s is still waiting to be put to the human. Put it to them first: %s.",
-			p.ID, decide.Question{Text: p.Question, Options: decide.ProposalOptions}.Call())
+		return "not recorded — " + decide.AskFirst(p.ID, p.Question) + "."
 	}
 	return fmt.Sprintf("not recorded — your proposal %s (%s) is still waiting for the human's answer. One proposal at a time: wait for it, then follow what baton tells you.", p.ID, p.What)
 }

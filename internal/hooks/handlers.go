@@ -357,9 +357,11 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
 		if by == "human" {
-			// The human is engaged: whatever baton escalated, they have it now.
+			// The human is engaged: whatever baton escalated, they have it now, and the model may act on
+			// what they say (state.Held).
 			st.Run.Progress()
 			st.Run.Escalation = nil
+			st.Run.HumanAt = c.Now
 		}
 		return nil
 	})
@@ -500,6 +502,8 @@ func answered(st *state.State, c Context, auto bool) valveAction {
 		by := "human"
 		if auto {
 			by = "timeout"
+		} else {
+			st.Run.HumanAt = c.Now
 		}
 		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": by}, say: say, tell: tell}
 	}

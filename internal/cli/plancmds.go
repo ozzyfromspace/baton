@@ -249,6 +249,13 @@ func cmdDone(args []string, io IO) int {
 	if !ok {
 		return 1
 	}
+	cur, err := s.Load()
+	if err != nil {
+		return fail(io, "%v", err)
+	}
+	if err := guard(io, &cur, "not done", true); err != nil {
+		return refused(io, s, "done", err)
+	}
 	work := checkWork(s, id)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {
@@ -258,6 +265,9 @@ func cmdDone(args []string, io IO) int {
 	var next string
 	var startHead string
 	st, err := s.Update(func(st *state.State) error {
+		if err := guard(io, st, "not done", true); err != nil {
+			return err
+		}
 		if ps := st.Phases[id]; ps != nil {
 			startHead = ps.StartHead
 		}
@@ -266,7 +276,7 @@ func cmdDone(args []string, io IO) int {
 		return err
 	})
 	if err != nil {
-		return fail(io, "%v", err)
+		return refused(io, s, "done", err)
 	}
 	s.AppendHandoff(id, p.vals["notes"])
 	done := map[string]any{"phase": id, "next": next}
@@ -310,6 +320,9 @@ func cmdBlocked(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
+	if err := guard(io, &st, "not recorded", true); err != nil {
+		return refused(io, s, "blocked", err)
+	}
 	work := checkWork(s, st.Current)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {
@@ -317,13 +330,16 @@ func cmdBlocked(args []string, io IO) int {
 		return fail(io, "%s", decide.UncommittedRefusal("blocked", st.Current, fileList(work.fresh)))
 	}
 	if _, err := s.Update(func(st *state.State) error {
+		if err := guard(io, st, "not recorded", true); err != nil {
+			return err
+		}
 		if err := state.SetBlocked(st, reason, io.Now()); err != nil {
 			return err
 		}
 		st.Blocked.Tried = tried
 		return nil
 	}); err != nil {
-		return fail(io, "%v", err)
+		return refused(io, s, "blocked", err)
 	}
 	blocked := map[string]any{"reason": reason, "tried": tried}
 	if len(work.fresh) > 0 {
@@ -416,8 +432,13 @@ func cmdWaiting(args []string, io IO) int {
 	if !ok {
 		return 1
 	}
-	if _, err := s.Update(func(st *state.State) error { return state.SetWaiting(st, what, d, io.Now()) }); err != nil {
-		return fail(io, "%v", err)
+	if _, err := s.Update(func(st *state.State) error {
+		if err := guard(io, st, "not recorded", true); err != nil {
+			return err
+		}
+		return state.SetWaiting(st, what, d, io.Now())
+	}); err != nil {
+		return refused(io, s, "waiting", err)
 	}
 	s.Event("waiting", map[string]any{"what": what, "until": io.Now().Add(d).UTC().Format(time.RFC3339)})
 	fmt.Fprintf(io.Out, "baton: recorded a wait for %q until %s. You may end your turn; if nothing wakes you by then, baton will.\n", what, io.Now().Add(d).Local().Format("15:04"))
@@ -433,9 +454,14 @@ func cmdCheckpoint(args []string, io IO) int {
 	if !ok {
 		return 1
 	}
-	st, err := s.Update(func(st *state.State) error { return state.SetCheckpoint(st) })
+	st, err := s.Update(func(st *state.State) error {
+		if err := guard(io, st, "not recorded", true); err != nil {
+			return err
+		}
+		return state.SetCheckpoint(st)
+	})
 	if err != nil {
-		return fail(io, "%v", err)
+		return refused(io, s, "checkpoint", err)
 	}
 	s.AppendHandoff(st.Current+" (checkpoint)", p.vals["notes"])
 	s.Event("checkpoint", map[string]any{"phase": st.Current})
@@ -450,20 +476,26 @@ func cmdCheckpoint(args []string, io IO) int {
 }
 
 func cmdPause(_ []string, io IO) int {
-	return simpleTransition(io, "paused", state.Pause, "baton: paused. baton will not compact, nudge or escalate until /baton resume.")
+	return simpleTransition(io, "pause", "paused", state.Pause, "baton: paused. baton will not compact, nudge or escalate until /baton resume.")
 }
 
 func cmdResume(_ []string, io IO) int {
-	return simpleTransition(io, "resumed", state.Resume, "baton: resumed. baton drives the plan again.")
+	resume := func(st *state.State) error {
+		if err := guard(io, st, "not resumed", false); err != nil {
+			return err
+		}
+		return state.Resume(st)
+	}
+	return simpleTransition(io, "resume", "resumed", resume, "baton: resumed. baton drives the plan again.")
 }
 
-func simpleTransition(io IO, kind string, fn func(*state.State) error, msg string) int {
+func simpleTransition(io IO, command, kind string, fn func(*state.State) error, msg string) int {
 	s, err := store(io)
 	if err != nil {
 		return fail(io, "%v", err)
 	}
 	if _, err := s.Update(fn); err != nil {
-		return fail(io, "%v", err)
+		return refused(io, s, command, err)
 	}
 	s.Event(kind, nil)
 	fmt.Fprintln(io.Out, msg)

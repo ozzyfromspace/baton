@@ -801,5 +801,25 @@ func TestAnAnswerBatonTypedIsAttributedToTheTimeout(t *testing.T) {
 		if say, _ := out["systemMessage"].(string); auto != strings.Contains(say, "nobody answered") {
 			t.Fatalf("auto=%v said %q", auto, say)
 		}
+		// Only the human's own answer counts as the human taking part.
+		if human := f.state().Run.HumanAt; human.Equal(f.now) == auto {
+			t.Fatalf("auto=%v: human at %v", auto, human)
+		}
+	}
+}
+
+// The human takes part by typing in the session; baton's own nudges and other notifications do not count.
+func TestTheHumanTakesPartByTyping(t *testing.T) {
+	f := newFixture(t, true)
+	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>"} {
+		f.fire("UserPromptSubmit", map[string]any{"prompt": prompt})
+		if h := f.state().Run.HumanAt; !h.IsZero() {
+			t.Fatalf("%q counted as the human: %v", prompt, h)
+		}
+	}
+	f.now = f.now.Add(time.Minute)
+	f.fire("UserPromptSubmit", map[string]any{"prompt": "use the staging key instead"})
+	if h := f.state().Run.HumanAt; !h.Equal(f.now) {
+		t.Fatalf("human at %v, want %v", h, f.now)
 	}
 }

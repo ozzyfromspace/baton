@@ -149,6 +149,9 @@ func TestWithoutGitNothingIsRefusedOrCommitted(t *testing.T) {
 			var said strings.Builder
 			for _, args := range [][]string{{"checkpoint"}, {"blocked", "need", "a", "key", "--tried", "the vault", "--keep-dirty", "ignored"}, {"resume"}, {"done", "P0"}} {
 				gittest.Write(t, root, args[0]+".txt", "work\n")
+				if args[0] == "resume" {
+					s.human() // only the human can clear a block
+				}
 				code, out, errs := s.run("", args...)
 				if code != 0 {
 					t.Fatalf("%v: exit %d: %s", args, code, errs)

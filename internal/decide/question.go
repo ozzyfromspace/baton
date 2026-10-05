@@ -59,6 +59,11 @@ var ProposalOptions = []Option{
 	{"Go ahead", "Do what you proposed"},
 }
 
+// AskFirst says to put a proposal to the human before anything else: until it is, nothing moves.
+func AskFirst(id, question string) string {
+	return fmt.Sprintf("put your proposal %s to the human first: %s", id, Question{question, ProposalOptions}.Call())
+}
+
 // Deadline is when a proposal made at now goes ahead: timeout later, rounded up to the minute, since the
 // question names it as HH:MM and baton must never go ahead before the time it gave.
 func Deadline(now time.Time, timeout time.Duration) time.Time {

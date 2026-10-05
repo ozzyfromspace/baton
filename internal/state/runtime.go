@@ -16,6 +16,9 @@ type Runtime struct {
 	TurnStarted  time.Time `json:"turn_started,omitzero"`
 	LastStop     time.Time `json:"last_stop,omitzero"`
 	LastActivity time.Time `json:"last_activity,omitzero"` // any hook from the main agent or a subagent
+	// HumanAt is when the human last took part: a prompt they typed, or their answer to one of baton's
+	// questions (not one baton answered for them).
+	HumanAt time.Time `json:"human_at,omitzero"`
 
 	// Dialogs are what Claude Code is waiting on the human for (permission prompts and questions), oldest
 	// first. Claude Code shows them one at a time, in the order they were requested, and fires

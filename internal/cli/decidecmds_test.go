@@ -44,6 +44,12 @@ func (s *session) logged(kind string, want map[string]any) bool {
 	return false
 }
 
+// human is the human taking part: a prompt they typed, or their answer to one of baton's questions.
+func (s *session) human() {
+	s.now = s.now.Add(time.Second)
+	s.set(func(x *state.State) { x.Run.HumanAt = s.now })
+}
+
 func (s *session) state() state.State {
 	st, _ := state.Open(s.env["BATON_DIR"], "", nil)
 	x, _ := st.Load()
@@ -106,7 +112,7 @@ func TestProposalRefusals(t *testing.T) {
 		{"paused", func(s *session) { s.set(func(x *state.State) { state.Pause(x) }) }, ok, "not running the plan (mode: paused)", "not running"},
 		{"compaction owed", func(s *session) { s.set(func(x *state.State) { x.CheckpointOwed = true }) }, ok, "must compact the context first", "compaction owed"},
 		{"review due", func(s *session) { s.set(func(x *state.State) { x.ReviewDue = "P0" }) }, ok, "before they review them", "review due"},
-		{"one not yet asked", func(s *session) { s.must("", ok...) }, ok, "is still waiting to be put to the human. Put it to them first: call the AskUserQuestion tool", "proposal pending"},
+		{"one not yet asked", func(s *session) { s.must("", ok...) }, ok, "not recorded — put your proposal d1 to the human first: call the AskUserQuestion tool", "proposal pending"},
 		{"one asked", func(s *session) {
 			s.must("", ok...)
 			s.set(func(x *state.State) { x.PendingProposal().Asked = true })
@@ -223,4 +229,75 @@ func TestBlockedNeedsWhatWasTried(t *testing.T) {
 	if !s.logged("blocked", map[string]any{"reason": "need the prod key", "tried": "the vault and .env"}) {
 		t.Errorf("events: %s", s.events())
 	}
+}
+
+// While the run waits on the human, the model cannot get out of it with a command of its own.
+func TestARunCannotClearItsOwnBlock(t *testing.T) {
+	commands := [][]string{{"resume"}, {"done", "P0"}, {"checkpoint"}, {"waiting", "the build", "--until", "5m"},
+		{"blocked", "still stuck", "--tried", "more"}, {"propose", "x", "--because", "y", "--undo", "z"}}
+	halts := map[string]func(s *session){
+		"blocked": func(s *session) { s.must("", "blocked", "need the prod key", "--tried", "the vault") },
+		"a held proposal": func(s *session) {
+			s.set(func(x *state.State) {
+				x.Run.Escalation = &state.Escalation{Kind: "decision", Reason: "the human is deciding", Since: s.now}
+			})
+		},
+		"a review": func(s *session) {
+			s.set(func(x *state.State) {
+				x.Run.Escalation = &state.Escalation{Kind: "review", Reason: "review due", Since: s.now}
+			})
+		},
+	}
+	for name, halt := range halts {
+		for _, args := range commands {
+			t.Run(name+"/"+args[0], func(t *testing.T) {
+				s := attached(t)
+				halt(s)
+				before := s.state()
+				why := s.fails(args...)
+				if !strings.Contains(why, "the run is waiting on the human (") || !strings.Contains(why, "only they can clear that. End your turn now") {
+					t.Fatalf("refusal: %s", why)
+				}
+				if !s.logged("refused", map[string]any{"command": args[0], "why": "held for the human"}) {
+					t.Errorf("events: %s", s.events())
+				}
+				if after := s.state(); after.Mode != before.Mode || (after.Blocked == nil) != (before.Blocked == nil) ||
+					(after.Run.Escalation == nil) != (before.Run.Escalation == nil) || after.CheckpointOwed || after.Waiting != nil || len(after.Decisions) > 0 {
+					t.Fatalf("a refused %s changed the state: %+v", args[0], after)
+				}
+
+				// Once the human has taken part, the model may act on what they said.
+				s.human()
+				if args[0] == "resume" && name != "blocked" {
+					return // only a block or a pause is resumed from the CLI
+				}
+				if code, _, errs := s.run("", args...); code != 0 {
+					t.Fatalf("after the human: %s", errs)
+				}
+			})
+		}
+	}
+
+	// From the human's own shell, nothing is held.
+	s := attached(t)
+	halts["blocked"](s)
+	delete(s.env, "BATON_HOST")
+	s.must("", "resume")
+}
+
+// A proposal goes to the human before anything else moves.
+func TestAProposalIsAskedBeforeAnythingElse(t *testing.T) {
+	s := attached(t)
+	s.must("", "propose", "skip the flaky test", "--because", "it times out on CI", "--undo", "re-enable it")
+	for _, args := range [][]string{{"done", "P0"}, {"checkpoint"}, {"waiting", "CI", "--until", "5m"}, {"blocked", "x", "--tried", "y"}} {
+		if why := s.fails(args...); !strings.Contains(why, "put your proposal d1 to the human first: call the AskUserQuestion tool with exactly one question, \"baton: it times out on CI.") {
+			t.Errorf("%v: %s", args, why)
+		}
+		if !s.logged("refused", map[string]any{"command": args[0], "why": "proposal not asked"}) {
+			t.Errorf("%v: events %s", args, s.events())
+		}
+	}
+	s.must("", "note", "notes still go through") // a note stops nothing
+	s.set(func(x *state.State) { x.PendingProposal().Asked = true })
+	s.must("", "checkpoint")
 }

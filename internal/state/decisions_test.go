@@ -71,3 +71,37 @@ func TestDecisionsNeedARunningPlan(t *testing.T) {
 		t.Error("proposal while paused")
 	}
 }
+
+// Only the human can clear a hard block, a held proposal or a review: until they take part, the halt
+// holds against the model's own commands.
+func TestHeldUntilTheHumanTakesPart(t *testing.T) {
+	before, at, after := t0.Add(-time.Minute), t0, t0.Add(time.Minute)
+	for _, c := range []struct {
+		name    string
+		set     func(st *State)
+		humanAt time.Time
+		held    bool
+	}{
+		{"nothing", func(*State) {}, time.Time{}, false},
+		{"blocked", func(st *State) { SetBlocked(st, "need a key", at) }, time.Time{}, true},
+		{"blocked, human earlier", func(st *State) { SetBlocked(st, "need a key", at) }, before, true},
+		{"blocked, human at the same moment", func(st *State) { SetBlocked(st, "need a key", at) }, at, true},
+		{"blocked, human since", func(st *State) { SetBlocked(st, "need a key", at) }, after, false},
+		{"decision", func(st *State) { st.Run.Escalation = &Escalation{Kind: "decision", Reason: "deciding", Since: at} }, before, true},
+		{"review", func(st *State) { st.Run.Escalation = &Escalation{Kind: "review", Since: at} }, time.Time{}, true},
+		{"review, human since", func(st *State) { st.Run.Escalation = &Escalation{Kind: "review", Since: at} }, after, false},
+		{"stalled is the watchdog's", func(st *State) { st.Run.Escalation = &Escalation{Kind: "stalled", Since: at} }, time.Time{}, false},
+	} {
+		st := running(t)
+		c.set(&st)
+		st.Run.HumanAt = c.humanAt
+		if _, _, held := st.Held(); held != c.held {
+			t.Errorf("%s: held %v, want %v", c.name, held, c.held)
+		}
+	}
+	st := running(t)
+	SetBlocked(&st, "need a key", at)
+	if what, since, _ := st.Held(); what != "blocked: need a key" || !since.Equal(at) {
+		t.Errorf("%q %v", what, since)
+	}
+}

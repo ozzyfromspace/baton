@@ -121,3 +121,16 @@ func Resolve(st *State, id, by, answer string, now time.Time) error {
 	}
 	return fmt.Errorf("no proposal %s", id)
 }
+
+// Held reports a halt only the human may clear (a hard block, a proposal held for them, a review) that
+// they have not taken part in since it began. While one holds, the model must not be able to clear it
+// with a command of its own: if it could, blocked would stop being a signal anyone can trust.
+func (st State) Held() (what string, since time.Time, held bool) {
+	if b := st.Blocked; b != nil && !st.Run.HumanAt.After(b.Since) {
+		return "blocked: " + b.Reason, b.Since, true
+	}
+	if e := st.Run.Escalation; e != nil && humanDecides[e.Kind] && !st.Run.HumanAt.After(e.Since) {
+		return e.Reason, e.Since, true
+	}
+	return "", time.Time{}, false
+}
