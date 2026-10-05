@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/loop"
+	"github.com/ozzyfromspace/baton/internal/notify"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -70,9 +72,15 @@ func runHost(args []string, io IO) int {
 			env = append(env, kv)
 		}
 	}
+	home, _ := os.UserHomeDir()
+	controller := &loop.Loop{
+		Store: st, Notify: notify.New(notify.LoadConfig(home, io.Env)), Project: filepath.Base(filepath.Dir(dir)),
+		Timing: loop.DefaultTiming, Logf: logf,
+	}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Store: st, Instance: instance, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, Now: io.Now, Logf: logf,
+		Controller: controller,
 	})
 	if err != nil {
 		return fail(io, "%v", err)
