@@ -55,6 +55,10 @@ type Runtime struct {
 type Dialog struct {
 	Tool  string    `json:"tool"`
 	Since time.Time `json:"since"`
+	// Kind names a dialog baton opened itself: "context_warning" for the context question, which baton
+	// answers itself ("Keep going") if nobody has within a while. AutoAnswered is when it did.
+	Kind         string    `json:"kind,omitempty"`
+	AutoAnswered time.Time `json:"auto_answered,omitzero"`
 }
 
 // Task is one piece of in-flight background work.

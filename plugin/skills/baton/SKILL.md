@@ -82,4 +82,5 @@ Explain:
 - Report progress only with `baton done <phase> --notes "…"`, `baton blocked "<why>"`, `baton waiting "<what>" --until <duration>` and `baton checkpoint --notes "…"`.
 - Run each of these as a plain command on its own. Inside double quotes, the shell runs backticks and `$( )` as commands and expands `$NAME`, so keep those out of notes, or use single quotes.
 - Background work (a dev server, a build, a background subagent) is not a status. If you stop to wait for it, declare the wait with `baton waiting "<what>" --until <how long it should take>`; waits are capped at 2 hours.
+- Don't ask the human questions (AskUserQuestion) while a plan runs: nobody may be there, and the run would wait. Decide, note your assumption, and carry on, or run `baton blocked "<your question>"` if you truly cannot continue. (baton refuses such questions unless the human started the turn.)
 - Never type `/compact` yourself. baton does that at the right moment.

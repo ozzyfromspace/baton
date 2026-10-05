@@ -456,3 +456,48 @@ func TestStopRecountsSubagents(t *testing.T) {
 		t.Fatalf("subagents = %d", n)
 	}
 }
+
+// While a plan runs, the model's own questions are refused (nobody may be there to answer); baton's own
+// questions, a human-started turn, and a paused or idle baton are left alone.
+func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
+	ask := func(f *fixture, q string) string {
+		out := f.fire("PreToolUse", map[string]any{"tool_name": "AskUserQuestion",
+			"tool_input": map[string]any{"questions": []any{map[string]any{"question": q}}}})
+		hso, _ := out["hookSpecificOutput"].(map[string]any)
+		d, _ := hso["permissionDecision"].(string)
+		return d
+	}
+	f := newFixture(t, true)
+	if d := ask(f, "Which database should I use?"); d != "deny" {
+		t.Fatalf("model question: %q", d)
+	}
+	if d := ask(f, "baton: blocked on P0: need a key"); d != "" {
+		t.Fatalf("baton's question: %q", d)
+	}
+	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "human"; return nil })
+	if d := ask(f, "Which database should I use?"); d != "" {
+		t.Fatalf("human-started turn: %q", d)
+	}
+	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "baton"; st.Mode = state.ModePaused; return nil })
+	if d := ask(f, "Which database should I use?"); d != "" {
+		t.Fatalf("paused: %q", d)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 1 {
+		t.Fatalf("events: %s", b)
+	}
+}
+
+// The host recognizes the context question's dialog, so it can answer it if nobody does.
+func TestTheContextQuestionDialogIsRecognized(t *testing.T) {
+	f := newFixture(t, true)
+	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
+		"tool_input": map[string]any{"questions": []any{map[string]any{"question": warnQuestionPrefix + "730k tokens, past the 729k warning line."}}}})
+	if d := f.state().Run.Dialog; d == nil || d.Kind != "context_warning" {
+		t.Fatalf("dialog %+v", d)
+	}
+	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
+		"tool_input": map[string]any{"questions": []any{map[string]any{"question": "baton: blocked on P0: x"}}}})
+	if d := f.state().Run.Dialog; d == nil || d.Kind != "" {
+		t.Fatalf("an escalation question taken for the context question: %+v", d)
+	}
+}

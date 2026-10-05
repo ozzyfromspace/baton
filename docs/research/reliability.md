@@ -38,7 +38,7 @@ The question was which non-deterministic behaviors could stall an unattended run
 - **baton's own CLI is allowed deterministically** in `PreToolUse`. A command with shell substitution in its notes (backticks inside double quotes) is refused, with the fix.
 - **A hook that fails open is recorded** in `events.jsonl` (`hook_failed`).
 
-## Left as decisions
+## Decided with the user (2026-10-05)
 
-- **The 90% context question waits for an answer.** It is pushed and re-pushed, and the answer acts directly. If nobody answers, the run waits.
-- **Questions the model asks on its own (`AskUserQuestion`) also wait for an answer.** They get the same push and reminders.
+- **The 90% context question times out.** After 20 minutes unanswered, the host answers "Keep going" itself by typing `2`. In a probe, both `2` and Down then Enter selected the second option of a single-question dialog at once, with no review step (`spikes/15-gates-and-signals/ask_keys.py`). `2` was chosen because it doesn't depend on where the highlight is. The host only types into a dialog it recognizes as its own context question (from the `PermissionRequest` input), and never while the human is typing or composing an answer. The answer arrives through the usual `PostToolUse` hook.
+- **Questions the model asks on its own are refused while a plan runs**, unless the human started the turn. The refusal tells the model to decide, note its assumption, or run `baton blocked`, which notifies the human. baton's own questions (all starting with `baton:`) are allowed.

@@ -16,6 +16,7 @@ import (
 // watch runs after the compaction checks on every tick.
 func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
+	l.answerWarning(v, st, in)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished) {
 		return // the compaction checks own this stretch
@@ -106,6 +107,28 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: "waiting for your answer (" + d.Tool + ")", At: v.Now})
 	})
 	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
+}
+
+// answerWarning answers baton's own context question when nobody has for WarnTimeout. The question
+// only warns: Claude Code compacts on its own when the context is full, so an unattended run should not
+// stop on it. baton picks the second option, "Keep going", by its number, which selects it wherever the
+// highlight is (docs/research/reliability.md); the answer then arrives through the usual hook. It never
+// types while the human is typing or composing an answer, and only once per question.
+func (l *Loop) answerWarning(v host.View, st state.State, in host.Injector) {
+	d := st.Run.Dialog
+	if d == nil || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() || v.Now.Sub(l.since(d.Since)) < l.Timing.WarnTimeout {
+		return
+	}
+	if v.Draft || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
+		return
+	}
+	l.update(func(st *state.State) {
+		if st.Run.Dialog != nil && st.Run.Dialog.Since.Equal(d.Since) {
+			st.Run.Dialog.AutoAnswered = v.Now
+		}
+	})
+	l.Store.Event("warning_timed_out", map[string]any{"after": l.Timing.WarnTimeout.String()})
+	in.Type("2", false)
 }
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired

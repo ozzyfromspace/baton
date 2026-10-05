@@ -59,3 +59,18 @@ func TestContextWarningAsksTheHuman(t *testing.T) {
 		kind("rewake"),
 	)
 }
+
+// Nobody answers the context question: after the (shortened) timeout baton answers "Keep going" itself,
+// and the answer arrives through the usual hook, so the run carries on instead of waiting all night.
+func TestContextQuestionTimesOut(t *testing.T) {
+	dir := NewProject(t)
+	Attach(t, dir, longPhasePlan)
+	s := StartEnv(t, dir, []string{"BATON_WARN_TOKENS=1000", "BATON_WARN_TIMEOUT=20s"}, "--model", "haiku", "Work on P0, and follow baton's instructions.")
+	s.Trust()
+	waitSequence(t, s, 5*time.Minute,
+		kind("context_warning"),
+		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "context_warning" },
+		kind("warning_timed_out"),
+		func(e map[string]any) bool { return e["kind"] == "answered" && e["answer"] == "Keep going" },
+	)
+}

@@ -33,6 +33,7 @@ type Timing struct {
 	WaitGrace      time.Duration // extra time after a declared wait runs out
 	BackgroundMax  time.Duration // background work may hold a quiet session (or a compaction) this long
 	DialogNotify   time.Duration // a permission prompt or question open this long: notify the human
+	WarnTimeout    time.Duration // the context question unanswered this long: baton answers "Keep going"
 	RateLimitRetry time.Duration // retry interval after a usage-limit error (doubled once at most)
 	OverloadRetry  time.Duration // first retry after an overload or server error (then backoff)
 	ClockJump      time.Duration // a gap between ticks this long means the machine slept
@@ -45,7 +46,7 @@ var DefaultTiming = Timing{
 	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute,
 	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
-	DialogNotify: 3 * time.Minute, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
+	DialogNotify: 3 * time.Minute, WarnTimeout: 20 * time.Minute, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute,
 }
 

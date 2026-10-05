@@ -109,7 +109,12 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 	}
 	var owed string
-	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	refuseQuestion := false
+	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" && !batonQuestion(c.Input) && st.Run.TurnBy != "human" {
+			refuseQuestion = true
+			return nil
+		}
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
 			return nil
 		}
@@ -121,16 +126,31 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 		return nil
 	})
-	if err != nil || owed == "" {
+	if err != nil {
 		return Result{}, ok(err)
 	}
-	return Result{Output: map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":            "PreToolUse",
-			"permissionDecision":       "deny",
-			"permissionDecisionReason": NudgePrefix + " End your turn now: " + owed + ". Do not start further work in this turn.",
-		},
-	}}, nil
+	if refuseQuestion {
+		s.Event("question_refused", map[string]any{"questions": len(questions(c.Input))})
+		return permission("deny", NudgePrefix+" baton is running this plan unattended, so a question would stop the run until someone answers it. "+
+			"Decide yourself: pick the most reasonable option, note the assumption (in your commit message and your `baton done` notes), and carry on. "+
+			"If you truly cannot continue without the human, run `baton blocked \"<your question>\"` and end your turn: baton will notify them."), nil
+	}
+	if owed == "" {
+		return Result{}, nil
+	}
+	return permission("deny", NudgePrefix+" End your turn now: "+owed+". Do not start further work in this turn."), nil
+}
+
+// batonQuestion reports an AskUserQuestion call that puts only baton's own questions (escalations, the
+// context question) to the human. Those are the run asking for the human on purpose.
+func batonQuestion(in map[string]any) bool {
+	qs := questions(in)
+	for _, q := range qs {
+		if !strings.HasPrefix(q, "baton:") {
+			return false
+		}
+	}
+	return len(qs) > 0
 }
 
 func permission(decision, reason string) Result {
@@ -231,6 +251,7 @@ func Primer(pl plan.Plan, st state.State) string {
 		"If you cannot continue without the human, run `baton blocked \"<why>\"` and end your turn. " +
 		"If you must wait for something outside you (a build, a deploy, background work), run `baton waiting \"<what>\" --until <duration>` (at most 2h): background work alone is not a status. " +
 		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
+		"The plan runs unattended, so do not ask the human questions (AskUserQuestion): decide, note your assumption, and carry on, or run `baton blocked` if you truly cannot. " +
 		"In a long phase, at a safe point (work committed), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
 		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
 		"(If the human wants to talk instead of running the plan, they can run /baton pause.)")
@@ -310,14 +331,32 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 
 func (h *handlers) permissionRequest(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
+	kind := ""
+	if tool == "AskUserQuestion" {
+		if qs := questions(c.Input); len(qs) == 1 && strings.HasPrefix(qs[0], warnQuestionPrefix) {
+			kind = "context_warning"
+		}
+	}
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.Dialog = &state.Dialog{Tool: tool, Since: c.Now}
+		st.Run.Dialog = &state.Dialog{Tool: tool, Since: c.Now, Kind: kind}
 		return nil
 	})
 	if err == nil {
-		s.Event("dialog_open", map[string]any{"tool": tool})
+		s.Event("dialog_open", map[string]any{"tool": tool, "dialog": kind})
 	}
 	return Result{}, ok(err)
+}
+
+// questions lists the question texts of an AskUserQuestion call.
+func questions(in map[string]any) []string {
+	ti, _ := in["tool_input"].(map[string]any)
+	list, _ := ti["questions"].([]any)
+	var out []string
+	for _, q := range list {
+		m, _ := q.(map[string]any)
+		out = append(out, str(m, "question"))
+	}
+	return out
 }
 
 func (h *handlers) toolDone(c Context) (Result, error) {
@@ -450,8 +489,12 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 
 // warnText makes the model put a fixed question to the human. AskUserQuestion reaches every device the
 // human uses (and the watchdog pushes a notification if it goes unanswered).
+// warnQuestionPrefix starts the context question; the host recognizes the dialog by it.
+const warnQuestionPrefix = "baton: the context holds "
+
 func warnText(used int, lim valve.Limits) string {
-	q := fmt.Sprintf("baton: the context holds %s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now?",
+	q := fmt.Sprintf(warnQuestionPrefix+"%s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
+		"(If nobody answers within 20 minutes, baton picks Keep going.)",
 		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt))
 	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with the question %q and two options: "+
 		"\"Checkpoint now\" (description: \"Finish the current step, save notes and compact; this phase continues from the notes\") and "+

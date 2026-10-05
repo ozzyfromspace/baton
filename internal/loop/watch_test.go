@@ -238,3 +238,42 @@ func TestUnansweredDialogIsPushedAgain(t *testing.T) {
 		t.Fatalf("pushes %v", r.push.kinds)
 	}
 }
+
+// baton answers its own context question ("Keep going", option 2) when nobody has within WarnTimeout,
+// so an unattended run does not stop on a warning. It never answers anything else, and never while
+// the human is typing.
+func TestTheContextQuestionTimesOut(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
+		st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"}
+	})
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered early: %q", r.in.text)
+	}
+	r.view.LastHumanKey = r.now.Add(2 * time.Minute) // the human is typing an answer
+	r.run(90 * time.Second)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered over the human: %q", r.in.text)
+	}
+	r.run(3 * time.Minute)
+	if len(r.in.text) != 1 || r.in.text[0] != "2" {
+		t.Fatalf("typed %q", r.in.text)
+	}
+	r.run(5 * time.Minute)
+	if len(r.in.text) != 1 {
+		t.Fatalf("answered twice: %q", r.in.text)
+	}
+
+	// Any other question waits for the human, however long.
+	r = newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
+		st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now}
+	})
+	r.run(DefaultTiming.WarnTimeout * 3)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered a question that was not baton's: %q", r.in.text)
+	}
+}
