@@ -4,6 +4,9 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- **Worktrees get their own state.** The search for `.baton/` stops at the first repository or worktree root, so a worktree nested inside its main checkout (such as `.claude/worktrees/<name>`) no longer picks up the main checkout's plan. baton's own `~/.baton` is never used as a project's state.
+
 ## [0.1.0-rc.1] - 2026-10-04
 
 The first release candidate: everything in the v0.1 plan except Windows.

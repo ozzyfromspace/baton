@@ -8,36 +8,45 @@ import (
 )
 
 // Locate returns the .baton directory for a process running in cwd. BATON_DIR (set by the host for
-// everything inside a hosted session) wins; otherwise the nearest existing .baton above cwd; otherwise
-// a new one at the repository root (the directory holding .git), or in cwd outside a repository.
+// everything inside a hosted session) wins. Otherwise the search walks up from cwd and stops at the
+// first .baton it finds, or at the root of the repository or worktree (the first directory holding
+// .git), whose .baton it returns. Stopping there matters: a worktree nested inside its main checkout
+// (such as .claude/worktrees/<name>) has its own state, so a session there never drives the main
+// checkout's plan. Outside a repository the state lives in cwd. baton's own home (~/.baton) is never a
+// project's state directory.
 func Locate(cwd string, env func(string) string) string {
 	if d := env("BATON_DIR"); d != "" {
 		return d
 	}
+	home := homeBaton(env)
 	for dir := cwd; ; dir = filepath.Dir(dir) {
-		if fi, err := os.Stat(filepath.Join(dir, ".baton")); err == nil && fi.IsDir() {
-			return filepath.Join(dir, ".baton")
+		cand := filepath.Join(dir, ".baton")
+		if fi, err := os.Stat(cand); err == nil && fi.IsDir() && cand != home {
+			return cand
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil && cand != home {
+			return cand
 		}
 		if filepath.Dir(dir) == dir {
-			break
+			return filepath.Join(cwd, ".baton")
 		}
 	}
-	if root := gitRoot(cwd); root != "" {
-		return filepath.Join(root, ".baton")
-	}
-	return filepath.Join(cwd, ".baton")
 }
 
-// gitRoot is the nearest directory at or above dir that contains .git (a directory or a worktree file).
-func gitRoot(dir string) string {
-	for ; ; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir
-		}
-		if filepath.Dir(dir) == dir {
-			return ""
-		}
+// homeBaton is baton's own directory ($BATON_HOME, or ~/.baton), which holds binaries, config and
+// elevation records rather than a project's run.
+func homeBaton(env func(string) string) string {
+	if r := env("BATON_HOME"); r != "" {
+		return filepath.Clean(r)
 	}
+	h := env("HOME")
+	if h == "" {
+		h, _ = os.UserHomeDir()
+	}
+	if h == "" {
+		return ""
+	}
+	return filepath.Join(h, ".baton")
 }
 
 // ExcludeFromGit adds ".baton/" to the repository's info/exclude so baton's state never shows up in

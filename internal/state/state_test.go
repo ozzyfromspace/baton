@@ -155,6 +155,44 @@ func TestLocate(t *testing.T) {
 	if got := Locate(deep, env(nil)); got != filepath.Join(root, "a", ".baton") {
 		t.Errorf("existing .baton wins: %s", got)
 	}
+
+	// A worktree nested inside the main checkout has its own state, even though the main checkout's
+	// .baton is above it.
+	os.Mkdir(filepath.Join(root, ".baton"), 0o755)
+	wt := filepath.Join(root, ".claude", "worktrees", "w")
+	os.MkdirAll(filepath.Join(wt, "sub"), 0o755)
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+filepath.Join(root, ".git", "worktrees", "w")+"\n"), 0o644)
+	if got := Locate(filepath.Join(wt, "sub"), env(nil)); got != filepath.Join(wt, ".baton") {
+		t.Errorf("nested worktree: %s", got)
+	}
+	if got := Locate(filepath.Join(root, ".claude"), env(nil)); got != filepath.Join(root, ".baton") {
+		t.Errorf("main checkout: %s", got)
+	}
+}
+
+// baton's own home (~/.baton) holds binaries and config; it is never a project's state, even when the
+// search reaches it (outside a repository, or with a dotfiles repository at ~).
+func TestLocateSkipsBatonHome(t *testing.T) {
+	home := t.TempDir()
+	os.Mkdir(filepath.Join(home, ".baton"), 0o755)
+	cwd := filepath.Join(home, "notes", "sub")
+	os.MkdirAll(cwd, 0o755)
+	env := func(k string) string { return map[string]string{"HOME": home}[k] }
+	if got := Locate(cwd, env); got != filepath.Join(cwd, ".baton") {
+		t.Errorf("outside a repository: %s", got)
+	}
+	os.Mkdir(filepath.Join(home, ".git"), 0o755)
+	if got := Locate(cwd, env); got != filepath.Join(cwd, ".baton") {
+		t.Errorf("dotfiles repository at home: %s", got)
+	}
+
+	other := t.TempDir()
+	os.Mkdir(filepath.Join(other, ".baton"), 0o755)
+	inner := filepath.Join(other, "proj")
+	os.Mkdir(inner, 0o755)
+	if got := Locate(inner, func(k string) string { return map[string]string{"BATON_HOME": filepath.Join(other, ".baton")}[k] }); got != filepath.Join(inner, ".baton") {
+		t.Errorf("BATON_HOME: %s", got)
+	}
 }
 
 func TestExcludeFromGitIsIdempotent(t *testing.T) {

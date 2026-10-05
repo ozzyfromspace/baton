@@ -20,7 +20,7 @@ baton takes every one of those decisions away from the model. The model does the
 ## How it works
 
 - **Hosting.** `baton` starts `claude` inside a pseudo-terminal it owns and passes every byte through. You see and use the normal Claude Code interface.
-- **State.** The plan's phases live in `.baton/` in your project, which is kept out of git. The model reports progress with `baton done`, `blocked`, `waiting` or `checkpoint`.
+- **State.** The plan's phases live in `.baton/` at the root of your repository, which is kept out of git. Each git worktree gets its own, so sessions in different worktrees run separate plans. The model reports progress with `baton done`, `blocked`, `waiting` or `checkpoint`.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
 - **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits.
