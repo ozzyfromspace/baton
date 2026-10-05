@@ -105,8 +105,10 @@ Escape, Ctrl-C or a human prompt pauses autonomy until the next `Stop`.
 6. **PostCompact** (matcher `manual`, asyncRewake) exits 2 **only for a baton-requested epoch** with "baton: compacted; begin P7". Any compaction after `done`, including an auto one, counts as the boundary, so there's never a double compaction. No PostCompact within 180s of the ack → escalate.
 
 **Mid-phase valves:**
-- The status line feeds `context_window.used_percentage` into state. Over a soft threshold, PostToolUse (main agent only, never inside subagents) adds "at your next safe point run `baton checkpoint` and end your turn" → same loop.
-- Hard backstop: launch with `--autocompact <cap>` (default 400k).
+- The status line feeds the exact context size (`context_window.current_usage`) and the model's window into state ([measurements](research/context-window.md)). The limit is `min(window, cap)`.
+- Over a soft threshold (60% of the limit), PostToolUse (main agent only, never inside subagents) adds "at your next safe point run `baton checkpoint` and end your turn" → same loop.
+- Over the warning line (90% of the limit, never under 200k, and always before Claude Code's own compaction), the model is told to ask the human with `AskUserQuestion`, using fixed text and options: "Checkpoint now" or "Keep going".
+- Hard backstop: launch with `--autocompact <cap>` (default 810k). Claude Code compacts on its own 33k tokens below the limit.
 
 **Escalation (two layers):**
 - **In session:** a Stop block with a fixed reason makes the model call `AskUserQuestion` with fixed text and options, which reaches all devices.

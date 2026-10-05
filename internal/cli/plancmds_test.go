@@ -178,18 +178,30 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 	st, _ := state.Open(s.env["BATON_DIR"], "inst", func() time.Time { return s.now })
 	st.Update(func(x *state.State) error { return state.Claim(x, "inst", 1, s.now) })
 
+	s.env["BATON_COMPACT_CAP"] = "810000"
 	raw, _ := json.Marshal(map[string]any{
-		"workspace":      map[string]any{"project_dir": t.TempDir()}, // a Windows path must be JSON-escaped
-		"context_window": map[string]any{"used_percentage": 42.4, "context_window_size": 400000},
+		"workspace": map[string]any{"project_dir": t.TempDir()}, // a Windows path must be JSON-escaped
+		"context_window": map[string]any{"used_percentage": 41, "context_window_size": 1000000,
+			"current_usage": map[string]any{"input_tokens": 2, "cache_creation_input_tokens": 2343, "cache_read_input_tokens": 410000, "output_tokens": 90}},
 	})
 	input := string(raw)
 	out := s.must(input, "statusline")
-	if out != "◆ baton · P0 1/3 The overlay · ctx 42%  user-line" {
+	if out != "◆ baton · P0 1/3 The overlay · ctx 412k/810k  user-line" {
 		t.Fatalf("status line %q", out)
 	}
 	loaded, _ := st.Load()
-	if loaded.Run.Context == nil || loaded.Run.Context.WindowSize != 400000 {
+	if c := loaded.Run.Context; c == nil || c.Tokens != 412_345 || c.WindowSize != 1_000_000 || c.Limit != 810_000 {
 		t.Fatalf("context not recorded: %+v", loaded.Run.Context)
+	}
+	want := "context: 412k of 810k · checkpoint at 486k · asks you at 729k · Claude Code compacts at about 777k"
+	if out := s.must("", "status"); !strings.Contains(out, want) {
+		t.Fatalf("status (hosted) lacks %q:\n%s", want, out)
+	}
+	delete(s.env, "BATON_HOST") // from a plain shell: the config's settings, the reading's limit
+	delete(s.env, "BATON_COMPACT_CAP")
+	s.env["BATON_HOME"] = t.TempDir()
+	if out := s.must("", "status"); !strings.Contains(out, want) {
+		t.Fatalf("status (shell) lacks %q:\n%s", want, out)
 	}
 }
 

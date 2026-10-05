@@ -19,6 +19,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
 // Segment is baton's part of the status line.
@@ -44,7 +45,11 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 		s += fmt.Sprintf(" · %s %d/%d %s", st.Current, i+1, len(pl.Phases), clip(pl.Phases[i].Title, 28))
 	}
 	if c := st.Run.Context; c != nil {
-		s += fmt.Sprintf(" · ctx %.0f%%", c.UsedPct)
+		if c.Limit > 0 {
+			s += " · ctx " + valve.Tokens(c.Used()) + "/" + valve.Tokens(c.Limit)
+		} else {
+			s += fmt.Sprintf(" · ctx %.0f%%", c.UsedPct)
+		}
 	}
 	if st.Waiting != nil {
 		s += " · waiting: " + clip(st.Waiting.What, 20)
@@ -68,7 +73,27 @@ type Input struct {
 	ContextWindow struct {
 		UsedPercentage    *float64 `json:"used_percentage"`
 		ContextWindowSize int      `json:"context_window_size"`
+		// CurrentUsage is the last request's token usage; null until the first response.
+		CurrentUsage *struct {
+			InputTokens              int `json:"input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		} `json:"current_usage"`
 	} `json:"context_window"`
+}
+
+// Tokens is the context size as of the last request: everything it sent, cached or not. ok is false
+// before the first response. (total_input_tokens is deliberately not used: it is documented as a
+// session total, the very number the model mistakes for its context.)
+func (in Input) Tokens() (tokens int, ok bool) {
+	cw := in.ContextWindow
+	if u := cw.CurrentUsage; u != nil {
+		return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens, true
+	}
+	if cw.UsedPercentage != nil && cw.ContextWindowSize > 0 {
+		return int(*cw.UsedPercentage * float64(cw.ContextWindowSize) / 100), true
+	}
+	return 0, false
 }
 
 // Parse decodes the status line input; unknown or missing fields are fine.

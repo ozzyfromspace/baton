@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	goio "io"
-	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +18,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/statusline"
+	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
 
@@ -64,13 +65,17 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		claude = "claude"
 	}
 	cfg := config.Load(batonRoot(io), io.Env)
+	autocompact, valves, err := contextSettings(cfg, args, io.Env)
+	if err != nil {
+		return fail(io, "%v (set it in %s, or BATON_AUTOCOMPACT)", err, config.Path(batonRoot(io)))
+	}
 	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "BATON_") {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, fmt.Sprintf("BATON_CHECKPOINT_PCT=%g", *cfg.CheckpointPct))
+	env = append(env, valves.Env()...)
 	env = append(env, extraEnv...)
 	timing := loop.DefaultTiming
 	// Shorter watchdog timings, for tests and impatient humans.
@@ -85,7 +90,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Store: st, Instance: instance, Version: version.Version,
-		Autocompact: cfg.Autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, Now: io.Now, Logf: logf,
+		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, Now: io.Now, Logf: logf,
 		Controller: controller,
 	})
 	if err != nil {
@@ -132,19 +137,68 @@ func cmdStatusline(_ []string, io IO) int {
 	return 0
 }
 
-// recordContext stores the context fill Claude Code reports, for the context valve. It only writes when
-// the value moved by a whole percent or is older than 30s, because the status line refreshes often.
+// contextSettings works out the --autocompact value baton launches claude with, and the context valve
+// settings its hooks share. A cap on the command line wins over baton's config, and baton then adds
+// none of its own (claude checks that value itself). So does CLAUDE_CODE_AUTO_COMPACT_WINDOW, which
+// Claude Code reads before either.
+func contextSettings(cfg config.Config, args []string, env func(string) string) (autocompact string, s valve.Settings, err error) {
+	s = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+	if n, err := strconv.Atoi(env("BATON_WARN_TOKENS")); err == nil && n > 0 {
+		s.WarnTokens = n
+	}
+	autocompact = cfg.Autocompact
+	value := autocompact
+	if v, ok := flagValue(args, "--autocompact"); ok {
+		autocompact, value = "", v
+	}
+	if value != "" {
+		n, ok := config.AutocompactTokens(value)
+		if !ok && autocompact != "" {
+			return "", s, fmt.Errorf("autocompact %q is not valid: use off, auto, or a size from 100k to 1m", value)
+		}
+		s.Cap = n
+	}
+	if n, err := strconv.Atoi(env("CLAUDE_CODE_AUTO_COMPACT_WINDOW")); err == nil && n > 0 {
+		s.Cap = min(max(n, config.MinAutocompact), config.MaxAutocompact)
+	}
+	return autocompact, s, nil
+}
+
+// flagValue finds a flag's value in claude's arguments, as "--flag value" or "--flag=value".
+func flagValue(args []string, name string) (string, bool) {
+	for i, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == name && i+1 < len(args) {
+			return args[i+1], true
+		}
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// recordContext stores the context size Claude Code reports, for the context valves. The status line
+// refreshes often, so it only writes when the size changed or the reading is 30s old.
 func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, error) {
 	st, err := s.Load()
-	if err != nil || in.ContextWindow.UsedPercentage == nil || !st.IsOwner(io.Env("BATON_INSTANCE"), io.Now()) {
+	tokens, ok := in.Tokens()
+	if err != nil || !ok || !st.IsOwner(io.Env("BATON_INSTANCE"), io.Now()) {
 		return st, err
 	}
-	pct, size, now := *in.ContextWindow.UsedPercentage, in.ContextWindow.ContextWindowSize, io.Now()
-	if c := st.Run.Context; c != nil && math.Abs(c.UsedPct-pct) < 1 && now.Sub(c.At) < 30*time.Second {
+	size, now := in.ContextWindow.ContextWindowSize, io.Now()
+	var pct float64
+	if p := in.ContextWindow.UsedPercentage; p != nil {
+		pct = *p
+	}
+	limit := valve.FromEnv(io.Env).Limits(size).Window
+	if c := st.Run.Context; c != nil && c.Tokens == tokens && c.WindowSize == size && c.Limit == limit && now.Sub(c.At) < 30*time.Second {
 		return st, nil
 	}
 	return s.Update(func(st *state.State) error {
-		st.Run.Context = &state.ContextUse{UsedPct: pct, WindowSize: size, At: now}
+		st.Run.Context = &state.ContextUse{UsedPct: pct, Tokens: tokens, WindowSize: size, Limit: limit, At: now}
 		return nil
 	})
 }

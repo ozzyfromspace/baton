@@ -37,3 +37,25 @@ func TestCheckpointCompactsAndContinuesThePhase(t *testing.T) {
 		func(e map[string]any) bool { return e["kind"] == "turn_started" && e["by"] == "baton" },
 	)
 }
+
+// Context warning. Past the warning line (forced low here), a hook has the model ask the human with a
+// fixed question; picking "Checkpoint now" (the first option, which AutoApprove's Enter selects) leads
+// to a checkpoint, and baton compacts and continues the same phase. AutoApprove also stands in for the
+// human on Haiku's permission prompts (the model commits before checkpointing).
+func TestContextWarningAsksTheHuman(t *testing.T) {
+	dir := NewProject(t)
+	Attach(t, dir, longPhasePlan)
+	s := StartEnv(t, dir, []string{"BATON_WARN_TOKENS=1000"}, "--model", "haiku", "Work on P0, and follow baton's instructions.")
+	s.Trust()
+	s.AutoApprove()
+	waitSequence(t, s, 6*time.Minute,
+		kind("context_warning"),
+		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["tool"] == "AskUserQuestion" },
+		kind("checkpoint"),
+		func(e map[string]any) bool { return e["kind"] == "compact_queued" && e["reason"] == "checkpoint" },
+		func(e map[string]any) bool {
+			return e["kind"] == "brief" && e["type"] == "checkpoint" && e["phase"] == "P0"
+		},
+		kind("rewake"),
+	)
+}

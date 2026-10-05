@@ -32,6 +32,11 @@ func TestSegment(t *testing.T) {
 		{"paused", func() state.State { s := run; s.Mode = state.ModePaused; return s }, true, "◆ baton · paused"},
 		{"complete", func() state.State { s := run; s.Mode = state.ModeComplete; return s }, true, "◆ baton · ✓ plan complete"},
 		{"waiting", func() state.State { s := run; state.SetWaiting(&s, "the build", time.Hour, now); return s }, true, "◆ baton · P0 1/2 The overlay · ctx 41% · waiting: the build"},
+		{"tokens against the limit", func() state.State {
+			s := run
+			s.Run.Context = &state.ContextUse{UsedPct: 41, Tokens: 412_345, WindowSize: 1_000_000, Limit: 810_000}
+			return s
+		}, true, "◆ baton · P0 1/2 The overlay · ctx 412k/810k"},
 	}
 	for _, c := range cases {
 		if got := Segment(c.st(), pl, c.plan); got != c.want {
@@ -85,5 +90,23 @@ func TestParse(t *testing.T) {
 	}
 	if Parse([]byte(`{"context_window":{"used_percentage":null}}`)).ContextWindow.UsedPercentage != nil {
 		t.Fatal("null percentage")
+	}
+}
+
+// Captured from Claude Code 2.1.289 (claude-opus-5-5[1m], --autocompact 810k): the window is the model's,
+// not the cap, and the percentage is rounded to a whole point (10k tokens on this model).
+func TestTokens(t *testing.T) {
+	for _, c := range []struct {
+		name, raw string
+		tokens    int
+		ok        bool
+	}{
+		{"before the first response", `{"context_window":{"context_window_size":1000000,"current_usage":null,"remaining_percentage":null,"total_input_tokens":0,"total_output_tokens":0,"used_percentage":null}}`, 0, false},
+		{"exact", `{"context_window":{"context_window_size":1000000,"current_usage":{"cache_creation_input_tokens":1962,"cache_read_input_tokens":40616,"input_tokens":2,"output_tokens":4},"remaining_percentage":96,"total_input_tokens":42580,"total_output_tokens":4,"used_percentage":4}}`, 42_580, true},
+		{"percentage only", `{"context_window":{"context_window_size":200000,"used_percentage":18}}`, 36_000, true},
+	} {
+		if tokens, ok := Parse([]byte(c.raw)).Tokens(); tokens != c.tokens || ok != c.ok {
+			t.Errorf("%s: %d %v", c.name, tokens, ok)
+		}
 	}
 }

@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
 // These commands are run by the model (through the Bash tool) and by the /baton skill. Their output is
@@ -178,7 +180,35 @@ func cmdStatus(args []string, io IO) int {
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
 	}
+	if cu := st.Run.Context; cu != nil {
+		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
+	}
 	return 0
+}
+
+// contextLine is the last context reading against the valves' thresholds. Outside the hosted session
+// the settings come from baton's config, and the limit from the reading itself.
+func contextLine(cu state.ContextUse, io IO) string {
+	vs := valve.FromEnv(io.Env)
+	if !hosted(io) {
+		cfg := config.Load(batonRoot(io), io.Env)
+		vs = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+	}
+	if vs.Cap == 0 {
+		vs.Cap = cu.Limit
+	}
+	l := vs.Limits(cu.WindowSize)
+	if l.Window == 0 {
+		return fmt.Sprintf("%.0f%% of the window", cu.UsedPct)
+	}
+	parts := []string{valve.Tokens(cu.Used()) + " of " + valve.Tokens(l.Window)}
+	if l.Checkpoint > 0 {
+		parts = append(parts, "checkpoint at "+valve.Tokens(l.Checkpoint))
+	}
+	if l.Warn > 0 {
+		parts = append(parts, "asks you at "+valve.Tokens(l.Warn))
+	}
+	return strings.Join(append(parts, "Claude Code compacts at about "+valve.Tokens(l.AutoAt)), " · ")
 }
 
 func cmdDone(args []string, io IO) int {

@@ -64,7 +64,7 @@ func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {
 	store, _ := state.Open(filepath.Join(t.TempDir(), ".baton"), "inst-1", time.Now)
 	cfg := Config{
 		Claude: fakeClaude, Args: []string{"--model", "haiku"}, BatonBin: "/opt/baton/bin/baton", Store: store,
-		Instance: "inst-1", Version: "test", Autocompact: "400k", Stdin: stdinR, Stdout: stdoutW,
+		Instance: "inst-1", Version: "test", Autocompact: "810k", Stdin: stdinR, Stdout: stdoutW,
 		Env:       append(os.Environ(), append([]string{"FAKE_OUT=" + r.out, "FAKE_EXIT=7"}, extraEnv...)...),
 		TypeDelay: time.Millisecond, EnterDelay: 5 * time.Millisecond,
 	}
@@ -137,7 +137,7 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 	}
 	args, env := r.start()
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--autocompact 400k") || !strings.HasSuffix(joined, "--model haiku") {
+	if !strings.Contains(joined, "--autocompact 810k") || !strings.HasSuffix(joined, "--model haiku") {
 		t.Fatalf("args: %v", args)
 	}
 	var settings map[string]any

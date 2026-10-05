@@ -23,9 +23,10 @@ baton takes every one of those decisions away from the model. The model does the
 - **State.** The plan's phases live in `.baton/` at the root of your repository, which is kept out of git. Each git worktree gets its own, so sessions in different worktrees run separate plans. The model reports progress with `baton done`, `blocked`, `waiting` or `checkpoint`.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
+- **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. Claude Code's own auto-compaction remains the backstop.
 - **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification.
-- **Status line.** A permanent `◆ baton · P6 6/23 <title> · ctx 41%` segment sits in front of your own status line.
+- **Status line.** A permanent `◆ baton · P6 6/23 <title> · ctx 412k/810k` segment sits in front of your own status line. It shows the context size against the limit.
 
 The design and the experiments behind it are in [`docs/plan.md`](docs/plan.md) and [`docs/research/`](docs/research).
 
@@ -79,8 +80,11 @@ Optional settings live in `~/.baton/config.json`. Environment variables override
 | `ntfy_server` | `BATON_NTFY_SERVER` | `https://ntfy.sh` | Your own ntfy server. |
 | `desktop` | `BATON_NOTIFY_DESKTOP` | `true` | Desktop notifications (macOS, and Linux with `notify-send`). |
 | `details` | — | `false` | Include the reason text in pushes. Pushes are content-free by default. |
-| `autocompact` | `BATON_AUTOCOMPACT` | `400k` | Launch-time cap on the context (`claude --autocompact`). `off` disables it. |
-| `checkpoint_pct` | `BATON_CHECKPOINT_PCT` | `60` | Context fill (%) at which baton asks the model to checkpoint at its next safe point. |
+| `autocompact` | `BATON_AUTOCOMPACT` | `810k` | Launch-time cap on the context (`claude --autocompact`): `auto`, or 100k to 1m. Claude Code compacts on its own about 33k tokens below the limit, which is this cap or the model's window, whichever is smaller. `off` leaves the limit to Claude Code's own settings. An `--autocompact` you pass to `baton` yourself wins. |
+| `checkpoint_pct` | `BATON_CHECKPOINT_PCT` | `60` | Context fill (% of the limit) at which baton asks the model to checkpoint at its next safe point. `0` turns it off. |
+| `warn_pct` | `BATON_WARN_PCT` | `90` | Context fill (% of the limit, but never under 200k tokens) at which baton asks you whether to checkpoint now or keep going. The run waits for your answer. If Claude Code would compact first (small windows), the question moves to before that point. `0` turns it off. |
+
+With the defaults on a 1M-token model, baton asks for a checkpoint at 486k tokens and asks you at 729k, and Claude Code compacts on its own at about 777k. `/baton setup` prints the numbers for your settings.
 
 `BATON_HOME` moves `~/.baton` elsewhere.
 

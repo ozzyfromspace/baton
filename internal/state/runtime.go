@@ -35,8 +35,10 @@ type Runtime struct {
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
-	// ContextNudged is set once the model has been asked to checkpoint; any compaction resets it.
+	// ContextNudged is set once the model has been asked to checkpoint, and ContextWarned once the human
+	// has been asked; each re-arms when the context falls well below its threshold (after a compaction).
 	ContextNudged bool        `json:"context_nudged,omitempty"`
+	ContextWarned bool        `json:"context_warned,omitempty"`
 	Escalation    *Escalation `json:"escalation,omitempty"`
 	LastError     *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.
@@ -94,9 +96,20 @@ func (c Compaction) InFlight() bool {
 
 // ContextUse is the context window fill reported by Claude Code's status line input.
 type ContextUse struct {
-	UsedPct    float64   `json:"used_pct"`
-	WindowSize int       `json:"window_size,omitempty"`
-	At         time.Time `json:"at"`
+	UsedPct    float64 `json:"used_pct"`              // percent of the model's window, as Claude Code reports it
+	Tokens     int     `json:"tokens,omitempty"`      // the size of the last request: its input, cached or not
+	WindowSize int     `json:"window_size,omitempty"` // the model's context window
+	// Limit is the compaction window: the model's window, or the --autocompact cap when that is smaller.
+	Limit int       `json:"limit,omitempty"`
+	At    time.Time `json:"at"`
+}
+
+// Used is the context size in tokens, estimated from the percentage when the exact count is missing.
+func (c ContextUse) Used() int {
+	if c.Tokens > 0 {
+		return c.Tokens
+	}
+	return int(c.UsedPct * float64(c.WindowSize) / 100)
 }
 
 // Escalation records that baton brought the human in, and why.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/elevate"
+	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
 
@@ -73,7 +74,11 @@ func cmdSetup(_ []string, io IO) int {
 	} else {
 		note(fmt.Sprintf("push notifications (optional): put {\"ntfy_topic\": \"<a long random name>\"} in %s and subscribe to it in the ntfy app; treat the topic like a password", config.Path(root)))
 	}
-	note(fmt.Sprintf("context: baton caps it with --autocompact %s and asks for a checkpoint at %g%%", orNone(cfg.Autocompact), *cfg.CheckpointPct))
+	if flag, vs, err := contextSettings(cfg, nil, io.Env); err != nil {
+		check(false, "", fmt.Sprintf("%v; fix it in %s (or BATON_AUTOCOMPACT), or claude will refuse to start", err, config.Path(root)))
+	} else {
+		note(contextSummary(flag, vs))
+	}
 	note("permissions: sessions started with `baton` allow baton's own CLI automatically; for plain sessions (elevation), add the rule Bash(baton:*) with /permissions")
 	if ok {
 		fmt.Fprintln(io.Out, "ready: start a session with `baton` (same arguments as `claude`), then /baton plan <goal> or /baton attach <plan>.")
@@ -105,6 +110,30 @@ func versionAtLeast(have, want string) bool {
 		}
 	}
 	return true
+}
+
+// contextSummary says where the context valves sit, worked out for a 1M-token model.
+func contextSummary(flag string, vs valve.Settings) string {
+	s := "context: Claude Code's own auto-compaction setting applies (autocompact is off)"
+	if flag != "" {
+		s = "context: baton launches claude with --autocompact " + flag
+	}
+	l := vs.Limits(1_000_000)
+	var parts []string
+	if l.Checkpoint > 0 {
+		parts = append(parts, fmt.Sprintf("asks the model to checkpoint at %s", valve.Tokens(l.Checkpoint)))
+	}
+	if l.Warn > 0 {
+		parts = append(parts, fmt.Sprintf("asks you (AskUserQuestion) at %s", valve.Tokens(l.Warn)))
+	}
+	if len(parts) == 0 {
+		parts = []string{"leaves the context alone (checkpoint_pct and warn_pct are 0)"}
+	}
+	s += fmt.Sprintf(". On a 1M-token model baton %s; Claude Code compacts on its own at about %s", strings.Join(parts, " and "), valve.Tokens(l.AutoAt))
+	if vs.Cap == 0 {
+		s += " (if its own setting does not compact sooner)"
+	}
+	return s + ". Smaller windows scale down."
 }
 
 func orNone(s string) string {

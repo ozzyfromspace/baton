@@ -2,11 +2,12 @@ package hooks
 
 import (
 	"fmt"
-	"strconv"
+	"math"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
 // NudgePrefix starts every message baton types or sends into the session, so the hooks can tell
@@ -288,50 +289,93 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 
 func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
-	var pct float64
-	nudge := false
+	var v valveAction
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if st.Run.Dialog != nil && st.Run.Dialog.Tool == tool {
 			st.Run.Dialog = nil
 		}
-		th := threshold(c.Env)
-		if cu := st.Run.Context; st.Run.ContextNudged && cu != nil && cu.UsedPct < th-10 {
-			st.Run.ContextNudged = false // a compaction brought it well below the threshold: re-arm
-		}
-		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" && shouldNudgeContext(st, th) {
-			st.Run.ContextNudged, pct, nudge = true, st.Run.Context.UsedPct, true
+		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
+			v = contextValves(st, valve.FromEnv(c.Env))
 		}
 		return nil
 	})
-	if err != nil || !nudge {
+	if err != nil || v.event == "" {
 		return Result{}, ok(err)
 	}
-	s.Event("context_nudge", map[string]any{"pct": pct})
+	s.Event(v.event, v.fields)
 	return Result{Output: map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName": "PostToolUse",
-			"additionalContext": fmt.Sprintf("%s Checkpoint due: the context is %.0f%% full. Finish the step you are on and commit, then run "+
-				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: baton compacts the context and you continue this phase from your notes. "+
-				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, pct),
-		},
+		"systemMessage":      v.say,
+		"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "additionalContext": v.tell},
 	}}, nil
 }
 
-// shouldNudgeContext asks the model to checkpoint when the context passes the threshold mid-phase. It
-// fires once, and re-arms only after the context falls 10 points below the threshold, so a compaction
-// that leaves the context above the threshold cannot start a loop of checkpoints. Subagents are never
-// nudged: they cannot end the main session's turn.
-func shouldNudgeContext(st *state.State, threshold float64) bool {
-	c := st.Run.Context
-	return threshold > 0 && c != nil && c.UsedPct >= threshold && st.Mode == state.ModeRunning &&
-		!st.Run.ContextNudged && !st.CheckpointOwed && !st.BoundaryOwed && !st.Run.Compaction.InFlight()
+// valveAction is what a context valve does: an event to log, a line for the human, words for the model.
+type valveAction struct {
+	event     string
+	fields    map[string]any
+	say, tell string
 }
 
-func threshold(env func(string) string) float64 {
-	if f, err := strconv.ParseFloat(env("BATON_CHECKPOINT_PCT"), 64); err == nil {
-		return f
+// contextValves runs the two mid-phase valves after a main-agent tool call. Past the checkpoint line,
+// the model is asked to checkpoint at its next safe point. Past the warning line, the model is asked to
+// put a fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its
+// own. Each fires once, and re-arms only after the context falls a tenth of the window below its line,
+// so a compaction that leaves the context high cannot start a loop. Subagents are never asked: they
+// cannot end the main session's turn.
+func contextValves(st *state.State, vs valve.Settings) valveAction {
+	cu := st.Run.Context
+	if cu == nil {
+		return valveAction{}
 	}
-	return 60
+	lim, used := vs.Limits(cu.WindowSize), cu.Used()
+	if lim.Window == 0 {
+		return valveAction{}
+	}
+	rearm := lim.Window / 10
+	if st.Run.ContextNudged && used < lim.Checkpoint-rearm {
+		st.Run.ContextNudged = false
+	}
+	if st.Run.ContextWarned && used < lim.Warn-rearm {
+		st.Run.ContextWarned = false
+	}
+	if st.Mode != state.ModeRunning || st.CheckpointOwed || st.BoundaryOwed || st.Run.Compaction.InFlight() {
+		return valveAction{}
+	}
+	pct := 100 * float64(used) / float64(lim.Window)
+	switch {
+	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned:
+		// The warning includes the checkpoint option, so the nudge has nothing left to say.
+		st.Run.ContextWarned, st.Run.ContextNudged = true, true
+		return valveAction{
+			event:  "context_warning",
+			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
+			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
+			tell:   warnText(used, lim),
+		}
+	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextNudged:
+		st.Run.ContextNudged = true
+		return valveAction{
+			event:  "context_nudge",
+			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "checkpoint": lim.Checkpoint, "limit": lim.Window},
+			say:    fmt.Sprintf("baton: context at %s of %s → checkpoint at the next safe point", valve.Tokens(used), valve.Tokens(lim.Window)),
+			tell: fmt.Sprintf("%s Checkpoint due: the context holds %s tokens, %.0f%% of its %s limit. Finish the step you are on and commit, then run "+
+				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: baton compacts the context and you continue this phase from your notes. "+
+				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window)),
+		}
+	}
+	return valveAction{}
+}
+
+// warnText makes the model put a fixed question to the human. AskUserQuestion reaches every device the
+// human uses (and the watchdog pushes a notification if it goes unanswered).
+func warnText(used int, lim valve.Limits) string {
+	q := fmt.Sprintf("baton: the context holds %s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now?",
+		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt))
+	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with the question %q and two options: "+
+		"\"Checkpoint now\" (description: \"Finish the current step, save notes and compact; this phase continues from the notes\") and "+
+		"\"Keep going\" (description: \"Carry on; Claude Code compacts on its own when the context is full\"). "+
+		"If they choose Checkpoint now, finish the step you are on and commit, then run `baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. "+
+		"If they choose Keep going, carry on with the phase.", NudgePrefix, q)
 }
 
 func (h *handlers) notification(c Context) (Result, error) {

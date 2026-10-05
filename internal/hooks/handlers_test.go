@@ -19,6 +19,7 @@ type fixture struct {
 	store *state.Store
 	now   time.Time
 	inst  string
+	vars  map[string]string // extra environment for the hooks
 }
 
 func newFixture(t *testing.T, withPlan bool) *fixture {
@@ -43,6 +44,9 @@ func newFixture(t *testing.T, withPlan bool) *fixture {
 
 func (f *fixture) env(instance string) func(string) string {
 	return func(k string) string {
+		if v, ok := f.vars[k]; ok {
+			return v
+		}
 		return map[string]string{"BATON_HOST": "1", "BATON_DIR": f.dir, "BATON_INSTANCE": instance}[k]
 	}
 }
@@ -205,34 +209,108 @@ func TestStopFailureAndSessionEnd(t *testing.T) {
 	}
 }
 
+// setContext records a status line reading from a 1M-token model.
+func (f *fixture) setContext(tokens int) {
+	f.t.Helper()
+	f.store.Update(func(st *state.State) error {
+		st.Run.Context = &state.ContextUse{Tokens: tokens, WindowSize: 1_000_000, UsedPct: float64(tokens) / 10_000}
+		return nil
+	})
+}
+
+func additionalContext(out map[string]any) string {
+	hso, _ := out["hookSpecificOutput"].(map[string]any)
+	s, _ := hso["additionalContext"].(string)
+	return s
+}
+
+// With the default 810k cap on a 1M model: checkpoint at 486k, warning at 729k, re-arm 81k below each.
+var defaultCap = map[string]string{"BATON_COMPACT_CAP": "810000"}
+
 func TestContextNudgeOncePerCompaction(t *testing.T) {
 	f := newFixture(t, true)
-	f.store.Update(func(st *state.State) error { st.Run.Context = &state.ContextUse{UsedPct: 72}; return nil })
+	f.vars = defaultCap
+	f.setContext(500_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "agent_id": "sub-1"}); out != nil {
 		t.Fatalf("nudged a subagent: %v", out)
 	}
 	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
-	ctx, _ := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
-	if !strings.Contains(ctx, "Checkpoint due: the context is 72% full") || !strings.Contains(ctx, "baton checkpoint --notes") {
-		t.Fatalf("nudge: %v", out)
+	if out["systemMessage"] != "baton: context at 500k of 810k → checkpoint at the next safe point" {
+		t.Fatalf("not announced: %v", out["systemMessage"])
+	}
+	ctx := additionalContext(out)
+	if !strings.Contains(ctx, "Checkpoint due: the context holds 500k tokens, 62% of its 810k limit") || !strings.Contains(ctx, "baton checkpoint --notes") {
+		t.Fatalf("nudge: %q", ctx)
 	}
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
 		t.Fatalf("nudged twice: %v", out)
 	}
 	// A compaction that leaves the context above the threshold must not start a loop of checkpoints.
 	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 65; return nil })
+	f.setContext(450_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
 		t.Fatalf("nudged again without the context dropping: %v", out)
 	}
 	// Well below the threshold, the nudge re-arms (but does not fire); past it again, it fires once more.
-	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 30; return nil })
+	f.setContext(300_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil || f.state().Run.ContextNudged {
 		t.Fatalf("below the threshold: %v nudged=%v", out, f.state().Run.ContextNudged)
 	}
-	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 61; return nil })
+	f.setContext(490_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out == nil {
 		t.Fatal("the re-armed nudge did not fire")
+	}
+}
+
+func TestContextWarningAsksTheHumanOnce(t *testing.T) {
+	f := newFixture(t, true)
+	f.vars = defaultCap
+	f.setContext(730_000)
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "agent_id": "sub-1"}); out != nil {
+		t.Fatalf("warned from a subagent: %v", out)
+	}
+	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
+	if out["systemMessage"] != "baton: context at 730k of 810k → asking you whether to checkpoint" {
+		t.Fatalf("not announced: %v", out["systemMessage"])
+	}
+	ctx := additionalContext(out)
+	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
+		`"Checkpoint now"`, `"Keep going"`, "baton checkpoint --notes"} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("warning lacks %q: %q", want, ctx)
+		}
+	}
+	// It includes the checkpoint option, so the nudge does not follow it; nor does it repeat.
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+		t.Fatalf("asked twice: %v", out)
+	}
+	// After a compaction (or anything else that brings the context well down), it re-arms.
+	f.setContext(600_000)
+	f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
+	f.setContext(740_000)
+	if !strings.Contains(additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "AskUserQuestion") {
+		t.Fatal("the re-armed warning did not fire")
+	}
+}
+
+func TestContextWarningStaysQuiet(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		vars map[string]string
+		set  func(*state.State)
+	}{
+		{"compaction owed", defaultCap, func(st *state.State) { st.CheckpointOwed = true }},
+		{"compaction underway", defaultCap, func(st *state.State) { st.Run.Compaction.Status = state.CompactActive }},
+		{"paused", defaultCap, func(st *state.State) { st.Mode = state.ModePaused }},
+		{"turned off", map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_WARN_PCT": "0", "BATON_CHECKPOINT_PCT": "0"}, func(*state.State) {}},
+	} {
+		f := newFixture(t, true)
+		f.vars = c.vars
+		f.setContext(760_000)
+		f.store.Update(func(st *state.State) error { c.set(st); return nil })
+		if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+			t.Errorf("%s: %v", c.name, out)
+		}
 	}
 }
 

@@ -29,7 +29,7 @@ type Config struct {
 	Store       *state.Store
 	Instance    string
 	Version     string
-	Autocompact string // passed as --autocompact when non-empty, e.g. "400k"
+	Autocompact string // passed as --autocompact when non-empty, e.g. "810k"
 	Stdin       *os.File
 	Stdout      *os.File
 	Env         []string // the child's base environment
