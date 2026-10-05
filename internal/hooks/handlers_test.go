@@ -204,3 +204,34 @@ func TestStopFailureAndSessionEnd(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestContextNudgeOncePerCompaction(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error { st.Run.Context = &state.ContextUse{UsedPct: 72}; return nil })
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "agent_id": "sub-1"}); out != nil {
+		t.Fatalf("nudged a subagent: %v", out)
+	}
+	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
+	ctx, _ := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
+	if !strings.Contains(ctx, "Checkpoint due: the context is 72% full") || !strings.Contains(ctx, "baton checkpoint --notes") {
+		t.Fatalf("nudge: %v", out)
+	}
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+		t.Fatalf("nudged twice: %v", out)
+	}
+	// A compaction that leaves the context above the threshold must not start a loop of checkpoints.
+	f.fire("PreCompact", map[string]any{"trigger": "manual"})
+	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 65; return nil })
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+		t.Fatalf("nudged again without the context dropping: %v", out)
+	}
+	// Well below the threshold, the nudge re-arms (but does not fire); past it again, it fires once more.
+	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 30; return nil })
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil || f.state().Run.ContextNudged {
+		t.Fatalf("below the threshold: %v nudged=%v", out, f.state().Run.ContextNudged)
+	}
+	f.store.Update(func(st *state.State) error { st.Run.Context.UsedPct = 61; return nil })
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out == nil {
+		t.Fatal("the re-armed nudge did not fire")
+	}
+}

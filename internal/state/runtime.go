@@ -35,9 +35,11 @@ type Runtime struct {
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
-	Escalation       *Escalation `json:"escalation,omitempty"`
-	LastError        *StopError  `json:"last_error,omitempty"`
-	Ended            *Ended      `json:"ended,omitempty"`
+	// ContextNudged is set once the model has been asked to checkpoint; any compaction resets it.
+	ContextNudged bool        `json:"context_nudged,omitempty"`
+	Escalation    *Escalation `json:"escalation,omitempty"`
+	LastError     *StopError  `json:"last_error,omitempty"`
+	Ended         *Ended      `json:"ended,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.

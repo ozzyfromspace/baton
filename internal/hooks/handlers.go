@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -219,13 +220,50 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 
 func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
-	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	var pct float64
+	nudge := false
+	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if st.Run.Dialog != nil && st.Run.Dialog.Tool == tool {
 			st.Run.Dialog = nil
 		}
+		th := threshold(c.Env)
+		if cu := st.Run.Context; st.Run.ContextNudged && cu != nil && cu.UsedPct < th-10 {
+			st.Run.ContextNudged = false // a compaction brought it well below the threshold: re-arm
+		}
+		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" && shouldNudgeContext(st, th) {
+			st.Run.ContextNudged, pct, nudge = true, st.Run.Context.UsedPct, true
+		}
 		return nil
 	})
-	return Result{}, ok(err)
+	if err != nil || !nudge {
+		return Result{}, ok(err)
+	}
+	s.Event("context_nudge", map[string]any{"pct": pct})
+	return Result{Output: map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName": "PostToolUse",
+			"additionalContext": fmt.Sprintf("%s Checkpoint due: the context is %.0f%% full. Finish the step you are on and commit, then run "+
+				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: baton compacts the context and you continue this phase from your notes. "+
+				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, pct),
+		},
+	}}, nil
+}
+
+// shouldNudgeContext asks the model to checkpoint when the context passes the threshold mid-phase. It
+// fires once, and re-arms only after the context falls 10 points below the threshold, so a compaction
+// that leaves the context above the threshold cannot start a loop of checkpoints. Subagents are never
+// nudged: they cannot end the main session's turn.
+func shouldNudgeContext(st *state.State, threshold float64) bool {
+	c := st.Run.Context
+	return threshold > 0 && c != nil && c.UsedPct >= threshold && st.Mode == state.ModeRunning &&
+		!st.Run.ContextNudged && !st.CheckpointOwed && !st.BoundaryOwed && !st.Run.Compaction.InFlight()
+}
+
+func threshold(env func(string) string) float64 {
+	if f, err := strconv.ParseFloat(env("BATON_CHECKPOINT_PCT"), 64); err == nil {
+		return f
+	}
+	return 60
 }
 
 func (h *handlers) notification(c Context) (Result, error) {
