@@ -13,6 +13,7 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `06-typed-compact-rewake/` | Typed `/compact` + post-compact brief + `PostCompact` asyncRewake: a full unattended phase handoff? |
 | `07-passthrough-wrapper/` | Prototype of baton's host: a transparent PTY wrapper that types `/compact` when a hook asks. |
 | `08-elevation/` | Can a plain `claude` session hand itself over to the wrapper (exit, relaunch, same conversation) with no keystrokes? |
+| `15-gates-and-signals/` | Does a status line refreshing every second keep the screen from settling? When does `idle_prompt` fire? ([write-up](../docs/research/reliability.md)) |
 | `14-context-window/` | What does the status line input report about the context under `--autocompact`? ([write-up](../docs/research/context-window.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
