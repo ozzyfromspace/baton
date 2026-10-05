@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -90,6 +91,11 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 	if !waiting {
 		return
 	}
+	if _, alone := st.Run.Dialogs.Only(); alone && d.Kind == "proposal" {
+		if p := st.PendingProposal(); p != nil && p.Untimed == "" {
+			return // the human was told when it was asked, and baton answers it at the deadline
+		}
+	}
 	due := []time.Duration{l.Timing.DialogNotify}
 	for _, r := range Reminders {
 		due = append(due, l.Timing.DialogNotify+r)
@@ -109,9 +115,11 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
 }
 
-// answerOwnQuestion answers baton's own context question when nobody has for WarnTimeout. The question
-// only warns: Claude Code compacts on its own when the context is full, so an unattended run should not
-// stop on it. The answer arrives through the usual hook.
+// answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context
+// question (Keep going) after WarnTimeout, since it only warns and Claude Code compacts on its own when
+// the context is full; and a timed proposal (Go ahead) at its deadline, since a run must not stop for
+// something it can work around (docs/escalation.md). An untimed proposal is never answered: only the
+// human can let it go ahead. The answer arrives through the usual hook.
 //
 // A key typed into the wrong dialog can approve something nobody approved (in a permission prompt, 2 is
 // "Yes, and always allow"), so three layers keep it out of anyone else's (docs/research/escalation.md):
@@ -120,18 +128,39 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 //   - the key is 3, where the default sits, which in a permission prompt means "No".
 //
 // The clock runs from when the question was first alone, and every key the human presses starts it over:
-// somebody at the keyboard is answering it. Keys go to the dialog, not the input box, so a draft there
-// does not matter. It answers once per question.
+// somebody at the keyboard is answering it. A proposal is never answered before the time its question
+// names, nor less than MinProposalWait after it was first alone (after a sleep, the human gets that long
+// again). Keys go to the dialog, not the input box, so a draft there does not matter. It answers once
+// per question.
 func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) {
 	d, alone := st.Run.Dialogs.Only()
-	if !alone || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() {
+	if !alone || !d.AutoAnswered.IsZero() {
 		return
 	}
-	if !l.alone.Same(d) {
-		l.alone, l.aloneAt = d, v.Now
+	var due time.Time
+	fields := map[string]any{"dialog": d.Kind, "key": ownAnswerKey}
+	switch d.Kind {
+	case "context_warning":
+		if !l.alone.Same(d) {
+			l.alone, l.aloneAt = d, v.Now
+		}
+		due = l.since(latest(d.Since, l.aloneAt, v.LastHumanKey)).Add(l.Timing.WarnTimeout)
+	case "proposal":
+		p := st.PendingProposal()
+		if p == nil || p.Untimed != "" || p.Deadline.IsZero() || decide.Normalize(p.Question) != d.Key {
+			return // untimed, settled, or not the question this proposal issued
+		}
+		if !l.alone.Same(d) {
+			l.alone, l.aloneAt = d, v.Now
+		}
+		// A key is a moment on the wall clock: one pressed before a sleep does not restart the timer at
+		// the wake (the minute alone does that).
+		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
+		fields["id"] = p.ID
+	default:
+		return
 	}
-	from := l.since(latest(d.Since, l.aloneAt, v.LastHumanKey))
-	if v.Now.Sub(from) < l.Timing.WarnTimeout || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
+	if v.Now.Before(due) || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
 		return
 	}
 	l.update(func(st *state.State) {
@@ -141,12 +170,16 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 			}
 		}
 	})
-	l.Store.Event("auto_answered", map[string]any{"dialog": d.Kind, "key": ownAnswerKey, "after": v.Now.Sub(l.since(l.aloneAt)).Round(time.Second).String()})
+	fields["after"] = v.Now.Sub(l.since(l.aloneAt)).Round(time.Second).String()
+	l.Store.Event("auto_answered", fields)
 	in.Type(ownAnswerKey, false)
 }
 
 // ownAnswerKey picks the third option of baton's own questions, where the default sits.
 const ownAnswerKey = "3"
+
+// MinProposalWait is the least time a proposal's question is on screen, alone, before baton answers it.
+const MinProposalWait = time.Minute
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
 // login, billing, a model that does not exist, a request Claude Code refuses to send) needs the human.
