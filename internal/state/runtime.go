@@ -39,7 +39,9 @@ type Runtime struct {
 	ContextNudged bool        `json:"context_nudged,omitempty"`
 	Escalation    *Escalation `json:"escalation,omitempty"`
 	LastError     *StopError  `json:"last_error,omitempty"`
-	Ended         *Ended      `json:"ended,omitempty"`
+	// PendingDone is the pending command (after elevation) already handed to the model.
+	PendingDone string `json:"pending_done,omitempty"`
+	Ended       *Ended `json:"ended,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.

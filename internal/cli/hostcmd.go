@@ -26,7 +26,10 @@ func init() {
 }
 
 // runHost starts claude inside baton's pseudo-terminal in the current directory.
-func runHost(args []string, io IO) int {
+func runHost(args []string, io IO) int { return runHostWith(args, io, nil) }
+
+// runHostWith is runHost with extra environment for the session (e.g. BATON_PENDING after elevation).
+func runHostWith(args []string, io IO, extraEnv []string) int {
 	if io.Env("BATON_HOST") == "1" {
 		return fail(io, "this is already a baton-hosted session; run claude's own commands here instead")
 	}
@@ -60,7 +63,7 @@ func runHost(args []string, io IO) int {
 	if claude == "" {
 		claude = "claude"
 	}
-	cfg := config.Load(homeDir(io), io.Env)
+	cfg := config.Load(batonRoot(io), io.Env)
 	var env []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "BATON_") {
@@ -68,6 +71,7 @@ func runHost(args []string, io IO) int {
 		}
 	}
 	env = append(env, fmt.Sprintf("BATON_CHECKPOINT_PCT=%g", *cfg.CheckpointPct))
+	env = append(env, extraEnv...)
 	timing := loop.DefaultTiming
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace} {
@@ -161,6 +165,14 @@ func fileLogger(path, instance string, now func() time.Time) func(string, ...any
 		fmt.Fprintf(f, "%s [%s] %s\n", now().Format("2006-01-02 15:04:05.000"), instance, fmt.Sprintf(format, a...))
 		f.Close()
 	}
+}
+
+// batonRoot is baton's own directory: $BATON_HOME, or ~/.baton.
+func batonRoot(io IO) string {
+	if r := io.Env("BATON_HOME"); r != "" {
+		return r
+	}
+	return filepath.Join(homeDir(io), ".baton")
 }
 
 // homeDir prefers the injected HOME so tests never touch the developer's real settings.

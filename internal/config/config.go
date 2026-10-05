@@ -1,6 +1,6 @@
-// Package config reads baton's user settings from ~/.baton/config.json. Environment variables override
-// the file, so a single session can be tuned without editing it. baton never edits Claude Code's own
-// settings files.
+// Package config reads baton's user settings from ~/.baton/config.json ($BATON_HOME/config.json).
+// Environment variables override the file, so a single session can be tuned without editing it. baton
+// never edits Claude Code's own settings files.
 package config
 
 import (
@@ -34,14 +34,14 @@ const (
 	DefaultNtfyServer    = "https://ntfy.sh"
 )
 
-// Path is where the config file lives for a home directory.
-func Path(home string) string { return filepath.Join(home, ".baton", "config.json") }
+// Path is where the config file lives, under baton's root directory (~/.baton, or $BATON_HOME).
+func Path(root string) string { return filepath.Join(root, "config.json") }
 
 // Load reads the config file (a missing or unreadable file is an empty config) and applies the
 // environment overrides and defaults.
-func Load(home string, env func(string) string) Config {
+func Load(root string, env func(string) string) Config {
 	var c Config
-	if b, err := os.ReadFile(Path(home)); err == nil {
+	if b, err := os.ReadFile(Path(root)); err == nil {
 		json.Unmarshal(b, &c)
 	}
 	if v := env("BATON_NTFY_TOPIC"); v != "" {
