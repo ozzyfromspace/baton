@@ -1,6 +1,8 @@
 # baton v0.1 — implementation plan
 
 > Approved 2026-10-04. Phases are committed in order; `git log` tells the story. Research behind it: [`research/spikes.md`](research/spikes.md).
+>
+> **v0.2.0 changed how a run reaches the human.** The model has three ways to do it (`note`, a timed `propose`, and `blocked --tried`). baton snapshots uncommitted work whenever the run halts, and runs a plan the same way in a folder without git. That design, and the spikes behind it, are in [`escalation.md`](escalation.md). Where this plan says a blocked run escalates, read that.
 
 ## Context
 
@@ -96,6 +98,8 @@ Escape, Ctrl-C or a human prompt pauses autonomy until the next `Stop`.
 | Blocked | escalate |
 | Declared wait within its window | allow; the watchdog owns the deadline |
 | No status | block with a fixed reason; after N consecutive blocks (default 3), escalate |
+
+v0.2.0 adds three rows: a review due after too many decisions without the human (checked before a phase boundary), a proposal not yet put to the human (refused with the exact question), and a proposal the human held. See [`escalation.md`](escalation.md).
 
 3. The **injector** types `/compact` (8 chars, then a lone CR).
 4. **PreCompact** records `{epoch, trigger, requested_by_baton}` and acks. If there's no ack in 15s: retry once, then escalate.

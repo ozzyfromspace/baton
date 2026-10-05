@@ -1,6 +1,6 @@
 # Working on baton
 
-baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`; the evidence behind it is in `docs/research/spikes.md`. Read both before changing how compaction, hooks, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
+baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`, and how a run reaches the human (note, propose, blocked; snapshots; answering its own question) is in `docs/escalation.md`. The evidence behind them is in `docs/research/` (`spikes.md`, `reliability.md`, `escalation.md`). Read them before changing how compaction, escalation, hooks, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
 
 ## Non-negotiables
 
@@ -13,7 +13,7 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
-- `internal/<pkg>/` — one package per concern (host, hooks, plan, state, brief, statusline, notify, watchdog, elevate).
+- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies.
 - `plugin/` — the Claude Code plugin (skill, launchers, elevation Stop hook). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 
@@ -27,7 +27,7 @@ make e2e        # real-claude scenarios (needs BATON_E2E=1, costs a few cents)
 make release-prep VERSION=v0.1.0   # pin checksums + plugin version, then commit and tag
 ```
 
-End-to-end tests run real `claude --model haiku` (no auto mode on Haiku, so tests approve dialogs with `AutoApprove`). They isolate `BATON_HOME`, never notify, and remove any plan file plan mode writes to `~/.claude/plans`.
+End-to-end tests run real `claude --model haiku`. Haiku has no auto mode, so tests approve dialogs with `AutoApprove`, or, where a proposal is on screen, use `acceptEdits` and narrow allow rules (AutoApprove's Enter would pick option 1). Every session gets its own `BATON_HOME` and `GNUPGHOME`, so neither your baton config nor your keyring is ever touched, and the signing tests use stand-in gpg scripts. Tests never notify, and they remove any plan file plan mode writes to `~/.claude/plans`. `BATON_E2E_SONNET=1` adds the Sonnet scenarios: auto mode at a phase boundary, and the replay of the signing outage behind graduated escalation ([`docs/escalation.md`](docs/escalation.md)).
 
 ## Conventions
 
