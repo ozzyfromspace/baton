@@ -23,14 +23,19 @@ func waitSequence(t *testing.T, s *Session, timeout time.Duration, steps ...func
 		return next == len(steps)
 	})
 	if next != len(steps) {
-		var lines []string
-		for _, e := range s.Events() {
-			delete(e, "ts")
-			delete(e, "instance")
-			lines = append(lines, fmt.Sprint(e))
-		}
-		t.Fatalf("matched %d of %d steps; events:\n%s", next, len(steps), strings.Join(lines, "\n"))
+		t.Fatalf("matched %d of %d steps; events:\n%s", next, len(steps), eventLog(s))
 	}
+}
+
+// eventLog is the session's events, one a line, for a failure message.
+func eventLog(s *Session) string {
+	var lines []string
+	for _, e := range s.Events() {
+		delete(e, "ts")
+		delete(e, "instance")
+		lines = append(lines, fmt.Sprint(e))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func kind(k string) func(map[string]any) bool {

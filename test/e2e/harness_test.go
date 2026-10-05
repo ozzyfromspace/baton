@@ -91,6 +91,44 @@ func NewProject(t *testing.T) string {
 	return dir
 }
 
+// NewSignedProject makes a git repository whose history is signed, like the one in the incident behind
+// graduated escalation (docs/escalation.md): commit.gpgsign is on, and gpg is a stand-in that signs
+// without any keyring. breakSigning makes every signature from then on time out, as the real gpg did
+// once the machine had restarted and its agent had lost the passphrase. No real gpg is ever run.
+func NewSignedProject(t *testing.T) (dir string, breakSigning func()) {
+	t.Helper()
+	dir, tools := t.TempDir(), t.TempDir()
+	gpg := func(name, body string) string {
+		p := filepath.Join(tools, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	signs := gpg("gpg-signs", "cat >/dev/null\n"+
+		"echo '[GNUPG:] SIG_CREATED D 1 8 00 1700000000 5A1E5A1E5A1E5A1E' >&2\n"+
+		"printf -- '-----BEGIN PGP SIGNATURE-----\\n\\niQEzBAABCAAdFiEE\\n-----END PGP SIGNATURE-----\\n'\n")
+	timesOut := gpg("gpg-times-out", "cat >/dev/null 2>&1\nsleep 4\n"+
+		"echo 'gpg: signing failed: Operation timed out' >&2\necho '[GNUPG:] FAILURE sign 67108949' >&2\nexit 2\n")
+	Git(t, dir, "init", "-q")
+	Git(t, dir, "config", "user.name", "baton e2e")
+	Git(t, dir, "config", "user.email", "e2e@baton.invalid")
+	Git(t, dir, "config", "commit.gpgsign", "true")
+	Git(t, dir, "config", "user.signingkey", "5A1E5A1E5A1E5A1E")
+	Git(t, dir, "config", "gpg.program", signs)
+	for _, f := range []struct{ name, text, msg string }{
+		{"README.md", "# Greeter\n\nSays hello and goodbye.\n", "chore: start the greeter"},
+		{"NOTES.md", "Signed history: every commit here is signed.\n", "docs: note that history is signed"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		Git(t, dir, "add", f.name)
+		Git(t, dir, "commit", "-q", "-m", f.msg)
+	}
+	return dir, func() { Git(t, dir, "config", "gpg.program", timesOut) }
+}
+
 // Git runs git in dir and returns its output, failing the test if git fails.
 func Git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
