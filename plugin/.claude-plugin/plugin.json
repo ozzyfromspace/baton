@@ -1,6 +1,6 @@
 {
   "name": "baton",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Run multi-phase Claude Code plans unattended, compacting at every phase boundary in one live terminal session.",
   "author": {
     "name": "Oswald Chisala",

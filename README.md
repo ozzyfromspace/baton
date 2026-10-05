@@ -4,7 +4,7 @@
 
 You plan the work in plan mode, approve it, and walk away. baton keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. If something needs you, it tells you on whatever device you're on.
 
-> Status: **release candidate** (v0.1.0-rc.1). macOS and Linux. Windows is planned.
+> Status: **release candidate** (v0.1.0-rc.2). macOS and Linux. Windows is planned.
 
 ## Why
 
