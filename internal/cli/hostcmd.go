@@ -95,6 +95,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: controller,
 	})
+	controller.Ended() // save uncommitted work as the session ends
 	if err != nil {
 		return fail(io, "%v", err)
 	}

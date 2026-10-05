@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -166,5 +168,32 @@ func TestWithoutGitNothingIsRefusedOrCommitted(t *testing.T) {
 				t.Error("created a repository")
 			}
 		})
+	}
+}
+
+// baton status lists the snapshots the host took and how to get one back.
+func TestStatusListsSnapshots(t *testing.T) {
+	s, planFile, root := newRepoSession(t)
+	s.attach(planFile)
+	if out := s.must("", "status"); strings.Contains(out, "snapshots") {
+		t.Fatalf("no snapshot yet: %s", out)
+	}
+	gittest.Write(t, root, "a.txt", "work in progress\n")
+	saved, err := gitx.Snapshot(root, s.now, "P0", "blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := s.must("", "status")
+	for _, want := range []string{saved.Ref + "  (P0 · 1 file)", "git show --stat <ref>", "git restore --source=<ref> --worktree -- ."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	var js struct {
+		Snapshots []gitx.Saved `json:"snapshots"`
+	}
+	json.Unmarshal([]byte(s.must("", "status", "--json")), &js)
+	if len(js.Snapshots) != 1 || js.Snapshots[0].Ref != saved.Ref {
+		t.Errorf("status --json: %+v", js)
 	}
 }

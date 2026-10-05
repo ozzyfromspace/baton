@@ -143,10 +143,14 @@ func cmdStatus(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	pl, perr := s.LoadPlan()
+	snaps := gitx.Snapshots(filepath.Dir(s.Dir))
 	if p.bools["json"] {
 		out := map[string]any{"state": st, "baton_dir": s.Dir, "hosted": hosted(io)}
 		if perr == nil {
 			out["plan"] = pl
+		}
+		if len(snaps) > 0 {
+			out["snapshots"] = snaps
 		}
 		b, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Fprintln(io.Out, string(b))
@@ -184,7 +188,26 @@ func cmdStatus(args []string, io IO) int {
 	if cu := st.Run.Context; cu != nil {
 		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
 	}
+	printSnapshots(io, snaps)
 	return 0
+}
+
+// printSnapshots lists the uncommitted work the host saved when the run halted, and how to get it back.
+func printSnapshots(io IO, snaps []gitx.Saved) {
+	if len(snaps) == 0 {
+		return
+	}
+	const most = 5
+	fmt.Fprintln(io.Out, "snapshots: uncommitted work baton saved when the run halted, newest first")
+	for i, sn := range snaps {
+		if i == most {
+			fmt.Fprintf(io.Out, "  … and %d older (git for-each-ref %s)\n", len(snaps)-most, gitx.SnapshotRefs)
+			break
+		}
+		fmt.Fprintf(io.Out, "  %s  %s  (%s)\n", sn.At.Local().Format("Jan 2 15:04"), sn.Ref, strings.TrimPrefix(sn.Subject, "baton snapshot: "))
+	}
+	fmt.Fprintln(io.Out, "  what one holds: git show --stat <ref>")
+	fmt.Fprintln(io.Out, "  put it back in the working tree (overwrites those files): "+gitx.RestoreCommand("<ref>"))
 }
 
 // contextLine is the last context reading against the valves' thresholds. Outside the hosted session

@@ -226,6 +226,8 @@ type Escalation struct {
 	// Reminded counts the reminders sent while the escalation stays unresolved; LastPush is the latest.
 	Reminded int       `json:"reminded,omitempty"`
 	LastPush time.Time `json:"last_push,omitzero"`
+	// Snapshot is the ref holding the uncommitted work the host saved when the run halted for this.
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 // StopError is the last API error that ended a turn (rate limit, overload, …).

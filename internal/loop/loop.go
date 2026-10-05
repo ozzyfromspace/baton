@@ -10,8 +10,11 @@ package loop
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -77,6 +80,8 @@ type Loop struct {
 	Project string
 	Timing  Timing
 	Logf    func(string, ...any)
+	// Snapshot saves uncommitted work (gitx.Snapshot when nil).
+	Snapshot func(root string, at time.Time, phase, why string) (gitx.Saved, error)
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -93,6 +98,11 @@ type Loop struct {
 	alone   state.Dialog // baton's own question, alone on screen since aloneAt
 	aloneAt time.Time
 
+	owner    bool           // this session has owned the project
+	halted   bool           // the run is halted, and this halt's snapshot was started
+	snapping atomic.Bool    // a snapshot is running
+	saving   sync.WaitGroup // and Ended waits for it
+
 	lastTick       time.Time
 	wokeAt         time.Time
 	idleNudged     time.Time
@@ -107,6 +117,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if !v.Owner {
 		return
 	}
+	l.owner = true
 	l.clock(v)
 	st, err := l.Store.Load()
 	if err != nil {
@@ -114,6 +125,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		return
 	}
 	l.sendNotices(v, st)
+	l.saveWork(v, st)
 	if st.Mode != state.ModeRunning {
 		return
 	}
