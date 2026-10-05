@@ -41,6 +41,10 @@ func TestSuggestRecognizesEachNotation(t *testing.T) {
 			[]string{"P1", "P2", "P3"}, []string{"Seed the tenants", "Walk the personas", "Restore"}},
 		{"phase-letters.md", "Migration", "", "",
 			[]string{"Phase-A", "Phase-B", "Phase-C"}, []string{"Inventory", "Move", "Phase C"}},
+		// Phase headings, with a context table whose rows also start with ids (S1…S4), and a bold bullet
+		// and a table row that look like phase ids too: only the headings are phases.
+		{"headings-with-table.md", "baton v0.2 — graduated escalation", "## Standing rules", "## Verification",
+			[]string{"P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"}, []string{"Evidence and the settled design", "Dialog safety"}},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {

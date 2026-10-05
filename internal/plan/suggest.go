@@ -14,8 +14,18 @@ import (
 //	## Phase 3 — Title / ## Phase C: Title              heading with "Phase <n>"
 //	- **P6 Title:** …                                   bold bullet starting with an id
 //	| P4 | Title | …                                    table row starting with an id
+//
+// A document lists its phases in one notation, so only the strongest notation present counts: headings,
+// then bold bullets, then table rows. Lines in the others that merely look like phases (a table of
+// spike results whose rows start with S1, S2, … ahead of the phase headings) are not phases.
 func Suggest(doc []byte) Spec {
 	lines := strings.Split(string(doc), "\n")
+	best := notationNone
+	for _, raw := range lines {
+		if id, _, _, n := matchPhase(strings.TrimRight(raw, " \t\r")); id != "" && n < best {
+			best = n
+		}
+	}
 	var spec Spec
 	lastPhaseLine, lastPhaseLevel := -1, 0
 	for i, raw := range lines {
@@ -30,8 +40,8 @@ func Suggest(doc []byte) Spec {
 			spec.RulesAnchor = strings.TrimSpace(line)
 			continue
 		}
-		id, title, level := matchPhase(line)
-		if id == "" {
+		id, title, level, notation := matchPhase(line)
+		if id == "" || notation != best {
 			if lastPhaseLine >= 0 && spec.EndAnchor == "" {
 				if m := reHeading.FindStringSubmatch(line); m != nil && len(m[1]) <= lastPhaseLevel && reEnd.MatchString(m[2]) {
 					spec.EndAnchor = strings.TrimSpace(line)
@@ -62,29 +72,38 @@ var (
 	reTableRow   = regexp.MustCompile(`^\|\s*\**` + idPart + `\**\s*\|\s*([^|]+?)\s*\|`)
 )
 
-// matchPhase returns the id, title and heading level (0 for non-headings) of a phase line, or "".
-func matchPhase(line string) (id, title string, level int) {
+// Phase notations, strongest first.
+const (
+	notationHeading = iota
+	notationBullet
+	notationTable
+	notationNone
+)
+
+// matchPhase returns the id, title, heading level (7 for non-headings) and notation of a phase line, or
+// an empty id.
+func matchPhase(line string) (id, title string, level, notation int) {
 	if m := reHeadingID.FindStringSubmatch(line); m != nil {
-		return m[2], cleanTitle(m[3]), len(m[1])
+		return m[2], cleanTitle(m[3]), len(m[1]), notationHeading
 	}
 	if m := reHeadingPh.FindStringSubmatch(line); m != nil {
 		t := cleanTitle(m[3])
 		if t == "" {
 			t = "Phase " + m[2]
 		}
-		return "Phase-" + m[2], t, len(m[1])
+		return "Phase-" + m[2], t, len(m[1]), notationHeading
 	}
 	if m := reBoldBullet.FindStringSubmatch(line); m != nil {
 		t := cleanTitle(m[2])
 		if t == "" {
 			t = m[1]
 		}
-		return m[1], t, 7
+		return m[1], t, 7, notationBullet
 	}
 	if m := reTableRow.FindStringSubmatch(line); m != nil {
-		return m[1], cleanTitle(m[2]), 7
+		return m[1], cleanTitle(m[2]), 7, notationTable
 	}
-	return "", "", 0
+	return "", "", 0, notationNone
 }
 
 func cleanTitle(s string) string {
