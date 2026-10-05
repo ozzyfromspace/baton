@@ -77,7 +77,13 @@ func Start(t *testing.T, dir string, args ...string) *Session {
 // StartEnv is Start with extra environment variables for baton (e.g. BATON_CHECKPOINT_PCT).
 func StartEnv(t *testing.T, dir string, env []string, args ...string) *Session {
 	t.Helper()
-	cmd := exec.Command(batonBin, args...)
+	return StartProgram(t, dir, env, batonBin, args...)
+}
+
+// StartProgram runs any program (a shell, plain claude) the way Start runs baton.
+func StartProgram(t *testing.T, dir string, env []string, prog string, args ...string) *Session {
+	t.Helper()
+	cmd := exec.Command(prog, args...)
 	cmd.Dir = dir
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "CLAUDE") && !strings.HasPrefix(kv, "BATON_") && !strings.HasPrefix(kv, "PATH=") {
@@ -173,6 +179,46 @@ func (s *Session) Type(text string) {
 	}
 	time.Sleep(400 * time.Millisecond)
 	s.pty.Write([]byte("\r"))
+}
+
+// AutoApprove plays a human who approves every dialog Claude Code opens (permission prompts, plan-mode
+// entry and plan approval). Haiku has no auto mode, so tests that let the model act freely need it.
+func (s *Session) AutoApprove() {
+	go func() {
+		approved := 0
+		for {
+			select {
+			case <-s.exited:
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			opens := 0
+			for _, e := range s.Events() {
+				if e["kind"] == "dialog_open" {
+					opens++
+				}
+			}
+			if opens > approved {
+				time.Sleep(1500 * time.Millisecond)
+				s.pty.Write([]byte("\r"))
+				approved = opens
+			}
+		}
+	}()
+}
+
+// RemovePlansAfter deletes plan files the session wrote into ~/.claude/plans (plan mode writes there),
+// so tests never leave plans behind in the developer's real plans folder.
+func (s *Session) RemovePlansAfter() {
+	home, _ := os.UserHomeDir()
+	plans := filepath.Join(home, ".claude", "plans")
+	s.t.Cleanup(func() {
+		for _, e := range s.Events() {
+			if p, _ := e["plan"].(string); e["kind"] == "attached" && filepath.Dir(p) == plans {
+				os.Remove(p)
+			}
+		}
+	})
 }
 
 // Events reads .baton/events.jsonl.

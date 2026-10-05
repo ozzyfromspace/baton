@@ -1,0 +1,70 @@
+//go:build !windows
+
+package e2e
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Elevation, end to end: in a real zsh with baton's init line, a plain claude session (baton's plugin
+// loaded) runs `baton elevate`; when its turn ends baton stops it, the shell relaunches the same
+// conversation under baton, and the model gets the pending step and runs the plan.
+func TestPlainSessionElevatesItself(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+	dir := NewProject(t)
+	Attach(t, dir, twoPhasePlan)
+	batonHome := t.TempDir()
+	zdot := t.TempDir()
+	rc := "PS1='e2e%# '\n" +
+		"export BATON_BIN=" + shq(batonBin) + "\n" +
+		`eval "$(` + shq(batonBin) + ` init zsh)"` + "\n"
+	os.WriteFile(filepath.Join(zdot, ".zshrc"), []byte(rc), 0o644)
+	s := StartProgram(t, dir, []string{"ZDOTDIR=" + zdot, "BATON_HOME=" + batonHome, "BATON_SHELL_HOOK=1"}, "zsh", "-d", "-i")
+	s.WaitScreen("e2e%", 20*time.Second)
+	s.Type(`claude --model haiku --plugin-dir ` + shq(pluginDir(t)) +
+		` 'Run exactly this one command with the Bash tool: baton elevate "Run echo hello, then baton done P0, then end your turn." Then end your turn immediately.'`)
+	s.Trust()
+	// A plain session has no allow rule for baton (Haiku has no auto mode): approve the one prompt, as
+	// the human would.
+	s.Until("elevation requested", 2*time.Minute, func() bool {
+		for _, e := range s.Events() {
+			if e["kind"] == "elevate_requested" {
+				return true
+			}
+		}
+		if strings.Contains(s.Screen(), "Doyouwanttoproceed?") && !strings.Contains(s.Screen(), "[approved]") {
+			time.Sleep(time.Second)
+			s.pty.Write([]byte("\r"))
+			s.mu.Lock()
+			s.screen.WriteString("[approved]")
+			s.mu.Unlock()
+		}
+		return false
+	})
+	waitSequence(t, s, 5*time.Minute,
+		kind("elevate_requested"),
+		kind("host_started"),
+		kind("pending_delivered"), // the resume rewake (async) and the sync session_start log in either order
+		func(e map[string]any) bool { return e["kind"] == "turn_started" && e["by"] == "baton" },
+		func(e map[string]any) bool { return e["kind"] == "phase_done" && e["phase"] == "P0" },
+	)
+	resumed := false
+	for _, e := range s.Events() {
+		resumed = resumed || e["kind"] == "session_start" && e["source"] == "resume"
+	}
+	if !resumed {
+		t.Error("no resumed session_start")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(batonHome, "elevate")); len(entries) != 0 {
+		t.Errorf("elevation record not consumed: %v", entries)
+	}
+}
+
+func shq(s string) string { return "'" + s + "'" }

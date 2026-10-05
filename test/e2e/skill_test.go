@@ -31,35 +31,16 @@ func TestSkillAttachesAndStartsAPlan(t *testing.T) {
 }
 
 // /baton plan runs a formal planning pass in plan mode, attaches the approved plan and starts it. The
-// test plays the human: it approves entering plan mode and approves the plan.
+// test plays the human: it approves entering plan mode, the plan, and any permission prompt.
 func TestSkillPlansAttachesAndStarts(t *testing.T) {
 	dir := NewProject(t)
 	s := Start(t, dir, "--model", "haiku", "--plugin-dir", pluginDir(t))
+	s.RemovePlansAfter()
 	s.Trust()
 	s.WaitQuiet(3*time.Second, 40*time.Second)
+	s.AutoApprove()
 	s.Type("/baton plan a two-phase plan for this empty repo: P0 runs `echo hello`, P1 runs `echo goodbye`. Keep it tiny.")
-	approved := 0
-	s.Until("plan attached", 5*time.Minute, func() bool {
-		for _, e := range s.Events() {
-			if e["kind"] == "attached" {
-				return true
-			}
-		}
-		// Approve plan-mode dialogs (enter plan mode, approve the plan) as they appear.
-		opens := 0
-		for _, e := range s.Events() {
-			if e["kind"] == "dialog_open" {
-				opens++
-			}
-		}
-		if opens > approved {
-			time.Sleep(2 * time.Second)
-			s.pty.Write([]byte("\r"))
-			approved = opens
-		}
-		return false
-	})
-	waitSequence(t, s, 3*time.Minute,
+	waitSequence(t, s, 6*time.Minute,
 		kind("attached"),
 		func(e map[string]any) bool { return e["kind"] == "phase_done" && e["phase"] == "P0" },
 	)
