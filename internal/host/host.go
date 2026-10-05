@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/pty"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"golang.org/x/term"
@@ -340,7 +342,7 @@ func claim(cfg Config) bool {
 		cfg.Logf("host: not owner: %v", err)
 		return false
 	}
-	cfg.Store.Event("host_started", map[string]any{"pid": os.Getpid(), "version": cfg.Version})
+	cfg.Store.Event("host_started", map[string]any{"pid": os.Getpid(), "version": cfg.Version, "git": gitx.Usable(filepath.Dir(cfg.Store.Dir))})
 	return true
 }
 

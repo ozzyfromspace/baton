@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ozzyfromspace/baton/internal/gitx"
 )
 
 // Locate returns the .baton directory for a process running in cwd. BATON_DIR (set by the host for
@@ -50,9 +52,12 @@ func homeBaton(env func(string) string) string {
 }
 
 // ExcludeFromGit adds ".baton/" to the repository's info/exclude so baton's state never shows up in
-// `git status` and the user's .gitignore is never touched. Outside a repository it does nothing.
+// `git status` and the user's .gitignore is never touched. Without git (gitx.Usable) it does nothing.
 func ExcludeFromGit(batonDir string) error {
 	root := filepath.Dir(batonDir)
+	if !gitx.Usable(root) {
+		return nil
+	}
 	gitPath := filepath.Join(root, ".git")
 	fi, err := os.Stat(gitPath)
 	if err != nil {
