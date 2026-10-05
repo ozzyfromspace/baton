@@ -18,7 +18,6 @@ var hookEvents = []string{
 var rewakeHooks = []struct{ event, matcher, name string }{
 	{"PostCompact", "manual", "PostCompactRewake"}, // auto-compaction happens mid-turn and continues by itself
 	{"SessionStart", "resume", "SessionStartRewake"},
-	{"Stop", "", "StopRewake"},
 }
 
 // Settings is the JSON baton passes to claude with --settings. It only exists for this session: no

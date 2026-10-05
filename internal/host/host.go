@@ -121,8 +121,9 @@ func Run(cfg Config) (int, error) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() { defer wg.Done(); h.loop(stop, owner) }()
+	go func() { defer wg.Done(); h.heartbeat(stop, owner) }()
 
 	werr := cmd.Wait()
 	close(stop)
@@ -145,6 +146,7 @@ type session struct {
 	lastHumanKey atomic.Int64
 	draft        atomic.Bool
 	keys         keyTracker
+	lastPanic    time.Time // controller goroutine only
 }
 
 func (h *session) pumpOutput() {
@@ -168,14 +170,10 @@ func (h *session) pumpInput() {
 	for {
 		n, err := h.cfg.Stdin.Read(buf)
 		if n > 0 {
-			switch h.keys.feed(buf[:n]) {
-			case inputTyping:
+			if h.keys.feed(buf[:n]) {
 				h.lastHumanKey.Store(h.cfg.Now().UnixNano())
-				h.draft.Store(true)
-			case inputSubmit:
-				h.lastHumanKey.Store(h.cfg.Now().UnixNano())
-				h.draft.Store(false)
 			}
+			h.draft.Store(h.keys.draft())
 			h.mu.Lock()
 			_, werr := h.pty.Write(buf[:n])
 			h.mu.Unlock()
@@ -211,10 +209,15 @@ func (h *session) Type(text string, enter bool) error {
 	return nil
 }
 
-func (h *session) loop(stop <-chan struct{}, owner bool) {
-	tick := time.NewTicker(TickInterval)
+// heartbeat keeps this session's claim on the project fresh. It runs on its own, so a controller that is
+// busy (typing, or waiting on a slow notification) can never let the claim lapse: a lapsed claim makes
+// every hook dormant.
+func (h *session) heartbeat(stop <-chan struct{}, owner bool) {
+	if !owner {
+		return
+	}
+	tick := time.NewTicker(state.OwnerTTL / 6)
 	defer tick.Stop()
-	lastBeat := h.cfg.Now()
 	for {
 		select {
 		case <-stop:
@@ -222,26 +225,49 @@ func (h *session) loop(stop <-chan struct{}, owner bool) {
 		case <-tick.C:
 		}
 		now := h.cfg.Now()
-		if owner && now.Sub(lastBeat) >= state.OwnerTTL/3 {
-			lastBeat = now
-			if _, err := h.cfg.Store.Update(func(st *state.State) error {
-				return state.Claim(st, h.cfg.Instance, os.Getpid(), now)
-			}); err != nil {
-				h.cfg.Logf("host: heartbeat failed: %v", err)
-			}
+		if _, err := h.cfg.Store.Update(func(st *state.State) error {
+			return state.Claim(st, h.cfg.Instance, os.Getpid(), now)
+		}); err != nil {
+			h.cfg.Logf("host: heartbeat failed: %v", err)
 		}
-		if h.cfg.Controller == nil {
-			continue
+	}
+}
+
+func (h *session) loop(stop <-chan struct{}, owner bool) {
+	if h.cfg.Controller == nil {
+		return
+	}
+	tick := time.NewTicker(TickInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
 		}
-		v := View{
-			Now:          now,
+		h.tick(View{
+			Now:          h.cfg.Now(),
 			LastOutput:   time.Unix(0, h.lastOutput.Load()),
 			LastHumanKey: time.Unix(0, h.lastHumanKey.Load()),
 			Draft:        h.draft.Load(),
 			Owner:        owner,
-		}
-		h.cfg.Controller.Tick(v, h)
+		})
 	}
+}
+
+// tick runs the controller once. A bug in it must not take the session down with it (the human would
+// lose claude mid-plan), so a panic is logged and the next tick runs as usual.
+func (h *session) tick(v View) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.cfg.Logf("host: controller panic: %v", r)
+			if h.cfg.Store != nil && v.Now.Sub(h.lastPanic) > time.Minute {
+				h.lastPanic = v.Now
+				h.cfg.Store.Event("controller_panic", map[string]any{"error": fmt.Sprint(r)})
+			}
+		}
+	}()
+	h.cfg.Controller.Tick(v, h)
 }
 
 // claim makes this session the project's owner, or explains why it runs as a plain passthrough.
