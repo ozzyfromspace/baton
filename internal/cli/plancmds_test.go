@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 type session struct {
@@ -151,5 +153,28 @@ func TestParseArgs(t *testing.T) {
 	}
 	if p, _ := parseArgs([]string{"--", "--notes"}, []string{"notes"}, nil); !reflect.DeepEqual(p.pos, []string{"--notes"}) {
 		t.Errorf("-- did not end flags: %+v", p)
+	}
+}
+
+func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
+	s, planFile := newSession(t)
+	spec := s.must("", "attach", planFile, "--suggest")
+	s.must(spec, "attach", planFile, "--spec", "-")
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"statusLine":{"type":"command","command":"echo user-line"}}`), 0o644)
+	s.env["HOME"] = home
+	s.env["BATON_INSTANCE"] = "inst"
+	st, _ := state.Open(s.env["BATON_DIR"], "inst", func() time.Time { return s.now })
+	st.Update(func(x *state.State) error { return state.Claim(x, "inst", 1, s.now) })
+
+	input := `{"workspace":{"project_dir":"` + t.TempDir() + `"},"context_window":{"used_percentage":42.4,"context_window_size":400000}}`
+	out := s.must(input, "statusline")
+	if out != "◆ baton · P0 1/3 The overlay · ctx 42%  user-line" {
+		t.Fatalf("status line %q", out)
+	}
+	loaded, _ := st.Load()
+	if loaded.Run.Context == nil || loaded.Run.Context.WindowSize != 400000 {
+		t.Fatalf("context not recorded: %+v", loaded.Run.Context)
 	}
 }
