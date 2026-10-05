@@ -413,10 +413,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
+		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
 			if tool == "AskUserQuestion" {
-				v = answered(st, c)
+				v = answered(st, c, !closed.AutoAnswered.IsZero())
 			}
 			if v.event == "" {
 				v = contextValves(st, valve.FromEnv(c.Env))
@@ -435,8 +435,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 }
 
 // answered acts on the human's answer to one of baton's own questions (those start with "baton:"), so
-// what happens next depends on the answer itself, not on the model remembering to act on it.
-func answered(st *state.State, c Context) valveAction {
+// what happens next depends on the answer itself, not on the model remembering to act on it. auto says
+// baton answered it itself, because nobody else did.
+func answered(st *state.State, c Context, auto bool) valveAction {
 	resp, _ := c.Input["tool_response"].(map[string]any)
 	answers, _ := resp["answers"].(map[string]any)
 	for q, a := range answers {
@@ -467,10 +468,18 @@ func answered(st *state.State, c Context) valveAction {
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
 		case "Keep going":
 			event, say = "answered", "baton: keep going — Claude Code compacts on its own when the context is full"
+			if auto {
+				say = "baton: nobody answered, so baton chose Keep going — Claude Code compacts on its own when the context is full"
+				tell = NudgePrefix + " Nobody answered the context question, so baton chose Keep going for the human. Carry on with " + st.Current + "."
+			}
 		default:
 			continue
 		}
-		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": "answer"}, say: say, tell: tell}
+		by := "human"
+		if auto {
+			by = "timeout"
+		}
+		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": by}, say: say, tell: tell}
 	}
 	return valveAction{}
 }
@@ -517,7 +526,7 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 			event:  "context_warning",
 			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
 			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
-			tell:   warnText(used, lim),
+			tell:   warnText(used, lim, vs.WarnTimeout),
 		}
 	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
 		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):
@@ -540,14 +549,48 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 // warnQuestionPrefix starts the context question; the host recognizes the dialog by it.
 const warnQuestionPrefix = "baton: the context holds "
 
-func warnText(used int, lim valve.Limits) string {
+// option is one answer baton offers in a question of its own.
+type option struct{ label, description string }
+
+// warnOptions are the context question's answers. The default, Keep going, is third on purpose: baton
+// types 3 when nobody answers, and in a permission prompt 3 is "No" (docs/research/escalation.md).
+var warnOptions = []option{
+	{"Checkpoint now", "Finish the current step, save notes and compact; this phase continues from the notes"},
+	{"Pause baton", "I'm taking over; baton stops driving the plan"},
+	{"Keep going", "Carry on; Claude Code compacts on its own when the context is full"},
+}
+
+func warnText(used int, lim valve.Limits, timeout time.Duration) string {
+	if timeout <= 0 {
+		timeout = valve.DefaultWarnTimeout
+	}
 	q := fmt.Sprintf(warnQuestionPrefix+"%s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
-		"(If nobody answers within 20 minutes, baton picks Keep going.)",
-		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt))
-	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with the question %q and two options: "+
-		"\"Checkpoint now\" (description: \"Finish the current step, save notes and compact; this phase continues from the notes\") and "+
-		"\"Keep going\" (description: \"Carry on; Claude Code compacts on its own when the context is full\"). "+
-		"baton acts on the answer itself; then follow what it tells you.", NudgePrefix, q)
+		"(If nobody answers within %s, baton picks Keep going.)",
+		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt), spell(timeout))
+	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with exactly one question, %q (header \"baton\"), "+
+		"and exactly %d options, in this order: %s; not multi-select. baton acts on the answer itself; then follow what it tells you.",
+		NudgePrefix, q, len(warnOptions), optionList(warnOptions))
+}
+
+// optionList spells out options for the model: "A" (description: "…"), "B" (description: "…").
+func optionList(opts []option) string {
+	var parts []string
+	for _, o := range opts {
+		parts = append(parts, fmt.Sprintf("%q (description: %q)", o.label, o.description))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// spell says a duration the way people do: "20 minutes", "1 minute", "45s".
+func spell(d time.Duration) string {
+	switch {
+	case d == time.Minute:
+		return "1 minute"
+	case d > time.Minute && d%time.Minute == 0:
+		return fmt.Sprintf("%d minutes", d/time.Minute)
+	default:
+		return d.String()
+	}
 }
 
 // notification records Claude Code's notifications. One of them is authoritative about the session:

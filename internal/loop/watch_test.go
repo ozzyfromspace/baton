@@ -1,6 +1,8 @@
 package loop
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -239,7 +241,7 @@ func TestUnansweredDialogIsPushedAgain(t *testing.T) {
 	}
 }
 
-// baton answers its own context question ("Keep going", option 2) when nobody has within WarnTimeout,
+// baton answers its own context question ("Keep going", option 3) when nobody has within WarnTimeout,
 // so an unattended run does not stop on a warning. It never answers anything else, and never while
 // the human is typing.
 func TestTheContextQuestionTimesOut(t *testing.T) {
@@ -248,22 +250,25 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
 	})
+	r.view.Draft = true // a draft in the input box does not matter: keys go to the dialog
 	r.run(DefaultTiming.WarnTimeout - time.Minute)
 	if len(r.in.text) != 0 {
 		t.Fatalf("answered early: %q", r.in.text)
 	}
-	r.view.LastHumanKey = r.now.Add(2 * time.Minute) // the human is typing an answer
-	r.run(90 * time.Second)
-	if len(r.in.text) != 0 {
-		t.Fatalf("answered over the human: %q", r.in.text)
-	}
-	r.run(3 * time.Minute)
-	if len(r.in.text) != 1 || r.in.text[0] != "2" {
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 || r.in.text[0] != "3" {
 		t.Fatalf("typed %q", r.in.text)
+	}
+	if d, _ := r.state().Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
+		t.Fatal("the answer is not marked as baton's own")
 	}
 	r.run(5 * time.Minute)
 	if len(r.in.text) != 1 {
 		t.Fatalf("answered twice: %q", r.in.text)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.loop.Store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"auto_answered"`) ||
+		!strings.Contains(string(b), `"key":"3"`) || !strings.Contains(string(b), `"dialog":"context_warning"`) {
+		t.Fatalf("events: %s", b)
 	}
 
 	// Any other question waits for the human, however long.
@@ -275,5 +280,79 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 	r.run(DefaultTiming.WarnTimeout * 3)
 	if len(r.in.text) != 0 {
 		t.Fatalf("answered a question that was not baton's: %q", r.in.text)
+	}
+}
+
+// Every key the human presses starts the clock over: somebody at the keyboard is answering.
+func TestAKeyRestartsTheClock(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+	})
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	r.view.LastHumanKey = r.now // an arrow key in the dialog
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered while the human was at it: %q", r.in.text)
+	}
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 || r.in.text[0] != "3" {
+		t.Fatalf("typed %q", r.in.text)
+	}
+}
+
+// baton types only when its question is the only dialog open. Another dialog may be on screen in front
+// of it (spikes/16-escalation, S1-D), and there a key would answer that dialog instead. The clock starts
+// when the question is first alone.
+func TestOnlyAnsweredWhenAlone(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "sub", Key: "k", Since: r.now})
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now.Add(time.Second), Kind: "context_warning"})
+	})
+	r.run(DefaultTiming.WarnTimeout * 2)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed with another dialog open: %q", r.in.text)
+	}
+	r.set(func(st *state.State) { st.Run.Dialogs.CloseAgent("sub") })
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("the clock ran while the question was not alone: %q", r.in.text)
+	}
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 || r.in.text[0] != "3" {
+		t.Fatalf("typed %q", r.in.text)
+	}
+
+	// A dialog that joins behind it stops baton too: the question might already be answered and gone.
+	r = newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+	})
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "sub", Key: "k", Since: r.now})
+	})
+	r.run(DefaultTiming.WarnTimeout)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed with a second dialog open: %q", r.in.text)
+	}
+}
+
+// Asleep, nobody can answer: the clock starts over at the wake.
+func TestSleepRestartsTheQuestionClock(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+	})
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	r.tick(time.Hour)
+	r.run(DefaultTiming.WarnTimeout - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered right after waking: %q", r.in.text)
+	}
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 {
+		t.Fatalf("typed %q", r.in.text)
 	}
 }

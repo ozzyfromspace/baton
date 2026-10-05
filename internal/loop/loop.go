@@ -15,6 +15,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
 // Timing is every deadline the loop enforces.
@@ -49,7 +50,7 @@ var DefaultTiming = Timing{
 	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
-	DialogNotify: 3 * time.Minute, WarnTimeout: 20 * time.Minute, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
+	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute,
 }
 
@@ -88,6 +89,9 @@ type Loop struct {
 	heldWhy   string    // what has been holding back something baton needs to type
 	heldSince time.Time
 	wished    bool // something wanted to type this tick
+
+	alone   state.Dialog // baton's own question, alone on screen since aloneAt
+	aloneAt time.Time
 
 	lastTick       time.Time
 	wokeAt         time.Time

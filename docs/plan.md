@@ -107,7 +107,7 @@ Escape, Ctrl-C or a human prompt pauses autonomy until the next `Stop`.
 **Mid-phase valves:**
 - The status line feeds the exact context size (`context_window.current_usage`) and the model's window into state ([measurements](research/context-window.md)). The limit is `min(window, cap)`.
 - Over a soft threshold (60% of the limit), PostToolUse (main agent only, never inside subagents) adds "at your next safe point run `baton checkpoint` and end your turn" → same loop.
-- Over the warning line (90% of the limit, never under 200k, and always before Claude Code's own compaction), the model is told to ask the human with `AskUserQuestion`, using fixed text and options: "Checkpoint now" or "Keep going".
+- Over the warning line (90% of the limit, never under 200k, and always before Claude Code's own compaction), the model is told to ask the human with `AskUserQuestion`, using fixed text and options: "Checkpoint now", "Pause baton" or "Keep going". Unanswered, the host picks "Keep going" by typing `3`, and only while that question is the only dialog open ([why](research/escalation.md)).
 - Hard backstop: launch with `--autocompact <cap>` (default 810k). Claude Code compacts on its own 33k tokens below the limit.
 
 **Escalation (two layers):**

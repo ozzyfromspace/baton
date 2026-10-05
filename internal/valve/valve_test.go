@@ -3,6 +3,7 @@ package valve
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLimits(t *testing.T) {
@@ -37,7 +38,7 @@ func TestLimits(t *testing.T) {
 }
 
 func TestEnvRoundTrip(t *testing.T) {
-	s := Settings{Cap: 810_000, CheckpointPct: 55, WarnPct: 0, WarnTokens: 12}
+	s := Settings{Cap: 810_000, CheckpointPct: 55, WarnPct: 0, WarnTokens: 12, WarnTimeout: 45 * time.Second}
 	m := map[string]string{}
 	for _, kv := range s.Env() {
 		k, v, _ := strings.Cut(kv, "=")

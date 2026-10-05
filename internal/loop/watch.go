@@ -16,7 +16,7 @@ import (
 // watch runs after the compaction checks on every tick.
 func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
-	l.answerWarning(v, st, in)
+	l.answerOwnQuestion(v, st, in)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished) {
 		return // the compaction checks own this stretch
@@ -109,17 +109,29 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
 }
 
-// answerWarning answers baton's own context question when nobody has for WarnTimeout. The question
+// answerOwnQuestion answers baton's own context question when nobody has for WarnTimeout. The question
 // only warns: Claude Code compacts on its own when the context is full, so an unattended run should not
-// stop on it. baton picks the second option, "Keep going", by its number, which selects it wherever the
-// highlight is (docs/research/reliability.md); the answer then arrives through the usual hook. It never
-// types while the human is typing or composing an answer, and only once per question.
-func (l *Loop) answerWarning(v host.View, st state.State, in host.Injector) {
+// stop on it. The answer arrives through the usual hook.
+//
+// A key typed into the wrong dialog can approve something nobody approved (in a permission prompt, 2 is
+// "Yes, and always allow"), so three layers keep it out of anyone else's (docs/research/escalation.md):
+//   - baton's question must be the only dialog open, so nothing can be on screen in front of it;
+//   - the hooks mark an entry as baton's only for the exact question baton issued;
+//   - the key is 3, where the default sits, which in a permission prompt means "No".
+//
+// The clock runs from when the question was first alone, and every key the human presses starts it over:
+// somebody at the keyboard is answering it. Keys go to the dialog, not the input box, so a draft there
+// does not matter. It answers once per question.
+func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) {
 	d, alone := st.Run.Dialogs.Only()
-	if !alone || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() || v.Now.Sub(l.since(d.Since)) < l.Timing.WarnTimeout {
+	if !alone || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() {
 		return
 	}
-	if v.Draft || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
+	if !l.alone.Same(d) {
+		l.alone, l.aloneAt = d, v.Now
+	}
+	from := l.since(latest(d.Since, l.aloneAt, v.LastHumanKey))
+	if v.Now.Sub(from) < l.Timing.WarnTimeout || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
 		return
 	}
 	l.update(func(st *state.State) {
@@ -129,9 +141,12 @@ func (l *Loop) answerWarning(v host.View, st state.State, in host.Injector) {
 			}
 		}
 	})
-	l.Store.Event("warning_timed_out", map[string]any{"after": l.Timing.WarnTimeout.String()})
-	in.Type("2", false)
+	l.Store.Event("auto_answered", map[string]any{"dialog": d.Kind, "key": ownAnswerKey, "after": v.Now.Sub(l.since(l.aloneAt)).Round(time.Second).String()})
+	in.Type(ownAnswerKey, false)
 }
+
+// ownAnswerKey picks the third option of baton's own questions, where the default sits.
+const ownAnswerKey = "3"
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
 // login, billing, a model that does not exist, a request Claude Code refuses to send) needs the human.

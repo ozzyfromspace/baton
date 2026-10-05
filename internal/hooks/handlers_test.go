@@ -327,10 +327,16 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	}
 	ctx := additionalContext(out)
 	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
-		`"Checkpoint now"`, `"Keep going"`, "baton acts on the answer itself"} {
+		"If nobody answers within 20 minutes, baton picks Keep going", "exactly 3 options, in this order",
+		`"Checkpoint now" (description: "Finish the current step`, `"Pause baton" (description:`, `"Keep going" (description:`,
+		"not multi-select", "baton acts on the answer itself"} {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("warning lacks %q: %q", want, ctx)
 		}
+	}
+	// The default is third, where the 3 baton types when nobody answers lands (in a permission prompt, 3 is No).
+	if i, j, k := strings.Index(ctx, `"Checkpoint now"`), strings.Index(ctx, `"Pause baton"`), strings.Index(ctx, `"Keep going" (`); !(i < j && j < k) {
+		t.Fatalf("options out of order: %q", ctx)
 	}
 	// It includes the checkpoint option, so the nudge does not follow it; nor does it repeat.
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
@@ -342,6 +348,16 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	f.setContext(740_000)
 	if !strings.Contains(additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "AskUserQuestion") {
 		t.Fatal("the re-armed warning did not fire")
+	}
+}
+
+// The question says when baton answers it, from the timeout the host runs with.
+func TestContextWarningSaysWhenBatonAnswers(t *testing.T) {
+	f := newFixture(t, true)
+	f.vars = map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_WARN_TIMEOUT": "45s"}
+	f.setContext(730_000)
+	if ctx := additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})); !strings.Contains(ctx, "If nobody answers within 45s, baton picks Keep going") {
+		t.Fatalf("warning: %q", ctx)
 	}
 }
 
@@ -422,6 +438,13 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	f.fire("Stop", map[string]any{})
 	if c := f.state().Run.Compaction; c.Status != state.CompactQueued || c.Reason != "checkpoint" {
 		t.Fatalf("no checkpoint at the stop: %+v", c)
+	}
+
+	// The context question has Pause baton too.
+	f = newFixture(t, true)
+	answer(f, "baton: the context holds 730k tokens, past the 729k warning line. Checkpoint now?", "Pause baton")
+	if f.state().Mode != state.ModePaused {
+		t.Fatal("not paused")
 	}
 
 	// Somebody else's question is none of baton's business.
@@ -643,4 +666,25 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// An answer baton typed itself is recorded as baton's, not the human's.
+func TestAnAnswerBatonTypedIsAttributedToTheTimeout(t *testing.T) {
+	q := warnQuestionPrefix + "730k tokens, past the 729k warning line."
+	for _, auto := range []bool{false, true} {
+		f := newFixture(t, true)
+		f.fire("PermissionRequest", ask(q, "Checkpoint now", "Pause baton", "Keep going"))
+		if auto {
+			f.store.Update(func(st *state.State) error { st.Run.Dialogs[0].AutoAnswered = f.now; return nil })
+		}
+		out := f.fire("PostToolUse", answer(ask(q, "Checkpoint now", "Pause baton", "Keep going"), "Keep going"))
+		b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
+		want := map[bool]string{false: `"by":"human"`, true: `"by":"timeout"`}[auto]
+		if !strings.Contains(string(b), `"kind":"answered"`) || !strings.Contains(string(b), want) {
+			t.Fatalf("auto=%v events: %s", auto, b)
+		}
+		if say, _ := out["systemMessage"].(string); auto != strings.Contains(say, "nobody answered") {
+			t.Fatalf("auto=%v said %q", auto, say)
+		}
+	}
 }

@@ -16,6 +16,7 @@ package valve
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
 )
@@ -32,7 +33,13 @@ type Settings struct {
 	CheckpointPct float64 // 0: never nudge
 	WarnPct       float64 // 0: never warn
 	WarnTokens    int     // a fixed warning line that replaces the computed one (tests)
+	// WarnTimeout is how long the context question waits for the human before baton answers it
+	// (0: the default). The host answers; the question says when.
+	WarnTimeout time.Duration
 }
+
+// DefaultWarnTimeout is how long the context question waits for the human by default.
+const DefaultWarnTimeout = 20 * time.Minute
 
 // Limits are the context sizes, in tokens, for one model window. A zero threshold is off.
 type Limits struct {
@@ -80,6 +87,9 @@ func (s Settings) Env() []string {
 	if s.WarnTokens > 0 {
 		env = append(env, "BATON_WARN_TOKENS="+strconv.Itoa(s.WarnTokens))
 	}
+	if s.WarnTimeout > 0 {
+		env = append(env, "BATON_WARN_TIMEOUT="+s.WarnTimeout.String())
+	}
 	return env
 }
 
@@ -97,6 +107,9 @@ func FromEnv(env func(string) string) Settings {
 	}
 	if n, err := strconv.Atoi(env("BATON_WARN_TOKENS")); err == nil && n > 0 {
 		s.WarnTokens = n
+	}
+	if d, err := time.ParseDuration(env("BATON_WARN_TIMEOUT")); err == nil && d > 0 {
+		s.WarnTimeout = d
 	}
 	return s
 }
