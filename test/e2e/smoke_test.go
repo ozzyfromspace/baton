@@ -36,6 +36,14 @@ func Attach(t *testing.T, dir, doc string) {
 	if out, err := attach.CombinedOutput(); err != nil {
 		t.Fatalf("attach: %v\n%s", err, out)
 	}
+	// The plan is part of the project, as it would be in real use: a run starts from a clean tree.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		for _, args := range [][]string{{"add", "plan.md"}, {"commit", "-q", "-m", "docs: the plan"}} {
+			if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %s", args, out)
+			}
+		}
+	}
 }
 
 // The model, inside a hosted session, can run baton's CLI without a permission prompt (the allow rule

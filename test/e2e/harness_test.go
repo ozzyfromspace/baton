@@ -29,6 +29,26 @@ func TestMain(m *testing.M) {
 		fmt.Println("e2e: skipped (set BATON_E2E=1 to run real claude sessions; costs a few cents)")
 		os.Exit(0)
 	}
+	// Run from inside a baton-hosted session, this process inherits that session's BATON_DIR, and every
+	// baton command a test runs would act on the developer's live run. Nothing here may see the
+	// developer's baton or keyring: baton's home and gpg's are throwaway directories for every command.
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "BATON_") && k != "BATON_E2E" && k != "BATON_E2E_SONNET" {
+			os.Unsetenv(k)
+		}
+	}
+	scratch, err := os.MkdirTemp("", "baton-e2e")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(scratch)
+	for k, sub := range map[string]string{"BATON_HOME": "home", "GNUPGHOME": "gnupg"} {
+		p := filepath.Join(scratch, sub)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			panic(err)
+		}
+		os.Setenv(k, p)
+	}
 	dir, err := os.MkdirTemp("", "baton-e2e-bin")
 	if err != nil {
 		panic(err)
@@ -39,6 +59,7 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
+	os.RemoveAll(scratch)
 	os.Exit(code)
 }
 
@@ -56,12 +77,20 @@ type Session struct {
 	exited  chan struct{}
 }
 
-// NewProject makes a throwaway git repository to run a session in.
+// NewProject makes a throwaway git repository to run a session in. It has its own identity and does
+// not sign: the developer's global git config may sign every commit, and no test may reach their
+// keyring (GNUPGHOME is a throwaway directory).
 func NewProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %s", out)
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"config", "user.name", "baton e2e"}, {"config", "user.email", "e2e@baton.invalid"},
+		{"config", "commit.gpgsign", "false"}, {"config", "tag.gpgsign", "false"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
 	}
 	return dir
 }
@@ -80,19 +109,22 @@ func StartEnv(t *testing.T, dir string, env []string, args ...string) *Session {
 	return StartProgram(t, dir, env, batonBin, args...)
 }
 
-// StartProgram runs any program (a shell, plain claude) the way Start runs baton.
+// StartProgram runs any program (a shell, plain claude) the way Start runs baton. Every session gets its
+// own baton home and gpg home, so the developer's config (an ntfy topic, settings a test does not
+// expect) and keyring never leak in; env can still set either.
 func StartProgram(t *testing.T, dir string, env []string, prog string, args ...string) *Session {
 	t.Helper()
 	cmd := exec.Command(prog, args...)
 	cmd.Dir = dir
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "CLAUDE") && !strings.HasPrefix(kv, "BATON_") && !strings.HasPrefix(kv, "PATH=") {
+		if !strings.HasPrefix(kv, "CLAUDE") && !strings.HasPrefix(kv, "BATON_") && !strings.HasPrefix(kv, "PATH=") && !strings.HasPrefix(kv, "GNUPGHOME=") {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(),
 		"BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=") // tests never notify the developer
-	cmd.Env = append(cmd.Env, env...)
+	cmd.Env = append(cmd.Env, env...) // later entries win
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {
 		t.Fatal(err)
