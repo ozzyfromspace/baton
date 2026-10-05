@@ -10,46 +10,15 @@ package notify
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/config"
 )
-
-// Config is read from ~/.baton/config.json; environment variables override it.
-type Config struct {
-	NtfyTopic  string `json:"ntfy_topic,omitempty"`  // BATON_NTFY_TOPIC
-	NtfyServer string `json:"ntfy_server,omitempty"` // BATON_NTFY_SERVER, default https://ntfy.sh
-	Desktop    *bool  `json:"desktop,omitempty"`     // BATON_NOTIFY_DESKTOP=0 disables
-	Details    bool   `json:"details,omitempty"`     // include the reason text in pushes (off: content-free)
-}
-
-// LoadConfig reads ~/.baton/config.json (if any) and applies environment overrides.
-func LoadConfig(home string, env func(string) string) Config {
-	var c Config
-	if b, err := os.ReadFile(filepath.Join(home, ".baton", "config.json")); err == nil {
-		json.Unmarshal(b, &c)
-	}
-	if v := env("BATON_NTFY_TOPIC"); v != "" {
-		c.NtfyTopic = v
-	}
-	if v := env("BATON_NTFY_SERVER"); v != "" {
-		c.NtfyServer = v
-	}
-	if v := env("BATON_NOTIFY_DESKTOP"); v != "" {
-		on := v != "0" && v != "false"
-		c.Desktop = &on
-	}
-	if c.NtfyServer == "" {
-		c.NtfyServer = "https://ntfy.sh"
-	}
-	return c
-}
 
 // Notifier sends one message to the human.
 type Notifier interface {
@@ -57,9 +26,9 @@ type Notifier interface {
 }
 
 // New returns a notifier for the configured channels.
-func New(c Config) Notifier { return &multi{cfg: c} }
+func New(c config.Config) Notifier { return &multi{cfg: c} }
 
-type multi struct{ cfg Config }
+type multi struct{ cfg config.Config }
 
 // headline is the content-free text for each kind of notice.
 var headline = map[string]string{
@@ -82,7 +51,7 @@ func (m *multi) Notify(project, kind, detail string) error {
 		body += ": " + detail
 	}
 	var errs []string
-	if m.cfg.Desktop == nil || *m.cfg.Desktop {
+	if m.cfg.DesktopOn() {
 		if err := desktop(title, body); err != nil {
 			errs = append(errs, "desktop: "+err.Error())
 		}
