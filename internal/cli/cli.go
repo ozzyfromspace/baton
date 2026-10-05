@@ -6,10 +6,12 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -103,7 +105,30 @@ func runHook(args []string, io IO) (code int) {
 		fmt.Fprintln(io.Err, "baton: hook needs an event name; ignoring")
 		return 0
 	}
-	return hooks.Dispatch(args[0], io.In, io.Out, io.Err, io.Env, io.Now, hookHandlers)
+	var errs bytes.Buffer
+	code = hooks.Dispatch(args[0], io.In, io.Out, multiWriter(io.Err, &errs), io.Env, io.Now, hookHandlers)
+	if code == 0 && errs.Len() > 0 {
+		recordHookFailure(args[0], errs.String(), io)
+	}
+	return code
+}
+
+// multiWriter is io.MultiWriter, reachable where an IO parameter named io shadows the package.
+var multiWriter = io.MultiWriter
+
+// recordHookFailure puts a hook that failed open on the record. Claude Code keeps hook stderr out of
+// sight, and a hook that silently did nothing (a Stop that queued no compaction) is otherwise
+// invisible; the event log is where a stall gets diagnosed.
+func recordHookFailure(event, msg string, io IO) {
+	dir := io.Env("BATON_DIR")
+	if dir == "" || io.Env("BATON_HOST") != "1" {
+		return
+	}
+	msg = strings.TrimSpace(strings.SplitN(msg, "\n", 2)[0])
+	if s, err := state.Open(dir, io.Env("BATON_INSTANCE"), io.Now); err == nil {
+		s.Event("hook_failed", map[string]any{"event": event, "error": msg})
+	}
+	fileLogger(filepath.Join(dir, "baton.log"), io.Env("BATON_INSTANCE"), io.Now)("hook %s failed open: %s", event, msg)
 }
 
 // hookHandlers maps event names to handlers. Hooks find the project through BATON_DIR, which the host

@@ -15,32 +15,30 @@ import (
 
 // watch runs after the compaction checks on every tick.
 func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
-	if l.lastTick.IsZero() || v.Now.Sub(l.lastTick) > l.Timing.ClockJump {
-		// First tick, or the machine slept: idle timers restart from now.
-		if !l.lastTick.IsZero() {
-			l.logf("loop: clock jumped %s (sleep?); idle timers restart", v.Now.Sub(l.lastTick).Round(time.Second))
-		}
-		l.wokeAt = v.Now
-	}
-	l.lastTick = v.Now
-
 	l.watchDialog(v, st)
-	if st.Run.Escalation != nil || st.Blocked != nil || st.Run.TurnOpen || st.Run.Dialog != nil {
+	comp := st.Run.Compaction
+	if comp.InFlight() || comp.Status == state.CompactFailed || comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished) {
+		return // the compaction checks own this stretch
+	}
+	// An API error that ended the last turn is retried even while an older escalation is open: the
+	// escalation is about something else, and the error would otherwise leave the run parked.
+	if e := st.Run.LastError; e != nil && !st.Run.TurnStarted.After(e.At) {
+		if esc := st.Run.Escalation; esc == nil || esc.Kind == "api_error" || e.At.After(esc.Since) {
+			l.watchError(v, st, in, *e)
+			return
+		}
+	}
+	l.errRetries, l.rateNotified = 0, false
+
+	if st.Run.Escalation != nil || st.Blocked != nil || l.why == gateTurn || st.Run.Dialog != nil {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
-	comp := st.Run.Compaction
-	if comp.InFlight() || comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished) {
-		return // the compaction checks own this stretch
+	if !l.idleNudged.IsZero() && st.Run.LastActivity.After(l.idleNudged) {
+		l.idleNudged = time.Time{} // the model answered the reminder (IdleNudges still counts it)
 	}
-	if e := st.Run.LastError; e != nil && !st.Run.TurnStarted.After(e.At) {
-		l.watchError(v, st, in, *e)
-		return
-	}
-	l.errRetries = 0
-
 	quietSince := latest(st.Run.LastActivity, st.Run.LastStop, l.wokeAt, l.idleNudged)
-	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(st.Run.LastStop) < l.Timing.BackgroundMax {
+	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(l.since(st.Run.LastStop)) < l.Timing.BackgroundMax {
 		return // background work will wake the session when it finishes
 	}
 	if w := st.Waiting; w != nil && v.Now.Before(w.Until.Add(l.Timing.WaitGrace)) {
@@ -49,17 +47,26 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	if v.Now.Sub(quietSince) < l.Timing.IdleNudge {
 		return
 	}
-	if !l.idleNudged.IsZero() {
+	switch {
+	case !l.idleNudged.IsZero():
 		// Already reminded once and still nothing: bring the human in.
 		l.escalate("stalled", fmt.Sprintf("no activity on %s for %s, even after a reminder", st.Current, v.Now.Sub(st.Run.LastActivity).Round(time.Minute)))
 		return
-	}
-	if l.gate(v, st) != "" {
+	case st.Run.IdleNudges >= MaxIdleNudges:
+		// The model answers reminders but the plan does not move (a wait declared again and again, or a
+		// stop that background work let through): more reminders would only burn tokens.
+		l.escalate("stalled", fmt.Sprintf("%s has not moved after %d reminders", st.Current, st.Run.IdleNudges))
 		return
 	}
+	if l.why != "" {
+		l.held(v, st, "remind the idle model")
+		return
+	}
+	l.proceed()
 	msg := l.idleMessage(v, st)
 	l.idleNudged = v.Now
-	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String()})
+	l.update(func(st *state.State) { st.Run.IdleNudges++ })
+	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1})
 	in.Type(msg, true)
 }
 
@@ -76,37 +83,79 @@ func (l *Loop) idleMessage(v host.View, st state.State) string {
 
 // watchDialog tells the human when Claude Code has been waiting on them (a permission prompt or a
 // question) for a while. It is a notice, not an escalation: the session is fine, it needs an answer.
+// It is repeated on the same schedule as escalation reminders, since the run waits until it is answered.
 func (l *Loop) watchDialog(v host.View, st state.State) {
 	d := st.Run.Dialog
-	if d == nil || v.Now.Sub(d.Since) < l.Timing.DialogNotify || l.dialogNotified.Equal(d.Since) {
+	if d == nil {
 		return
 	}
-	l.dialogNotified = d.Since
+	due := []time.Duration{l.Timing.DialogNotify}
+	for _, r := range Reminders {
+		due = append(due, l.Timing.DialogNotify+r)
+	}
+	open := v.Now.Sub(l.since(d.Since))
+	n := 0
+	for n < len(due) && open >= due[n] {
+		n++
+	}
+	if n == 0 || !l.dialogNotified.IsZero() && !l.dialogNotified.Before(d.Since.Add(due[n-1])) {
+		return
+	}
+	l.dialogNotified = d.Since.Add(due[n-1])
 	l.update(func(st *state.State) {
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: "waiting for your answer (" + d.Tool + ")", At: v.Now})
 	})
-	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool})
+	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
 }
 
-// watchError resumes a turn that an API error ended. A usage limit is announced once and retried
-// slowly; overloads and server errors are retried with backoff. A turn that starts on its own (Claude
-// Code may resume by itself) supersedes all of this.
+// transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
+// login, billing, a model that does not exist, a request Claude Code refuses to send) needs the human.
+var transientErrors = map[string]bool{"rate_limit": true, "overloaded": true, "server_error": true, "unknown": true, "max_output_tokens": true}
+
+// MaxErrorRetries is how many transient-error retries happen before the human is told (retries go on).
+const MaxErrorRetries = 6
+
+// watchError resumes a turn that an API error ended. A usage limit is announced once per episode and
+// retried every 15-30 minutes, so the run resumes soon after the limit resets. Overloads and server
+// errors are retried with backoff, and reported if they persist. Errors that will not pass on their
+// own are reported at once and not retried. A turn that starts on its own (Claude Code may resume by
+// itself) supersedes all of this.
 func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state.StopError) {
-	base := l.Timing.OverloadRetry
+	if !transientErrors[e.Error] {
+		if esc := st.Run.Escalation; esc == nil || esc.Kind != "api_error" {
+			reason := fmt.Sprintf("the last turn failed with an API error baton cannot retry away (%s)", e.Error)
+			if e.Details != "" {
+				reason += ": " + e.Details
+			}
+			l.escalate("api_error", reason)
+		}
+		return
+	}
+	var wait time.Duration
 	if e.Error == "rate_limit" {
-		base = l.Timing.RateLimitRetry
-		if !l.rateNotified.Equal(e.At) {
-			l.rateNotified = e.At
+		if !l.rateNotified {
+			l.rateNotified = true
 			l.update(func(st *state.State) {
 				st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "rate_limit", Text: e.Details, At: v.Now})
 			})
 		}
+		wait = l.Timing.RateLimitRetry << min(l.errRetries, 1) // ×1, then ×2: limits reset at unknown times
+	} else {
+		wait = l.Timing.OverloadRetry << min(l.errRetries, 4) // back off: ×1, ×2, ×4, ×8, ×16
+		if l.errRetries >= MaxErrorRetries {
+			if esc := st.Run.Escalation; esc == nil || esc.Kind != "api_error" {
+				l.escalate("api_error", fmt.Sprintf("the API keeps failing (%s) after %d retries; baton keeps retrying", e.Error, l.errRetries))
+			}
+		}
 	}
-	wait := base << min(l.errRetries, 4) // back off: ×1, ×2, ×4, ×8, ×16
-	since := latest(e.At, l.errNudged)
-	if v.Now.Sub(since) < wait || l.gate(v, st) != "" {
+	if v.Now.Sub(l.since(latest(e.At, l.errNudged))) < wait {
 		return
 	}
+	if l.why != "" {
+		l.held(v, st, "retry after an API error")
+		return
+	}
+	l.proceed()
 	l.errRetries++
 	l.errNudged = v.Now
 	l.Store.Event("error_retry", map[string]any{"error": e.Error, "retry": l.errRetries})

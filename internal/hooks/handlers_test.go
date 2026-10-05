@@ -187,15 +187,61 @@ func TestCompactionLifecycle(t *testing.T) {
 	if c := f.state().Run.Compaction; c.Status != state.CompactDone {
 		t.Fatalf("finished: %+v", c)
 	}
-	// An auto-compaction while a boundary is owed satisfies it (no second compaction later).
+	// An automatic PreCompact while a boundary is owed is only Claude Code precomputing a summary: it
+	// must not pass for the owed compaction, or baton would wait for one that is not happening.
 	f.store.Update(func(st *state.State) error { st.BoundaryOwed = true; st.Run.Compaction.Reason = ""; return nil })
 	f.fire("PreCompact", map[string]any{"trigger": "auto"})
-	if c := f.state().Run.Compaction; !c.ByBaton || c.Reason != "boundary" || c.Epoch != 2 || c.Status != state.CompactActive {
-		t.Fatalf("auto while owed: %+v", c)
+	if c := f.state().Run.Compaction; c.Epoch != 1 || c.Status != state.CompactDone {
+		t.Fatalf("auto precompute taken for a compaction: %+v", c)
+	}
+	// The Stop then queues the owed compaction as usual.
+	f.fire("Stop", map[string]any{})
+	if c := f.state().Run.Compaction; c.Status != state.CompactQueued || c.Epoch != 2 || c.Reason != "boundary" {
+		t.Fatalf("not queued after the precompute: %+v", c)
 	}
 	events, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
-	if strings.Count(string(events), `"kind":"compact_started"`) != 3 || !strings.Contains(string(events), `"kind":"compact_finished"`) {
+	if strings.Count(string(events), `"kind":"compact_started"`) != 2 || !strings.Contains(string(events), `"kind":"compact_finished"`) ||
+		!strings.Contains(string(events), `"kind":"precompact_auto"`) {
 		t.Fatalf("events: %s", events)
+	}
+}
+
+// When Claude Code really compacts on its own while a boundary is owed (mid-turn, after `baton done`),
+// that compaction counts: the next phase starts from its brief, and nothing is compacted again.
+func TestAutoCompactionSatisfiesAnOwedBoundary(t *testing.T) {
+	f := newFixture(t, true)
+	pl, _ := f.store.LoadPlan()
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+	f.fire("PreCompact", map[string]any{"trigger": "auto"})
+	ctx := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
+	if !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") {
+		t.Fatalf("brief:\n%s", ctx)
+	}
+	f.fire("PostCompact", map[string]any{"trigger": "auto"})
+	st := f.state()
+	if st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive || st.Run.Compaction.Status != state.CompactDone || !st.Run.Compaction.ByBaton {
+		t.Fatalf("boundary not satisfied: %+v", st)
+	}
+	if out := f.fire("Stop", map[string]any{}); out["decision"] != "block" || f.state().Run.Compaction.Status == state.CompactQueued {
+		t.Fatalf("compacted again: %v %+v", out, f.state().Run.Compaction)
+	}
+}
+
+// A mid-phase auto-compaction after an earlier baton compaction must not look like baton's own: no
+// rewake, and no "did not resume" nudge when the turn later ends with a wait.
+func TestAutoCompactionAfterABatonOneIsNotBatons(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error {
+		st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactDone, Reason: "checkpoint", ByBaton: true, Rewoken: 3}
+		return nil
+	})
+	f.fire("PreCompact", map[string]any{"trigger": "auto"})
+	if ctx := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"})); !strings.Contains(ctx, "compacted the context automatically") {
+		t.Fatalf("brief:\n%s", ctx)
+	}
+	f.fire("PostCompact", map[string]any{"trigger": "auto"})
+	if c := f.state().Run.Compaction; c.ByBaton || c.Trigger != "auto" {
+		t.Fatalf("auto compaction taken for baton's: %+v", c)
 	}
 }
 
@@ -245,6 +291,12 @@ func TestContextNudgeOncePerCompaction(t *testing.T) {
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
 		t.Fatalf("nudged twice: %v", out)
 	}
+	// Another tenth of the limit later, the request is repeated.
+	f.setContext(590_000)
+	if !strings.Contains(additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "the context holds 590k tokens") {
+		t.Fatal("the nudge was not repeated as the context grew")
+	}
+	f.setContext(500_000)
 	// A compaction that leaves the context above the threshold must not start a loop of checkpoints.
 	f.fire("PreCompact", map[string]any{"trigger": "manual"})
 	f.setContext(450_000)
@@ -275,7 +327,7 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	}
 	ctx := additionalContext(out)
 	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
-		`"Checkpoint now"`, `"Keep going"`, "baton checkpoint --notes"} {
+		`"Checkpoint now"`, `"Keep going"`, "baton acts on the answer itself"} {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("warning lacks %q: %q", want, ctx)
 		}
@@ -326,10 +378,81 @@ func TestToolsAreHeldWhileACompactionIsOwed(t *testing.T) {
 	if hso["permissionDecision"] != "deny" || !strings.Contains(hso["permissionDecisionReason"].(string), "End your turn now") {
 		t.Fatalf("not held: %v", out)
 	}
-	if out := f.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "baton status"}}); out != nil {
+	out = f.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "baton status"}})
+	if hso, _ := out["hookSpecificOutput"].(map[string]any); hso["permissionDecision"] != "allow" {
 		t.Fatalf("baton's own CLI was held: %v", out)
 	}
 	if out := f.fire("PreToolUse", map[string]any{"tool_name": "Edit", "agent_id": "sub"}); out != nil {
 		t.Fatalf("a subagent was held: %v", out)
+	}
+}
+
+// The human's answer to baton's own question acts by itself: the model need not remember to run anything.
+func TestAnswersToBatonsQuestionsAct(t *testing.T) {
+	answer := func(f *fixture, q, a string) map[string]any {
+		return f.fire("PostToolUse", map[string]any{"tool_name": "AskUserQuestion",
+			"tool_response": map[string]any{"answers": map[string]any{q: a}}})
+	}
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error {
+		state.SetBlocked(st, "need a key", f.now)
+		st.Run.Escalation = &state.Escalation{Kind: "blocked", Reason: "blocked on P0: need a key", Asked: true}
+		return nil
+	})
+	if out := answer(f, "baton: blocked on P0: need a key", "Continue"); !strings.Contains(additionalContext(out), "baton has resumed") {
+		t.Fatalf("continue: %v", out)
+	}
+	if st := f.state(); st.Blocked != nil || st.Run.Escalation != nil || st.Mode != state.ModeRunning {
+		t.Fatalf("not resumed: %+v", st)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"resumed"`) {
+		t.Fatalf("events: %s", b)
+	}
+	answer(f, "baton: blocked on P0: something", "Pause baton")
+	if f.state().Mode != state.ModePaused {
+		t.Fatal("not paused")
+	}
+
+	f = newFixture(t, true)
+	answer(f, "baton: the context holds 730k tokens, past the 729k warning line. Checkpoint now?", "Checkpoint now")
+	if !f.state().CheckpointAsked {
+		t.Fatal("checkpoint not recorded")
+	}
+	// The model ends its turn without running baton checkpoint: the stop is a checkpoint anyway.
+	f.fire("Stop", map[string]any{})
+	if c := f.state().Run.Compaction; c.Status != state.CompactQueued || c.Reason != "checkpoint" {
+		t.Fatalf("no checkpoint at the stop: %+v", c)
+	}
+
+	// Somebody else's question is none of baton's business.
+	f = newFixture(t, true)
+	if out := answer(f, "Which color?", "Continue"); out != nil || f.state().Mode != state.ModeRunning {
+		t.Fatalf("acted on a foreign question: %v", out)
+	}
+}
+
+// Claude Code's idle notification proves no turn or dialog is open: flags that stuck (an interrupted
+// turn fires no Stop) are corrected.
+func TestIdleNotificationCorrectsStuckFlags(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error {
+		st.Run.TurnOpen, st.Run.Dialog = true, &state.Dialog{Tool: "Bash"}
+		return nil
+	})
+	f.fire("Notification", map[string]any{"notification_type": "idle_prompt", "message": "Claude is waiting for your input"})
+	if r := f.state().Run; r.TurnOpen || r.Dialog != nil {
+		t.Fatalf("still stuck: %+v", r)
+	}
+}
+
+// A Stop recounts subagents from what is really running; one that died in an API error never fired
+// SubagentStop.
+func TestStopRecountsSubagents(t *testing.T) {
+	f := newFixture(t, true)
+	f.fire("SubagentStart", map[string]any{"agent_id": "a"})
+	f.fire("SubagentStart", map[string]any{"agent_id": "b"})
+	f.fire("Stop", map[string]any{"background_tasks": []any{map[string]any{"id": "x", "type": "subagent", "status": "running"}}})
+	if n := f.state().Run.Subagents; n != 1 {
+		t.Fatalf("subagents = %d", n)
 	}
 }

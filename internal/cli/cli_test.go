@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +107,23 @@ func TestContextSettings(t *testing.T) {
 		if err != nil || flag != c.flag || vs != want {
 			t.Errorf("%s: flag %q settings %+v err %v; want %q %+v", c.name, flag, vs, err, c.flag, want)
 		}
+	}
+}
+
+// A hook that fails open leaves a trace in the event log, where a stall gets diagnosed.
+func TestHookFailuresAreRecorded(t *testing.T) {
+	old := hookHandlers
+	defer func() { hookHandlers = old }()
+	hookHandlers = map[string]hooks.Handler{"Stop": func(hooks.Context) (hooks.Result, error) {
+		return hooks.Result{}, fmt.Errorf("baton state is locked by another process")
+	}}
+	dir := t.TempDir()
+	io, _, _ := testIO(`{}`, map[string]string{"BATON_HOST": "1", "BATON_DIR": dir, "BATON_INSTANCE": "i"})
+	if code := Main([]string{"hook", "Stop"}, io); code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if !strings.Contains(string(b), `"kind":"hook_failed"`) || !strings.Contains(string(b), "locked by another process") {
+		t.Fatalf("events: %s", b)
 	}
 }

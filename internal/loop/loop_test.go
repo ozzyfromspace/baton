@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -23,10 +24,17 @@ func (t *typed) Type(s string, enter bool) error {
 	return nil
 }
 
-type pushes struct{ kinds []string }
+type pushes struct {
+	kinds []string
+	fail  int // fail this many sends first
+}
 
 func (p *pushes) Notify(project, kind, detail string) error {
 	p.kinds = append(p.kinds, kind)
+	if p.fail > 0 {
+		p.fail--
+		return fmt.Errorf("network down")
+	}
 	return nil
 }
 
@@ -60,6 +68,13 @@ func (r *rig) tick(advance time.Duration) {
 	r.loop.Tick(r.view, r.in)
 }
 
+// run advances d in 10-second ticks. Ticks are continuous in real life; one long gap looks like sleep.
+func (r *rig) run(d time.Duration) {
+	for step := 10 * time.Second; d > 0; d -= step {
+		r.tick(min(step, d))
+	}
+}
+
 func (r *rig) state() state.State {
 	st, _ := r.loop.Store.Load()
 	return st
@@ -78,7 +93,7 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 	}{
 		{"turn open", func() { r.set(func(st *state.State) { st.Run.TurnOpen = true }) }, func() { r.set(func(st *state.State) { st.Run.TurnOpen = false }) }},
 		{"dialog", func() { r.set(func(st *state.State) { st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion"} }) }, func() { r.set(func(st *state.State) { st.Run.Dialog = nil }) }},
-		{"subagent", func() { r.set(func(st *state.State) { st.Run.Subagents = 1 }) }, func() { r.set(func(st *state.State) { st.Run.Subagents = 0 }) }},
+		{"background subagent", func() { r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent"}} }) }, func() { r.set(func(st *state.State) { st.Run.Background = nil }) }},
 		{"draft", func() { r.view.Draft = true }, func() { r.view.Draft = false }},
 		{"human typing", func() { r.view.LastHumanKey = r.now }, func() { r.view.LastHumanKey = r.now.Add(-time.Hour) }},
 		{"screen busy", func() { r.view.LastOutput = r.now }, func() { r.view.LastOutput = r.now.Add(-time.Hour) }},
@@ -115,12 +130,27 @@ func TestRetryOnceThenEscalate(t *testing.T) {
 	}
 	r.tick(DefaultTiming.AckTimeout + time.Second)
 	st := r.state()
-	if st.Run.Compaction.Status != state.CompactFailed || st.Run.Escalation == nil {
+	if st.Run.Compaction.Status != state.CompactFailed || st.Run.Escalation == nil || !strings.Contains(st.Run.Escalation.Reason, "will try again") {
 		t.Fatalf("no escalation: %+v", st.Run)
 	}
 	r.tick(time.Second) // the next tick pushes the notice
 	if len(r.push.kinds) != 1 || r.push.kinds[0] != "compaction_failed" || len(r.state().Run.Notices) != 0 {
 		t.Fatalf("pushes %v notices %v", r.push.kinds, r.state().Run.Notices)
+	}
+	// A compaction that is still owed is never abandoned: the round starts over after a backoff.
+	r.run(DefaultTiming.FailedRetry)
+	r.tick(time.Second)
+	if c := r.state().Run.Compaction; c.Rounds != 1 || len(r.in.text) != 3 || !strings.HasPrefix(r.in.text[2], clearLine) {
+		t.Fatalf("no new round: %+v typed %q", c, r.in.text)
+	}
+	// It finally happens: the escalation clears itself.
+	r.set(func(st *state.State) {
+		st.Run.Compaction.Status, st.Run.Compaction.ByBaton, st.Run.Compaction.Finished = state.CompactDone, true, r.now
+		st.Run.TurnStarted = r.now.Add(time.Second)
+	})
+	r.tick(2 * time.Second)
+	if e := r.state().Run.Escalation; e != nil {
+		t.Fatalf("escalation outlived its cause: %+v", e)
 	}
 }
 
@@ -134,7 +164,7 @@ func TestAcknowledgedCompactionIsLeftAlone(t *testing.T) {
 	if len(r.in.text) != 1 || r.state().Run.Compaction.Status != state.CompactActive {
 		t.Fatalf("typed %q state %+v", r.in.text, r.state().Run.Compaction)
 	}
-	r.tick(DefaultTiming.CompactTimeout)
+	r.run(DefaultTiming.CompactTimeout)
 	if r.state().Run.Compaction.Status != state.CompactFailed {
 		t.Fatal("a compaction that never finished was not escalated")
 	}
@@ -145,6 +175,7 @@ func TestNudgeThenEscalateWhenTheModelDoesNotResume(t *testing.T) {
 	r.set(func(st *state.State) {
 		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, ByBaton: true, Reason: "boundary", Finished: r.now}
 	})
+	r.tick(0)
 	r.tick(DefaultTiming.ResumeNudge / 2)
 	if len(r.in.text) != 0 {
 		t.Fatal("nudged too early")
@@ -153,9 +184,18 @@ func TestNudgeThenEscalateWhenTheModelDoesNotResume(t *testing.T) {
 	if len(r.in.text) != 1 || !strings.HasPrefix(r.in.text[0], "[baton] Context compacted. Begin P1") {
 		t.Fatalf("nudge %q", r.in.text)
 	}
-	r.tick(DefaultTiming.ResumeEscalate + time.Second)
+	r.run(DefaultTiming.ResumeEscalate + time.Second)
 	if e := r.state().Run.Escalation; e == nil || !strings.Contains(e.Reason, "did not resume") {
 		t.Fatalf("escalation %+v", e)
+	}
+	// The model wakes after all (a late rewake): the escalation clears itself.
+	r.set(func(st *state.State) {
+		st.Run.LastActivity = r.now.Add(time.Second)
+		st.Run.TurnStarted = r.now.Add(time.Second)
+	})
+	r.tick(2 * time.Second)
+	if e := r.state().Run.Escalation; e != nil {
+		t.Fatalf("escalation outlived its cause: %+v", e)
 	}
 }
 
@@ -165,7 +205,7 @@ func TestResumedModelIsNotNudged(t *testing.T) {
 		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, ByBaton: true, Finished: r.now}
 		st.Run.TurnStarted = r.now.Add(2 * time.Second)
 	})
-	r.tick(10 * time.Minute)
+	r.run(10 * time.Minute)
 	if len(r.in.text) != 0 {
 		t.Fatalf("nudged a model that resumed: %q", r.in.text)
 	}
@@ -174,11 +214,108 @@ func TestResumedModelIsNotNudged(t *testing.T) {
 func TestADraftBlockingACompactionIsReported(t *testing.T) {
 	r := newRig(t)
 	r.view.Draft = true
-	r.tick(time.Second)
-	r.tick(DefaultTiming.DraftEscalate + time.Second)
-	r.tick(time.Second)
+	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
 	if len(r.in.text) != 0 || len(r.push.kinds) != 1 || r.push.kinds[0] != "draft" {
 		t.Fatalf("typed %q pushes %v", r.in.text, r.push.kinds)
+	}
+	if e := r.state().Run.Escalation; e == nil || !strings.Contains(e.Reason, "Ctrl-C") {
+		t.Fatalf("escalation %+v", e)
+	}
+	// The human clears it: the escalation goes, and the compaction is typed.
+	r.view.Draft = false
+	r.tick(time.Second)
+	r.tick(time.Second)
+	if r.state().Run.Escalation != nil || len(r.in.text) != 1 {
+		t.Fatalf("after clearing: escalation %+v typed %q", r.state().Run.Escalation, r.in.text)
+	}
+}
+
+// A status line that redraws every second never leaves the screen still for Quiet. Typing is safe
+// anyway (Claude Code buffers input), so after QuietMax with every other gate open, baton types.
+func TestAScreenThatNeverSettlesDoesNotBlockForever(t *testing.T) {
+	r := newRig(t)
+	for i := 0; i < 20; i++ {
+		r.view.LastOutput = r.now
+		r.tick(time.Second)
+	}
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed after %d busy seconds: %q", 20, r.in.text)
+	}
+	for i := 0; i < 15 && len(r.in.text) == 0; i++ {
+		r.view.LastOutput = r.now
+		r.tick(time.Second)
+	}
+	if len(r.in.text) != 1 || r.in.text[0] != "/compact" {
+		t.Fatalf("never typed into a busy screen: %q", r.in.text)
+	}
+}
+
+// The Stop hook does not run when a turn is interrupted, and a hook can fail; an open turn with no
+// sign of life must not hold everything forever.
+func TestAStaleTurnStopsBlocking(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) { st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now })
+	r.tick(0)
+	r.run(DefaultTiming.StaleTurn - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed during a live turn: %q", r.in.text)
+	}
+	r.run(2 * time.Minute)
+	if len(r.in.text) == 0 || r.in.text[0] != "/compact" {
+		t.Fatalf("a stale turn still blocks: %q", r.in.text)
+	}
+}
+
+// Background subagents may hold a compaction, but not forever without telling anyone.
+func TestHungBackgroundSubagentsAreReported(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent", Status: "running"}} })
+	r.run(DefaultTiming.BackgroundMax + time.Minute)
+	if e := r.state().Run.Escalation; len(r.in.text) != 0 || e == nil || e.Kind != "stuck" || !strings.Contains(e.Reason, "background subagents") {
+		t.Fatalf("typed %q escalation %+v", r.in.text, e)
+	}
+	r.set(func(st *state.State) { st.Run.Background = nil })
+	r.run(5 * time.Second)
+	if e := r.state().Run.Escalation; e != nil || len(r.in.text) != 1 {
+		t.Fatalf("after the subagents finished: typed %q escalation %+v", r.in.text, e)
+	}
+}
+
+// A machine that sleeps through a compaction does not fail it the moment it wakes.
+func TestSleepDoesNotFailACompaction(t *testing.T) {
+	r := newRig(t)
+	r.tick(time.Second)
+	r.set(func(st *state.State) {
+		st.Run.Compaction.Status, st.Run.Compaction.Started, st.Run.Compaction.ByBaton = state.CompactActive, r.now, true
+	})
+	r.tick(time.Second)
+	r.tick(3 * time.Hour) // asleep
+	r.tick(time.Second)
+	if c := r.state().Run.Compaction; c.Status != state.CompactActive {
+		t.Fatalf("failed right after waking: %+v", c)
+	}
+}
+
+// One escalation push is easy to miss; unresolved ones are pushed again, a few times.
+func TestUnresolvedEscalationsAreRepeated(t *testing.T) {
+	r := newRig(t)
+	r.view.Draft = true
+	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
+	r.run(Reminders[1] + time.Minute)
+	if len(r.push.kinds) != 3 {
+		t.Fatalf("pushes %v", r.push.kinds)
+	}
+}
+
+// A push that fails (no network) stays queued and is retried.
+func TestFailedPushesAreRetried(t *testing.T) {
+	r := newRig(t)
+	r.push.fail = 1
+	r.view.Draft = true
+	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
+	r.run(2 * DefaultTiming.NoticeRetry)
+	if len(r.push.kinds) != 2 || len(r.state().Run.Notices) != 0 {
+		t.Fatalf("pushes %v queued %v", r.push.kinds, r.state().Run.Notices)
 	}
 }
 

@@ -28,6 +28,9 @@ type Runtime struct {
 
 	// StopBlocks counts consecutive Stops baton refused because the model reported no status.
 	StopBlocks int `json:"stop_blocks"`
+	// IdleNudges counts the reminders baton typed since the plan last moved (a phase done, a checkpoint,
+	// a block, the human taking part). Reminders that keep getting answered without progress escalate.
+	IdleNudges int `json:"idle_nudges,omitempty"`
 
 	Compaction Compaction `json:"compaction"`
 	// Notices are messages for the human that the host sends out of band (push and desktop), then clears.
@@ -35,12 +38,14 @@ type Runtime struct {
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
-	// ContextNudged is set once the model has been asked to checkpoint, and ContextWarned once the human
-	// has been asked; each re-arms when the context falls well below its threshold (after a compaction).
-	ContextNudged bool        `json:"context_nudged,omitempty"`
-	ContextWarned bool        `json:"context_warned,omitempty"`
-	Escalation    *Escalation `json:"escalation,omitempty"`
-	LastError     *StopError  `json:"last_error,omitempty"`
+	// ContextNudged is set once the model has been asked to checkpoint (ContextNudgedAt: at what size, so
+	// the request is repeated as the context keeps growing), and ContextWarned once the human has been
+	// asked; each re-arms when the context falls well below its threshold (after a compaction).
+	ContextNudged   bool        `json:"context_nudged,omitempty"`
+	ContextNudgedAt int         `json:"context_nudged_at,omitempty"`
+	ContextWarned   bool        `json:"context_warned,omitempty"`
+	Escalation      *Escalation `json:"escalation,omitempty"`
+	LastError       *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.
 	PendingDone string `json:"pending_done,omitempty"`
 	Ended       *Ended `json:"ended,omitempty"`
@@ -87,6 +92,10 @@ type Compaction struct {
 	Rewoken int `json:"rewoken,omitempty"`
 	// Nudged is when baton typed a reminder because the model did not resume after this compaction.
 	Nudged time.Time `json:"nudged,omitzero"`
+	// FailedAt and Rounds: when baton last gave up on this compaction, and how many times it started
+	// over. A failed compaction is retried with backoff, never abandoned while one is owed.
+	FailedAt time.Time `json:"failed_at,omitzero"`
+	Rounds   int       `json:"rounds,omitempty"`
 }
 
 // InFlight reports whether a baton-requested compaction is queued or underway.
@@ -114,10 +123,17 @@ func (c ContextUse) Used() int {
 
 // Escalation records that baton brought the human in, and why.
 type Escalation struct {
+	Kind   string    `json:"kind,omitempty"` // blocked, stalled, stuck, draft, compaction_failed, api_error, …
 	Reason string    `json:"reason"`
 	Since  time.Time `json:"since"`
 	Asked  bool      `json:"asked"` // the in-session question was requested
 	Pushed bool      `json:"pushed"`
+	// Watchdog escalations (raised by the host for inactivity) clear themselves once the session shows
+	// signs of life again; escalations from the Stop table wait for the human's answer.
+	Watchdog bool `json:"watchdog,omitempty"`
+	// Reminded counts the reminders sent while the escalation stays unresolved; LastPush is the latest.
+	Reminded int       `json:"reminded,omitempty"`
+	LastPush time.Time `json:"last_push,omitzero"`
 }
 
 // StopError is the last API error that ended a turn (rate limit, overload, …).
@@ -132,6 +148,9 @@ type Notice struct {
 	Kind string    `json:"kind"` // blocked, stalled, compaction_failed, plan_complete, …
 	Text string    `json:"text"`
 	At   time.Time `json:"at"`
+	// Tries and NextTry: a notice whose delivery failed stays queued and is retried.
+	Tries   int       `json:"tries,omitempty"`
+	NextTry time.Time `json:"next_try,omitzero"`
 }
 
 // Ended records the session ending.
@@ -140,12 +159,25 @@ type Ended struct {
 	At     time.Time `json:"at"`
 }
 
-// BusyBackground reports background work that can still wake the session: anything in flight except
-// monitors, which watch indefinitely and must not make an idle session look busy.
+// Progress records that the plan moved or the human took part: escalations about the run standing
+// still no longer apply, and the reminder count starts over.
+func (r *Runtime) Progress() {
+	r.IdleNudges, r.StopBlocks = 0, 0
+	if e := r.Escalation; e != nil && e.Kind != "blocked" {
+		r.Escalation = nil
+	}
+}
+
+// waitable are the background task types (as Claude Code reports them at Stop) that are the model's own
+// work and wake the session when they finish. Monitors watch indefinitely, and dream, auto-mode scan
+// and memory import are Claude Code's own housekeeping: none of those may make an idle session look busy.
+var waitable = map[string]bool{"shell": true, "subagent": true, "workflow": true, "MCP task": true, "teammate": true, "cloud session": true}
+
+// BusyBackground reports background work that can still wake the session.
 func (r Runtime) BusyBackground() []Task {
 	var out []Task
 	for _, t := range r.Background {
-		if t.Type != "monitor" {
+		if waitable[t.Type] {
 			out = append(out, t)
 		}
 	}

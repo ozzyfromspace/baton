@@ -76,6 +76,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
 		}
 		return d
 	}
+	if st.CheckpointAsked && !st.BoundaryOwed {
+		st.CheckpointAsked, st.CheckpointOwed = false, true // the human asked for it; the model need not remember
+	}
 	switch {
 	case st.Run.Compaction.InFlight():
 		// A compaction is already queued or underway; let the turn end so the host can type it.
@@ -92,21 +95,37 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
 	case st.Waiting != nil && now.Before(st.Waiting.Until):
+		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))
-	case len(st.Run.BusyBackground()) > 0:
-		d.say(fmt.Sprintf("baton: waiting on %d background task(s)", len(st.Run.BusyBackground())))
 	default:
 		// While a plan runs, a stop needs a status even when the human started the turn: every run
-		// begins with a human "go". To talk without the plan, the human pauses baton.
+		// begins with a human "go". To talk without the plan, the human pauses baton. Background work
+		// is no excuse either: a dev server or a log watcher runs forever, so a stop that waits on it
+		// must say for how long (baton waiting), and baton holds it to that.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
-			d.refuse(noStatusReason(st.Current, cur))
-			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks})
+			reason := noStatusReason(st.Current, cur)
+			if bg := st.Run.BusyBackground(); len(bg) > 0 {
+				reason += " " + backgroundNote(bg)
+			}
+			d.refuse(reason)
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "background": len(st.Run.BusyBackground())})
 			return d
 		}
 		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without reporting status", st.Run.StopBlocks, st.Current), now)
 	}
 	return d
+}
+
+func backgroundNote(bg []state.Task) string {
+	what := bg[0].Description
+	if what == "" {
+		what = bg[0].Type
+	}
+	if len(bg) > 1 {
+		what = fmt.Sprintf("%s, and %d more", what, len(bg)-1)
+	}
+	return fmt.Sprintf("Background work is still running (%s), but that is not a status: if you are waiting on it, use `baton waiting` with how long it should take, so baton can wake you if it never reports back.", what)
 }
 
 func noStatusReason(id, title string) string {
@@ -123,7 +142,7 @@ func noStatusReason(id, title string) string {
 func escalate(st *state.State, d *decision, kind, reason string, now time.Time) {
 	e := st.Run.Escalation
 	if e == nil || e.Reason != reason {
-		e = &state.Escalation{Reason: reason, Since: now}
+		e = &state.Escalation{Kind: kind, Reason: reason, Since: now}
 		st.Run.Escalation = e
 		notice(st, kind, reason, now)
 		d.emit("escalated", map[string]any{"type": kind, "reason": reason})
@@ -142,7 +161,7 @@ func askReason(reason string) string {
 	return fmt.Sprintf("[baton] Bring the human in now: call the AskUserQuestion tool with the question %q and two options: "+
 		"\"Continue\" (description: \"I've handled it; carry on with the plan\") and "+
 		"\"Pause baton\" (description: \"I'll take it from here\"). "+
-		"If they choose Continue, run `baton resume` and carry on with the plan. If they choose Pause baton, run `baton pause` and wait for them.",
+		"baton acts on the answer itself; then follow what it tells you.",
 		"baton: "+reason)
 }
 

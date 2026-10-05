@@ -49,11 +49,15 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "declared wait in its window",
 			setup: func(st *state.State) { state.SetWaiting(st, "the build", time.Hour, tStop) },
 			say:   "waiting for the build"},
-		{name: "busy background work",
+		{name: "background work is not a status: declare the wait",
 			setup: func(st *state.State) {
-				st.Run.Background = []state.Task{{Type: "shell", Status: "running"}}
+				st.Run.Background = []state.Task{{Type: "shell", Status: "running", Description: "npm run dev"}}
 			},
-			say: "waiting on 1 background task"},
+			block: true, reason: "Background work is still running (npm run dev), but that is not a status"},
+		{name: "Claude Code's own housekeeping is not background work", block: true, reason: "not reported done",
+			setup: func(st *state.State) {
+				st.Run.Background = []state.Task{{Type: "dream"}, {Type: "auto-mode scan"}}
+			}},
 		{name: "monitors alone are not busy", block: true, reason: "not reported done",
 			setup: func(st *state.State) {
 				st.Run.Background = []state.Task{{Type: "monitor", Status: "running"}}

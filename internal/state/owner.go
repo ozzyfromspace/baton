@@ -42,7 +42,9 @@ func Release(st *State, instance string) {
 	}
 }
 
-// IsOwner reports whether instance currently owns the project.
+// IsOwner reports whether instance owns the project. A stale heartbeat does not end ownership: it only
+// lets another host take the project over (Claim). Until one does, the owner's own hooks keep working,
+// for instance in the seconds after the machine wakes, before the host's next heartbeat.
 func (st *State) IsOwner(instance string, now time.Time) bool {
-	return instance != "" && st.Owner.Live(now) && st.Owner.Instance == instance
+	return instance != "" && st.Owner != nil && st.Owner.Instance == instance
 }

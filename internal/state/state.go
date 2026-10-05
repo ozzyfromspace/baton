@@ -61,6 +61,9 @@ type State struct {
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
 	CheckpointOwed bool `json:"checkpoint_owed,omitempty"`
+	// CheckpointAsked: the human chose "Checkpoint now"; the model may finish its step first, and the
+	// next stop becomes a checkpoint whether or not the model ran `baton checkpoint`.
+	CheckpointAsked bool `json:"checkpoint_asked,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }
@@ -126,6 +129,8 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 	}
 	ps.Status, ps.DoneAt = PhaseDone, now
 	st.Blocked, st.Waiting, st.CheckpointOwed = nil, nil, false
+	st.Run.Progress()
+	st.Run.Escalation = nil
 	next = nextPending(st, p)
 	if next == "" {
 		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
@@ -153,6 +158,7 @@ func Start(st *State, now time.Time, head string) {
 		ps.Status, ps.StartedAt, ps.StartHead = PhaseActive, now, head
 	}
 	st.BoundaryOwed = false
+	st.Run.Progress()
 }
 
 // SetBlocked records that the model cannot continue without a human.
@@ -164,8 +170,13 @@ func SetBlocked(st *State, reason string, now time.Time) error {
 		return errors.New("say why you are blocked")
 	}
 	st.Blocked, st.Waiting = &Block{Reason: reason, Since: now}, nil
+	st.Run.Progress()
 	return nil
 }
+
+// MaxWait bounds a declared wait. A longer one would let a run sit idle for hours on the model's say-so;
+// anything that slow needs the human to know.
+const MaxWait = 2 * time.Hour
 
 // SetWaiting records a bounded wait.
 func SetWaiting(st *State, what string, d time.Duration, now time.Time) error {
@@ -174,6 +185,9 @@ func SetWaiting(st *State, what string, d time.Duration, now time.Time) error {
 	}
 	if what == "" || d <= 0 {
 		return errors.New("say what you are waiting for and for how long (e.g. --until 20m)")
+	}
+	if d > MaxWait {
+		return fmt.Errorf("a wait can be at most %s; for anything longer, run `baton blocked \"<what you are waiting for>\"` so the human knows", MaxWait)
 	}
 	st.Waiting, st.Blocked = &Wait{What: what, Since: now, Until: now.Add(d)}, nil
 	return nil
@@ -184,7 +198,8 @@ func SetCheckpoint(st *State) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("checkpoints only apply while a plan is running (mode: %s)", st.Mode)
 	}
-	st.CheckpointOwed = true
+	st.CheckpointOwed, st.CheckpointAsked, st.Blocked = true, false, nil
+	st.Run.Progress()
 	return nil
 }
 
@@ -205,7 +220,8 @@ func Resume(st *State) error {
 	if st.Mode == ModePaused {
 		st.Mode = ModeRunning
 	}
-	st.Blocked, st.Run.Escalation, st.Run.StopBlocks = nil, nil, 0
+	st.Blocked, st.Run.Escalation = nil, nil
+	st.Run.Progress()
 	return nil
 }
 

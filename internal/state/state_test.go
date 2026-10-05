@@ -235,7 +235,12 @@ func TestOwnership(t *testing.T) {
 	if err := Claim(&st, "a", 1, t0.Add(10*time.Second)); err != nil || !st.Owner.Heartbeat.Equal(t0.Add(10*time.Second)) {
 		t.Fatalf("heartbeat: %v", err)
 	}
-	if err := Claim(&st, "b", 2, t0.Add(10*time.Second+OwnerTTL)); err != nil || !st.IsOwner("b", t0.Add(10*time.Second+OwnerTTL)) {
+	// A stale heartbeat (the machine slept, the host has not ticked yet) does not end ownership...
+	if !st.IsOwner("a", t0.Add(time.Hour)) {
+		t.Fatal("the owner's own hooks went dormant on a stale heartbeat")
+	}
+	// ...it only lets another host take over.
+	if err := Claim(&st, "b", 2, t0.Add(10*time.Second+OwnerTTL)); err != nil || !st.IsOwner("b", t0.Add(10*time.Second+OwnerTTL)) || st.IsOwner("a", t0) {
 		t.Fatalf("stale owner not replaced: %v", err)
 	}
 	Release(&st, "a") // not the owner any more: no effect
@@ -258,5 +263,15 @@ func TestEventFieldsCannotOverrideReservedKeys(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
 	if !strings.Contains(string(b), `"kind":"brief"`) || !strings.Contains(string(b), `"instance":"inst"`) || strings.Contains(string(b), `"ts":"x"`) {
 		t.Fatalf("event: %s", b)
+	}
+}
+
+func TestWaitsAreBounded(t *testing.T) {
+	st := Attach(threePhases(), t0, "")
+	if err := SetWaiting(&st, "the deploy", MaxWait, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetWaiting(&st, "the overnight batch", MaxWait+time.Minute, t0); err == nil || !strings.Contains(err.Error(), "baton blocked") {
+		t.Fatalf("an unbounded wait: %v", err)
 	}
 }

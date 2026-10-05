@@ -24,16 +24,26 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 		if st.Mode != state.ModeRunning {
 			return nil
 		}
-		comp := st.Run.Compaction
+		comp := &st.Run.Compaction
+		ours := comp.ByBaton && comp.Status == state.CompactActive
+		if !ours && (st.BoundaryOwed || st.CheckpointOwed) {
+			// Claude Code compacted on its own while a compaction was owed: that one counts.
+			adoptOwed(st, c.Now)
+			comp.Trigger, ours = "auto", true
+		}
 		switch {
-		case comp.ByBaton && comp.Reason == "boundary" && st.BoundaryOwed:
+		case ours && comp.Reason == "boundary" && st.BoundaryOwed:
 			kind = brief.Boundary
 			state.Start(st, c.Now, head)
-		case comp.ByBaton && comp.Reason == "checkpoint":
+		case ours && comp.Reason == "checkpoint":
 			kind = brief.Checkpoint
 			st.CheckpointOwed = false
 		default:
+			// Mid-phase auto-compaction: the turn continues by itself, and nothing of baton's is pending.
 			kind = brief.Auto
+			if !ours {
+				comp.ByBaton, comp.Trigger = false, "auto"
+			}
 		}
 		return nil
 	})
@@ -73,8 +83,8 @@ func (h *handlers) postCompactRewake(c Context) (Result, error) {
 		if !comp.ByBaton || comp.Epoch <= comp.Rewoken || st.Mode != state.ModeRunning {
 			return nil
 		}
-		if comp.Status != state.CompactActive && comp.Status != state.CompactDone {
-			return nil
+		if comp.Status != state.CompactActive && comp.Status != state.CompactDone && comp.Status != state.CompactFailed {
+			return nil // (Failed: PostCompact, running alongside, is promoting a late finish to Done)
 		}
 		comp.Rewoken, epoch = comp.Epoch, comp.Epoch
 		if comp.Reason == "boundary" {

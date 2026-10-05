@@ -172,3 +172,69 @@ func TestSleepRestartsTheIdleTimer(t *testing.T) {
 		t.Fatalf("no reminder after waking and staying idle: %q", r.in.text)
 	}
 }
+
+// An error that will not pass on its own (an expired login, billing) is reported at once, never retried.
+func TestPermanentAPIErrorsAreReportedNotRetried(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.LastError = &state.StopError{Error: "authentication_failed", Details: "please run /login", At: r.now}
+	})
+	r.run(2 * time.Hour)
+	if len(r.in.text) != 0 {
+		t.Fatalf("retried a permanent error: %q", r.in.text)
+	}
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "api_error" || !strings.Contains(e.Reason, "please run /login") {
+		t.Fatalf("escalation %+v", e)
+	}
+	if r.push.kinds[0] != "api_error" {
+		t.Fatalf("pushes %v", r.push.kinds)
+	}
+}
+
+// Overloads are retried with backoff, and the human hears about them if they persist.
+func TestPersistentOverloadIsReported(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) { st.Run.LastError = &state.StopError{Error: "overloaded", At: r.now} })
+	r.run(90 * time.Minute)
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "api_error" || !strings.Contains(e.Reason, "keeps retrying") {
+		t.Fatalf("escalation %+v (typed %d)", e, len(r.in.text))
+	}
+	n := len(r.in.text)
+	r.run(time.Hour)
+	if len(r.in.text) <= n {
+		t.Fatal("stopped retrying after reporting")
+	}
+}
+
+// Reminders that get answered without the plan moving escalate instead of repeating forever.
+func TestRemindersWithoutProgressEscalate(t *testing.T) {
+	r := newIdleRig(t)
+	for round := 0; round < MaxIdleNudges; round++ {
+		r.run(DefaultTiming.IdleNudge + time.Minute)
+		// The model answers the reminder (a turn, some activity) and stops again without progress.
+		r.set(func(st *state.State) { st.Run.TurnStarted, st.Run.LastActivity, st.Run.LastStop = r.now, r.now, r.now })
+		r.tick(time.Second)
+	}
+	if len(r.in.text) != MaxIdleNudges {
+		t.Fatalf("reminders %q", r.in.text)
+	}
+	r.run(DefaultTiming.IdleNudge + time.Minute)
+	if e := r.state().Run.Escalation; len(r.in.text) != MaxIdleNudges || e == nil || !strings.Contains(e.Reason, "has not moved") {
+		t.Fatalf("typed %q escalation %+v", r.in.text, e)
+	}
+	// The plan moves: the count starts over.
+	r.set(func(st *state.State) { st.Run.Progress() })
+	if r.state().Run.IdleNudges != 0 || r.state().Run.Escalation != nil {
+		t.Fatal("progress did not reset the reminders")
+	}
+}
+
+// A dialog nobody answers is pushed again, not just once.
+func TestUnansweredDialogIsPushedAgain(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) { st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now} })
+	r.run(DefaultTiming.DialogNotify + Reminders[0] + time.Minute)
+	if len(r.push.kinds) != 2 || r.push.kinds[1] != "dialog" {
+		t.Fatalf("pushes %v", r.push.kinds)
+	}
+}

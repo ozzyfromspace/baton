@@ -24,7 +24,7 @@ baton takes every one of those decisions away from the model. The model does the
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
 - **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. Claude Code's own auto-compaction remains the backstop.
-- **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits.
+- **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits, API errors. Nothing baton waits on can hold it forever. Every wait has a deadline or a fallback, and whatever needs you is pushed again until it's resolved.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification.
 - **Status line.** A permanent `◆ baton · P6 6/23 <title> · ctx 412k/810k` segment sits in front of your own status line. It shows the context size against the limit.
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -82,11 +83,31 @@ func ok(err error) error {
 	return err
 }
 
-// preToolUse holds the model at a compaction it owes. After `baton done` or `baton checkpoint`, the turn
+// preToolUse does two things.
+//
+// It lets baton's own CLI through deterministically. A plain `baton …` command is allowed outright, so
+// neither a permission prompt nor the auto-mode classifier can park an unattended run on it. One whose
+// arguments the shell would rewrite (backticks or $ inside double quotes: notes often quote code) is
+// refused with the fix, because it would run those as commands and mangle the notes.
+//
+// And it holds the model at a compaction it owes. After `baton done` or `baton checkpoint`, the turn
 // must end so the host can compact; a model that carries on would start the next phase (or keep going)
 // in the old context. So until then every main-agent tool call except baton's own CLI is denied, with
 // the reason. Subagents are not held: they cannot end the main turn.
 func (h *handlers) preToolUse(c Context) (Result, error) {
+	if str(c.Input, "tool_name") == "Bash" {
+		ti, _ := c.Input["tool_input"].(map[string]any)
+		if baton, verdict := batonShell(str(ti, "command")); baton {
+			switch verdict {
+			case shellSimple:
+				return permission("allow", "baton's own CLI"), nil
+			case shellSubstitution:
+				return permission("deny", NudgePrefix+" The shell would rewrite part of this baton command: backticks, $( ) and $NAME inside double quotes run as commands or expand. "+
+					"Put the text in single quotes instead (write an apostrophe as '\\''), or leave those characters out, and run it again."), nil
+			}
+			return Result{}, nil // operators or redirections: Claude Code's usual permission checks apply
+		}
+	}
 	var owed string
 	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
@@ -110,6 +131,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			"permissionDecisionReason": NudgePrefix + " End your turn now: " + owed + ". Do not start further work in this turn.",
 		},
 	}}, nil
+}
+
+func permission(decision, reason string) Result {
+	return Result{Output: map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       decision,
+			"permissionDecisionReason": reason,
+		},
+	}}
 }
 
 // isBatonCommand reports a Bash call that runs baton's own CLI (always allowed).
@@ -198,7 +229,8 @@ func Primer(pl plan.Plan, st state.State) string {
 	b.WriteString("Report progress only with these commands (Bash tool): " +
 		"when the current phase is complete and committed, run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — baton then compacts the context and starts the next phase with a fresh brief. " +
 		"If you cannot continue without the human, run `baton blocked \"<why>\"` and end your turn. " +
-		"If you must wait for something outside you (a build, a deploy), run `baton waiting \"<what>\" --until <duration>`. " +
+		"If you must wait for something outside you (a build, a deploy, background work), run `baton waiting \"<what>\" --until <duration>` (at most 2h): background work alone is not a status. " +
+		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
 		"In a long phase, at a safe point (work committed), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
 		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
 		"(If the human wants to talk instead of running the plan, they can run /baton pause.)")
@@ -265,7 +297,8 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		st.Run.Dialog = nil
 		if by == "human" {
 			// The human is engaged: whatever baton escalated, they have it now.
-			st.Run.StopBlocks, st.Run.Escalation = 0, nil
+			st.Run.Progress()
+			st.Run.Escalation = nil
 		}
 		return nil
 	})
@@ -295,7 +328,12 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			st.Run.Dialog = nil
 		}
 		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
-			v = contextValves(st, valve.FromEnv(c.Env))
+			if tool == "AskUserQuestion" {
+				v = answered(st, c)
+			}
+			if v.event == "" {
+				v = contextValves(st, valve.FromEnv(c.Env))
+			}
 		}
 		return nil
 	})
@@ -309,6 +347,47 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	}}, nil
 }
 
+// answered acts on the human's answer to one of baton's own questions (those start with "baton:"), so
+// what happens next depends on the answer itself, not on the model remembering to act on it.
+func answered(st *state.State, c Context) valveAction {
+	resp, _ := c.Input["tool_response"].(map[string]any)
+	answers, _ := resp["answers"].(map[string]any)
+	for q, a := range answers {
+		answer, _ := a.(string)
+		if !strings.HasPrefix(q, "baton:") {
+			continue
+		}
+		// Events are named as if the CLI had done it (resumed, paused), so the record reads the same.
+		var event, say, tell string
+		switch strings.TrimSpace(answer) {
+		case "Continue":
+			if state.Resume(st) != nil {
+				continue
+			}
+			event, say, tell = "resumed", "baton: resumed", NudgePrefix+" The human chose Continue: baton has resumed the plan. Carry on with "+st.Current+"."
+		case "Pause baton":
+			if state.Pause(st) != nil {
+				continue
+			}
+			event, say, tell = "paused", "baton: paused — the human is driving", NudgePrefix+" The human chose Pause baton: baton is paused. Wait for the human's instructions."
+		case "Checkpoint now":
+			if st.Mode != state.ModeRunning {
+				continue
+			}
+			st.CheckpointAsked = true
+			event, say = "checkpoint_asked", "baton: checkpoint at the end of this step"
+			tell = NudgePrefix + " The human chose Checkpoint now. Finish the step you are on and commit, then run " +
+				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
+		case "Keep going":
+			event, say = "answered", "baton: keep going — Claude Code compacts on its own when the context is full"
+		default:
+			continue
+		}
+		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": "answer"}, say: say, tell: tell}
+	}
+	return valveAction{}
+}
+
 // valveAction is what a context valve does: an event to log, a line for the human, words for the model.
 type valveAction struct {
 	event     string
@@ -317,7 +396,8 @@ type valveAction struct {
 }
 
 // contextValves runs the two mid-phase valves after a main-agent tool call. Past the checkpoint line,
-// the model is asked to checkpoint at its next safe point. Past the warning line, the model is asked to
+// the model is asked to checkpoint at its next safe point, and asked again for every further tenth of
+// the limit. Past the warning line, the model is asked to
 // put a fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its
 // own. Each fires once, and re-arms only after the context falls a tenth of the window below its line,
 // so a compaction that leaves the context high cannot start a loop. Subagents are never asked: they
@@ -333,7 +413,7 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 	}
 	rearm := lim.Window / 10
 	if st.Run.ContextNudged && used < lim.Checkpoint-rearm {
-		st.Run.ContextNudged = false
+		st.Run.ContextNudged, st.Run.ContextNudgedAt = false, 0
 	}
 	if st.Run.ContextWarned && used < lim.Warn-rearm {
 		st.Run.ContextWarned = false
@@ -345,15 +425,17 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 	switch {
 	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned:
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
-		st.Run.ContextWarned, st.Run.ContextNudged = true, true
+		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
 		return valveAction{
 			event:  "context_warning",
 			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
 			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
 			tell:   warnText(used, lim),
 		}
-	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextNudged:
-		st.Run.ContextNudged = true
+	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
+		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):
+		// Asked again for every further tenth of the limit: one request is easy to put off.
+		st.Run.ContextNudged, st.Run.ContextNudgedAt = true, used
 		return valveAction{
 			event:  "context_nudge",
 			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "checkpoint": lim.Checkpoint, "limit": lim.Window},
@@ -374,15 +456,24 @@ func warnText(used int, lim valve.Limits) string {
 	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with the question %q and two options: "+
 		"\"Checkpoint now\" (description: \"Finish the current step, save notes and compact; this phase continues from the notes\") and "+
 		"\"Keep going\" (description: \"Carry on; Claude Code compacts on its own when the context is full\"). "+
-		"If they choose Checkpoint now, finish the step you are on and commit, then run `baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. "+
-		"If they choose Keep going, carry on with the phase.", NudgePrefix, q)
+		"baton acts on the answer itself; then follow what it tells you.", NudgePrefix, q)
 }
 
+// notification records Claude Code's notifications. One of them is authoritative about the session:
+// idle_prompt ("Claude is waiting for your input") fires about a minute after a turn ends, and never
+// while a dialog is on screen. It corrects a turn or dialog that baton still thinks is open because the
+// hook that would have closed it never ran (the Stop hook does not run for an interrupted turn).
 func (h *handlers) notification(c Context) (Result, error) {
 	kind := str(c.Input, "notification_type")
-	s, _, err := h.update(c, func(*state.State, *state.Store) error { return nil })
+	var fixed bool
+	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if kind == "idle_prompt" && (st.Run.TurnOpen || st.Run.Dialog != nil) {
+			st.Run.TurnOpen, st.Run.Dialog, fixed = false, nil, true
+		}
+		return nil
+	})
 	if err == nil {
-		s.Event("notification", map[string]any{"type": kind})
+		s.Event("notification", map[string]any{"type": kind, "corrected": fixed})
 	}
 	return Result{}, ok(err)
 }
@@ -406,6 +497,14 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 func recordStop(st *state.State, c Context) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.Dialog = false, c.Now, nil
 	st.Run.Background = tasks(c.Input["background_tasks"])
+	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
+	// SubagentStop: recount from the list of what is really still running.
+	st.Run.Subagents = 0
+	for _, t := range st.Run.Background {
+		if t.Type == "subagent" || t.Type == "workflow" {
+			st.Run.Subagents++
+		}
+	}
 	if crons, okc := c.Input["session_crons"].([]any); okc {
 		st.Run.Crons = len(crons)
 	} else {
@@ -416,7 +515,7 @@ func recordStop(st *state.State, c Context) {
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.TurnOpen, st.Run.LastError = false, &e
+		st.Run.TurnOpen, st.Run.LastError, st.Run.Dialog, st.Run.Subagents = false, &e, nil, 0
 		return nil
 	})
 	if err == nil {
@@ -425,25 +524,28 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 	return Result{}, ok(err)
 }
 
+// preCompact acknowledges a manual compaction: the one baton typed, or one the human typed while a
+// compaction is owed (which satisfies it, so baton never compacts twice in a row).
+//
+// An automatic PreCompact proves nothing yet. Claude Code precomputes its summary in the background,
+// from about 80% of the window, and fires PreCompact then; the compaction itself may come much later or
+// never (docs/research/context-window.md). Treating it as the owed compaction would leave baton waiting
+// for a compaction that is not happening. Only SessionStart(compact) proves one happened, so an
+// automatic compaction is adopted there (afterCompaction).
 func (h *handlers) preCompact(c Context) (Result, error) {
 	trigger := str(c.Input, "trigger")
 	var cp state.Compaction
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if trigger != "manual" {
+			cp = st.Run.Compaction
+			return nil
+		}
 		comp := &st.Run.Compaction
-		requested := comp.Status == state.CompactQueued || comp.Status == state.CompactTyped
 		switch {
-		case requested && trigger == "manual":
+		case comp.Status == state.CompactQueued || comp.Status == state.CompactTyped:
 			comp.ByBaton = true
 		case st.BoundaryOwed || st.CheckpointOwed:
-			// Any compaction while one is owed (an auto-compaction, or the human typing /compact)
-			// satisfies it, so baton never compacts twice in a row.
-			comp.ByBaton = true
-			if comp.Reason == "" {
-				comp.Reason = reasonOwed(st)
-			}
-			if comp.Status == "" || comp.Status == state.CompactDone || comp.Status == state.CompactFailed {
-				comp.Epoch++
-			}
+			adoptOwed(st, c.Now)
 		default:
 			comp.ByBaton = false
 		}
@@ -454,10 +556,24 @@ func (h *handlers) preCompact(c Context) (Result, error) {
 		cp = *comp
 		return nil
 	})
-	if err == nil {
-		s.Event("compact_started", map[string]any{"trigger": trigger, "by_baton": cp.ByBaton, "epoch": cp.Epoch, "reason": cp.Reason})
+	if err != nil {
+		return Result{}, ok(err)
 	}
-	return Result{}, ok(err)
+	if trigger != "manual" {
+		s.Event("precompact_auto", map[string]any{"owed": cp.Status})
+		return Result{}, nil
+	}
+	s.Event("compact_started", map[string]any{"trigger": trigger, "by_baton": cp.ByBaton, "epoch": cp.Epoch, "reason": cp.Reason})
+	return Result{}, nil
+}
+
+// adoptOwed makes a compaction baton did not type count as the one it owes: a new epoch, underway.
+func adoptOwed(st *state.State, now time.Time) {
+	comp := &st.Run.Compaction
+	if !comp.InFlight() {
+		comp.Epoch++
+	}
+	comp.ByBaton, comp.Reason, comp.Status, comp.Started, comp.Tries = true, reasonOwed(st), state.CompactActive, now, 0
 }
 
 func reasonOwed(st *state.State) string {
@@ -471,8 +587,12 @@ func (h *handlers) postCompact(c Context) (Result, error) {
 	var cp state.Compaction
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		comp := &st.Run.Compaction
-		if comp.ByBaton && comp.Status == state.CompactActive {
+		if comp.ByBaton && (comp.Status == state.CompactActive || comp.Status == state.CompactFailed) {
+			// Failed means baton gave up waiting; a compaction that finished late still counts.
 			comp.Status = state.CompactDone
+			if e := st.Run.Escalation; e != nil && e.Kind == "compaction_failed" {
+				st.Run.Escalation = nil
+			}
 		}
 		comp.Finished = c.Now
 		cp = *comp
