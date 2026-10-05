@@ -71,6 +71,12 @@ func NewProject(t *testing.T) string {
 // the baton binary is put first on PATH, as the plugin's bin/ is in real use.
 func Start(t *testing.T, dir string, args ...string) *Session {
 	t.Helper()
+	return StartEnv(t, dir, nil, args...)
+}
+
+// StartEnv is Start with extra environment variables for baton (e.g. BATON_CHECKPOINT_PCT).
+func StartEnv(t *testing.T, dir string, env []string, args ...string) *Session {
+	t.Helper()
 	cmd := exec.Command(batonBin, args...)
 	cmd.Dir = dir
 	for _, kv := range os.Environ() {
@@ -80,6 +86,7 @@ func Start(t *testing.T, dir string, args ...string) *Session {
 	}
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=") // tests never notify the developer
+	cmd.Env = append(cmd.Env, env...)
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {
 		t.Fatal(err)
