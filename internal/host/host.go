@@ -7,6 +7,7 @@ package host
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,8 @@ type Config struct {
 	Controller Controller // nil: pure passthrough
 	// TypeDelay and EnterDelay pace injected keystrokes so Claude Code reads them as typing, not a paste.
 	TypeDelay, EnterDelay time.Duration
+	// HangupGrace is how long claude gets to exit after each signal once the terminal is gone (5s).
+	HangupGrace time.Duration
 }
 
 // View is what the controller knows about the terminal on each tick.
@@ -82,6 +85,9 @@ func Run(cfg Config) (int, error) {
 	}
 	if cfg.EnterDelay == 0 {
 		cfg.EnterDelay = 400 * time.Millisecond
+	}
+	if cfg.HangupGrace == 0 {
+		cfg.HangupGrace = 5 * time.Second
 	}
 
 	owner := claim(cfg)
@@ -125,13 +131,13 @@ func Run(cfg Config) (int, error) {
 	}
 	defer release(cfg, owner)
 
-	h := &session{cfg: cfg, pty: p}
+	h := &session{cfg: cfg, pty: p, cmd: cmd, interactive: interactive, exited: make(chan struct{})}
 	h.lastOutput.Store(cfg.Now().UnixNano())
 
 	outDone := make(chan struct{})
 	go func() { defer close(outDone); h.pumpOutput() }()
 	go h.pumpInput()
-	stopSignals := forwardSignals(cmd, p, cfg.Stdout, interactive)
+	stopSignals := forwardSignals(cmd, p, cfg.Stdout, interactive, func() { h.hangUp("baton got SIGHUP") })
 	defer stopSignals()
 
 	stop := make(chan struct{})
@@ -141,6 +147,7 @@ func Run(cfg Config) (int, error) {
 	go func() { defer wg.Done(); h.heartbeat(stop, owner) }()
 
 	werr := cmd.Wait()
+	close(h.exited)
 	close(stop)
 	wg.Wait()
 	select { // let the last of claude's output reach the screen
@@ -156,6 +163,10 @@ func Run(cfg Config) (int, error) {
 type session struct {
 	cfg          Config
 	pty          pty.PTY
+	cmd          *exec.Cmd
+	interactive  bool          // the user's terminal is a terminal, not a pipe
+	exited       chan struct{} // closed once claude has exited
+	hangupOnce   sync.Once
 	mu           sync.Mutex // serializes writes to the pty: human keystrokes vs. injected typing
 	lastOutput   atomic.Int64
 	lastHumanKey atomic.Int64
@@ -166,14 +177,19 @@ type session struct {
 	lastPanic    time.Time // controller goroutine only
 }
 
+// pumpOutput copies claude's screen to the user's terminal. If the terminal is gone it keeps reading and
+// discards: claude blocks on output nobody reads (a write, or a tcsetattr that waits for the output to
+// drain), and a claude blocked there never gets to the hangup it is sent.
 func (h *session) pumpOutput() {
 	buf := make([]byte, 32*1024)
+	out := io.Writer(h.cfg.Stdout)
 	for {
 		n, err := h.pty.Read(buf)
 		if n > 0 {
 			h.lastOutput.Store(h.cfg.Now().UnixNano())
-			if _, werr := h.cfg.Stdout.Write(buf[:n]); werr != nil {
-				return
+			if _, werr := out.Write(buf[:n]); werr != nil && out != io.Discard {
+				out = io.Discard
+				h.hangUp(fmt.Sprintf("writing to it failed: %v", werr))
 			}
 		}
 		if err != nil {
@@ -182,10 +198,43 @@ func (h *session) pumpOutput() {
 	}
 }
 
+// hangUp ends a session whose terminal has gone (a closed tab, a killed shell): nobody can see it or
+// type into it any more. claude gets what a closed terminal would give it, SIGHUP, then SIGTERM and
+// SIGKILL if it is still there HangupGrace after each, so it never outlives its terminal. Until then
+// it would go on holding the project, and the next baton there would run as plain claude.
+func (h *session) hangUp(why string) {
+	h.hangupOnce.Do(func() {
+		h.cfg.Logf("host: the terminal is gone (%s); ending %s", why, h.cfg.Claude)
+		if h.cfg.Store != nil {
+			h.cfg.Store.Event("terminal_gone", map[string]any{"why": why})
+		}
+		go func() {
+			for _, sig := range hangupSignals {
+				select {
+				case <-h.exited:
+					return
+				default:
+				}
+				h.cfg.Logf("host: sending %v to %s", sig, h.cfg.Claude)
+				h.cmd.Process.Signal(sig)
+				select {
+				case <-h.exited:
+					return
+				case <-time.After(h.cfg.HangupGrace):
+				}
+			}
+		}()
+	})
+}
+
 func (h *session) pumpInput() {
 	buf := make([]byte, 4096)
 	for {
 		n, err := h.cfg.Stdin.Read(buf)
+		if err != nil && h.interactive {
+			// A terminal in raw mode never reads as EOF (Ctrl-D is a byte): the terminal is gone.
+			h.hangUp(fmt.Sprintf("reading from it failed: %v", err))
+		}
 		if n > 0 {
 			now := h.cfg.Now()
 			h.keysMu.Lock()

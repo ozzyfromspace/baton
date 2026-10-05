@@ -12,9 +12,13 @@ import (
 	"golang.org/x/term"
 )
 
+// hangupSignals end a session whose terminal is gone, in order, HangupGrace apart.
+var hangupSignals = []os.Signal{syscall.SIGHUP, syscall.SIGTERM, syscall.SIGKILL}
+
 // forwardSignals keeps claude's terminal size in step with the user's (SIGWINCH) and passes
-// termination signals sent to baton on to claude. It returns a function that stops forwarding.
-func forwardSignals(cmd *exec.Cmd, p pty.PTY, stdout *os.File, interactive bool) func() {
+// termination signals sent to baton on to claude. SIGHUP means baton's own terminal is gone, so it
+// calls hangup, which makes sure claude ends too. It returns a function that stops forwarding.
+func forwardSignals(cmd *exec.Cmd, p pty.PTY, stdout *os.File, interactive bool, hangup func()) func() {
 	ch := make(chan os.Signal, 8)
 	signal.Notify(ch, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
 	done := make(chan struct{})
@@ -30,6 +34,10 @@ func forwardSignals(cmd *exec.Cmd, p pty.PTY, stdout *os.File, interactive bool)
 							p.Resize(uint16(r), uint16(c))
 						}
 					}
+					continue
+				}
+				if s == syscall.SIGHUP {
+					hangup()
 					continue
 				}
 				if cmd.Process != nil {

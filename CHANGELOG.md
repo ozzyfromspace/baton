@@ -4,6 +4,15 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- **A session ends when its terminal does.** Closing the tab (or killing the shell) that a hosted
+  session ran in could leave baton and claude running with nobody able to see or reach them, still
+  holding the project, so the next `baton` there ran as plain claude. baton stopped reading claude's
+  output once the screen was gone, and claude then blocked on that output (found stuck in a
+  `tcsetattr` for hours), so it never got to the SIGHUP baton forwarded. baton now keeps draining
+  the output and ends claude itself: SIGHUP, then SIGTERM and SIGKILL 5 seconds apart. The event
+  `terminal_gone` records why.
+
 ## [0.2.1] - 2026-10-05
 
 ### Changed
