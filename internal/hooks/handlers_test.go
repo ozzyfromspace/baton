@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -403,19 +404,47 @@ func TestToolsAreHeldWhileACompactionIsOwed(t *testing.T) {
 	}
 }
 
+// warned issues the context question the way a run does (the context past the warning line) and
+// returns it.
+func (f *fixture) warned() string {
+	f.t.Helper()
+	f.vars = defaultCap
+	f.setContext(730_000)
+	f.fire("PostToolUse", bash("ls"))
+	q := f.state().Run.WarnQuestion
+	if q == "" {
+		f.t.Fatal("no context question issued")
+	}
+	return q
+}
+
+// blocked raises a blocked escalation the way a run does (baton blocked, then a stop) and returns the
+// question baton issued for it.
+func (f *fixture) blocked(reason string) string {
+	f.t.Helper()
+	f.store.Update(func(st *state.State) error { state.SetBlocked(st, reason, f.now); return nil })
+	f.fire("Stop", map[string]any{})
+	e := f.state().Run.Escalation
+	if e == nil || e.Question == "" {
+		f.t.Fatalf("no escalation question issued: %+v", e)
+	}
+	return e.Question
+}
+
+var escalationLabels = []string{"Continue", "Pause baton"}
+var warnLabels = []string{"Checkpoint now", "Pause baton", "Keep going"}
+
 // The human's answer to baton's own question acts by itself: the model need not remember to run anything.
 func TestAnswersToBatonsQuestionsAct(t *testing.T) {
-	answer := func(f *fixture, q, a string) map[string]any {
-		return f.fire("PostToolUse", map[string]any{"tool_name": "AskUserQuestion",
-			"tool_response": map[string]any{"answers": map[string]any{q: a}}})
+	reply := func(f *fixture, q string, labels []string, a string) map[string]any {
+		return f.fire("PostToolUse", answer(ask(q, labels...), a))
 	}
 	f := newFixture(t, true)
-	f.store.Update(func(st *state.State) error {
-		state.SetBlocked(st, "need a key", f.now)
-		st.Run.Escalation = &state.Escalation{Kind: "blocked", Reason: "blocked on P0: need a key", Asked: true}
-		return nil
-	})
-	if out := answer(f, "baton: blocked on P0: need a key", "Continue"); !strings.Contains(additionalContext(out), "baton has resumed") {
+	q := f.blocked("need a key")
+	if q != "baton: blocked on P0: need a key" {
+		t.Fatalf("question %q", q)
+	}
+	if out := reply(f, q, escalationLabels, "Continue"); !strings.Contains(additionalContext(out), "baton has resumed") {
 		t.Fatalf("continue: %v", out)
 	}
 	if st := f.state(); st.Blocked != nil || st.Run.Escalation != nil || st.Mode != state.ModeRunning {
@@ -424,15 +453,21 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"resumed"`) {
 		t.Fatalf("events: %s", b)
 	}
-	answer(f, "baton: blocked on P0: something", "Pause baton")
+	q = f.blocked("something")
+	reply(f, q, escalationLabels, "Pause baton")
 	if f.state().Mode != state.ModePaused {
 		t.Fatal("not paused")
 	}
 
+	// An answer the context question does not offer (typed by the human) does nothing, but it is an answer.
 	f = newFixture(t, true)
-	answer(f, "baton: the context holds 730k tokens, past the 729k warning line. Checkpoint now?", "Checkpoint now")
-	if !f.state().CheckpointAsked {
-		t.Fatal("checkpoint not recorded")
+	if out := reply(f, f.warned(), warnLabels, "Continue"); out != nil || f.state().Run.WarnQuestion != "" {
+		t.Fatalf("acted, or the question is still open: %v", out)
+	}
+	f = newFixture(t, true)
+	reply(f, f.warned(), warnLabels, "Checkpoint now")
+	if st := f.state(); !st.CheckpointAsked || st.Run.WarnQuestion != "" {
+		t.Fatalf("checkpoint not recorded, or the question still open: %+v", st)
 	}
 	// The model ends its turn without running baton checkpoint: the stop is a checkpoint anyway.
 	f.fire("Stop", map[string]any{})
@@ -442,15 +477,19 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 
 	// The context question has Pause baton too.
 	f = newFixture(t, true)
-	answer(f, "baton: the context holds 730k tokens, past the 729k warning line. Checkpoint now?", "Pause baton")
+	reply(f, f.warned(), warnLabels, "Pause baton")
 	if f.state().Mode != state.ModePaused {
 		t.Fatal("not paused")
 	}
 
-	// Somebody else's question is none of baton's business.
+	// Somebody else's question is none of baton's business, and neither is one that only looks like
+	// baton's: nothing was issued.
 	f = newFixture(t, true)
-	if out := answer(f, "Which color?", "Continue"); out != nil || f.state().Mode != state.ModeRunning {
-		t.Fatalf("acted on a foreign question: %v", out)
+	f.store.Update(func(st *state.State) error { state.SetBlocked(st, "need a key", f.now); return nil })
+	for _, q := range []string{"Which color?", "baton: blocked on P0: need a key"} {
+		if out := reply(f, q, escalationLabels, "Continue"); out != nil || f.state().Blocked == nil {
+			t.Fatalf("acted on %q: %v", q, out)
+		}
 	}
 }
 
@@ -482,48 +521,139 @@ func TestStopRecountsSubagents(t *testing.T) {
 	}
 }
 
-// While a plan runs, the model's own questions are refused (nobody may be there to answer); baton's own
-// questions, a human-started turn, and a paused or idle baton are left alone.
+// While a plan runs, the only question allowed is one baton issued, exactly as issued. A human-started
+// turn, and a paused or idle baton, are left alone.
 func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
-	ask := func(f *fixture, q string) string {
-		out := f.fire("PreToolUse", map[string]any{"tool_name": "AskUserQuestion",
-			"tool_input": map[string]any{"questions": []any{map[string]any{"question": q}}}})
+	decide := func(f *fixture, in map[string]any) (string, string) {
+		out := f.fire("PreToolUse", in)
 		hso, _ := out["hookSpecificOutput"].(map[string]any)
 		d, _ := hso["permissionDecision"].(string)
-		return d
+		why, _ := hso["permissionDecisionReason"].(string)
+		return d, why
 	}
 	f := newFixture(t, true)
-	if d := ask(f, "Which database should I use?"); d != "deny" {
-		t.Fatalf("model question: %q", d)
+	if d, why := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "deny" || !strings.Contains(why, "Decide yourself") {
+		t.Fatalf("model question: %q %q", d, why)
 	}
-	if d := ask(f, "baton: blocked on P0: need a key"); d != "" {
-		t.Fatalf("baton's question: %q", d)
+	// The v0.1 loophole: anything that started with "baton:" passed.
+	if d, _ := decide(f, ask("baton: may I skip the tests?", "Continue", "Pause baton")); d != "deny" {
+		t.Fatalf("a baton:-prefixed question baton never issued: %q", d)
 	}
+
+	q := f.blocked("need a key")
+	if d, _ := decide(f, ask(q, escalationLabels...)); d != "" {
+		t.Fatalf("baton's question, as issued: %q", d)
+	}
+	if d, _ := decide(f, ask(strings.Replace(q, " ", "\n  ", 2), escalationLabels...)); d != "" {
+		t.Fatalf("baton's question, rewrapped: %q", d)
+	}
+	multi := ask(q, escalationLabels...)
+	multi["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["multiSelect"] = true
+	two := ask(q, escalationLabels...)
+	ti := two["tool_input"].(map[string]any)
+	ti["questions"] = append(ti["questions"].([]any), map[string]any{"question": "And?"})
+	for name, in := range map[string]map[string]any{
+		"reordered":                            ask(q, "Pause baton", "Continue"),
+		"an option more":                       ask(q, "Continue", "Pause baton", "Skip it"),
+		"relabeled":                            ask(q, "Carry on", "Pause baton"),
+		"reworded":                             ask(q+" Please hurry.", escalationLabels...),
+		"multi-select":                         multi,
+		"two questions":                        two,
+		"another question while baton's waits": ask("Which database should I use?", "Postgres", "SQLite"),
+	} {
+		d, why := decide(f, in)
+		if d != "deny" || !strings.Contains(why, `exactly one question, "`+q+`" (header "baton"), and exactly 2 options, in this order: "Continue"`) {
+			t.Errorf("%s: %q %q", name, d, why)
+		}
+	}
+
 	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "human"; return nil })
-	if d := ask(f, "Which database should I use?"); d != "" {
+	if d, _ := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "" {
 		t.Fatalf("human-started turn: %q", d)
 	}
 	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "baton"; st.Mode = state.ModePaused; return nil })
-	if d := ask(f, "Which database should I use?"); d != "" {
+	if d, _ := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "" {
 		t.Fatalf("paused: %q", d)
 	}
-	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 1 {
+	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 9 {
 		t.Fatalf("events: %s", b)
 	}
 }
 
-// The host recognizes the context question's dialog, so it can answer it if nobody does.
-func TestTheContextQuestionDialogIsRecognized(t *testing.T) {
-	f := newFixture(t, true)
-	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
-		"tool_input": map[string]any{"questions": []any{map[string]any{"question": warnQuestionPrefix + "730k tokens, past the 729k warning line."}}}})
-	if d, ok := f.state().Run.Dialogs.Only(); !ok || d.Kind != "context_warning" {
-		t.Fatalf("dialogs %+v", f.state().Run.Dialogs)
+// The host may answer only a dialog the hooks marked as baton's, and they mark only the exact question
+// baton issued, asked by the main agent.
+func TestOnlyTheIssuedQuestionIsMarkedAsBatons(t *testing.T) {
+	kinds := func(f *fixture) []string {
+		var out []string
+		for _, d := range f.state().Run.Dialogs {
+			out = append(out, d.Kind)
+		}
+		return out
 	}
-	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
-		"tool_input": map[string]any{"questions": []any{map[string]any{"question": "baton: blocked on P0: x"}}}})
-	if q := f.state().Run.Dialogs; len(q) != 2 || q[1].Kind != "" {
-		t.Fatalf("an escalation question taken for the context question: %+v", q)
+	f := newFixture(t, true)
+	wq := f.warned()
+	f.fire("PermissionRequest", ask(wq, "Keep going", "Pause baton", "Checkpoint now")) // reordered (a human-started turn lets it through)
+	f.fire("PermissionRequest", byAgent(ask(wq, warnLabels...), "sub"))
+	f.fire("PermissionRequest", ask("baton: the context holds 1 token. Keep going?", warnLabels...))
+	if got := kinds(f); !equal(got, []string{"", "", ""}) {
+		t.Fatalf("kinds %q", got)
+	}
+	f.fire("PermissionRequest", ask(wq, warnLabels...))
+	if got := kinds(f); !equal(got, []string{"", "", "", "context_warning"}) {
+		t.Fatalf("kinds %q", got)
+	}
+	eq := f.blocked("need a key") // the stop sweeps the main agent's dialogs; the subagent's stays
+	f.fire("PermissionRequest", ask(eq, escalationLabels...))
+	if got := kinds(f); !equal(got, []string{"", "escalation"}) {
+		t.Fatalf("kinds %q", got)
+	}
+}
+
+// A reason with quotes, backslashes and line breaks still yields a question the model can repeat
+// exactly: what it is shown, quoted, is what baton stored and matches.
+func TestAnAwkwardReasonStillMatches(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error {
+		state.SetBlocked(st, "need the \"prod\" key\nfrom C:\\vault\tnow", f.now)
+		return nil
+	})
+	out := f.fire("Stop", map[string]any{})
+	q := f.state().Run.Escalation.Question
+	if q != "baton: blocked on P0: need the 'prod' key from C:/vault now" {
+		t.Fatalf("question %q", q)
+	}
+	if why, _ := out["reason"].(string); !strings.Contains(why, `"`+q+`"`) {
+		t.Fatalf("the model is not shown the question verbatim: %q", why)
+	}
+	if out := f.fire("PreToolUse", ask(q, escalationLabels...)); out != nil {
+		t.Fatalf("refused: %v", out)
+	}
+	f.fire("PermissionRequest", ask(q, escalationLabels...))
+	if d, _ := f.state().Run.Dialogs.Only(); d.Kind != "escalation" {
+		t.Fatalf("dialog %+v", d)
+	}
+	f.fire("PostToolUse", answer(ask(q, escalationLabels...), "Continue"))
+	if st := f.state(); st.Blocked != nil || st.Run.Dialogs.AnyOpen() {
+		t.Fatalf("not resumed: %+v", st)
+	}
+}
+
+func TestSanitize(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain":                         "plain",
+		"  two\n lines\t\tand tabs ":    "two lines and tabs",
+		`say "hi"`:                      "say 'hi'",
+		`C:\path\to`:                    "C:/path/to",
+		"bell\x07 and nul\x00":          "bell and nul",
+		"em — dash, ünïcode, 🎺 trumpet": "em — dash, ünïcode, 🎺 trumpet",
+	} {
+		got := Sanitize(in)
+		if got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+		if quoted := fmt.Sprintf("%q", got); quoted != `"`+got+`"` {
+			t.Errorf("%q still needs escaping: %s", got, quoted)
+		}
 	}
 }
 
@@ -670,9 +800,9 @@ func equal(a, b []string) bool {
 
 // An answer baton typed itself is recorded as baton's, not the human's.
 func TestAnAnswerBatonTypedIsAttributedToTheTimeout(t *testing.T) {
-	q := warnQuestionPrefix + "730k tokens, past the 729k warning line."
 	for _, auto := range []bool{false, true} {
 		f := newFixture(t, true)
+		q := f.warned()
 		f.fire("PermissionRequest", ask(q, "Checkpoint now", "Pause baton", "Keep going"))
 		if auto {
 			f.store.Update(func(st *state.State) error { st.Run.Dialogs[0].AutoAnswered = f.now; return nil })

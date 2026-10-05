@@ -68,8 +68,9 @@ type Dialog struct {
 	Agent string    `json:"agent,omitempty"`
 	Key   string    `json:"key,omitempty"`
 	Since time.Time `json:"since"`
-	// Kind names a dialog baton opened itself: "context_warning" for the context question, which baton
-	// answers itself ("Keep going") if nobody has within a while. AutoAnswered is when it did.
+	// Kind names a question baton issued, put to the human word for word in the shape baton gave it:
+	// "escalation", or "context_warning" for the context question, which baton answers itself
+	// ("Keep going") if nobody has within a while. AutoAnswered is when it did.
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
 }

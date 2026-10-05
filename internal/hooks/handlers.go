@@ -112,11 +112,15 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 	}
 	var owed string
-	refuseQuestion := false
+	var refuseQuestion string
+	var pending []issued
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" && !batonQuestion(c.Input) && st.Run.TurnBy != "human" {
-			refuseQuestion = true
-			return nil
+		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" && st.Run.TurnBy != "human" {
+			if _, own := matchIssued(st, c.Input); !own {
+				pending = issuedQuestions(st)
+				refuseQuestion = questionRefusal(pending)
+				return nil
+			}
 		}
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
 			return nil
@@ -132,11 +136,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	if err != nil {
 		return Result{}, ok(err)
 	}
-	if refuseQuestion {
-		s.Event("question_refused", map[string]any{"questions": len(questions(c.Input))})
-		return permission("deny", NudgePrefix+" baton is running this plan unattended, so a question would stop the run until someone answers it. "+
-			"Decide yourself: pick the most reasonable option, note the assumption (in your commit message and your `baton done` notes), and carry on. "+
-			"If you truly cannot continue without the human, run `baton blocked \"<your question>\"` and end your turn: baton will notify them."), nil
+	if refuseQuestion != "" {
+		s.Event("question_refused", map[string]any{"questions": len(questions(c.Input)), "issued": len(pending)})
+		return permission("deny", refuseQuestion), nil
 	}
 	if owed == "" {
 		return Result{}, nil
@@ -162,16 +164,16 @@ func readOnlyTool(name string) bool {
 	return false
 }
 
-// batonQuestion reports an AskUserQuestion call that puts only baton's own questions (escalations, the
-// context question) to the human. Those are the run asking for the human on purpose.
-func batonQuestion(in map[string]any) bool {
-	qs := questions(in)
-	for _, q := range qs {
-		if !strings.HasPrefix(q, "baton:") {
-			return false
-		}
+// questionRefusal is why a question that is not one baton issued is refused while a plan runs, and what
+// to do instead. When baton has a question of its own waiting to be asked, it quotes the exact call.
+func questionRefusal(pending []issued) string {
+	if len(pending) > 0 {
+		return NudgePrefix + " While a plan runs, the only question that may be put to the human is the one baton issued, exactly as issued. " +
+			"To ask it, " + pending[0].call() + ". For anything else, decide yourself: pick the most reasonable option, note the assumption, and carry on."
 	}
-	return len(qs) > 0
+	return NudgePrefix + " baton is running this plan unattended, so a question would stop the run until someone answers it. " +
+		"Decide yourself: pick the most reasonable option, note the assumption (in your commit message and your `baton done` notes), and carry on. " +
+		"If you truly cannot continue without the human, run `baton blocked \"<your question>\"` and end your turn: baton will notify them."
 }
 
 func permission(decision, reason string) Result {
@@ -356,13 +358,13 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 func (h *handlers) permissionRequest(c Context) (Result, error) {
 	tool, agent := str(c.Input, "tool_name"), str(c.Input, "agent_id")
 	kind := ""
-	if tool == "AskUserQuestion" && agent == "" {
-		if qs := questions(c.Input); len(qs) == 1 && strings.HasPrefix(qs[0], warnQuestionPrefix) {
-			kind = "context_warning"
-		}
-	}
 	var open int
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if tool == "AskUserQuestion" && agent == "" {
+			if iq, own := matchIssued(st, c.Input); own {
+				kind = iq.kind // baton's own question, exactly as issued: the only kind the host may answer
+			}
+		}
 		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
 		open = len(st.Run.Dialogs)
 		return nil
@@ -393,9 +395,6 @@ func dialogKey(in map[string]any) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:12])
 }
-
-// normalize collapses runs of whitespace, so a question matches whatever line breaks it went through.
-func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // questions lists the question texts of an AskUserQuestion call.
 func questions(in map[string]any) []string {
@@ -434,22 +433,26 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	}}, nil
 }
 
-// answered acts on the human's answer to one of baton's own questions (those start with "baton:"), so
-// what happens next depends on the answer itself, not on the model remembering to act on it. auto says
-// baton answered it itself, because nobody else did.
+// answered acts on the answer to one of baton's own questions, found by its exact text, so what happens
+// next depends on the answer itself, not on the model remembering to act on it. auto says baton
+// answered it itself, because nobody else did.
 func answered(st *state.State, c Context, auto bool) valveAction {
 	resp, _ := c.Input["tool_response"].(map[string]any)
 	answers, _ := resp["answers"].(map[string]any)
 	for q, a := range answers {
 		answer, _ := a.(string)
-		if !strings.HasPrefix(q, "baton:") {
+		iq, own := lookupIssued(st, q)
+		if !own {
 			continue
+		}
+		if iq.kind == "context_warning" {
+			st.Run.WarnQuestion = "" // answered: asking it again would need a new warning
 		}
 		// Events are named as if the CLI had done it (resumed, paused), so the record reads the same.
 		var event, say, tell string
 		switch strings.TrimSpace(answer) {
 		case "Continue":
-			if state.Resume(st) != nil {
+			if iq.kind != "escalation" || state.Resume(st) != nil {
 				continue
 			}
 			event, say, tell = "resumed", "baton: resumed", NudgePrefix+" The human chose Continue: baton has resumed the plan. Carry on with "+st.Current+"."
@@ -459,7 +462,7 @@ func answered(st *state.State, c Context, auto bool) valveAction {
 			}
 			event, say, tell = "paused", "baton: paused — the human is driving", NudgePrefix+" The human chose Pause baton: baton is paused. Wait for the human's instructions."
 		case "Checkpoint now":
-			if st.Mode != state.ModeRunning {
+			if iq.kind != "context_warning" || st.Mode != state.ModeRunning {
 				continue
 			}
 			st.CheckpointAsked = true
@@ -467,6 +470,9 @@ func answered(st *state.State, c Context, auto bool) valveAction {
 			tell = NudgePrefix + " The human chose Checkpoint now. Finish the step you are on and commit, then run " +
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
 		case "Keep going":
+			if iq.kind != "context_warning" {
+				continue
+			}
 			event, say = "answered", "baton: keep going — Claude Code compacts on its own when the context is full"
 			if auto {
 				say = "baton: nobody answered, so baton chose Keep going — Claude Code compacts on its own when the context is full"
@@ -522,11 +528,13 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned:
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
 		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
+		q := warnQuestion(used, lim, vs.WarnTimeout)
+		st.Run.WarnQuestion = q.question
 		return valveAction{
 			event:  "context_warning",
 			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
 			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
-			tell:   warnText(used, lim, vs.WarnTimeout),
+			tell:   NudgePrefix + " Context warning. Before anything else, " + q.call() + ". baton acts on the answer itself; then follow what it tells you.",
 		}
 	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
 		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):
@@ -544,41 +552,17 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 	return valveAction{}
 }
 
-// warnText makes the model put a fixed question to the human. AskUserQuestion reaches every device the
-// human uses (and the watchdog pushes a notification if it goes unanswered).
-// warnQuestionPrefix starts the context question; the host recognizes the dialog by it.
-const warnQuestionPrefix = "baton: the context holds "
-
-// option is one answer baton offers in a question of its own.
-type option struct{ label, description string }
-
-// warnOptions are the context question's answers. The default, Keep going, is third on purpose: baton
-// types 3 when nobody answers, and in a permission prompt 3 is "No" (docs/research/escalation.md).
-var warnOptions = []option{
-	{"Checkpoint now", "Finish the current step, save notes and compact; this phase continues from the notes"},
-	{"Pause baton", "I'm taking over; baton stops driving the plan"},
-	{"Keep going", "Carry on; Claude Code compacts on its own when the context is full"},
-}
-
-func warnText(used int, lim valve.Limits, timeout time.Duration) string {
+// warnQuestion is the context question, which the model is told to put to the human word for word.
+// AskUserQuestion reaches every device the human uses (and the watchdog pushes a notification if it
+// goes unanswered).
+func warnQuestion(used int, lim valve.Limits, timeout time.Duration) issued {
 	if timeout <= 0 {
 		timeout = valve.DefaultWarnTimeout
 	}
-	q := fmt.Sprintf(warnQuestionPrefix+"%s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
+	q := fmt.Sprintf("baton: the context holds %s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
 		"(If nobody answers within %s, baton picks Keep going.)",
 		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt), spell(timeout))
-	return fmt.Sprintf("%s Context warning. Before anything else, call the AskUserQuestion tool with exactly one question, %q (header \"baton\"), "+
-		"and exactly %d options, in this order: %s; not multi-select. baton acts on the answer itself; then follow what it tells you.",
-		NudgePrefix, q, len(warnOptions), optionList(warnOptions))
-}
-
-// optionList spells out options for the model: "A" (description: "…"), "B" (description: "…").
-func optionList(opts []option) string {
-	var parts []string
-	for _, o := range opts {
-		parts = append(parts, fmt.Sprintf("%q (description: %q)", o.label, o.description))
-	}
-	return strings.Join(parts, ", ")
+	return issued{kind: "context_warning", question: q, options: warnOptions}
 }
 
 // spell says a duration the way people do: "20 minutes", "1 minute", "45s".

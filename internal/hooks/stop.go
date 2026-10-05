@@ -147,9 +147,12 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 		notice(st, kind, reason, now)
 		d.emit("escalated", map[string]any{"type": kind, "reason": reason})
 	}
+	if e.Question == "" {
+		e.Question = Sanitize("baton: " + reason)
+	}
 	if !e.Asked {
 		e.Asked = true
-		d.refuse(askReason(reason))
+		d.refuse(askReason(e.Question))
 		return
 	}
 	d.say("baton: waiting on you — " + reason)
@@ -157,12 +160,9 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 
 // askReason makes the model put a fixed question to the human. AskUserQuestion reaches every device the
 // human uses, which is why baton routes the in-session escalation through it.
-func askReason(reason string) string {
-	return fmt.Sprintf("[baton] Bring the human in now: call the AskUserQuestion tool with the question %q and two options: "+
-		"\"Continue\" (description: \"I've handled it; carry on with the plan\") and "+
-		"\"Pause baton\" (description: \"I'll take it from here\"). "+
-		"baton acts on the answer itself; then follow what it tells you.",
-		"baton: "+reason)
+func askReason(question string) string {
+	return "[baton] Bring the human in now: " + issued{"escalation", question, escalationOptions}.call() +
+		". baton acts on the answer itself; then follow what it tells you."
 }
 
 func notice(st *state.State, kind, text string, now time.Time) {
