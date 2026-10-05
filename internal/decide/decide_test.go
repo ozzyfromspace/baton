@@ -2,6 +2,8 @@ package decide
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -113,14 +115,65 @@ func TestCapReached(t *testing.T) {
 	}
 }
 
-func TestPlaybook(t *testing.T) {
-	git := Playbook(true, 5*time.Minute)
-	for _, want := range []string{"commit it, degraded if need be (e.g. --no-gpg-sign)", "baton note", "baton propose", "a deadline (5 minutes)", "baton blocked \"<why>\" --tried", "Waiting, doing nothing or stopping is not a proposal"} {
-		if !strings.Contains(git, want) {
-			t.Errorf("playbook lacks %q:\n%s", want, git)
+// Every text that depends on the project says what fits it, and without git none asks for a commit.
+func TestWords(t *testing.T) {
+	texts := func(w Words) map[string]string {
+		return map[string]string{
+			"playbook": w.Playbook(), "reporting": w.Reporting(), "no status": w.NoStatus("P4", "P4 (Ship)"),
+			"question refused": w.QuestionRefused(""), "question refused, one issued": w.QuestionRefused("call the AskUserQuestion tool with …"),
+			"finish step": w.FinishStep(), "closing": w.Closing("P4"),
 		}
 	}
-	if plain := Playbook(false, time.Minute); strings.Contains(strings.ToLower(plain), "commit") || !strings.Contains(plain, "a deadline (1 minute)") {
+	for name, text := range texts(Words{Git: false, Timeout: time.Minute}) {
+		if strings.Contains(strings.ToLower(text), "commit") || strings.Contains(strings.ToLower(text), "git init") {
+			t.Errorf("%s without git asks for a commit:\n%s", name, text)
+		}
+	}
+	git := texts(Words{Git: true, Timeout: 5 * time.Minute})
+	for name, wants := range map[string][]string{
+		"playbook": {"commit it, degraded if need be (e.g. --no-gpg-sign)", "never discard, stash, reset or unstage work", "baton note", "baton propose",
+			"a deadline of 5 minutes", "baton blocked \"<why>\" --tried", "Waiting, doing nothing or stopping is not a proposal"},
+		"reporting": {"complete and committed", "baton note", "baton propose", "baton blocked \"<why>\" --tried", "a deadline of 5 minutes",
+			"waiting, doing nothing or stopping is not a proposal", "One proposal covers the case in front of you", "`baton note` it each time", "(work committed)"},
+		"no status":        {"(the phase is finished and committed)", "baton propose", "--tried", "baton waiting", "`baton note` it and carry on"},
+		"question refused": {"baton note", "baton propose", "a deadline of 5 minutes", "--tried"},
+		"finish step":      {"and commit it"},
+		"closing":          {"When P4 is complete and committed", "baton note", "baton propose", "baton blocked --tried"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(git[name], want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, git[name])
+			}
+		}
+	}
+	if plain := (Words{Timeout: time.Minute}).Playbook(); !strings.Contains(plain, "a deadline of 1 minute") {
 		t.Errorf("playbook without git:\n%s", plain)
+	}
+}
+
+// The skill teaches what baton enforces: the three ways to reach the human, and nothing about creating
+// a repository.
+func TestTheSkillNamesTheThreeTiers(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "baton", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := string(b)
+	for _, want := range []string{
+		"`baton note \"<what you did>\" --undo \"<how to reverse it>\"`",
+		"`baton propose \"<what you will do>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"`",
+		"`baton blocked \"<why>\" --tried \"<what you tried>\"`",
+		"waiting, doing nothing or stopping is not a proposal",
+		"One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.",
+		"committed (in a git repository; otherwise saved)",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("the skill lacks %q", want)
+		}
+	}
+	for _, never := range []string{"git init", "create a repository", "initialize a repository"} {
+		if strings.Contains(strings.ToLower(skill), never) {
+			t.Errorf("the skill suggests %q", never)
+		}
 	}
 }

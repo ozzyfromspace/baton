@@ -22,9 +22,9 @@ func (h *handlers) stop(c Context) (Result, error) {
 	}
 	pl, _ := s.LoadPlan()
 	var d decision
-	_, _, err = h.update(c, func(st *state.State, _ *state.Store) error {
+	_, _, err = h.update(c, func(st *state.State, s *state.Store) error {
 		recordStop(st, c)
-		d = decideStop(st, pl, c.Now)
+		d = decideStop(st, pl, c.Now, words(c, s))
 		return nil
 	})
 	if err != nil {
@@ -62,7 +62,7 @@ func (d *decision) refuse(reason string) {
 }
 
 // decideStop is the Stop decision table. Rows are checked in order; the first that applies wins.
-func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
+func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) decision {
 	var d decision
 	cur := phaseTitle(pl, st.Current)
 	switch st.Mode {
@@ -105,7 +105,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
 		// must say for how long (baton waiting), and baton holds it to that.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
-			reason := noStatusReason(st.Current, cur)
+			reason := w.NoStatus(st.Current, cur)
 			if bg := st.Run.BusyBackground(); len(bg) > 0 {
 				reason += " " + backgroundNote(bg)
 			}
@@ -127,15 +127,6 @@ func backgroundNote(bg []state.Task) string {
 		what = fmt.Sprintf("%s, and %d more", what, len(bg)-1)
 	}
 	return fmt.Sprintf("Background work is still running (%s), but that is not a status: if you are waiting on it, use `baton waiting` with how long it should take, so baton can wake you if it never reports back.", what)
-}
-
-func noStatusReason(id, title string) string {
-	return fmt.Sprintf("[baton] You stopped, but phase %s is not reported done. If the human asked you something this turn, answer it first. "+
-		"If there is more to do on the phase, keep working on it. "+
-		"Otherwise report with exactly one of these, then end your turn: "+
-		"`baton done %s --notes \"<what later phases need to know>\"` (the phase is finished and committed), "+
-		"`baton blocked \"<why>\"` (you need the human), or "+
-		"`baton waiting \"<what>\" --until <duration>` (you are waiting on something outside you).", title, id)
 }
 
 // escalate brings the human in: once in the session (a question, which reaches all their devices) and

@@ -93,7 +93,7 @@ func TestSessionStartPrimer(t *testing.T) {
 	f = newFixture(t, true)
 	out := f.fire("SessionStart", map[string]any{"source": "startup", "session_id": "s-1"})
 	ctx := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
-	for _, want := range []string{"hosted by baton", "Current phase: P0 — First", "baton done <phase>", "baton blocked", "baton waiting", "Never type /compact"} {
+	for _, want := range []string{"hosted by baton", "Current phase: P0 — First", "baton done <phase>", "baton note", "baton propose", "baton blocked \"<why>\" --tried", "baton waiting", "Never type /compact"} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("primer lacks %q:\n%s", want, ctx)
 		}

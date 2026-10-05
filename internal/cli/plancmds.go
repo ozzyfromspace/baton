@@ -314,7 +314,7 @@ func cmdBlocked(args []string, io IO) int {
 	if tried == "" {
 		s.Event("refused", map[string]any{"command": "blocked", "why": "no --tried"})
 		return fail(io, "not recorded — blocked stops the whole run until the human answers, so it needs --tried \"<what you tried>\".\n%s",
-			decide.Playbook(gitx.Usable(filepath.Dir(s.Dir)), config.EscalationFromEnv(io.Env).Timeout))
+			words(io, s).Playbook())
 	}
 	st, err := s.Load()
 	if err != nil {
@@ -500,6 +500,11 @@ func simpleTransition(io IO, command, kind string, fn func(*state.State) error, 
 	s.Event(kind, nil)
 	fmt.Fprintln(io.Out, msg)
 	return 0
+}
+
+// words is what the model-facing text depends on in this project.
+func words(io IO, s *state.Store) decide.Words {
+	return decide.Words{Git: gitx.Usable(filepath.Dir(s.Dir)), Timeout: config.EscalationFromEnv(io.Env).Timeout}
 }
 
 func storeAndPlan(io IO) (*state.Store, plan.Plan, bool) {

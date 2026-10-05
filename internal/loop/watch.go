@@ -78,7 +78,7 @@ func (l *Loop) idleMessage(v host.View, st state.State) string {
 	case len(st.Run.BusyBackground()) > 0:
 		return fmt.Sprintf("[baton] Background work has been running for over %s with no progress on %s. Check on it, then continue, or report your status.", l.Timing.BackgroundMax, st.Current)
 	default:
-		return fmt.Sprintf("[baton] No activity for %s and %s is not reported done. Continue it, or report: baton done / baton blocked / baton waiting.", l.Timing.IdleNudge, st.Current)
+		return fmt.Sprintf("[baton] No activity for %s and %s is not reported done. Continue it, or report: baton done / baton propose / baton blocked --tried / baton waiting.", l.Timing.IdleNudge, st.Current)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -85,7 +86,7 @@ func TestStopDecisionTable(t *testing.T) {
 			if c.setup != nil {
 				c.setup(&st)
 			}
-			d := decideStop(&st, pl, tStop)
+			d := decideStop(&st, pl, tStop, decide.Words{Git: true})
 			blocked := d.output["decision"] == "block"
 			if blocked != c.block {
 				t.Fatalf("blocked = %v, want %v (%v)", blocked, c.block, d.output)
@@ -119,8 +120,8 @@ func TestEscalationIsAskedOnceAndPushedOnce(t *testing.T) {
 	pl := demoPlan()
 	st := running()
 	state.SetBlocked(&st, "need a decision", tStop)
-	first := decideStop(&st, pl, tStop)
-	second := decideStop(&st, pl, tStop.Add(time.Minute))
+	first := decideStop(&st, pl, tStop, decide.Words{Git: true})
+	second := decideStop(&st, pl, tStop.Add(time.Minute), decide.Words{Git: true})
 	if first.output["decision"] != "block" || second.output["decision"] == "block" {
 		t.Fatalf("first %v second %v", first.output, second.output)
 	}
@@ -136,11 +137,11 @@ func TestRefusalsCountThenEscalate(t *testing.T) {
 	pl := demoPlan()
 	st := running()
 	for i := 1; i <= MaxStopBlocks; i++ {
-		if d := decideStop(&st, pl, tStop); d.output["decision"] != "block" || st.Run.StopBlocks != i {
+		if d := decideStop(&st, pl, tStop, decide.Words{Git: true}); d.output["decision"] != "block" || st.Run.StopBlocks != i {
 			t.Fatalf("stop %d: %v (blocks %d)", i, d.output, st.Run.StopBlocks)
 		}
 	}
-	d := decideStop(&st, pl, tStop)
+	d := decideStop(&st, pl, tStop, decide.Words{Git: true})
 	if !strings.Contains(d.output["reason"].(string), "AskUserQuestion") || st.Run.Escalation == nil {
 		t.Fatalf("escalation: %v", d.output)
 	}

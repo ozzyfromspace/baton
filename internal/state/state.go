@@ -197,7 +197,7 @@ func SetWaiting(st *State, what string, d time.Duration, now time.Time) error {
 		return errors.New("say what you are waiting for and for how long (e.g. --until 20m)")
 	}
 	if d > MaxWait {
-		return fmt.Errorf("a wait can be at most %s; for anything longer, run `baton blocked \"<what you are waiting for>\"` so the human knows", MaxWait)
+		return fmt.Errorf("a wait can be at most %s; for anything longer, run `baton blocked \"<what you are waiting for>\" --tried \"<what you tried>\"` so the human knows", MaxWait)
 	}
 	st.Waiting, st.Blocked = &Wait{What: what, Since: now, Until: now.Add(d)}, nil
 	return nil

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -47,6 +48,22 @@ func TestBoundaryBrief(t *testing.T) {
 	}
 	if strings.Contains(b, "Add people to a household") {
 		t.Error("the brief quoted the next phase's section too")
+	}
+}
+
+// The brief ends with how to report the phase and reach the human, in words that fit the project.
+func TestBriefEndsWithTheWaysToReport(t *testing.T) {
+	pl, doc, st := setup(t)
+	git := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Words: decide.Words{Git: true}})
+	for _, want := range []string{"When P1 is complete and committed, run `baton done P1", "`baton note`", "`baton propose`", "`baton blocked --tried`", "baton waiting"} {
+		if !strings.Contains(git, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+	plain := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st})
+	closing := plain[strings.LastIndex(plain, "\n")+1:] // the plan's own rules may well mention commits
+	if !strings.HasPrefix(closing, "When P1 is complete, run") || strings.Contains(closing, "commit") {
+		t.Errorf("brief without git ends:\n%s", closing)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -32,6 +33,7 @@ type Input struct {
 	Doc     []byte // the plan document's current text
 	State   state.State
 	Handoff string // .baton/handoff.md
+	Words   decide.Words
 }
 
 // Write returns the brief.
@@ -87,9 +89,7 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "Notes left by earlier phases (.baton/handoff.md, most recent last):\n\n%s\n\n", tail(notes, maxNotes))
 	}
 
-	fmt.Fprintf(&b, "When %s is complete and committed, run `baton done %s --notes \"<what later phases need to know>\"` and end your turn. "+
-		"If you cannot continue without the human: `baton blocked \"<why>\"`. Waiting on something outside you: `baton waiting \"<what>\" --until <duration>`. "+
-		"Never type /compact yourself.", st.Current, st.Current)
+	b.WriteString(in.Words.Closing(st.Current))
 	return b.String()
 }
 

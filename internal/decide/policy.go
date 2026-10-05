@@ -36,29 +36,6 @@ func UntimedReason(term string) string {
 // limit), so baton stops for them to review those decisions before anything else.
 func CapReached(unattended, max int) bool { return max > 0 && unattended >= max }
 
-// Playbook is what a refusal says instead of only "no": how to keep the run moving, and the lightest
-// way to reach the human that fits (the wording held up in the S2 replay, docs/research/escalation.md).
-// Without git there is no "uncommitted work?" line: baton never asks for a commit there.
-func Playbook(git bool, timeout time.Duration) string {
-	var b strings.Builder
-	b.WriteString("A run must not stop for something it can work around. Before hard-blocking:\n")
-	if git {
-		b.WriteString("  · uncommitted work?   commit it, degraded if need be (e.g. --no-gpg-sign); never discard, stash, reset or unstage work\n")
-	}
-	b.WriteString("  · a step failed?      is there a worse-but-working version? do that\n" +
-		"  · a rule or convention of the plan can't be followed right now (a tool missing, a service down)?\n" +
-		"                        that is what baton propose is for: the human gets a deadline to veto your way around it\n" +
-		"Then pick the lightest status that fits:\n" +
-		"  · baton note \"<what you did>\" --undo \"<how to reverse it>\"\n" +
-		"        you already took a reversible path, and the human should know. The run continues.\n" +
-		"  · baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"\n")
-	fmt.Fprintf(&b, "        a human might choose differently: baton puts it to them with a deadline (%s), and no answer means you do it.\n", Spell(timeout))
-	b.WriteString("        A proposal is an action that makes progress. Waiting, doing nothing or stopping is not a proposal.\n" +
-		"  · baton blocked \"<why>\" --tried \"<what you tried>\"\n" +
-		"        only if every way forward is irreversible, or needs a secret only the human holds. The run stops until they answer.")
-	return b.String()
-}
-
 // Spell says a duration the way people do: "5 minutes", "1 minute", "45s".
 func Spell(d time.Duration) string {
 	switch {

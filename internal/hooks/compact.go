@@ -55,7 +55,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 	}
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
-	text := brief.Write(brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff)})
+	text := brief.Write(brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s)})
 	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
 	if kind == brief.Boundary {
 		msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"

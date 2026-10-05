@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -115,7 +118,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var owed string
 	var refuseQuestion string
 	var pending []issued
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
 			// A human-started turn may ask the human anything, except a question passed off as baton's:
 			// one that starts "baton:" while baton has a question waiting must be that question, word
@@ -123,7 +126,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			if _, own := matchIssued(st, c.Input); !own {
 				pending = issuedQuestions(st)
 				if st.Run.TurnBy != "human" || len(pending) > 0 && claimsBaton(c.Input) {
-					refuseQuestion = questionRefusal(pending)
+					refuseQuestion = questionRefusal(pending, words(c, s))
 					return nil
 				}
 			}
@@ -182,14 +185,11 @@ func claimsBaton(in map[string]any) bool {
 
 // questionRefusal is why a question that is not one baton issued is refused while a plan runs, and what
 // to do instead. When baton has a question of its own waiting to be asked, it quotes the exact call.
-func questionRefusal(pending []issued) string {
+func questionRefusal(pending []issued, w decide.Words) string {
 	if len(pending) > 0 {
-		return NudgePrefix + " While a plan runs, the only question that may be put to the human is the one baton issued, exactly as issued. " +
-			"To ask it, " + pending[0].Call() + ". For anything else, decide yourself: pick the most reasonable option, note the assumption, and carry on."
+		return w.QuestionRefused(pending[0].Call())
 	}
-	return NudgePrefix + " baton is running this plan unattended, so a question would stop the run until someone answers it. " +
-		"Decide yourself: pick the most reasonable option, note the assumption (in your commit message and your `baton done` notes), and carry on. " +
-		"If you truly cannot continue without the human, run `baton blocked \"<your question>\"` and end your turn: baton will notify them."
+	return w.QuestionRefused("")
 }
 
 func permission(decision, reason string) Result {
@@ -246,7 +246,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		"systemMessage": "baton: hosting · " + progressLine(pl, st),
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":     "SessionStart",
-			"additionalContext": Primer(pl, st),
+			"additionalContext": Primer(pl, st, words(c, s)),
 		},
 	}}, nil
 }
@@ -273,7 +273,7 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 }
 
 // Primer tells the model, at the start of a hosted session, how baton expects it to report progress.
-func Primer(pl plan.Plan, st state.State) string {
+func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
 	switch st.Mode {
@@ -286,16 +286,14 @@ func Primer(pl plan.Plan, st state.State) string {
 	if i := pl.Index(st.Current); i >= 0 {
 		fmt.Fprintf(&b, "Current phase: %s — %s (see %s). ", st.Current, pl.Phases[i].Title, pl.File)
 	}
-	b.WriteString("Report progress only with these commands (Bash tool): " +
-		"when the current phase is complete and committed, run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — baton then compacts the context and starts the next phase with a fresh brief. " +
-		"If you cannot continue without the human, run `baton blocked \"<why>\"` and end your turn. " +
-		"If you must wait for something outside you (a build, a deploy, background work), run `baton waiting \"<what>\" --until <duration>` (at most 2h): background work alone is not a status. " +
-		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
-		"The plan runs unattended, so do not ask the human questions (AskUserQuestion): decide, note your assumption, and carry on, or run `baton blocked` if you truly cannot. " +
-		"In a long phase, at a safe point (work committed), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
-		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
-		"(If the human wants to talk instead of running the plan, they can run /baton pause.)")
+	b.WriteString(w.Reporting())
 	return b.String()
+}
+
+// words is what the model-facing text depends on in this project: whether git is usable there, and how
+// long a proposal waits for the human.
+func words(c Context, s *state.Store) decide.Words {
+	return decide.Words{Git: gitx.Usable(filepath.Dir(s.Dir)), Timeout: config.EscalationFromEnv(c.Env).Timeout}
 }
 
 func progressLine(pl plan.Plan, st state.State) string {
@@ -429,14 +427,15 @@ func questions(in map[string]any) []string {
 func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
+			w := words(c, s)
 			if tool == "AskUserQuestion" {
-				v = answered(st, c, !closed.AutoAnswered.IsZero())
+				v = answered(st, c, !closed.AutoAnswered.IsZero(), w)
 			}
 			if v.event == "" {
-				v = contextValves(st, valve.FromEnv(c.Env))
+				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
 		}
 		return nil
@@ -454,7 +453,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 // answered acts on the answer to one of baton's own questions, found by its exact text, so what happens
 // next depends on the answer itself, not on the model remembering to act on it. auto says baton
 // answered it itself, because nobody else did.
-func answered(st *state.State, c Context, auto bool) valveAction {
+func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction {
 	resp, _ := c.Input["tool_response"].(map[string]any)
 	answers, _ := resp["answers"].(map[string]any)
 	for q, a := range answers {
@@ -485,7 +484,7 @@ func answered(st *state.State, c Context, auto bool) valveAction {
 			}
 			st.CheckpointAsked = true
 			event, say = "checkpoint_asked", "baton: checkpoint at the end of this step"
-			tell = NudgePrefix + " The human chose Checkpoint now. Finish the step you are on and commit, then run " +
+			tell = NudgePrefix + " The human chose Checkpoint now. " + w.FinishStep() + ", then run " +
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
 		case "Keep going":
 			if iq.kind != "context_warning" {
@@ -524,7 +523,7 @@ type valveAction struct {
 // own. Each fires once, and re-arms only after the context falls a tenth of the window below its line,
 // so a compaction that leaves the context high cannot start a loop. Subagents are never asked: they
 // cannot end the main session's turn.
-func contextValves(st *state.State, vs valve.Settings) valveAction {
+func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveAction {
 	cu := st.Run.Context
 	if cu == nil {
 		return valveAction{}
@@ -564,9 +563,9 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 			event:  "context_nudge",
 			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "checkpoint": lim.Checkpoint, "limit": lim.Window},
 			say:    fmt.Sprintf("baton: context at %s of %s → checkpoint at the next safe point", valve.Tokens(used), valve.Tokens(lim.Window)),
-			tell: fmt.Sprintf("%s Checkpoint due: the context holds %s tokens, %.0f%% of its %s limit. Finish the step you are on and commit, then run "+
+			tell: fmt.Sprintf("%s Checkpoint due: the context holds %s tokens, %.0f%% of its %s limit. %s, then run "+
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: baton compacts the context and you continue this phase from your notes. "+
-				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window)),
+				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window), w.FinishStep()),
 		}
 	}
 	return valveAction{}

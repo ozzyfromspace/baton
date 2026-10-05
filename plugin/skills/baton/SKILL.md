@@ -39,7 +39,7 @@ was typed, so `cat` recovers it even if baton will not start.
 
 1. Call the `EnterPlanMode` tool and plan the goal as a formal, multi-phase plan. Write the plan so baton can run it:
    - Give each phase its own heading in this exact form: `## P0 — <title>`, `## P1 — <title>`, and so on, in order.
-   - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed.
+   - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed (in a git repository; otherwise saved).
    - Size each phase to finish comfortably in one context window. Between phases, context is compacted and only the plan, the brief and your notes carry over, so each phase must be understandable from the plan document alone.
    - If the run has rules that apply to every phase, put them in a `## Standing rules` section before the first phase.
    - End with a `## Verification` section.
@@ -95,10 +95,14 @@ Run `baton update` and show its output. It updates the plugin through Claude Cod
 
 ## While a plan runs
 
-- Report progress only with `baton done <phase> --notes "…"`, `baton blocked "<why>"`, `baton waiting "<what>" --until <duration>` and `baton checkpoint --notes "…"`.
+- Report progress only with `baton done <phase> --notes "…"`, `baton waiting "<what>" --until <duration>` and `baton checkpoint --notes "…"`.
+- A run must not stop for something it can work around. When something goes wrong, keep the plan moving on a reversible path, and tell the human in the lightest way that fits:
+  - `baton note "<what you did>" --undo "<how to reverse it>"`: you already took a reversible path, and the human should know. The run continues.
+  - `baton propose "<what you will do>" --because "<what went wrong>" --undo "<how to reverse it>"`: a rule or convention of the plan can't be followed right now, or a human might choose differently. baton prints the exact question to put to the human; ask it exactly as printed. If nobody answers by its deadline (5 minutes unless the human set another), baton picks Go ahead, and you do it. A proposal is an action that makes progress: waiting, doing nothing or stopping is not a proposal. One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.
+  - `baton blocked "<why>" --tried "<what you tried>"`: only if every way forward is irreversible, or needs a secret only the human holds. The run stops until they answer, and only they can clear it.
 - Run each of these as a plain command on its own. Inside double quotes, the shell runs backticks and `$( )` as commands and expands `$NAME`, so keep those out of notes, or use single quotes.
 - Background work (a dev server, a build, a background subagent) is not a status. If you stop to wait for it, declare the wait with `baton waiting "<what>" --until <how long it should take>`; waits are capped at 2 hours.
-- Don't ask the human questions (AskUserQuestion) while a plan runs: nobody may be there, and the run would wait. Decide, note your assumption, and carry on, or run `baton blocked "<your question>"` if you truly cannot continue. (baton refuses such questions unless the human started the turn.)
+- Don't ask the human questions (AskUserQuestion) of your own while a plan runs: nobody may be there, and the run would wait. Decide and carry on, or use `baton propose`. (baton refuses such questions unless the human started the turn; the questions baton prints for you are the exception.)
 - Never type `/compact` yourself. baton does that at the right moment.
 - If the human's unsent draft is in the way of a compaction, baton saves it to `.baton/drafts/` and
   clears the input box. That is deliberate and needs nothing from you; if they ask where their message
