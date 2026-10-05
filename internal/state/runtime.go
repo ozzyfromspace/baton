@@ -29,11 +29,15 @@ type Runtime struct {
 	// StopBlocks counts consecutive Stops baton refused because the model reported no status.
 	StopBlocks int `json:"stop_blocks"`
 
-	Compaction Compaction  `json:"compaction"`
-	Context    *ContextUse `json:"context,omitempty"`
-	Escalation *Escalation `json:"escalation,omitempty"`
-	LastError  *StopError  `json:"last_error,omitempty"`
-	Ended      *Ended      `json:"ended,omitempty"`
+	Compaction Compaction `json:"compaction"`
+	// Notices are messages for the human that the host sends out of band (push and desktop), then clears.
+	Notices []Notice `json:"notices,omitempty"`
+	// CompleteNotified is set once the human has been told the plan is complete.
+	CompleteNotified bool        `json:"complete_notified,omitempty"`
+	Context          *ContextUse `json:"context,omitempty"`
+	Escalation       *Escalation `json:"escalation,omitempty"`
+	LastError        *StopError  `json:"last_error,omitempty"`
+	Ended            *Ended      `json:"ended,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.
@@ -73,6 +77,10 @@ type Compaction struct {
 	// it was the one baton requested.
 	Trigger string `json:"trigger,omitempty"`
 	ByBaton bool   `json:"by_baton,omitempty"`
+	// Rewoken is the last epoch whose completion woke the model, so each compaction wakes it once.
+	Rewoken int `json:"rewoken,omitempty"`
+	// Nudged is when baton typed a reminder because the model did not resume after this compaction.
+	Nudged time.Time `json:"nudged,omitzero"`
 }
 
 // InFlight reports whether a baton-requested compaction is queued or underway.
@@ -100,6 +108,13 @@ type StopError struct {
 	Error   string    `json:"error"`
 	Details string    `json:"details,omitempty"`
 	At      time.Time `json:"at"`
+}
+
+// Notice is one message for the human, sent outside the session.
+type Notice struct {
+	Kind string    `json:"kind"` // blocked, stalled, compaction_failed, plan_complete, …
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
 }
 
 // Ended records the session ending.

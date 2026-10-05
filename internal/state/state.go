@@ -192,13 +192,13 @@ func Pause(st *State) error {
 
 // Resume gives the session back to baton and clears any block.
 func Resume(st *State) error {
-	if st.Mode != ModePaused && st.Blocked == nil {
+	if st.Mode != ModePaused && st.Blocked == nil && st.Run.Escalation == nil {
 		return fmt.Errorf("nothing to resume (mode: %s)", st.Mode)
 	}
 	if st.Mode == ModePaused {
 		st.Mode = ModeRunning
 	}
-	st.Blocked = nil
+	st.Blocked, st.Run.Escalation, st.Run.StopBlocks = nil, nil, 0
 	return nil
 }
 

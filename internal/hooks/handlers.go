@@ -37,6 +37,7 @@ func Handlers(d Deps) map[string]Handler {
 		"StopFailure":        h.stopFailure,
 		"PreCompact":         h.preCompact,
 		"PostCompact":        h.postCompact,
+		"PostCompactRewake":  h.postCompactRewake,
 	}
 }
 
@@ -102,7 +103,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		pl, havePlan = p, true
 	}
 	if source == "compact" {
-		return Result{}, nil // the post-compaction brief is the boundary loop's job (P6)
+		return h.afterCompaction(c, s)
 	}
 	if !havePlan {
 		return Result{Output: map[string]any{"systemMessage": "baton: hosting this session (no plan attached — /baton plan or /baton attach)"}}, nil
@@ -192,7 +193,8 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.Dialog = nil
 		if by == "human" {
-			st.Run.StopBlocks = 0
+			// The human is engaged: whatever baton escalated, they have it now.
+			st.Run.StopBlocks, st.Run.Escalation = 0, nil
 		}
 		return nil
 	})
