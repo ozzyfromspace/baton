@@ -54,11 +54,13 @@ func init() {
 		return runHost(args, io)
 	})
 	register("hook", "handle a Claude Code hook event (called by the hooks baton installs)", runHook)
-	register("version", "print baton's version", func(_ []string, io IO) int {
-		fmt.Fprintln(io.Out, "baton", version.Version)
+	register("version", "print baton's version and who made it (also -v, --version)", func(_ []string, io IO) int {
+		fmt.Fprintln(io.Out, "baton", version.Version) // first, and alone on its line: scripts read it
+		fmt.Fprintln(io.Out, version.Credit())
+		fmt.Fprintln(io.Out, version.Homepage)
 		return 0
 	})
-	register("help", "show this help", func(_ []string, io IO) int { usage(io.Out); return 0 })
+	register("help", "show this help (also -h, --help)", func(_ []string, io IO) int { usage(io.Out); return 0 })
 }
 
 // Main runs baton with args (without the program name) and returns the exit code.
@@ -80,16 +82,22 @@ func Main(args []string, io IO) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, "baton %s — run multi-phase Claude Code plans unattended\n\n", version.Version)
-	fmt.Fprintln(w, "usage:\n  baton [claude args…]\n  baton <command> [args…]\n\ncommands:")
+	fmt.Fprintf(w, "baton %s — run multi-phase Claude Code plans unattended\n", version.Version)
+	fmt.Fprintf(w, "by %s · %s\n\n", version.Author, version.Homepage)
+	fmt.Fprintln(w, "usage:\n  baton [claude args…]\n  baton <command> [args…]")
+	fmt.Fprintln(w, "\nflags:\n  -h, --help     show this help\n  -v, --version  print baton's version and who made it")
+	fmt.Fprintln(w, "  (these two are baton's own; for claude's, run claude --help or claude --version)\n\ncommands:")
 	names := make([]string, 0, len(commands))
+	width := 0
 	for n := range commands {
 		names = append(names, n)
+		width = max(width, len(n))
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		fmt.Fprintf(w, "  %-11s %s\n", n, commands[n].summary)
+		fmt.Fprintf(w, "  %-*s  %s\n", width, n, commands[n].summary)
 	}
+	fmt.Fprintf(w, "\n%s\n", version.Credit())
 }
 
 // runHook is the entry point for every hook. It must never exit 2 by accident: argument problems

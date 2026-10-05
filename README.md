@@ -56,6 +56,8 @@ To update later, run `baton update` (or `/baton update` in a session). It update
 
 ```sh
 baton              # instead of `claude`; it takes the same arguments
+baton --version    # or -v: which baton this is (claude --version for Claude Code's)
+baton --help       # or -h: every command
 ```
 
 Inside the session:

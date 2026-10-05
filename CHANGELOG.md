@@ -4,6 +4,11 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+- **`baton --version` and `baton --help` say who made baton.** `--version` (`-v`) adds the copyright,
+  license and homepage under its first line, which stays `baton <version>` on its own. `--help` (`-h`)
+  lists both flags, says they shadow claude's own, and lines up long command names.
+
 ## [0.2.0] - 2026-10-05
 
 A 17-phase run hard-blocked on a GPG signing timeout, with a verified phase's work staged but not

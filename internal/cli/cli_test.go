@@ -12,6 +12,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/valve"
+	"github.com/ozzyfromspace/baton/internal/version"
 )
 
 func testIO(stdin string, env map[string]string) (IO, *bytes.Buffer, *bytes.Buffer) {
@@ -25,15 +26,30 @@ func testIO(stdin string, env map[string]string) (IO, *bytes.Buffer, *bytes.Buff
 }
 
 func TestVersionAndHelp(t *testing.T) {
-	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+	for _, tc := range []struct {
+		args  []string
+		first string   // the whole first line
+		has   []string // and somewhere in the output
+	}{
+		{[]string{"version"}, "baton " + version.Version, []string{version.Credit(), version.Homepage}},
+		{[]string{"--version"}, "baton " + version.Version, []string{version.Credit(), version.Homepage}},
+		{[]string{"-v"}, "baton " + version.Version, []string{version.Credit(), version.Homepage}},
+		{[]string{"help"}, "baton " + version.Version + " — run multi-phase Claude Code plans unattended",
+			[]string{"by Oswald Chisala · " + version.Homepage, "-h, --help", "-v, --version", "  hook  ", version.Credit()}},
+		{[]string{"--help"}, "baton " + version.Version + " — run multi-phase Claude Code plans unattended", []string{"-v, --version"}},
+		{[]string{"-h"}, "baton " + version.Version + " — run multi-phase Claude Code plans unattended", []string{"-v, --version"}},
+	} {
 		io, out, _ := testIO("", nil)
-		if code := Main(args, io); code != 0 || !strings.HasPrefix(out.String(), "baton ") {
-			t.Errorf("%v: code %d out %q", args, code, out.String())
+		code := Main(tc.args, io)
+		first, _, _ := strings.Cut(out.String(), "\n")
+		if code != 0 || first != tc.first {
+			t.Errorf("%v: code %d, first line %q, want %q", tc.args, code, first, tc.first)
 		}
-	}
-	io, out, _ := testIO("", nil)
-	if code := Main([]string{"help"}, io); code != 0 || !strings.Contains(out.String(), "hook") {
-		t.Errorf("help: code %d out %q", code, out.String())
+		for _, want := range tc.has {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%v: no %q in:\n%s", tc.args, want, out.String())
+			}
+		}
 	}
 }
 
