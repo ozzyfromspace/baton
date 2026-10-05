@@ -104,6 +104,21 @@ func TestSessionStartPrimer(t *testing.T) {
 	if f.state().Run.SessionID != "s-1" {
 		t.Error("session id not recorded")
 	}
+	if strings.Contains(ctx, "Decisions made without the human") {
+		t.Errorf("a record with nothing in it:\n%s", ctx)
+	}
+
+	// After a /clear the model has none of the run in context: the primer brings the record back.
+	f.store.Update(func(st *state.State) error {
+		_, err := state.AddNote(st, "committed P0 unsigned", "re-sign it", f.now)
+		return err
+	})
+	out = f.fire("SessionStart", map[string]any{"source": "clear"})
+	ctx = out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
+	if !strings.Contains(ctx, ".)\n\nDecisions made without the human so far (if they ask, each has its undo):\n\n- d1 (P0, ") ||
+		!strings.HasSuffix(ctx, "noted: committed P0 unsigned. Undo: re-sign it") {
+		t.Errorf("primer after /clear:\n%s", ctx)
+	}
 }
 
 func TestNonOwnerSessionIsDormant(t *testing.T) {

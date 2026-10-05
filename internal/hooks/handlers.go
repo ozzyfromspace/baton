@@ -292,21 +292,27 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 	return Result{Rewake: NudgePrefix + " This session is now hosted by baton (same conversation). Continue with: " + pending}, nil
 }
 
-// Primer tells the model, at the start of a hosted session, how baton expects it to report progress.
+// Primer tells the model, at the start of a hosted session, how baton expects it to report progress, and
+// what the run has decided without the human so far: after a /clear or a restart the model has none of
+// it in context, and the human may ask about it.
 func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
 	switch st.Mode {
 	case state.ModeComplete:
 		b.WriteString("Every phase of the plan is done.")
-		return b.String()
 	case state.ModePaused:
 		b.WriteString("baton is paused: the human is driving; do not report phase progress unless asked. ")
 	}
-	if i := pl.Index(st.Current); i >= 0 {
-		fmt.Fprintf(&b, "Current phase: %s — %s (see %s). ", st.Current, pl.Phases[i].Title, pl.File)
+	if st.Mode != state.ModeComplete {
+		if i := pl.Index(st.Current); i >= 0 {
+			fmt.Fprintf(&b, "Current phase: %s — %s (see %s). ", st.Current, pl.Phases[i].Title, pl.File)
+		}
+		b.WriteString(w.Reporting())
 	}
-	b.WriteString(w.Reporting())
+	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
+		b.WriteString("\n\n" + strings.TrimSpace(decide.RecordSection(ds)))
+	}
 	return b.String()
 }
 
@@ -373,6 +379,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
 	var events []event
 	var tell string
+	var told []string
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
@@ -382,6 +389,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			// what they say (state.Held). A proposal held for them is answered by what they wrote.
 			if e, t, ok := released(st); ok {
 				events, tell = append(events, e), t
+			}
+			var record string
+			if told, record = tellDecisions(st); record != "" {
+				tell = strings.TrimSpace(tell + "\n\n" + record)
 			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
@@ -399,9 +410,13 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	if tell == "" {
 		return Result{}, nil
 	}
-	return Result{Output: map[string]any{
-		"hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": tell},
-	}}, nil
+	out := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": tell}}
+	if len(told) > 0 {
+		s.Event("decisions_told", map[string]any{"ids": told})
+		out["systemMessage"] = "baton: decisions made without you since you last wrote: " + strings.Join(told, ", ") +
+			" — Claude has them, each with its undo (/baton status lists them)"
+	}
+	return Result{Output: out}, nil
 }
 
 // permissionRequest records a dialog joining Claude Code's queue. It fires when the dialog is requested,

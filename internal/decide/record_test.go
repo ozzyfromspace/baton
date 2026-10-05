@@ -66,7 +66,7 @@ func TestListsKeepTheNewest(t *testing.T) {
 	if all := Listed(ds, 0); strings.Contains(all, "earlier") || !strings.Contains(all, "- d1 (P1,") {
 		t.Errorf("no limit:\n%s", all)
 	}
-	for _, text := range []string{RecordSection(ds)} {
+	for _, text := range []string{RecordSection(ds), LateAnswer(ds)} {
 		if strings.Contains(strings.ToLower(text), "commit") {
 			t.Errorf("the record asks for a commit:\n%s", text)
 		}

@@ -203,6 +203,24 @@ func goingAhead(st *state.State) bool {
 	return false
 }
 
+// tellDecisions hands the model, as the human writes to it, the decisions made without them that it has
+// not been handed at such a moment yet, and marks them told (the S3 mechanism, docs/research/
+// escalation.md). What the human wrote may be a late answer, "undo that", to a decision a compaction
+// or a /clear has taken out of the model's context: its undo is then at hand.
+func tellDecisions(st *state.State) (ids []string, tell string) {
+	var untold []state.Decision
+	for i := range st.Decisions {
+		if d := &st.Decisions[i]; d.WithoutHuman() && !d.Told {
+			d.Told = true
+			untold, ids = append(untold, *d), append(ids, d.ID)
+		}
+	}
+	if len(untold) == 0 {
+		return nil, ""
+	}
+	return ids, NudgePrefix + " " + decide.LateAnswer(untold)
+}
+
 // announceNotes shows the human, in the session, each note not yet shown, and marks it shown.
 func announceNotes(st *state.State) string {
 	var lines []string

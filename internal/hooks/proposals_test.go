@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -394,5 +395,59 @@ func TestANoteIsAnnouncedOnce(t *testing.T) {
 	}
 	if out := f.fire("PostToolUse", bash("ls")); out != nil {
 		t.Fatalf("announced twice: %v", out)
+	}
+}
+
+// When the human writes, the model is handed the decisions made without them since they last did, each
+// with its undo: what they wrote may be a late "undo that" to one the model no longer has in context. Only
+// the human's own turns, and each decision once.
+func TestALateAnswerFindsTheDecisions(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error {
+		state.AddNote(st, "committed P0 unsigned", "re-sign it", f.now)
+		state.AddProposal(st, state.Decision{What: "skip the flaky test", Undo: "re-enable it", Deadline: f.now}, f.now)
+		state.Resolve(st, "d2", state.ByTimeout, "Go ahead", f.now)
+		state.AddProposal(st, state.Decision{What: "use staging", Undo: "switch back"}, f.now)
+		return state.Resolve(st, "d3", state.ByHuman, "Go ahead", f.now) // the human said so
+	})
+	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>"} {
+		if out := f.fire("UserPromptSubmit", map[string]any{"prompt": prompt}); out != nil {
+			t.Fatalf("%q was handed the record: %v", prompt, out)
+		}
+	}
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "I'm back. Undo whatever you did while I was away."})
+	ctx := additionalContext(out)
+	for _, want := range []string{"[baton] Decisions this run made without the human since they last wrote to you", "undo one only if they ask",
+		") noted: committed P0 unsigned. Undo: re-sign it\n", ": skip the flaky test. Undo: re-enable it"} {
+		if !strings.Contains(ctx, want) {
+			t.Errorf("context lacks %q:\n%s", want, ctx)
+		}
+	}
+	if strings.Contains(ctx, "use staging") {
+		t.Errorf("a decision the human made is in the record:\n%s", ctx)
+	}
+	if say, _ := out["systemMessage"].(string); say != "baton: decisions made without you since you last wrote: d1, d2 — Claude has them, each with its undo (/baton status lists them)" {
+		t.Errorf("said %q", say)
+	}
+	if e := f.events()[len(f.events())-1]; e["kind"] != "decisions_told" || fmt.Sprint(e["ids"]) != "[d1 d2]" {
+		t.Errorf("last event: %v", e)
+	}
+	if st := f.state(); !st.Decisions[0].Told || !st.Decisions[1].Told || st.Decisions[2].Told {
+		t.Errorf("told: %+v", st.Decisions)
+	}
+	if out := f.fire("UserPromptSubmit", map[string]any{"prompt": "thanks"}); out != nil {
+		t.Fatalf("handed over twice: %v", out)
+	}
+
+	// A hold's answer comes first; the record follows it, with only what is new.
+	call := f.propose(false)
+	f.fire("PermissionRequest", call)
+	f.fire("PostToolUse", answer(call, "Wait for me"))
+	f.fire("Stop", map[string]any{})
+	f.store.Update(func(st *state.State) error { _, err := state.AddNote(st, "pinned the linter", "", f.now); return err })
+	ctx = additionalContext(f.fire("UserPromptSubmit", map[string]any{"prompt": "go ahead after all"}))
+	hold, record := strings.Index(ctx, "Your proposal d4 (commit P0 unsigned)"), strings.Index(ctx, "Decisions this run made without the human")
+	if hold < 0 || record < hold || !strings.Contains(ctx, "d5 (P0, ") || strings.Contains(ctx, "d1 (P0, ") {
+		t.Errorf("context:\n%s", ctx)
 	}
 }

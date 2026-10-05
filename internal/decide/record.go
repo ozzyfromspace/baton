@@ -85,3 +85,10 @@ func Listed(ds []state.Decision, most int) string {
 func RecordSection(ds []state.Decision) string {
 	return "Decisions made without the human so far (if they ask, each has its undo):\n\n" + Listed(ds, MostListed)
 }
+
+// LateAnswer hands the model, as the human writes to it, the decisions made without them since they last
+// did: what they wrote may be about one of them, and its undo is then at hand.
+func LateAnswer(ds []state.Decision) string {
+	return "Decisions this run made without the human since they last wrote to you, oldest first. What they just wrote may be about one of them: " +
+		"undo one only if they ask, with the undo given here.\n" + Listed(ds, MostListed)
+}
