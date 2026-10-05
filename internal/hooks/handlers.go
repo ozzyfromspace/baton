@@ -115,11 +115,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var refuseQuestion string
 	var pending []issued
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" && st.Run.TurnBy != "human" {
+		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
+			// A human-started turn may ask the human anything, except a question passed off as baton's:
+			// one that starts "baton:" while baton has a question waiting must be that question, word
+			// for word, or the host will not recognize it and the run waits on an answer nobody gives.
 			if _, own := matchIssued(st, c.Input); !own {
 				pending = issuedQuestions(st)
-				refuseQuestion = questionRefusal(pending)
-				return nil
+				if st.Run.TurnBy != "human" || len(pending) > 0 && claimsBaton(c.Input) {
+					refuseQuestion = questionRefusal(pending)
+					return nil
+				}
 			}
 		}
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
@@ -160,6 +165,16 @@ func readOnlyTool(name string) bool {
 	switch name {
 	case "Read", "Grep", "Glob", "NotebookRead":
 		return true
+	}
+	return false
+}
+
+// claimsBaton reports a question call that presents itself as baton's.
+func claimsBaton(in map[string]any) bool {
+	for _, q := range questions(in) {
+		if strings.HasPrefix(strings.TrimSpace(q), "baton:") {
+			return true
+		}
 	}
 	return false
 }
@@ -560,7 +575,7 @@ func warnQuestion(used int, lim valve.Limits, timeout time.Duration) issued {
 		timeout = valve.DefaultWarnTimeout
 	}
 	q := fmt.Sprintf("baton: the context holds %s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
-		"(If nobody answers within %s, baton picks Keep going.)",
+		"If nobody answers within %s, baton picks Keep going.",
 		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt), spell(timeout))
 	return issued{kind: "context_warning", question: q, options: warnOptions}
 }

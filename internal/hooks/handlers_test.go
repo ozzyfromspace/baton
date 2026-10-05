@@ -328,7 +328,7 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	}
 	ctx := additionalContext(out)
 	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
-		"If nobody answers within 20 minutes, baton picks Keep going", "exactly 3 options, in this order",
+		"Checkpoint now? If nobody answers within 20 minutes, baton picks Keep going.", "exactly 3 options, in this order",
 		`"Checkpoint now" (description: "Finish the current step`, `"Pause baton" (description:`, `"Keep going" (description:`,
 		"not multi-select", "baton acts on the answer itself"} {
 		if !strings.Contains(ctx, want) {
@@ -571,11 +571,16 @@ func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
 	if d, _ := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "" {
 		t.Fatalf("human-started turn: %q", d)
 	}
+	// Even then, a question passed off as baton's must be the one baton issued: Haiku dropped the
+	// question's last sentence once, and the host never recognized the dialog.
+	if d, why := decide(f, ask(strings.TrimSuffix(q, " need a key")+"?", escalationLabels...)); d != "deny" || !strings.Contains(why, `"`+q+`"`) {
+		t.Fatalf("a trimmed baton question in a human-started turn: %q %q", d, why)
+	}
 	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "baton"; st.Mode = state.ModePaused; return nil })
 	if d, _ := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "" {
 		t.Fatalf("paused: %q", d)
 	}
-	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 9 {
+	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 10 {
 		t.Fatalf("events: %s", b)
 	}
 }
