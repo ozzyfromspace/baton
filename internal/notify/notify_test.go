@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ozzyfromspace/baton/internal/config"
@@ -28,5 +29,25 @@ func TestPushIsContentFreeByDefault(t *testing.T) {
 	n.Notify("p", "blocked", "need a decision")
 	if gotBody != "baton needs you: blocked: need a decision" {
 		t.Fatalf("details body %q", gotBody)
+	}
+}
+
+// A note needs nothing from the human, so it pushes quietly; a proposal has a deadline, and pushes loud.
+func TestPriorityFollowsWhatTheHumanMustDo(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Priority"))
+	}))
+	defer srv.Close()
+	off := false
+	n := New(config.Config{NtfyTopic: "t", NtfyServer: srv.URL, Desktop: &off})
+	for _, kind := range []string{"note", "proposal", "proceeded", "decision", "review", "blocked"} {
+		if headline[kind] == "" {
+			t.Errorf("%s has no headline", kind)
+		}
+		n.Notify("p", kind, "")
+	}
+	if want := []string{"2", "4", "", "4", "4", ""}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("priorities %q, want %q", got, want)
 	}
 }

@@ -97,10 +97,11 @@ func ok(err error) error {
 // arguments the shell would rewrite (backticks or $ inside double quotes: notes often quote code) is
 // refused with the fix, because it would run those as commands and mangle the notes.
 //
-// And it holds the model at a compaction it owes. After `baton done` or `baton checkpoint`, the turn
+// And it holds the model where it must not carry on. After `baton done` or `baton checkpoint`, the turn
 // must end so the host can compact; a model that carries on would start the next phase (or keep going)
-// in the old context. So until then every main-agent tool call except baton's own CLI is denied, with
-// the reason. Subagents are not held: they cannot end the main turn.
+// in the old context. And a proposal must be put to the human before anything else happens. So
+// until then every main-agent tool call except baton's own CLI (and the questions baton issued) is
+// denied, with the reason. Subagents are not held: they cannot end the main turn.
 func (h *handlers) preToolUse(c Context) (Result, error) {
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
@@ -115,15 +116,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			return Result{}, nil // operators or redirections: Claude Code's usual permission checks apply
 		}
 	}
-	var owed string
+	var hold string
 	var refuseQuestion string
 	var pending []issued
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		own := false
 		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
 			// A human-started turn may ask the human anything, except a question passed off as baton's:
 			// one that starts "baton:" while baton has a question waiting must be that question, word
 			// for word, or the host will not recognize it and the run waits on an answer nobody gives.
-			if _, own := matchIssued(st, c.Input); !own {
+			if _, own = matchIssued(st, c.Input); !own {
 				pending = issuedQuestions(st)
 				if st.Run.TurnBy != "human" || len(pending) > 0 && claimsBaton(c.Input) {
 					refuseQuestion = questionRefusal(pending, words(c, s))
@@ -134,11 +136,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
 			return nil
 		}
+		p := st.PendingProposal()
 		switch {
 		case st.BoundaryOwed:
-			owed = "the phase is done and baton must compact the context before " + st.Current + " begins"
+			hold = endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
 		case st.CheckpointOwed:
-			owed = "you asked for a checkpoint and baton must compact the context first"
+			hold = endTurn("you asked for a checkpoint and baton must compact the context first")
+		case own:
+			// baton's own question gets through the holds below: it is how they end.
+		case p != nil && !p.Asked:
+			hold = NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
 		}
 		return nil
 	})
@@ -149,7 +156,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		s.Event("question_refused", map[string]any{"questions": len(questions(c.Input)), "issued": len(pending)})
 		return permission("deny", refuseQuestion), nil
 	}
-	if owed == "" {
+	if hold == "" {
 		return Result{}, nil
 	}
 	// While something has gone wrong, let the model LOOK. The block exists to stop work before a
@@ -160,7 +167,12 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			return Result{}, nil
 		}
 	}
-	return permission("deny", NudgePrefix+" End your turn now: "+owed+". Do not start further work in this turn."), nil
+	return permission("deny", hold), nil
+}
+
+// endTurn is a hold's reason when the turn must end.
+func endTurn(why string) string {
+	return NudgePrefix + " End your turn now: " + why + ". Do not start further work in this turn."
 }
 
 // readOnlyTool names the tools that only read. Bash is deliberately absent: a command line can do
@@ -221,11 +233,13 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	source := str(c.Input, "source")
 	var pl plan.Plan
 	var havePlan bool
+	var events []event
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = nil
 		if source != "compact" {
 			st.Run.TurnOpen, st.Run.Subagents = false, 0
 			st.Run.Dialogs.Clear()
+			events, _ = vanished(st, c.Now, false)
 		}
 		return nil
 	})
@@ -233,6 +247,9 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		return Result{}, ok(err)
 	}
 	s.Event("session_start", map[string]any{"source": source})
+	for _, e := range events {
+		s.Event(e.kind, e.fields)
+	}
 	if p, err := s.LoadPlan(); err == nil && st.Mode != state.ModeIdle {
 		pl, havePlan = p, true
 	}
@@ -351,22 +368,37 @@ func TurnSource(prompt string) string {
 
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
+	var events []event
+	var tell string
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
+		events, tell = vanished(st, c.Now, by == "human")
 		if by == "human" {
 			// The human is engaged: whatever baton escalated, they have it now, and the model may act on
-			// what they say (state.Held).
+			// what they say (state.Held). A proposal held for them is answered by what they wrote.
+			if e, t, ok := released(st); ok {
+				events, tell = append(events, e), t
+			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
 			st.Run.HumanAt = c.Now
 		}
 		return nil
 	})
-	if err == nil {
-		s.Event("turn_started", map[string]any{"by": by})
+	if err != nil {
+		return Result{}, ok(err)
 	}
-	return Result{}, ok(err)
+	s.Event("turn_started", map[string]any{"by": by})
+	for _, e := range events {
+		s.Event(e.kind, e.fields)
+	}
+	if tell == "" {
+		return Result{}, nil
+	}
+	return Result{Output: map[string]any{
+		"hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": tell},
+	}}, nil
 }
 
 // permissionRequest records a dialog joining Claude Code's queue. It fires when the dialog is requested,
@@ -375,6 +407,8 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 	tool, agent := str(c.Input, "tool_name"), str(c.Input, "agent_id")
 	kind := ""
 	var open int
+	var proposal event
+	var isProposal bool
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if tool == "AskUserQuestion" && agent == "" {
 			if iq, own := matchIssued(st, c.Input); own {
@@ -383,6 +417,9 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 		}
 		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
 		open = len(st.Run.Dialogs)
+		if kind == "proposal" {
+			proposal, isProposal = asked(st, c.Now)
+		}
 		return nil
 	})
 	if err == nil {
@@ -391,6 +428,9 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 			fields["agent"] = agent
 		}
 		s.Event("dialog_open", fields)
+		if isProposal {
+			s.Event(proposal.kind, proposal.fields)
+		}
 	}
 	return Result{}, ok(err)
 }
@@ -427,27 +467,50 @@ func questions(in map[string]any) []string {
 func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
+	var dropped []event
+	var notes string
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
-		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
+		if str(c.Input, "agent_id") != "" {
+			return nil
+		}
+		if c.Event == "PostToolUse" {
 			w := words(c, s)
 			if tool == "AskUserQuestion" {
-				v = answered(st, c, !closed.AutoAnswered.IsZero(), w)
+				auto := !closed.AutoAnswered.IsZero()
+				if v = answeredProposal(st, c, auto); v.event == "" {
+					v = answered(st, c, auto, w)
+				}
 			}
-			if v.event == "" {
+			// No other question while a proposal or a review waits on the human: one at a time.
+			if v.event == "" && st.PendingProposal() == nil && st.ReviewDue == "" {
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
+			notes = announceNotes(st)
 		}
+		dropped, _ = vanished(st, c.Now, false) // a proposal's question that failed or was denied went unanswered
 		return nil
 	})
-	if err != nil || v.event == "" {
+	if err != nil {
 		return Result{}, ok(err)
 	}
-	s.Event(v.event, v.fields)
-	return Result{Output: map[string]any{
-		"systemMessage":      v.say,
-		"hookSpecificOutput": map[string]any{"hookEventName": "PostToolUse", "additionalContext": v.tell},
-	}}, nil
+	for _, e := range dropped {
+		s.Event(e.kind, e.fields)
+	}
+	if v.event == "" && notes == "" {
+		return Result{}, nil
+	}
+	out := map[string]any{"systemMessage": strings.TrimSpace(notes + "\n" + v.say)}
+	if v.event != "" {
+		s.Event(v.event, v.fields)
+		for _, e := range v.also {
+			s.Event(e.kind, e.fields)
+		}
+	}
+	if v.tell != "" {
+		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": v.tell}
+	}
+	return Result{Output: out}, nil
 }
 
 // answered acts on the answer to one of baton's own questions, found by its exact text, so what happens
@@ -509,10 +572,12 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 	return valveAction{}
 }
 
-// valveAction is what a context valve does: an event to log, a line for the human, words for the model.
+// valveAction is what a context valve or an answer does: an event to log (and any that follow it), a
+// line for the human, words for the model.
 type valveAction struct {
 	event     string
 	fields    map[string]any
+	also      []event
 	say, tell string
 }
 
@@ -591,15 +656,20 @@ func warnQuestion(used int, lim valve.Limits, timeout time.Duration) issued {
 func (h *handlers) notification(c Context) (Result, error) {
 	kind := str(c.Input, "notification_type")
 	var fixed bool
+	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if kind == "idle_prompt" && (st.Run.TurnOpen || st.Run.Dialogs.AnyOpen()) {
 			st.Run.TurnOpen, fixed = false, true
 			st.Run.Dialogs.Clear()
+			events, _ = vanished(st, c.Now, false)
 		}
 		return nil
 	})
 	if err == nil {
 		s.Event("notification", map[string]any{"type": kind, "corrected": fixed})
+		for _, e := range events {
+			s.Event(e.kind, e.fields)
+		}
 	}
 	return Result{}, ok(err)
 }
@@ -642,13 +712,18 @@ func recordStop(st *state.State, c Context) {
 
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
+	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents = false, &e, 0
 		st.Run.Dialogs.CloseMain()
+		events, _ = vanished(st, c.Now, false)
 		return nil
 	})
 	if err == nil {
 		s.Event("stop_failure", map[string]any{"error": e.Error})
+		for _, e := range events {
+			s.Event(e.kind, e.fields)
+		}
 	}
 	return Result{}, ok(err)
 }

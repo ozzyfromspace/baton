@@ -24,7 +24,9 @@ func (h *handlers) stop(c Context) (Result, error) {
 	var d decision
 	_, _, err = h.update(c, func(st *state.State, s *state.Store) error {
 		recordStop(st, c)
+		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
 		d = decideStop(st, pl, c.Now, words(c, s))
+		d.events = append(dropped, d.events...)
 		return nil
 	})
 	if err != nil {
@@ -80,7 +82,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	if st.CheckpointAsked && !st.BoundaryOwed {
 		st.CheckpointAsked, st.CheckpointOwed = false, true // the human asked for it; the model need not remember
 	}
-	switch {
+	switch p := st.PendingProposal(); {
 	case st.Run.Compaction.InFlight():
 		// A compaction is already queued or underway; let the turn end so the host can type it.
 	case st.BoundaryOwed:
@@ -93,6 +95,20 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: checkpoint → compacting, then %s continues", cur))
 		d.emit("compact_queued", map[string]any{"reason": "checkpoint", "epoch": st.Run.Compaction.Epoch})
+	case p != nil && !p.Asked:
+		// The model proposed something and stopped without asking: nothing would ever answer it.
+		st.Run.StopBlocks++
+		if st.Run.StopBlocks <= MaxStopBlocks {
+			d.refuse(NudgePrefix + " You stopped, but " + decide.AskFirst(p.ID, p.Question) + ". baton acts on the answer itself; then follow what it tells you.")
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "proposal not asked"})
+			return d
+		}
+		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without putting its proposal %s to you", st.Run.StopBlocks, st.Current, p.ID), now)
+	case st.Run.Escalation != nil && st.Run.Escalation.Kind == "decision":
+		// A proposal held for the human (Wait for me, or its question went away unanswered). They were
+		// asked already, and pushed; their next message is the answer.
+		st.Run.StopBlocks = 0
+		d.say("baton: waiting on you — " + st.Run.Escalation.Reason)
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
 	case st.Waiting != nil && now.Before(st.Waiting.Until):
@@ -144,7 +160,7 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 	}
 	if !e.Asked {
 		e.Asked = true
-		d.refuse(askReason(e.Question))
+		d.refuse(askReason(decide.Question{Text: e.Question, Options: decide.EscalationOptions}))
 		return
 	}
 	d.say("baton: waiting on you — " + reason)
@@ -152,9 +168,8 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 
 // askReason makes the model put a fixed question to the human. AskUserQuestion reaches every device the
 // human uses, which is why baton routes the in-session escalation through it.
-func askReason(question string) string {
-	return "[baton] Bring the human in now: " + decide.Question{Text: question, Options: decide.EscalationOptions}.Call() +
-		". baton acts on the answer itself; then follow what it tells you."
+func askReason(q decide.Question) string {
+	return "[baton] Bring the human in now: " + q.Call() + ". baton acts on the answer itself; then follow what it tells you."
 }
 
 func notice(st *state.State, kind, text string, now time.Time) {

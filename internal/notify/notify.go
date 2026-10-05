@@ -41,7 +41,15 @@ var headline = map[string]string{
 	"rate_limit":        "paused by a usage limit",
 	"dialog":            "claude is waiting for your answer",
 	"note":              "the run decided something without you",
+	"proposal":          "baton proposes something: answer, or it goes ahead",
+	"proceeded":         "baton went ahead with a proposal nobody answered",
+	"decision":          "baton is holding a proposal for you",
+	"review":            "baton needs you: review the decisions made without you",
 }
+
+// priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a
+// note needs nothing from the human; a proposal has a deadline, and a hold or a review stops the run.
+var priority = map[string]string{"note": "2", "proposal": "4", "decision": "4", "review": "4"}
 
 func (m *multi) Notify(project, kind, detail string) error {
 	title := "baton — " + project
@@ -103,6 +111,9 @@ func ntfy(server, topic, title, body, kind string) error {
 		tag = "white_check_mark"
 	}
 	req.Header.Set("Tags", tag)
+	if p := priority[kind]; p != "" {
+		req.Header.Set("Priority", p)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

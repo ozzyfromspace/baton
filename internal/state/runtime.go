@@ -72,8 +72,8 @@ type Dialog struct {
 	Key   string    `json:"key,omitempty"`
 	Since time.Time `json:"since"`
 	// Kind names a question baton issued, put to the human word for word in the shape baton gave it:
-	// "escalation", or "context_warning" for the context question, which baton answers itself
-	// ("Keep going") if nobody has within a while. AutoAnswered is when it did.
+	// "escalation", "review", or one baton answers itself if nobody has within a while: "context_warning"
+	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when it did.
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
 }
@@ -132,6 +132,16 @@ func (q *DialogQueue) remove(drop func(Dialog) bool) {
 
 // AnyOpen reports whether any dialog is open.
 func (q DialogQueue) AnyOpen() bool { return len(q) > 0 }
+
+// Has reports whether a dialog of this kind is open.
+func (q DialogQueue) Has(kind string) bool {
+	for _, d := range q {
+		if d.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
 
 // Front is the oldest open dialog: the one Claude Code shows first.
 func (q DialogQueue) Front() (Dialog, bool) {

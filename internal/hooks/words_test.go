@@ -9,8 +9,12 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
+// denyReason is why PreToolUse denied a call, or "" if it did not.
 func denyReason(out map[string]any) string {
 	hso, _ := out["hookSpecificOutput"].(map[string]any)
+	if hso["permissionDecision"] != "deny" {
+		return ""
+	}
 	s, _ := hso["permissionDecisionReason"].(string)
 	return s
 }

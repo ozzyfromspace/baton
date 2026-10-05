@@ -46,6 +46,19 @@ func TestStopDecisionTable(t *testing.T) {
 				state.Done(st, pl, "P0", tStop, false)
 				st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactTyped}
 			}},
+		{name: "a proposal not yet put to the human", block: true, reason: "You stopped, but put your proposal d1 to the human first: call the AskUserQuestion tool",
+			setup: func(st *state.State) {
+				state.AddProposal(st, state.Decision{What: "skip it", Question: "baton: x. Unless you answer by 12:05, I will skip it."}, tStop)
+			}},
+		{name: "an unasked proposal escalates after repeated stops", block: true, reason: "AskUserQuestion", notice: "stalled",
+			setup: func(st *state.State) {
+				state.AddProposal(st, state.Decision{What: "skip it", Question: "baton: x."}, tStop)
+				st.Run.StopBlocks = MaxStopBlocks
+			}},
+		{name: "a held proposal waits on the human, asked already", say: "waiting on you — proposal d1 waits for you",
+			setup: func(st *state.State) {
+				st.Run.Escalation = &state.Escalation{Kind: "decision", Reason: "proposal d1 waits for you: skip it", Since: tStop, Asked: true}
+			}},
 		{name: "blocked asks the human once",
 			setup: func(st *state.State) { state.SetBlocked(st, "need a decision", tStop) },
 			block: true, reason: "AskUserQuestion", notice: "blocked"},
