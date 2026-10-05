@@ -189,11 +189,49 @@ func cmdStatus(args []string, io IO) int {
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
 	}
+	printWaitingOnYou(io, &st)
 	if cu := st.Run.Context; cu != nil {
 		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
 	}
+	printDecisions(io, st)
 	printSnapshots(io, snaps)
 	return 0
+}
+
+// printWaitingOnYou shows what of the run's decisions waits on the human: a proposal, one held for them,
+// or a review.
+func printWaitingOnYou(io IO, st *state.State) {
+	if p := st.PendingProposal(); p != nil {
+		fmt.Fprintf(io.Out, "proposal %s: %s\n  because: %s\n", p.ID, p.What, p.Because)
+		switch {
+		case p.Untimed != "":
+			fmt.Fprintf(io.Out, "  waits for you: baton will not let it go ahead without you (%s)\n", p.Untimed)
+		case p.Asked:
+			fmt.Fprintf(io.Out, "  goes ahead at %s unless you answer baton's question in the session\n", p.Deadline.Local().Format("15:04"))
+		default:
+			fmt.Fprintf(io.Out, "  goes ahead at %s unless you answer (Claude has yet to put the question to you)\n", p.Deadline.Local().Format("15:04"))
+		}
+		fmt.Fprintf(io.Out, "  undo: %s\n", decide.UndoOf(*p))
+	}
+	if e := st.Run.Escalation; e != nil && e.Kind == "decision" {
+		fmt.Fprintf(io.Out, "held for you: %s — write in the session to answer it\n", e.Reason)
+	}
+	if st.ReviewDue != "" {
+		fmt.Fprintf(io.Out, "review due: %s has made %d decisions without you, as many as it may before you go over them (below). "+
+			"Answer baton's question in the session, or /baton resume to let the run go on.\n", st.ReviewDue, st.Unattended(st.ReviewDue))
+	}
+}
+
+// printDecisions lists what the run decided without the human, each with its undo.
+func printDecisions(io IO, st state.State) {
+	ds := decide.WithoutHuman(st.Decisions)
+	if len(ds) == 0 {
+		return
+	}
+	fmt.Fprintln(io.Out, "decisions made without you (this run, oldest first):")
+	for _, d := range ds {
+		fmt.Fprintf(io.Out, "  %-4s %-8s %s  %s\n       undo: %s\n", d.ID, d.Phase, decide.Stamp(decide.When(d)), decide.Happened(d), decide.UndoOf(d))
+	}
 }
 
 // printSnapshots lists the uncommitted work the host saved when the run halted, and how to get it back.
@@ -288,8 +326,22 @@ func cmdDone(args []string, io IO) int {
 	if startHead != "" && startHead == gitx.Head(filepath.Dir(s.Dir)) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
 	}
+	var mine []state.Decision
+	for _, d := range decide.WithoutHuman(st.Decisions) {
+		if d.Phase == id {
+			mine = append(mine, d)
+		}
+	}
+	if len(mine) > 0 {
+		fmt.Fprintf(io.Out, "baton: %s made %d %s without the human (baton status lists them for the human, each with its undo):\n%s",
+			id, len(mine), plural(len(mine), "decision", "decisions"), decide.Listed(mine, 0))
+	}
 	if st.Mode == state.ModeComplete {
-		fmt.Fprintf(io.Out, "baton: %s done. That was the last phase — the plan is complete. Summarize the results for the human and end your turn.\n", id)
+		summary := "Summarize the results for the human"
+		if n := len(decide.WithoutHuman(st.Decisions)); n > 0 {
+			summary += fmt.Sprintf(", including the %d %s this run made without them (baton status lists them, each with its undo),", n, plural(n, "decision", "decisions"))
+		}
+		fmt.Fprintf(io.Out, "baton: %s done. That was the last phase — the plan is complete. %s and end your turn.\n", id, summary)
 		return 0
 	}
 	np := pl.Phases[pl.Index(next)]

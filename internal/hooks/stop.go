@@ -73,9 +73,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	case state.ModeComplete:
 		if !st.Run.CompleteNotified {
 			st.Run.CompleteNotified = true
-			notice(st, "plan_complete", fmt.Sprintf("%s: all %d phases done", pl.Title, len(pl.Phases)), now)
-			d.say(fmt.Sprintf("baton: plan complete — all %d phases done", len(pl.Phases)))
-			d.emit("plan_complete", nil)
+			done := fmt.Sprintf("all %d phases done", len(pl.Phases))
+			n := len(decide.WithoutHuman(st.Decisions))
+			if n > 0 {
+				done += " · " + decide.Tally(n) + " — /baton status"
+			}
+			notice(st, "plan_complete", pl.Title+": "+done, now)
+			d.say("baton: plan complete — " + done)
+			d.emit("plan_complete", map[string]any{"decisions": n})
 		}
 		return d
 	}

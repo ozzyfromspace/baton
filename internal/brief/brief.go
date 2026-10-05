@@ -1,6 +1,7 @@
 // Package brief writes what the model reads right after a compaction: where the plan stands, the phase
-// it is on (quoted from the plan document), the standing rules, and the notes earlier phases left. The
-// text is assembled by code from files, never summarized by a model, so it is the same every time.
+// it is on (quoted from the plan document), the standing rules, the notes earlier phases left, and the
+// decisions the run made without the human. The text is assembled by code from files, never summarized
+// by a model, so it is the same every time.
 package brief
 
 import (
@@ -87,6 +88,9 @@ func Write(in Input) string {
 	}
 	if notes := strings.TrimSpace(in.Handoff); notes != "" {
 		fmt.Fprintf(&b, "Notes left by earlier phases (.baton/handoff.md, most recent last):\n\n%s\n\n", tail(notes, maxNotes))
+	}
+	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
+		b.WriteString(decide.RecordSection(ds) + "\n")
 	}
 
 	b.WriteString(in.Words.Closing(st.Current))

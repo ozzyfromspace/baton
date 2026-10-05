@@ -1,6 +1,7 @@
 package brief
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,5 +98,42 @@ func TestLongNotesKeepTheMostRecent(t *testing.T) {
 	b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Handoff: notes.String()})
 	if !strings.Contains(b, "THE LATEST NOTE") || !strings.Contains(b, "earlier notes omitted") {
 		t.Fatal("long notes were not trimmed to the most recent")
+	}
+}
+
+// After a compaction the model still knows what the run decided without the human, so a late "undo that"
+// finds its undo; the newest ten, the rest in baton status.
+func TestBriefListsTheDecisionsMadeWithoutTheHuman(t *testing.T) {
+	pl, doc, st := setup(t)
+	if b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st}); strings.Contains(b, "Decisions made without the human") {
+		t.Fatal("a section with no decisions in it")
+	}
+	at := time.Date(2026, 10, 4, 12, 30, 0, 0, time.UTC)
+	for i := 1; i <= 11; i++ {
+		state.AddNote(&st, fmt.Sprintf("step %d", i), fmt.Sprintf("revert step %d", i), at)
+	}
+	state.AddProposal(&st, state.Decision{What: "skip the flaky test", Undo: "re-enable it", Deadline: at.Add(5 * time.Minute)}, at)
+	state.Resolve(&st, "d12", state.ByTimeout, "Go ahead", at.Add(5*time.Minute))
+	state.AddProposal(&st, state.Decision{What: "use staging", Undo: "switch back"}, at)
+	state.Resolve(&st, "d13", state.ByHuman, "Go ahead", at) // the human said so
+
+	for _, git := range []bool{true, false} {
+		b := Write(Input{Kind: Auto, Plan: pl, Doc: doc, State: st, Words: decide.Words{Git: git, Timeout: 5 * time.Minute}})
+		i := strings.Index(b, "Decisions made without the human so far (if they ask, each has its undo):\n\n- …and 2 earlier (baton status lists every one)\n- d3 (P1, ")
+		if i < 0 {
+			t.Fatalf("git=%v: no section of the newest ten:\n%s", git, b)
+		}
+		section := b[i:strings.Index(b, "When P1 is complete")]
+		for _, want := range []string{"noted: step 11. Undo: revert step 11\n", "went ahead, as nobody answered by " + at.Add(5*time.Minute).Local().Format("15:04") + ": skip the flaky test. Undo: re-enable it\n"} {
+			if !strings.Contains(section, want) {
+				t.Errorf("git=%v: section lacks %q:\n%s", git, want, section)
+			}
+		}
+		if strings.Contains(section, "step 2.") || strings.Contains(section, "use staging") {
+			t.Errorf("git=%v: section lists an old decision, or one the human made:\n%s", git, section)
+		}
+		if !git && strings.Contains(strings.ToLower(b[i:]), "commit") { // the plan quoted above may, baton's words may not
+			t.Errorf("a brief without git mentions committing:\n%s", b[i:])
+		}
 	}
 }

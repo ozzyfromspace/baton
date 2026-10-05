@@ -34,6 +34,7 @@ func TestStopDecisionTable(t *testing.T) {
 		say     string // substring of the systemMessage
 		compact string // compaction reason queued ("" = none)
 		notice  string // kind of out-of-band notice queued
+		detail  string // substring of the notice's text
 	}{
 		{name: "idle", setup: func(st *state.State) { *st = state.New() }},
 		{name: "paused", setup: func(st *state.State) { st.Mode = state.ModePaused }},
@@ -97,6 +98,19 @@ func TestStopDecisionTable(t *testing.T) {
 				state.Done(st, pl, "P1", tStop, false)
 			},
 			say: "plan complete", notice: "plan_complete"},
+		{name: "plan complete counts the decisions made without the human",
+			setup: func(st *state.State) {
+				state.AddNote(st, "a", "", tStop)
+				state.Done(st, pl, "P0", tStop, false)
+				state.Start(st, tStop, state.Origin{})
+				state.AddProposal(st, state.Decision{What: "b"}, tStop)
+				state.Resolve(st, "d2", state.ByTimeout, "Go ahead", tStop)
+				state.AddProposal(st, state.Decision{What: "c"}, tStop)
+				state.Resolve(st, "d3", state.ByHuman, "Go ahead", tStop) // the human said so: not without them
+				state.Done(st, pl, "P1", tStop, false)
+			},
+			say: "plan complete — all 2 phases done · 2 decisions made without you — /baton status", notice: "plan_complete",
+			detail: "Demo: all 2 phases done · 2 decisions made without you — /baton status"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -126,6 +140,8 @@ func TestStopDecisionTable(t *testing.T) {
 			}
 			if c.notice != "" && (len(st.Run.Notices) != 1 || st.Run.Notices[0].Kind != c.notice) {
 				t.Errorf("notices = %+v, want one %s", st.Run.Notices, c.notice)
+			} else if c.detail != "" && !strings.Contains(st.Run.Notices[0].Text, c.detail) {
+				t.Errorf("notice %q lacks %q", st.Run.Notices[0].Text, c.detail)
 			}
 			if c.notice == "" && len(st.Run.Notices) != 0 {
 				t.Errorf("unexpected notices %+v", st.Run.Notices)

@@ -312,3 +312,97 @@ func TestAProposalIsAskedBeforeAnythingElse(t *testing.T) {
 	s.set(func(x *state.State) { x.PendingProposal().Asked = true })
 	s.must("", "checkpoint")
 }
+
+// baton status is where the human finds what the run decided without them, each with its undo, and what
+// waits on them.
+func TestStatusListsTheDecisionsMadeWithoutYou(t *testing.T) {
+	s := attached(t)
+	if out := s.must("", "status"); strings.Contains(out, "decisions made without you") || strings.Contains(out, "proposal") {
+		t.Fatalf("status with no decisions:\n%s", out)
+	}
+	noted := s.now
+	s.must("", "note", "committed P0 unsigned: gpg times out", "--undo", "git commit --amend --no-edit -S")
+	s.now = s.now.Add(time.Minute)
+	s.must("", "propose", "skip the flaky test", "--because", "it times out on CI", "--undo", "re-enable it")
+	st := s.state()
+	deadline := st.PendingProposal().Deadline
+	record := "decisions made without you (this run, oldest first):\n  d1   P0       " + noted.Local().Format("Jan 2 15:04") +
+		"  noted: committed P0 unsigned: gpg times out\n       undo: git commit --amend --no-edit -S\n"
+
+	out := s.must("", "status")
+	for _, want := range []string{"proposal d2: skip the flaky test\n  because: it times out on CI\n  goes ahead at " + deadline.Local().Format("15:04") +
+		" unless you answer (Claude has yet to put the question to you)\n  undo: re-enable it\n", record} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	s.set(func(x *state.State) { x.PendingProposal().Asked = true })
+	if out := s.must("", "status"); !strings.Contains(out, "unless you answer baton's question in the session") {
+		t.Errorf("asked:\n%s", out)
+	}
+
+	// Nobody answered: it went ahead, and joins the record.
+	wentAhead := deadline.Add(time.Minute)
+	s.set(func(x *state.State) { state.Resolve(x, "d2", state.ByTimeout, "Go ahead", wentAhead) })
+	out = s.must("", "status")
+	if want := record + "  d2   P0       " + wentAhead.Local().Format("Jan 2 15:04") + "  went ahead, as nobody answered by " +
+		deadline.Local().Format("15:04") + ": skip the flaky test\n       undo: re-enable it\n"; !strings.Contains(out, want) || strings.Contains(out, "proposal d2:") {
+		t.Errorf("status lacks %q:\n%s", want, out)
+	}
+
+	// One the human answered is not theirs to find here; one held for them, and a review, wait on them.
+	s.must("", "propose", "use the staging database", "--because", "the dev one is down", "--undo", "switch back")
+	s.set(func(x *state.State) {
+		state.Resolve(x, "d3", state.ByHeld, "Wait for me", s.now)
+		x.Run.Escalation = &state.Escalation{Kind: "decision", Reason: "proposal d3 waits for you: use the staging database", Since: s.now, Asked: true}
+		state.DueReview(x, "P0", s.now)
+	})
+	out = s.must("", "status")
+	for _, want := range []string{"held for you: proposal d3 waits for you: use the staging database — write in the session to answer it",
+		"review due: P0 has made 2 decisions without you, as many as it may before you go over them (below). Answer baton's question in the session, or /baton resume"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "  d3 ") {
+		t.Errorf("a proposal the human answered is listed as made without them:\n%s", out)
+	}
+
+	var status struct {
+		State struct{ Decisions []state.Decision } `json:"state"`
+	}
+	json.Unmarshal([]byte(s.must("", "status", "--json")), &status)
+	if d := status.State.Decisions; len(d) != 3 || d[1].Resolved == nil || d[1].Resolved.By != state.ByTimeout || d[0].Undo != "git commit --amend --no-edit -S" {
+		t.Errorf("--json decisions: %+v", d)
+	}
+}
+
+// baton done lists the decisions that phase made without the human, and the last one counts the run's.
+func TestDoneListsTheDecisionsMadeWithoutTheHuman(t *testing.T) {
+	s := attached(t) // not a git repository: nothing here depends on git
+	s.must("", "note", "pinned the linter to v1", "--undo", "unpin it")
+	out := s.must("", "done", "P0")
+	list := "baton: P0 made 1 decision without the human (baton status lists them for the human, each with its undo):\n- d1 (P0, " +
+		s.now.Local().Format("Jan 2 15:04") + ") noted: pinned the linter to v1. Undo: unpin it\n"
+	if !strings.Contains(out, list+"baton: P0 done. Next phase: P1") {
+		t.Errorf("done P0:\n%s", out)
+	}
+	s.startNext()
+	s.must("", "note", "a")
+	s.must("", "note", "b")
+	if out := s.must("", "done", "P1"); !strings.Contains(out, "P1 made 2 decisions without the human") || !strings.Contains(out, "- d2 (P1,") ||
+		!strings.Contains(out, "- d3 (P1,") || strings.Contains(out, "d1") {
+		t.Errorf("done P1:\n%s", out)
+	}
+	s.startNext()
+	out = s.must("", "done", "R1")
+	if strings.Contains(out, "R1 made") || !strings.Contains(out, "the plan is complete. Summarize the results for the human, including the 3 decisions this run made without them "+
+		"(baton status lists them, each with its undo), and end your turn.") {
+		t.Errorf("done R1:\n%s", out)
+	}
+
+	s = attached(t)
+	if out := s.must("", "done", "P0"); strings.Contains(out, "without the human") {
+		t.Errorf("no decisions:\n%s", out)
+	}
+}
