@@ -19,7 +19,8 @@ Explain briefly:
 - `/baton status`: where the run stands.
 - `/baton pause` / `/baton resume`: take or give back the wheel.
 - `/baton elevate`: hand this session over to baton.
-- `/baton setup`: first-time setup.
+- `/baton setup`: check this machine and say what is left to set up.
+- `/baton update`: update baton to the latest release.
 
 ## status
 
@@ -72,10 +73,16 @@ Elevation refuses to stop claude while background tasks or subagents are still r
 
 ## setup
 
-Explain:
+Run `baton setup`. It downloads baton's binary on first use and checks this machine: ✓ lines are done, ✗ lines need the user, · lines are notes. Show its output, then explain in plain words what each ✗ line asks the user to do, and mention the optional items:
 - **Starting sessions:** start sessions with `baton` instead of `claude`. It accepts the same arguments.
-- **Automatic elevation (optional):** to have plain `claude` sessions hand themselves to baton automatically, add `eval "$(baton init zsh)"` (or `bash`) to the shell config and open a new terminal.
+- **Automatic elevation and `baton` on the PATH:** the `eval "$(… init zsh)"` line it prints goes in the shell config (`~/.zshrc`, or `~/.bashrc` with `bash`); then open a new terminal.
 - **Push notifications (optional):** put an ntfy topic in `~/.baton/config.json` as `{"ntfy_topic": "<a long random name>"}` and subscribe to it in the ntfy app. Treat the topic like a password.
+
+Do not edit the user's shell config or baton's config yourself unless they ask you to.
+
+## update
+
+Run `baton update` and show its output. It updates the plugin through Claude Code, then downloads and verifies the matching binary. If it updated, tell the user that sessions already running (this one included) keep the old version until they restart: exit and run `baton --continue`, or start a new session with `baton`.
 
 ## While a plan runs
 
