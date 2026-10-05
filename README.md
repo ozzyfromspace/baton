@@ -4,7 +4,7 @@
 
 You plan the work in plan mode, approve it, and walk away. baton keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. If something needs you, it tells you on whatever device you're on.
 
-> Status: **release candidate** (v0.1.0-rc.2). macOS and Linux. Windows is planned.
+> Status: **v0.1.0**. macOS and Linux. Windows is planned.
 
 ## Why
 
@@ -48,6 +48,8 @@ eval "$(~/.baton/bin/baton init zsh)"
 
 That line puts `baton` on your PATH. It also lets a plain `claude` session hand itself to baton automatically (see [Elevation](#elevation)).
 
+To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Running sessions keep their version until you restart them.
+
 ## Use
 
 ```sh
@@ -64,6 +66,7 @@ Inside the session:
 | `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. |
 | `/baton elevate` | Hand a plain `claude` session to baton (see below). |
 | `/baton setup` | Check this machine and list what's missing. |
+| `/baton update` | Update baton to the latest release (also `baton update` in a shell; `--check` only looks). |
 
 baton finds phases by short ids at the start of headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`. They can also be bold bullets or table rows. `/baton plan` writes plans in that format.
 
