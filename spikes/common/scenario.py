@@ -20,7 +20,7 @@ class Driver:
         if pid == 0:
             os.chdir(cwd)
             for k in list(os.environ):
-                if k.startswith('CLAUDE'):
+                if k.startswith('CLAUDE') or k.startswith('BATON_'):  # a hosted parent's BATON_* must not leak in
                     del os.environ[k]
             os.environ['TERM'] = 'xterm-256color'
             os.environ.update(env_extra or {})
