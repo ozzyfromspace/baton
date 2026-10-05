@@ -17,8 +17,11 @@ type Runtime struct {
 	LastStop     time.Time `json:"last_stop,omitzero"`
 	LastActivity time.Time `json:"last_activity,omitzero"` // any hook from the main agent or a subagent
 
-	// Dialog is set while Claude Code waits on the human: a permission prompt or a question.
-	Dialog *Dialog `json:"dialog,omitempty"`
+	// Dialogs are what Claude Code is waiting on the human for (permission prompts and questions), oldest
+	// first. Claude Code shows them one at a time, in the order they were requested, and fires
+	// PermissionRequest when one joins the queue, not when it reaches the screen
+	// (docs/research/escalation.md). A state file from v0.1 has a single "dialog" instead; it is ignored.
+	Dialogs DialogQueue `json:"dialogs,omitempty"`
 	// Gate is why baton may not type right now, in its own words, or "" when it may. It exists so a
 	// human can tell a blocked run from a working one: a queued compaction used to render on the status
 	// line as "compacting…" however long it had been held, which claims something is happening.
@@ -45,11 +48,13 @@ type Runtime struct {
 	// ContextNudged is set once the model has been asked to checkpoint (ContextNudgedAt: at what size, so
 	// the request is repeated as the context keeps growing), and ContextWarned once the human has been
 	// asked; each re-arms when the context falls well below its threshold (after a compaction).
-	ContextNudged   bool        `json:"context_nudged,omitempty"`
-	ContextNudgedAt int         `json:"context_nudged_at,omitempty"`
-	ContextWarned   bool        `json:"context_warned,omitempty"`
-	Escalation      *Escalation `json:"escalation,omitempty"`
-	LastError       *StopError  `json:"last_error,omitempty"`
+	ContextNudged   bool `json:"context_nudged,omitempty"`
+	ContextNudgedAt int  `json:"context_nudged_at,omitempty"`
+	ContextWarned   bool `json:"context_warned,omitempty"`
+	// WarnQuestion is the context question baton last issued, exactly as issued, until it is answered.
+	WarnQuestion string      `json:"warn_question,omitempty"`
+	Escalation   *Escalation `json:"escalation,omitempty"`
+	LastError    *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.
 	PendingDone string `json:"pending_done,omitempty"`
 	Ended       *Ended `json:"ended,omitempty"`
@@ -57,12 +62,88 @@ type Runtime struct {
 
 // Dialog is an open prompt the human must answer.
 type Dialog struct {
-	Tool  string    `json:"tool"`
+	Tool string `json:"tool"`
+	// Agent is the subagent that asked ("" for the main agent). Key identifies the call itself, so its
+	// result can close this entry and no other: hook inputs carry no tool_use_id before the result.
+	Agent string    `json:"agent,omitempty"`
+	Key   string    `json:"key,omitempty"`
 	Since time.Time `json:"since"`
 	// Kind names a dialog baton opened itself: "context_warning" for the context question, which baton
 	// answers itself ("Keep going") if nobody has within a while. AutoAnswered is when it did.
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
+}
+
+// Same reports whether d and o are the same entry.
+func (d Dialog) Same(o Dialog) bool {
+	return d.Tool == o.Tool && d.Agent == o.Agent && d.Key == o.Key && d.Since.Equal(o.Since)
+}
+
+// DialogQueue is the open dialogs, oldest first.
+//
+// An entry closes only when its own call's result arrives (CloseExact), or when something proves no
+// dialog of its owner can still be open: that agent ended (CloseAgent), the main turn ended
+// (CloseMain), or Claude Code reported the session idle (Clear). A denied permission prompt fires no
+// hook at all, so entries can go stale. A stale entry only ever holds baton back: it keeps the typing
+// gate shut, and keeps baton's own question from being the only dialog open.
+type DialogQueue []Dialog
+
+// Open adds a dialog at the back of the queue.
+func (q *DialogQueue) Open(d Dialog) { *q = append(*q, d) }
+
+// CloseExact closes the oldest dialog that agent opened for exactly this tool and key, and returns it.
+// There is deliberately no nearest match: a call that never had a dialog must not close a live one.
+func (q *DialogQueue) CloseExact(agent, tool, key string) (Dialog, bool) {
+	for i, d := range *q {
+		if d.Agent == agent && d.Tool == tool && d.Key == key {
+			*q = append((*q)[:i:i], (*q)[i+1:]...)
+			return d, true
+		}
+	}
+	return Dialog{}, false
+}
+
+// CloseAgent closes every dialog a subagent opened (it has stopped).
+func (q *DialogQueue) CloseAgent(agent string) {
+	if agent != "" {
+		q.remove(func(d Dialog) bool { return d.Agent == agent })
+	}
+}
+
+// CloseMain closes every dialog the main agent opened (its turn has ended).
+func (q *DialogQueue) CloseMain() { q.remove(func(d Dialog) bool { return d.Agent == "" }) }
+
+// Clear closes every dialog.
+func (q *DialogQueue) Clear() { *q = nil }
+
+func (q *DialogQueue) remove(drop func(Dialog) bool) {
+	var kept DialogQueue
+	for _, d := range *q {
+		if !drop(d) {
+			kept = append(kept, d)
+		}
+	}
+	*q = kept
+}
+
+// AnyOpen reports whether any dialog is open.
+func (q DialogQueue) AnyOpen() bool { return len(q) > 0 }
+
+// Front is the oldest open dialog: the one Claude Code shows first.
+func (q DialogQueue) Front() (Dialog, bool) {
+	if len(q) == 0 {
+		return Dialog{}, false
+	}
+	return q[0], true
+}
+
+// Only is the open dialog when exactly one is open. Only then can baton know which dialog a key it
+// types lands in.
+func (q DialogQueue) Only() (Dialog, bool) {
+	if len(q) != 1 {
+		return Dialog{}, false
+	}
+	return q[0], true
 }
 
 // Task is one piece of in-flight background work.
@@ -131,11 +212,13 @@ func (c ContextUse) Used() int {
 
 // Escalation records that baton brought the human in, and why.
 type Escalation struct {
-	Kind   string    `json:"kind,omitempty"` // blocked, stalled, stuck, draft, compaction_failed, api_error, …
-	Reason string    `json:"reason"`
-	Since  time.Time `json:"since"`
-	Asked  bool      `json:"asked"` // the in-session question was requested
-	Pushed bool      `json:"pushed"`
+	Kind   string `json:"kind,omitempty"` // blocked, stalled, stuck, draft, compaction_failed, api_error, …
+	Reason string `json:"reason"`
+	// Question is the question baton told the model to put to the human, exactly as issued.
+	Question string    `json:"question,omitempty"`
+	Since    time.Time `json:"since"`
+	Asked    bool      `json:"asked"` // the in-session question was requested
+	Pushed   bool      `json:"pushed"`
 	// Watchdog escalations (raised by the host for inactivity) clear themselves once the session shows
 	// signs of life again; escalations from the Stop table wait for the human's answer.
 	Watchdog bool `json:"watchdog,omitempty"`
@@ -168,13 +251,18 @@ type Ended struct {
 }
 
 // Progress records that the plan moved or the human took part: escalations about the run standing
-// still no longer apply, and the reminder count starts over.
+// still no longer apply, and the reminder count starts over. Escalations that wait on the human's
+// decision stay: the model reporting progress must not be able to dismiss them.
 func (r *Runtime) Progress() {
 	r.IdleNudges, r.StopBlocks = 0, 0
-	if e := r.Escalation; e != nil && e.Kind != "blocked" {
+	if e := r.Escalation; e != nil && !humanDecides[e.Kind] {
 		r.Escalation = nil
 	}
 }
+
+// humanDecides are the escalations only the human can resolve: a hard block, a proposal held for
+// them (decision), and a review of the decisions made without them.
+var humanDecides = map[string]bool{"blocked": true, "decision": true, "review": true}
 
 // waitable are the background task types (as Claude Code reports them at Stop) that are the model's own
 // work and wake the session when they finish. Monitors watch indefinitely, and dream, auto-mode scan

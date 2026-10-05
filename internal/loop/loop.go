@@ -215,7 +215,7 @@ func (l *Loop) gate(v host.View, st state.State) string {
 	switch {
 	case st.Run.TurnOpen && !l.turnStale(v, st):
 		why = gateTurn
-	case st.Run.Dialog != nil:
+	case st.Run.Dialogs.AnyOpen():
 		why = gateDialog
 	case busyAgents(st) && !l.agentsStale(v, st):
 		why = gateAgents
@@ -259,7 +259,7 @@ func (l *Loop) turnStale(v host.View, st state.State) bool {
 
 // gateDialog has NO ceiling, deliberately, and it is the one gate that keeps one.
 //
-// `Run.Dialog` is set while Claude Code waits on the human — "a permission prompt or a question".
+// `Run.Dialogs` holds what Claude Code waits on the human for — "a permission prompt or a question".
 // Keystrokes landing in a permission prompt SELECT an option, so a baton that stopped trusting that
 // flag and typed anyway could approve a tool call nobody approved. Every other gate expires into
 // action; this one may not, because the thing on the other side of it is the human's consent. A plan

@@ -100,7 +100,7 @@ func TestDeclaredWaitAndBackgroundWorkHoldTheWatchdog(t *testing.T) {
 
 func TestOpenDialogNotifiesTheHumanOnce(t *testing.T) {
 	r := newIdleRig(t)
-	r.set(func(st *state.State) { st.Run.Dialog = &state.Dialog{Tool: "Bash", Since: r.now} })
+	r.set(func(st *state.State) { st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Since: r.now}) })
 	for i := 0; i < 10; i++ {
 		r.tick(time.Minute)
 	}
@@ -232,7 +232,7 @@ func TestRemindersWithoutProgressEscalate(t *testing.T) {
 // A dialog nobody answers is pushed again, not just once.
 func TestUnansweredDialogIsPushedAgain(t *testing.T) {
 	r := newIdleRig(t)
-	r.set(func(st *state.State) { st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now} })
+	r.set(func(st *state.State) { st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now}) })
 	r.run(DefaultTiming.DialogNotify + Reminders[0] + time.Minute)
 	if len(r.push.kinds) != 2 || r.push.kinds[1] != "dialog" {
 		t.Fatalf("pushes %v", r.push.kinds)
@@ -246,7 +246,7 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 	r := newIdleRig(t)
 	r.set(func(st *state.State) {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
-		st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"}
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
 	})
 	r.run(DefaultTiming.WarnTimeout - time.Minute)
 	if len(r.in.text) != 0 {
@@ -270,7 +270,7 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 	r = newIdleRig(t)
 	r.set(func(st *state.State) {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
-		st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion", Since: r.now}
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now})
 	})
 	r.run(DefaultTiming.WarnTimeout * 3)
 	if len(r.in.text) != 0 {

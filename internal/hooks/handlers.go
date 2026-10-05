@@ -1,6 +1,9 @@
 package hooks
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -203,7 +206,8 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = nil
 		if source != "compact" {
-			st.Run.TurnOpen, st.Run.Dialog, st.Run.Subagents = false, nil, 0
+			st.Run.TurnOpen, st.Run.Subagents = false, 0
+			st.Run.Dialogs.Clear()
 		}
 		return nil
 	})
@@ -333,7 +337,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
-		st.Run.Dialog = nil
+		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
 		if by == "human" {
 			// The human is engaged: whatever baton escalated, they have it now.
 			st.Run.Progress()
@@ -347,23 +351,51 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	return Result{}, ok(err)
 }
 
+// permissionRequest records a dialog joining Claude Code's queue. It fires when the dialog is requested,
+// which is not when it is shown: a dialog requested earlier is shown first.
 func (h *handlers) permissionRequest(c Context) (Result, error) {
-	tool := str(c.Input, "tool_name")
+	tool, agent := str(c.Input, "tool_name"), str(c.Input, "agent_id")
 	kind := ""
-	if tool == "AskUserQuestion" {
+	if tool == "AskUserQuestion" && agent == "" {
 		if qs := questions(c.Input); len(qs) == 1 && strings.HasPrefix(qs[0], warnQuestionPrefix) {
 			kind = "context_warning"
 		}
 	}
+	var open int
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.Dialog = &state.Dialog{Tool: tool, Since: c.Now, Kind: kind}
+		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
+		open = len(st.Run.Dialogs)
 		return nil
 	})
 	if err == nil {
-		s.Event("dialog_open", map[string]any{"tool": tool, "dialog": kind})
+		fields := map[string]any{"tool": tool, "dialog": kind, "open": open}
+		if agent != "" {
+			fields["agent"] = agent
+		}
+		s.Event("dialog_open", fields)
 	}
 	return Result{}, ok(err)
 }
+
+// dialogKey identifies a tool call across its PermissionRequest and its result, which have no
+// tool_use_id in common. A question is known by its question texts (its result adds the answers to its
+// input); any other call by a hash of its input, which is the same in both (measured for Bash, Write,
+// Edit and Read).
+func dialogKey(in map[string]any) string {
+	if str(in, "tool_name") == "AskUserQuestion" {
+		qs := questions(in)
+		for i, q := range qs {
+			qs[i] = normalize(q)
+		}
+		return strings.Join(qs, "\n")
+	}
+	b, _ := json.Marshal(in["tool_input"]) // map keys are sorted, so the encoding is canonical
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:12])
+}
+
+// normalize collapses runs of whitespace, so a question matches whatever line breaks it went through.
+func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // questions lists the question texts of an AskUserQuestion call.
 func questions(in map[string]any) []string {
@@ -381,9 +413,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if st.Run.Dialog != nil && st.Run.Dialog.Tool == tool {
-			st.Run.Dialog = nil
-		}
+		st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" && str(c.Input, "agent_id") == "" {
 			if tool == "AskUserQuestion" {
 				v = answered(st, c)
@@ -528,8 +558,9 @@ func (h *handlers) notification(c Context) (Result, error) {
 	kind := str(c.Input, "notification_type")
 	var fixed bool
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if kind == "idle_prompt" && (st.Run.TurnOpen || st.Run.Dialog != nil) {
-			st.Run.TurnOpen, st.Run.Dialog, fixed = false, nil, true
+		if kind == "idle_prompt" && (st.Run.TurnOpen || st.Run.Dialogs.AnyOpen()) {
+			st.Run.TurnOpen, fixed = false, true
+			st.Run.Dialogs.Clear()
 		}
 		return nil
 	})
@@ -549,6 +580,7 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 		if st.Run.Subagents > 0 {
 			st.Run.Subagents--
 		}
+		st.Run.Dialogs.CloseAgent(str(c.Input, "agent_id")) // a subagent that has stopped asks nothing
 		return nil
 	})
 	return Result{}, ok(err)
@@ -556,7 +588,8 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 
 // recordStop notes what every Stop tells us; the decision about the stop is made in stop.go.
 func recordStop(st *state.State, c Context) {
-	st.Run.TurnOpen, st.Run.LastStop, st.Run.Dialog = false, c.Now, nil
+	st.Run.TurnOpen, st.Run.LastStop = false, c.Now
+	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
 	st.Run.Background = tasks(c.Input["background_tasks"])
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
@@ -576,7 +609,8 @@ func recordStop(st *state.State, c Context) {
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.TurnOpen, st.Run.LastError, st.Run.Dialog, st.Run.Subagents = false, &e, nil, 0
+		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents = false, &e, 0
+		st.Run.Dialogs.CloseMain()
 		return nil
 	})
 	if err == nil {

@@ -100,7 +100,7 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 		off  func()
 	}{
 		{"turn open", func() { r.set(func(st *state.State) { st.Run.TurnOpen = true }) }, func() { r.set(func(st *state.State) { st.Run.TurnOpen = false }) }},
-		{"dialog", func() { r.set(func(st *state.State) { st.Run.Dialog = &state.Dialog{Tool: "AskUserQuestion"} }) }, func() { r.set(func(st *state.State) { st.Run.Dialog = nil }) }},
+		{"dialog", func() { r.set(func(st *state.State) { st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion"}) }) }, func() { r.set(func(st *state.State) { st.Run.Dialogs.Clear() }) }},
 		{"background subagent", func() { r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent"}} }) }, func() { r.set(func(st *state.State) { st.Run.Background = nil }) }},
 		{"draft", func() { r.view.Draft = true }, func() { r.view.Draft = false }},
 		{"human typing", func() { r.view.LastHumanKey = r.now }, func() { r.view.LastHumanKey = r.now.Add(-time.Hour) }},

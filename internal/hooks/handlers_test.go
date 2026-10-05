@@ -137,16 +137,16 @@ func TestTurnsDialogsSubagentsAndStops(t *testing.T) {
 	if r := f.state().Run; !r.TurnOpen || r.TurnBy != "human" {
 		t.Fatalf("turn: %+v", r)
 	}
-	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion"})
-	if d := f.state().Run.Dialog; d == nil || d.Tool != "AskUserQuestion" {
-		t.Fatalf("dialog: %+v", d)
+	f.fire("PermissionRequest", ask("Which?"))
+	if d, ok := f.state().Run.Dialogs.Only(); !ok || d.Tool != "AskUserQuestion" {
+		t.Fatalf("dialog: %+v", f.state().Run.Dialogs)
 	}
-	f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
-	if f.state().Run.Dialog == nil {
+	f.fire("PostToolUse", bash("ls"))
+	if !f.state().Run.Dialogs.AnyOpen() {
 		t.Fatal("a different tool finishing closed the dialog")
 	}
-	f.fire("PostToolUse", map[string]any{"tool_name": "AskUserQuestion"})
-	if f.state().Run.Dialog != nil {
+	f.fire("PostToolUse", answer(ask("Which?"), "A"))
+	if f.state().Run.Dialogs.AnyOpen() {
 		t.Fatal("dialog not closed")
 	}
 	f.fire("SubagentStart", map[string]any{"agent_id": "a"})
@@ -436,11 +436,13 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 func TestIdleNotificationCorrectsStuckFlags(t *testing.T) {
 	f := newFixture(t, true)
 	f.store.Update(func(st *state.State) error {
-		st.Run.TurnOpen, st.Run.Dialog = true, &state.Dialog{Tool: "Bash"}
+		st.Run.TurnOpen = true
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash"})
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "sub"})
 		return nil
 	})
 	f.fire("Notification", map[string]any{"notification_type": "idle_prompt", "message": "Claude is waiting for your input"})
-	if r := f.state().Run; r.TurnOpen || r.Dialog != nil {
+	if r := f.state().Run; r.TurnOpen || r.Dialogs.AnyOpen() {
 		t.Fatalf("still stuck: %+v", r)
 	}
 }
@@ -492,12 +494,153 @@ func TestTheContextQuestionDialogIsRecognized(t *testing.T) {
 	f := newFixture(t, true)
 	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
 		"tool_input": map[string]any{"questions": []any{map[string]any{"question": warnQuestionPrefix + "730k tokens, past the 729k warning line."}}}})
-	if d := f.state().Run.Dialog; d == nil || d.Kind != "context_warning" {
-		t.Fatalf("dialog %+v", d)
+	if d, ok := f.state().Run.Dialogs.Only(); !ok || d.Kind != "context_warning" {
+		t.Fatalf("dialogs %+v", f.state().Run.Dialogs)
 	}
 	f.fire("PermissionRequest", map[string]any{"tool_name": "AskUserQuestion",
 		"tool_input": map[string]any{"questions": []any{map[string]any{"question": "baton: blocked on P0: x"}}}})
-	if d := f.state().Run.Dialog; d == nil || d.Kind != "" {
-		t.Fatalf("an escalation question taken for the context question: %+v", d)
+	if q := f.state().Run.Dialogs; len(q) != 2 || q[1].Kind != "" {
+		t.Fatalf("an escalation question taken for the context question: %+v", q)
 	}
+}
+
+// Hook inputs for the dialog tests, shaped like Claude Code's (spikes/16-escalation, S1).
+func ask(q string, labels ...string) map[string]any {
+	var opts []any
+	for _, l := range labels {
+		opts = append(opts, map[string]any{"label": l, "description": l})
+	}
+	return map[string]any{"tool_name": "AskUserQuestion", "tool_input": map[string]any{"questions": []any{
+		map[string]any{"question": q, "header": "baton", "options": opts, "multiSelect": false}}}}
+}
+
+func bash(cmd string) map[string]any {
+	return map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": cmd, "description": "run " + cmd}}
+}
+
+func byAgent(in map[string]any, agent string) map[string]any {
+	in["agent_id"], in["agent_type"] = agent, "general-purpose"
+	return in
+}
+
+// answer is the PostToolUse of a question: its input gains the answers, and so does its response.
+func answer(in map[string]any, a string) map[string]any {
+	ti := in["tool_input"].(map[string]any)
+	q := ti["questions"].([]any)[0].(map[string]any)["question"].(string)
+	answers := map[string]any{q: a}
+	out := map[string]any{"tool_name": "AskUserQuestion", "tool_response": map[string]any{"questions": ti["questions"], "answers": answers},
+		"tool_input": map[string]any{"questions": ti["questions"], "answers": answers, "annotations": map[string]any{}}}
+	return out
+}
+
+func openDialogs(f *fixture) []string {
+	var out []string
+	for _, d := range f.state().Run.Dialogs {
+		out = append(out, d.Agent+"/"+d.Tool)
+	}
+	return out
+}
+
+// The dialog queue through the hooks, in both orders spikes/16-escalation measured. A call's result
+// closes its own dialog and nothing else; the rest is swept when its owner is provably done.
+func TestDialogQueueThroughTheHooks(t *testing.T) {
+	// S1-C: the question first, then a background subagent's permission prompt behind it.
+	f := newFixture(t, true)
+	f.fire("UserPromptSubmit", map[string]any{"prompt": "go"})
+	f.fire("PermissionRequest", ask("probe: background?", "Alpha", "Beta", "Gamma"))
+	f.fire("PermissionRequest", byAgent(bash("sleep 3 && touch probe_c.txt"), "sub"))
+	if got := openDialogs(f); len(got) != 2 || got[0] != "/AskUserQuestion" || got[1] != "sub/Bash" {
+		t.Fatalf("S1-C queue %v", got)
+	}
+	f.fire("PostToolUse", answer(ask("probe: background?", "Alpha", "Beta", "Gamma"), "Gamma"))
+	if got := openDialogs(f); len(got) != 1 || got[0] != "sub/Bash" {
+		t.Fatalf("after the answer %v", got)
+	}
+	f.fire("PostToolUse", byAgent(bash("sleep 3 && touch probe_c.txt"), "sub"))
+	if got := openDialogs(f); len(got) != 0 {
+		t.Fatalf("after the subagent's command ran %v", got)
+	}
+
+	// S1-D: the subagent asked first. Its prompt is on screen; the human said No to it (no hook fires),
+	// and only its SubagentStop shows it is gone.
+	f = newFixture(t, true)
+	f.fire("UserPromptSubmit", map[string]any{"prompt": "go"})
+	f.fire("PermissionRequest", byAgent(bash("touch probe_d.txt"), "sub"))
+	f.fire("PermissionRequest", ask("probe: queued?", "Alpha", "Beta", "Gamma"))
+	if d, _ := f.state().Run.Dialogs.Front(); d.Agent != "sub" {
+		t.Fatalf("front %+v", d)
+	}
+	f.fire("SubagentStop", map[string]any{"agent_id": "sub"})
+	if d, ok := f.state().Run.Dialogs.Only(); !ok || d.Tool != "AskUserQuestion" {
+		t.Fatalf("after SubagentStop %v", openDialogs(f))
+	}
+}
+
+func TestDialogsCloseOnlyOnAnExactMatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		result map[string]any
+		event  string
+	}{
+		{"a call that never had a dialog", bash("ls"), "PostToolUse"},
+		{"the same command from a subagent", byAgent(bash("make deploy"), "sub"), "PostToolUse"},
+		{"another tool", map[string]any{"tool_name": "Write", "tool_input": map[string]any{"command": "make deploy", "description": "run make deploy"}}, "PostToolUseFailure"},
+		{"a denial of something else", bash("rm -rf build"), "PermissionDenied"},
+	}
+	for _, c := range cases {
+		f := newFixture(t, true)
+		f.fire("PermissionRequest", bash("make deploy"))
+		f.fire(c.event, c.result)
+		if got := openDialogs(f); len(got) != 1 {
+			t.Errorf("%s closed the dialog: %v", c.name, got)
+		}
+	}
+	for _, ev := range []string{"PostToolUse", "PostToolUseFailure", "PermissionDenied"} {
+		f := newFixture(t, true)
+		f.fire("PermissionRequest", bash("make deploy"))
+		f.fire(ev, bash("make deploy"))
+		if got := openDialogs(f); len(got) != 0 {
+			t.Errorf("%s of the same call left %v", ev, got)
+		}
+	}
+}
+
+// What proves a dialog is gone: the main turn ending (Stop, StopFailure) or a new prompt closes the main
+// agent's; a subagent's stays until that subagent stops or the session goes idle.
+func TestDialogSweeps(t *testing.T) {
+	for _, c := range []struct {
+		event string
+		input map[string]any
+		want  []string
+	}{
+		{"Stop", map[string]any{}, []string{"sub/Bash"}},
+		{"StopFailure", map[string]any{"error": "overloaded"}, []string{"sub/Bash"}},
+		{"UserPromptSubmit", map[string]any{"prompt": "what now?"}, []string{"sub/Bash"}},
+		{"SubagentStop", map[string]any{"agent_id": "sub"}, []string{"/Bash"}},
+		{"SubagentStop", map[string]any{"agent_id": "other"}, []string{"/Bash", "sub/Bash"}},
+		{"Notification", map[string]any{"notification_type": "idle_prompt"}, nil},
+		{"Notification", map[string]any{"notification_type": "permission_prompt"}, []string{"/Bash", "sub/Bash"}},
+		{"SessionStart", map[string]any{"source": "resume"}, nil},
+		{"SessionStart", map[string]any{"source": "compact"}, []string{"/Bash", "sub/Bash"}},
+	} {
+		f := newFixture(t, true)
+		f.fire("PermissionRequest", bash("make"))
+		f.fire("PermissionRequest", byAgent(bash("make"), "sub"))
+		f.fire(c.event, c.input)
+		if got := openDialogs(f); !equal(got, c.want) {
+			t.Errorf("%s %v: %v, want %v", c.event, c.input, got, c.want)
+		}
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

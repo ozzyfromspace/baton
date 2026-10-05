@@ -31,7 +31,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	}
 	l.errRetries, l.rateNotified = 0, false
 
-	if st.Run.Escalation != nil || st.Blocked != nil || l.why == gateTurn || st.Run.Dialog != nil {
+	if st.Run.Escalation != nil || st.Blocked != nil || l.why == gateTurn || st.Run.Dialogs.AnyOpen() {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
@@ -86,8 +86,8 @@ func (l *Loop) idleMessage(v host.View, st state.State) string {
 // question) for a while. It is a notice, not an escalation: the session is fine, it needs an answer.
 // It is repeated on the same schedule as escalation reminders, since the run waits until it is answered.
 func (l *Loop) watchDialog(v host.View, st state.State) {
-	d := st.Run.Dialog
-	if d == nil {
+	d, waiting := st.Run.Dialogs.Front()
+	if !waiting {
 		return
 	}
 	due := []time.Duration{l.Timing.DialogNotify}
@@ -115,16 +115,18 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 // highlight is (docs/research/reliability.md); the answer then arrives through the usual hook. It never
 // types while the human is typing or composing an answer, and only once per question.
 func (l *Loop) answerWarning(v host.View, st state.State, in host.Injector) {
-	d := st.Run.Dialog
-	if d == nil || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() || v.Now.Sub(l.since(d.Since)) < l.Timing.WarnTimeout {
+	d, alone := st.Run.Dialogs.Only()
+	if !alone || d.Kind != "context_warning" || !d.AutoAnswered.IsZero() || v.Now.Sub(l.since(d.Since)) < l.Timing.WarnTimeout {
 		return
 	}
 	if v.Draft || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
 		return
 	}
 	l.update(func(st *state.State) {
-		if st.Run.Dialog != nil && st.Run.Dialog.Since.Equal(d.Since) {
-			st.Run.Dialog.AutoAnswered = v.Now
+		for i := range st.Run.Dialogs {
+			if st.Run.Dialogs[i].Same(d) {
+				st.Run.Dialogs[i].AutoAnswered = v.Now
+			}
 		}
 	})
 	l.Store.Event("warning_timed_out", map[string]any{"after": l.Timing.WarnTimeout.String()})
