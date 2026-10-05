@@ -22,13 +22,21 @@ type Timing struct {
 	ResumeNudge    time.Duration // no turn this long after a compaction: type a reminder
 	ResumeEscalate time.Duration // still nothing this long after the reminder: bring the human in
 	DraftEscalate  time.Duration // a human draft blocking a compaction this long: tell them
+	IdleNudge      time.Duration // no hook activity this long mid-plan: type a reminder (then escalate)
+	WaitGrace      time.Duration // extra time after a declared wait runs out
+	BackgroundMax  time.Duration // background work may hold a quiet session this long
+	DialogNotify   time.Duration // a permission prompt or question open this long: notify the human
+	RateLimitRetry time.Duration // first retry after a usage-limit error (then backoff)
+	OverloadRetry  time.Duration // first retry after an overload or server error (then backoff)
+	ClockJump      time.Duration // a gap between ticks this long means the machine slept
 }
 
 // DefaultTiming is baton's production timing.
 var DefaultTiming = Timing{
 	Quiet: 1500 * time.Millisecond, HandsOff: 3 * time.Second, AckTimeout: 15 * time.Second,
 	CompactTimeout: 10 * time.Minute, ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
-	DraftEscalate: 2 * time.Minute,
+	DraftEscalate: 2 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
+	DialogNotify: 3 * time.Minute, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute, ClockJump: 2 * time.Minute,
 }
 
 // MaxTries is how many times baton types /compact for one compaction before escalating.
@@ -46,7 +54,14 @@ type Loop struct {
 	Timing  Timing
 	Logf    func(string, ...any)
 
-	draftSince time.Time
+	draftSince     time.Time
+	lastTick       time.Time
+	wokeAt         time.Time
+	idleNudged     time.Time
+	dialogNotified time.Time
+	rateNotified   time.Time
+	errNudged      time.Time
+	errRetries     int
 }
 
 // Tick runs once per host tick.
@@ -82,6 +97,14 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 	case state.CompactDone:
 		l.checkResumed(v, st, in)
+	}
+	l.watch(v, st, in)
+}
+
+// Flush sends any queued notices now; the host calls it when the session ends.
+func (l *Loop) Flush() {
+	if st, err := l.Store.Load(); err == nil {
+		l.sendNotices(st)
 	}
 }
 
