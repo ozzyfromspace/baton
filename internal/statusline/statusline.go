@@ -129,7 +129,7 @@ func RunUser(command string, input []byte, dir string, timeout time.Duration) st
 	if err != nil && len(out) == 0 {
 		return ""
 	}
-	return strings.TrimRight(string(out), "\n")
+	return strings.TrimRight(strings.ReplaceAll(string(out), "\r\n", "\n"), "\r\n")
 }
 
 // Compose puts baton's segment in front of the user's status line (first line, if it has several).

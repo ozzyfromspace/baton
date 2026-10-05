@@ -168,7 +168,11 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 	st, _ := state.Open(s.env["BATON_DIR"], "inst", func() time.Time { return s.now })
 	st.Update(func(x *state.State) error { return state.Claim(x, "inst", 1, s.now) })
 
-	input := `{"workspace":{"project_dir":"` + t.TempDir() + `"},"context_window":{"used_percentage":42.4,"context_window_size":400000}}`
+	raw, _ := json.Marshal(map[string]any{
+		"workspace":      map[string]any{"project_dir": t.TempDir()}, // a Windows path must be JSON-escaped
+		"context_window": map[string]any{"used_percentage": 42.4, "context_window_size": 400000},
+	})
+	input := string(raw)
 	out := s.must(input, "statusline")
 	if out != "◆ baton · P0 1/3 The overlay · ctx 42%  user-line" {
 		t.Fatalf("status line %q", out)
