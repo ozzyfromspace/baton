@@ -1,15 +1,78 @@
 ---
 name: baton
-description: Drive a multi-phase plan with baton, which hosts this Claude Code session and compacts the context at every phase boundary. Use when the user runs /baton (help, status, plan, attach, pause, resume, elevate, setup).
+description: Run a multi-phase plan with baton, which hosts this Claude Code session and compacts the context at every phase boundary so a long plan runs unattended. Use when the user runs /baton (plan, attach, status, pause, resume, elevate, setup, help), or asks to run, attach, pause or resume a plan with baton.
 ---
 
 # /baton
 
-baton runs an approved multi-phase plan phase by phase in this session and compacts the context between phases. It works through a small command-line tool, `baton`, that ships with this plugin (in its `bin/` directory, so it is on the Bash tool's PATH).
+baton runs an approved multi-phase plan phase by phase in this session, with no human needed at phase boundaries. Between phases it compacts the context, gives you a brief for the next phase, and wakes you up. It works through a small command-line tool, `baton`, which ships in this plugin's `bin/` directory, so it is on the Bash tool's PATH. Every `baton` command only reads and writes the project's `.baton/` directory.
 
-The user ran `/baton $ARGUMENTS`. Handle the first word:
+The user ran: `/baton $ARGUMENTS`
 
-- **help** (or nothing): explain the subcommands below in a few lines.
-- **status**: run `baton status` with the Bash tool and show the output verbatim.
+Act on the first word of the arguments. If there is none, treat it as `help`.
 
-The other subcommands (plan, attach, pause, resume, elevate, setup) are being built; say so if asked.
+## help
+
+Explain briefly:
+- `/baton plan <goal>`: plan the work in plan mode, then run it.
+- `/baton attach [plan file]`: run a plan that already exists.
+- `/baton status`: where the run stands.
+- `/baton pause` / `/baton resume`: take or give back the wheel.
+- `/baton elevate`: hand this session over to baton.
+- `/baton setup`: first-time setup.
+
+## status
+
+Run `baton status` and show its output verbatim.
+
+## plan <goal>
+
+1. Call the `EnterPlanMode` tool and plan the goal as a formal, multi-phase plan. Write the plan so baton can run it:
+   - Give each phase its own heading in this exact form: `## P0 — <title>`, `## P1 — <title>`, and so on, in order.
+   - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed.
+   - Size each phase to finish comfortably in one context window. Between phases, context is compacted and only the plan, the brief and your notes carry over, so each phase must be understandable from the plan document alone.
+   - If the run has rules that apply to every phase, put them in a `## Standing rules` section before the first phase.
+   - End with a `## Verification` section.
+2. When the user approves the plan (ExitPlanMode), attach it as described under **attach** below, using the plan file you just wrote, and then start P0.
+
+## attach [plan file]
+
+1. Find the plan document:
+   - the path given in the arguments, or
+   - the plan approved in this conversation, or
+   - otherwise list `~/.claude/plans/` newest first and ask the user which one with `AskUserQuestion`.
+2. Run `baton attach <file> --suggest`. It prints a JSON spec of the phases it found. Check it against the document:
+   - every phase is present, in order;
+   - ids and titles are right;
+   - each `anchor` is a verbatim snippet that starts that phase's section and occurs only once in the document;
+   - set `rules_anchor` to the standing-rules heading if there is one, and `end_anchor` to the first heading after the last phase (for example `## Verification`).
+3. Attach it with one plain command (no heredocs or pipes, so the allow rule for `baton` covers it):
+   - If the suggestion is right as printed: `baton attach <file> --suggested`.
+   - Otherwise pass the corrected spec inline, in single quotes: `baton attach <file> --spec '{"title": …, "phases": [ … ]}'`.
+
+   If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running, ask the user before adding `--replace`.
+4. If `baton attach` says the session is not hosted by baton, nothing will compact automatically. Offer `/baton elevate`.
+5. Begin the first phase.
+
+## pause / resume
+
+Run `baton pause` or `baton resume` and report the result in one line. Pause hands the session to the human: baton stops compacting, nudging and escalating. Resume gives it back to baton and also clears a "blocked" state.
+
+## elevate
+
+Elevation hands this plain `claude` session over to baton without losing the conversation: same session, same context. It is only needed when this session was not started with `baton`. If `baton status` already reports a hosted session, say so and stop.
+
+Until automatic elevation lands, tell the user to:
+1. Exit this session (`/exit`).
+2. Run `baton --resume <session id>` in the same terminal and directory. The session id is in the `CLAUDE_CODE_SESSION_ID` environment variable: run `echo $CLAUDE_CODE_SESSION_ID` to show it.
+
+## setup
+
+Explain:
+- **Starting sessions:** start sessions with `baton` instead of `claude`. It accepts the same arguments.
+- **Push notifications (optional):** put an ntfy topic in `~/.baton/config.json` as `{"ntfy_topic": "<a long random name>"}` and subscribe to it in the ntfy app. Treat the topic like a password.
+
+## While a plan runs
+
+- Report progress only with `baton done <phase> --notes "…"`, `baton blocked "<why>"`, `baton waiting "<what>" --until <duration>` and `baton checkpoint --notes "…"`.
+- Never type `/compact` yourself. baton does that at the right moment.
