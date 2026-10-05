@@ -20,7 +20,7 @@ vet:
 
 # Real-claude end-to-end scenarios; each run costs a few cents.
 e2e: build
-	BATON_E2E=1 $(GO) test ./test/e2e/... -count=1 -v
+	BATON_E2E=1 $(GO) test ./test/e2e/... -count=1 -v -timeout 30m
 
 cross:
 	@for t in $(TARGETS); do \
