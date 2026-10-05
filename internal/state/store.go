@@ -115,12 +115,14 @@ func (s *Store) Update(fn func(*State) error) (State, error) {
 // Event appends one line to events.jsonl. Events are the audit trail: tests and humans read them.
 // It takes no lock, so it may be called from inside an Update callback.
 func (s *Store) Event(kind string, fields map[string]any) error {
-	rec := map[string]any{"ts": s.Now().UTC().Format(time.RFC3339Nano), "kind": kind}
-	if s.Instance != "" {
-		rec["instance"] = s.Instance
-	}
+	rec := map[string]any{}
 	for k, v := range fields {
 		rec[k] = v
+	}
+	// The reserved keys always win, so a field can never disguise one event as another.
+	rec["ts"], rec["kind"] = s.Now().UTC().Format(time.RFC3339Nano), kind
+	if s.Instance != "" {
+		rec["instance"] = s.Instance
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {

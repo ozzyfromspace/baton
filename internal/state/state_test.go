@@ -210,3 +210,12 @@ func TestOwnership(t *testing.T) {
 		t.Fatal("reattach dropped the owner")
 	}
 }
+
+func TestEventFieldsCannotOverrideReservedKeys(t *testing.T) {
+	s, _ := Open(t.TempDir(), "inst", func() time.Time { return t0 })
+	s.Event("brief", map[string]any{"kind": "boundary", "ts": "x", "instance": "y"})
+	b, _ := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
+	if !strings.Contains(string(b), `"kind":"brief"`) || !strings.Contains(string(b), `"instance":"inst"`) || strings.Contains(string(b), `"ts":"x"`) {
+		t.Fatalf("event: %s", b)
+	}
+}
