@@ -19,7 +19,7 @@ import (
 // read by the model, so it is short, literal, and says what to do next.
 
 func init() {
-	register("attach", "attach a plan document: --suggest prints a phase spec, --spec FILE|- attaches it", cmdAttach)
+	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", cmdAttach)
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
 	register("done", "mark the current phase finished: done <phase> [--notes TEXT]", cmdDone)
 	register("blocked", "report that you cannot continue without the human: blocked <reason>", cmdBlocked)
@@ -45,9 +45,9 @@ func fail(io IO, format string, a ...any) int {
 func hosted(io IO) bool { return io.Env("BATON_HOST") == "1" }
 
 func cmdAttach(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"spec"}, []string{"suggest", "replace"})
+	p, err := parseArgs(args, []string{"spec"}, []string{"suggest", "suggested", "replace"})
 	if err != nil || len(p.pos) != 1 {
-		return fail(io, "usage: baton attach <plan.md> (--suggest | --spec FILE|-) [--replace]%s", errSuffix(err))
+		return fail(io, "usage: baton attach <plan.md> (--suggest | --suggested | --spec JSON|FILE|-) [--replace]%s", errSuffix(err))
 	}
 	file, err := filepath.Abs(p.pos[0])
 	if err != nil {
@@ -60,18 +60,23 @@ func cmdAttach(args []string, io IO) int {
 	if p.bools["suggest"] {
 		out, _ := json.MarshalIndent(plan.Suggest(doc), "", "  ")
 		fmt.Fprintln(io.Out, string(out))
-		fmt.Fprintln(io.Err, "baton: this is a suggestion. Check every phase is present and in order, fix ids/titles, make each "+
-			"anchor a verbatim snippet that starts its phase, then attach it with: baton attach "+p.pos[0]+" --spec -")
+		fmt.Fprintln(io.Err, "baton: this is a suggestion. Check every phase is present and in order, ids and titles are right, and each "+
+			"anchor is a verbatim snippet that starts its phase. If it is right as printed: baton attach "+p.pos[0]+" --suggested. "+
+			"Otherwise pass the corrected spec inline: baton attach "+p.pos[0]+" --spec '<json>'")
 		return 0
 	}
 	src, ok := p.vals["spec"]
-	if !ok {
-		return fail(io, "pass --suggest to get a phase spec, then --spec FILE (or --spec - for stdin) to attach it")
-	}
 	var raw []byte
-	if src == "-" {
+	switch {
+	case p.bools["suggested"]:
+		raw, err = json.Marshal(plan.Suggest(doc))
+	case !ok:
+		return fail(io, "pass --suggest to see the phases baton found, then --suggested to attach them as they are, or --spec '<json>' to attach a corrected spec")
+	case src == "-":
 		raw, err = goio.ReadAll(io.In)
-	} else {
+	case strings.HasPrefix(strings.TrimSpace(src), "{"):
+		raw = []byte(src) // inline JSON: a single plain command, which an allow rule for baton covers
+	default:
 		raw, err = os.ReadFile(src)
 	}
 	if err != nil {

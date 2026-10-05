@@ -178,3 +178,14 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 		t.Fatalf("context not recorded: %+v", loaded.Run.Context)
 	}
 }
+
+func TestAttachSuggestedAndInlineSpec(t *testing.T) {
+	s, planFile := newSession(t)
+	if out := s.must("", "attach", planFile, "--suggested"); !strings.Contains(out, "3 phases") {
+		t.Fatalf("--suggested: %s", out)
+	}
+	inline := `{"title":"Inline","phases":[{"id":"P0","title":"The overlay","anchor":"## P0 — The overlay"},{"id":"R1","title":"Roster","anchor":"## R1 — The roster can grow"}]}`
+	if out := s.must("", "attach", planFile, "--replace", "--spec", inline); !strings.Contains(out, `"Inline" — 2 phases`) {
+		t.Fatalf("inline spec: %s", out)
+	}
+}
