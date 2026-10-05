@@ -95,6 +95,13 @@ func NewProject(t *testing.T) string {
 	return dir
 }
 
+// NewPlainProject makes a throwaway folder that is not a git repository. baton runs a plan there the same
+// way, with nothing that needs git.
+func NewPlainProject(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
+}
+
 // Start runs `baton <args…>` in dir. Inherited CLAUDE* variables are removed (a claude started from
 // inside another Claude Code session would otherwise not save transcripts), and the directory holding
 // the baton binary is put first on PATH, as the plugin's bin/ is in real use.
