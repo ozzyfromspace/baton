@@ -4,11 +4,19 @@
 #      and which developers can point at a local build;
 #   2. the installed binary in ~/.baton/bin.
 # Downloading a release binary on first use is added with the release tooling.
+
+# The plugin's Stop hook runs on every turn of every session; it only matters while an elevation is
+# pending, so answer the common case here without starting the binary.
+if [ "${1:-}" = "elevate-stop" ]; then
+  [ -n "${BATON_HOST:-}" ] && exit 0
+  for f in "${BATON_HOME:-$HOME/.baton}/elevate/"*.json; do [ -e "$f" ] && break; exit 0; done
+fi
 if [ -n "${BATON_BIN:-}" ] && [ -x "$BATON_BIN" ]; then
   exec "$BATON_BIN" "$@"
 fi
-if [ -x "$HOME/.baton/bin/baton" ]; then
-  exec "$HOME/.baton/bin/baton" "$@"
+if [ -x "${BATON_HOME:-$HOME/.baton}/bin/baton" ]; then
+  exec "${BATON_HOME:-$HOME/.baton}/bin/baton" "$@"
 fi
+[ "${1:-}" = "elevate-stop" ] && exit 0
 echo "baton: the baton binary is not installed yet; run /baton setup" >&2
 exit 1

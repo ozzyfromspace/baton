@@ -51,8 +51,8 @@ Run `baton status` and show its output verbatim.
    - Otherwise pass the corrected spec inline, in single quotes: `baton attach <file> --spec '{"title": …, "phases": [ … ]}'`.
 
    If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running, ask the user before adding `--replace`.
-4. If `baton attach` says the session is not hosted by baton, nothing will compact automatically. Offer `/baton elevate`.
-5. Begin the first phase.
+4. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so elevate instead of starting: run `baton elevate "Begin the first phase of the attached plan."` and end your turn (see **elevate**).
+5. Otherwise, begin the first phase.
 
 ## pause / resume
 
@@ -60,16 +60,21 @@ Run `baton pause` or `baton resume` and report the result in one line. Pause han
 
 ## elevate
 
-Elevation hands this plain `claude` session over to baton without losing the conversation: same session, same context. It is only needed when this session was not started with `baton`. If `baton status` already reports a hosted session, say so and stop.
+Elevation hands this plain `claude` session to baton without losing the conversation: same session, same context. It is only needed when this session was not started with `baton`. If `baton status` already reports a hosted session, say so and stop.
 
-Until automatic elevation lands, tell the user to:
-1. Exit this session (`/exit`).
-2. Run `baton --resume <session id>` in the same terminal and directory. The session id is in the `CLAUDE_CODE_SESSION_ID` environment variable: run `echo $CLAUDE_CODE_SESSION_ID` to show it.
+Run `baton elevate "<what you should do next once hosted>"`, for example `baton elevate "Begin the first phase of the attached plan."`. Then:
+
+- **If it says "elevating":** end your turn immediately. When the turn ends, baton stops this claude process. The shell relaunches the same conversation under baton, and you will receive the next step.
+- **If it says the shell does not relaunch sessions yet:** relay its two options to the user word for word, then stop.
+- **If it says this session has no terminal (desktop app or IDE panel):** tell the user that baton needs a terminal session started with `baton`.
+
+Elevation refuses to stop claude while background tasks or subagents are still running. It retries at the next stop.
 
 ## setup
 
 Explain:
 - **Starting sessions:** start sessions with `baton` instead of `claude`. It accepts the same arguments.
+- **Automatic elevation (optional):** to have plain `claude` sessions hand themselves to baton automatically, add `eval "$(baton init zsh)"` (or `bash`) to the shell config and open a new terminal.
 - **Push notifications (optional):** put an ntfy topic in `~/.baton/config.json` as `{"ntfy_topic": "<a long random name>"}` and subscribe to it in the ntfy app. Treat the topic like a password.
 
 ## While a plan runs

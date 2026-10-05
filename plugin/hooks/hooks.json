@@ -1,0 +1,17 @@
+{
+  "description": "baton: finish an elevation. In a plain claude session that ran `baton elevate`, stop claude cleanly once the turn ends so the shell relaunches the same conversation under baton. Sessions hosted by baton get their hooks from baton itself.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/baton",
+            "args": ["elevate-stop"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
