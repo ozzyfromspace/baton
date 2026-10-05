@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
@@ -44,6 +45,10 @@ type Timing struct {
 	OverloadRetry  time.Duration // first retry after an overload or server error (then backoff)
 	ClockJump      time.Duration // a gap between ticks this long means the machine slept
 	NoticeRetry    time.Duration // a notice that failed to send is retried after this
+
+	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
+	// (escalation_timeout); a key the human presses starts it over.
+	EscalationTimeout time.Duration
 }
 
 // DefaultTiming is baton's production timing.
@@ -54,7 +59,7 @@ var DefaultTiming = Timing{
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
-	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute,
+	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
 // MaxTries is how many times baton types /compact in one round before it gives up on the round.

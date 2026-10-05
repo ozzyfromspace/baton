@@ -69,7 +69,12 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s, or BATON_AUTOCOMPACT)", err, config.Path(batonRoot(io)))
 	}
+	escalation, err := cfg.Escalation()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
+	timing.EscalationTimeout = escalation.Timeout
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace, "BATON_WARN_TIMEOUT": &timing.WarnTimeout} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
@@ -85,7 +90,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
-	batonEnv := append(valves.Env(), extraEnv...)
+	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
 	controller := &loop.Loop{
 		Store: st, Notify: notify.New(cfg), Project: filepath.Base(filepath.Dir(dir)),
 		Timing: timing, Logf: logf,
