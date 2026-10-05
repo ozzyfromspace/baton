@@ -164,6 +164,9 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.Ended = &state.Ended{Reason: reason, At: c.Now}
 		st.Run.TurnOpen = false
+		if st.Mode == state.ModeRunning && !deliberateEnd[reason] {
+			notice(st, "session_ended", "the session ended mid-plan ("+reason+")", c.Now)
+		}
 		return nil
 	})
 	if err == nil {
@@ -171,6 +174,9 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 	}
 	return Result{}, ok(err)
 }
+
+// deliberateEnd are session-end reasons that mean the human chose to end the session.
+var deliberateEnd = map[string]bool{"prompt_input_exit": true, "clear": true, "logout": true}
 
 // TurnSource classifies a submitted prompt: a rewake or nudge from baton, another task notification,
 // or the human.

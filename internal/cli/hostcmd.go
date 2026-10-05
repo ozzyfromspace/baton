@@ -68,9 +68,16 @@ func runHost(args []string, io IO) int {
 		}
 	}
 	env = append(env, fmt.Sprintf("BATON_CHECKPOINT_PCT=%g", *cfg.CheckpointPct))
+	timing := loop.DefaultTiming
+	// Shorter watchdog timings, for tests and impatient humans.
+	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace} {
+		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
+			*field = d
+		}
+	}
 	controller := &loop.Loop{
 		Store: st, Notify: notify.New(cfg), Project: filepath.Base(filepath.Dir(dir)),
-		Timing: loop.DefaultTiming, Logf: logf,
+		Timing: timing, Logf: logf,
 	}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Store: st, Instance: instance, Version: version.Version,
@@ -80,6 +87,15 @@ func runHost(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
+	if code != 0 && code != 130 && code != 143 { // not a deliberate Ctrl-C or termination
+		st.Update(func(s *state.State) error {
+			if s.Mode == state.ModeRunning && s.Run.Ended == nil {
+				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: fmt.Sprintf("claude exited with code %d mid-plan", code), At: io.Now()})
+			}
+			return nil
+		})
+	}
+	controller.Flush()
 	return code
 }
 
