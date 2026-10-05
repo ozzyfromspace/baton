@@ -4,6 +4,117 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-05
+
+A 17-phase run hard-blocked on a GPG signing timeout, with a verified phase's work staged but not
+committed. `baton blocked` was the model's only way to tell the human anything, and it halts the run, so
+every "you should know" became a stop. Somebody happened to be watching. Unwatched, the run would have sat
+there, its work uncommitted, until somebody looked. Replayed against v0.1.1 with nobody at the terminal,
+Sonnet hard-blocked 4 times out of 4.
+
+A run no longer stops for something it can work around. When something goes wrong, the model notes what
+it did, proposes a way forward that goes ahead unless you object in time, or blocks, saying what it
+tried. Whenever the run does halt, baton saves any uncommitted work, and every decision made without you
+is recorded with its undo. The same replay now finishes the plan. The design and the experiments behind it
+are in [docs/escalation.md](docs/escalation.md).
+
+### Security
+- **baton could type into a dialog that wasn't its own.** v0.1.1 answered its context question (the 90%
+  warning) by typing `2` into the last dialog it had recorded. Claude Code shows dialogs oldest first, and
+  records them when they are requested, not when they are shown. So a background subagent's permission
+  prompt could be on screen in front of that question, and in a Bash permission prompt `2` is "Yes, and
+  always allow". An unattended run could have approved a command, and added an always-allow rule, that
+  nobody chose. baton now tracks open dialogs as a queue. It types only while its own question is the only
+  dialog open, and it types `3`, which in a permission prompt is "No". The context question's options are
+  now `Checkpoint now · Pause baton · Keep going`. **Upgrade if you run v0.1.x unattended.**
+- **Only the questions baton issued pass as baton's.** Mid-run, any question starting with `baton:` was let
+  through and its answer acted on. Now a question counts as baton's only if it matches one baton issued,
+  word for word: the same labels in the same order, single-select. Anything else is refused, and the model
+  is shown the exact call.
+
+### Added
+- **Three ways for the model to reach you,** the lightest that fits ([README](README.md#when-something-goes-wrong)):
+  - **`baton note "<what it did>" --undo "<how>"`.** It already took a reversible way around a problem.
+    The run keeps going, and you're told.
+  - **`baton propose "<action>" --because "<what went wrong>" --undo "<how>"`.** A question with a deadline:
+    `Wait for me` · `Pause baton` · `Go ahead`. If nobody answers, baton picks Go ahead and the model does
+    it. A key press restarts the clock. An outward-facing or irreversible action gets no deadline.
+  - **`baton blocked "<why>" --tried "<what it tried>"`.** `--tried` is now required.
+
+  Every refusal names the way forward, from one playbook. In particular: when a rule of the plan can't be
+  followed right now, propose the closest reversible way around it.
+- **Snapshots of uncommitted work.** Whenever the run halts with uncommitted work, the host saves it into
+  `refs/baton/snapshots/<phase>-<time>`. A halt is a block, a dialog waiting on you, a usage-limit wait,
+  a pause, or the session ending. Your working tree, index, `HEAD` and gpg are left alone. `baton status`
+  lists the snapshots with the command to restore one.
+- **A record of every decision made without you,** each with its undo. It is shown in:
+  - `baton status`;
+  - `baton done`, for that phase;
+  - the plan-complete notice, as a count;
+  - the brief after each compaction.
+
+  The next time you type, the model is handed the ones you haven't seen, so a late "undo that" works, even
+  after `/clear`.
+- **A review stop.** After `max_auto_decisions` decisions made without you in one phase (default 5), the run
+  stops for you to review them.
+- **Config:**
+  - `escalation_timeout`: how long a proposal waits for you, `5m` by default;
+  - `max_auto_decisions`: the review cap, `5` by default.
+- **Status line:**
+  - `? proposal · goes ahead 15:33`;
+  - `? proposal · waiting on you`;
+  - `⚠ review due`.
+- **Notices:** `note`, `proposal`, `proceeded`, `decision` and `review`. On ntfy, a note is low priority
+  and the rest are high.
+- **Events:**
+  - `note`, `proposed`, `proposal_asked`, `proposal_resolved`;
+  - `review_due`, `review_resolved`, `decisions_told`;
+  - `snapshot`, `snapshot_failed`, `refused`;
+  - `auto_answered`, which replaces `warning_timed_out`;
+  - `attached` and `host_started` now record `git`.
+
+### Changed
+- **`blocked` and `done` refuse to leave new work uncommitted.** Files that are new or changed since the
+  phase started must be committed, or kept with `--keep-dirty "<why>"`. Committing in a degraded way (such
+  as unsigned) is fine, if the model says how to repair it. A gate the model can satisfy itself is a
+  prompt, not a guarantee, so the snapshot exists too.
+  - Work already there when the phase started only gets a warning.
+  - `checkpoint` only warns.
+  - `waiting` and `propose` are not gated.
+- **The model can't clear its own block.** While a block, a held proposal or a review waits for you,
+  `resume`, `done`, `checkpoint`, `waiting` and `blocked` are refused until you have taken part.
+- **Projects without git work the same.** One check decides everything git-related: a `.git` at the
+  project root, and `git` on `PATH`. Without git:
+  - there is no commit gate, no snapshot, and no "no commit since the phase started" warning;
+  - baton's wording says "complete" and "saved", and never asks the model to commit or create a repository.
+- **The skill and baton's instructions to the model teach the three tiers.**
+- **The context question's timer restarts on a key press.** A draft in the input box no longer holds the
+  answer, since keys go to the dialog.
+
+### Fixed
+- **baton's own settings reach the session again.** v0.1.1 stripped every `BATON_*` variable from the
+  hosted session, so that a nested session wouldn't inherit another plan's state. baton's own settings
+  went with them, which broke two things:
+  - the context valves measured against the model's whole window instead of the `--autocompact` cap, so
+    the 90% question came after Claude Code had already compacted;
+  - an elevated session never received its pending command.
+- **`baton attach --suggest` offered table rows as phases.** In a plan with `## P0 — …` headings, a
+  context table whose rows start with an id (`| S1 | … |`) was offered as phases S1–S4, ahead of P0.
+  Only the strongest notation present counts now: headings, then bold bullets, then table rows.
+- **A reworded context question went unanswered.** A model that asked it with a sentence missing got
+  through in a turn the human had started, and the host never answered it. While one of baton's
+  questions is waiting, a question starting with `baton:` must now be that question exactly.
+
+### Unchanged, deliberately
+- **An open permission prompt is never answered or typed through.**
+- **Nothing outward-facing or irreversible goes ahead on a timer.**
+- **A secret only you hold means a hard block.** So does anything baton can't classify.
+
+### Upgrading
+A running session keeps its version until you restart it: `/baton update`, then `baton --continue`. A
+plan attached under v0.1.x carries on. For a phase that started before the upgrade, baton has no record
+of the uncommitted work at its start, so the commit gate only warns there.
+
 ## [0.1.1] - 2026-10-05
 
 A run could be parked indefinitely by a half-typed message. Found live: a plan sat with a compaction
@@ -116,7 +227,9 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ozzyfromspace/baton/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/ozzyfromspace/baton/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ozzyfromspace/baton/compare/v0.1.0-rc.2...v0.1.0
 [0.1.0-rc.2]: https://github.com/ozzyfromspace/baton/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/ozzyfromspace/baton/releases/tag/v0.1.0-rc.1
