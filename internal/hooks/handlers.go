@@ -136,7 +136,8 @@ func Primer(pl plan.Plan, st state.State) string {
 		"If you cannot continue without the human, run `baton blocked \"<why>\"` and end your turn. " +
 		"If you must wait for something outside you (a build, a deploy), run `baton waiting \"<what>\" --until <duration>`. " +
 		"In a long phase, at a safe point (work committed), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
-		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why.")
+		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
+		"(If the human wants to talk instead of running the plan, they can run /baton pause.)")
 	return b.String()
 }
 

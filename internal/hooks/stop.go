@@ -95,10 +95,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
 		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))
 	case len(st.Run.BusyBackground()) > 0:
 		d.say(fmt.Sprintf("baton: waiting on %d background task(s)", len(st.Run.BusyBackground())))
-	case st.Run.TurnBy == "human":
-		// The human is at the keyboard and started this turn: a conversation, not a stall.
-		st.Run.StopBlocks = 0
 	default:
+		// While a plan runs, a stop needs a status even when the human started the turn: every run
+		// begins with a human "go". To talk without the plan, the human pauses baton.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
 			d.refuse(noStatusReason(st.Current, cur))
@@ -111,7 +110,8 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time) decision {
 }
 
 func noStatusReason(id, title string) string {
-	return fmt.Sprintf("[baton] You stopped, but phase %s is not reported done. If there is more to do, keep working on it. "+
+	return fmt.Sprintf("[baton] You stopped, but phase %s is not reported done. If the human asked you something this turn, answer it first. "+
+		"If there is more to do on the phase, keep working on it. "+
 		"Otherwise report with exactly one of these, then end your turn: "+
 		"`baton done %s --notes \"<what later phases need to know>\"` (the phase is finished and committed), "+
 		"`baton blocked \"<why>\"` (you need the human), or "+

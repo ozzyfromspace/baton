@@ -58,7 +58,8 @@ func TestStopDecisionTable(t *testing.T) {
 			setup: func(st *state.State) {
 				st.Run.Background = []state.Task{{Type: "monitor", Status: "running"}}
 			}},
-		{name: "human conversation", setup: func(st *state.State) { st.Run.TurnBy = "human" }},
+		{name: "a human-started turn still needs a status", setup: func(st *state.State) { st.Run.TurnBy = "human" },
+			block: true, reason: "answer it first"},
 		{name: "no status is refused", block: true, reason: "baton done P0"},
 		{name: "expired wait is no status", block: true, reason: "not reported done",
 			setup: func(st *state.State) { state.SetWaiting(st, "x", time.Minute, tStop.Add(-time.Hour)) }},
