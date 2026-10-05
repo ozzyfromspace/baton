@@ -33,6 +33,10 @@ type PhaseState struct {
 	DoneAt    time.Time `json:"done_at,omitzero"`
 	// StartHead is the git HEAD when the phase started, used to warn about a phase with no commit.
 	StartHead string `json:"start_head,omitempty"`
+	// StartDirty is the uncommitted work already there when the phase started, so that blocked and done
+	// refuse only the work this phase left uncommitted. nil when it is not known: a project without git,
+	// or a phase that started before baton recorded it.
+	StartDirty *Dirt `json:"start_dirty,omitempty"`
 }
 
 // Block is a reason the model cannot continue without a human.
@@ -74,18 +78,18 @@ func New() State {
 }
 
 // Attach starts a fresh run of p: the first phase becomes active.
-func Attach(p plan.Plan, now time.Time, head string) State {
-	return attachKeeping(nil, nil, p, now, head)
+func Attach(p plan.Plan, now time.Time, o Origin) State {
+	return attachKeeping(nil, nil, p, now, o)
 }
 
 // Reattach is Attach for a project that may already have an owner: ownership survives a new plan.
-func Reattach(prev State, p plan.Plan, now time.Time, head string) State {
+func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 	run := prev.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
-	return attachKeeping(prev.Owner, &run, p, now, head)
+	return attachKeeping(prev.Owner, &run, p, now, o)
 }
 
-func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, head string) State {
+func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Origin) State {
 	st := New()
 	st.Owner = owner
 	if prev != nil {
@@ -96,7 +100,7 @@ func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, head
 		st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 	}
 	st.Current = p.Phases[0].ID
-	st.Phases[st.Current] = &PhaseState{Status: PhaseActive, StartedAt: now, StartHead: head}
+	st.Phases[st.Current] = &PhaseState{Status: PhaseActive, StartedAt: now, StartHead: o.Head, StartDirty: o.Dirty}
 	return st
 }
 
@@ -145,7 +149,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 }
 
 // Start marks the current phase active; called when its brief is delivered after the boundary compaction.
-func Start(st *State, now time.Time, head string) {
+func Start(st *State, now time.Time, o Origin) {
 	if st.Current == "" {
 		return
 	}
@@ -155,7 +159,7 @@ func Start(st *State, now time.Time, head string) {
 		st.Phases[st.Current] = ps
 	}
 	if ps.Status != PhaseActive {
-		ps.Status, ps.StartedAt, ps.StartHead = PhaseActive, now, head
+		ps.Status, ps.StartedAt, ps.StartHead, ps.StartDirty = PhaseActive, now, o.Head, o.Dirty
 	}
 	st.BoundaryOwed = false
 	st.Run.Progress()

@@ -3,10 +3,12 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -18,7 +20,7 @@ func demoPlan() plan.Plan {
 }
 
 func running() state.State {
-	return state.Attach(demoPlan(), tStop, "")
+	return state.Attach(demoPlan(), tStop, state.Origin{})
 }
 
 func TestStopDecisionTable(t *testing.T) {
@@ -72,7 +74,7 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "plan complete notifies once",
 			setup: func(st *state.State) {
 				state.Done(st, pl, "P0", tStop, false)
-				state.Start(st, tStop, "") // the boundary compaction happened
+				state.Start(st, tStop, state.Origin{}) // the boundary compaction happened
 				state.Done(st, pl, "P1", tStop, false)
 			},
 			say: "plan complete", notice: "plan_complete"},
@@ -188,6 +190,38 @@ func TestBoundarySequenceThroughTheHooks(t *testing.T) {
 	// The next stop with nothing owed and no status is refused, not compacted again.
 	if out := f.fire("Stop", map[string]any{}); out["decision"] != "block" {
 		t.Fatalf("stop after boundary: %v", out)
+	}
+}
+
+// The phase a boundary starts records what it finds: HEAD and the work already uncommitted, so its own
+// blocked and done refuse only what it leaves. Without git there is nothing to record.
+func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {
+	boundary := func(f *fixture) *state.PhaseState {
+		pl, _ := f.store.LoadPlan()
+		f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+		f.fire("Stop", map[string]any{})
+		f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
+		f.fire("PreCompact", map[string]any{"trigger": "manual"})
+		f.fire("SessionStart", map[string]any{"source": "compact"})
+		return f.state().Phases["P1"]
+	}
+	gittest.Isolate(t)
+	f := newFixture(t, true)
+	root := filepath.Dir(f.dir)
+	gittest.Init(t, root)
+	gittest.Commit(t, root, "first", "plan.md")
+	gittest.Write(t, root, "left.txt", "uncommitted, from P0\n")
+	ps := boundary(f)
+	if ps.StartHead != gittest.Git(t, root, "rev-parse", "HEAD") || ps.StartDirty == nil {
+		t.Fatalf("P1 started with %+v", ps)
+	}
+	if files := ps.StartDirty.Files; len(files) != 1 || files["left.txt"] == "" {
+		t.Errorf("recorded %v; want left.txt alone (baton's own files are not work)", files)
+	}
+
+	plain := newFixture(t, true)
+	if ps := boundary(plain); ps.Status != state.PhaseActive || ps.StartHead != "" || ps.StartDirty != nil {
+		t.Errorf("without git: %+v", ps)
 	}
 }
 

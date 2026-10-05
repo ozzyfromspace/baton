@@ -40,7 +40,8 @@ func (s *session) run(stdin string, args ...string) (int, string, string) {
 // startNext does what the post-compaction hook does at a phase boundary: start the next phase.
 func (s *session) startNext() {
 	st, _ := state.Open(s.env["BATON_DIR"], "", func() time.Time { return s.now })
-	st.Update(func(x *state.State) error { state.Start(x, s.now, ""); return nil })
+	origin := state.OriginOf(s.env["BATON_DIR"])
+	st.Update(func(x *state.State) error { state.Start(x, s.now, origin); return nil })
 }
 
 func (s *session) must(stdin string, args ...string) string {

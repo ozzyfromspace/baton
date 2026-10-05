@@ -16,7 +16,7 @@ func newIdleRig(t *testing.T) *rig {
 	r := newRig(t)
 	r.set(func(st *state.State) {
 		st.BoundaryOwed = false
-		state.Start(st, r.now, "")
+		state.Start(st, r.now, state.Origin{})
 		st.Run.Compaction = state.Compaction{}
 		st.Run.LastActivity, st.Run.LastStop = r.now, r.now
 	})

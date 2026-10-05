@@ -60,7 +60,7 @@ func newRig(t *testing.T) *rig {
 	store, _ := state.Open(t.TempDir(), "inst", func() time.Time { return r.now })
 	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "a"}, {ID: "P1", Title: "b"}}}
 	store.Update(func(st *state.State) error {
-		*st = state.Attach(pl, r.now, "")
+		*st = state.Attach(pl, r.now, state.Origin{})
 		state.Done(st, pl, "P0", r.now, false)
 		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactQueued, Reason: "boundary", Queued: r.now}
 		return state.Claim(st, "inst", 1, r.now)

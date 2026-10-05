@@ -22,7 +22,7 @@ func setup(t *testing.T) (plan.Plan, []byte, state.State) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	st := state.Attach(pl, now, "")
+	st := state.Attach(pl, now, state.Origin{})
 	if _, err := state.Done(&st, pl, "P0", now, false); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestBoundaryBrief(t *testing.T) {
 
 func TestCheckpointAndAutoBriefsContinueThePhase(t *testing.T) {
 	pl, doc, st := setup(t)
-	state.Start(&st, time.Now(), "")
+	state.Start(&st, time.Now(), state.Origin{})
 	for _, kind := range []string{Checkpoint, Auto} {
 		b := Write(Input{Kind: kind, Plan: pl, Doc: doc, State: st})
 		if !strings.Contains(b, "continue P1 — The one-liners from where you left off") || strings.Contains(b, "Begin it now") {

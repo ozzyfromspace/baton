@@ -37,7 +37,7 @@ func newFixture(t *testing.T, withPlan bool) *fixture {
 			t.Fatal(err)
 		}
 		f.store.SavePlan(pl)
-		f.store.Update(func(st *state.State) error { *st = state.Attach(pl, f.now, ""); return nil })
+		f.store.Update(func(st *state.State) error { *st = state.Attach(pl, f.now, state.Origin{}); return nil })
 	}
 	f.store.Update(func(st *state.State) error { return state.Claim(st, f.inst, 1, f.now) })
 	return f

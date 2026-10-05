@@ -15,7 +15,7 @@ import (
 func TestSegment(t *testing.T) {
 	pl := plan.Plan{Version: 1, Phases: []plan.Phase{{ID: "P0", Title: "The overlay"}, {ID: "P1", Title: "A very long phase title that keeps going"}}}
 	now := time.Now()
-	run := state.Attach(pl, now, "")
+	run := state.Attach(pl, now, state.Origin{})
 	run.Run.Context = &state.ContextUse{UsedPct: 41.4}
 	cases := []struct {
 		name string
@@ -25,7 +25,12 @@ func TestSegment(t *testing.T) {
 	}{
 		{"no plan", func() state.State { return state.New() }, false, "◆ baton"},
 		{"running", func() state.State { return run }, true, "◆ baton · P0 1/2 The overlay · ctx 41%"},
-		{"long title", func() state.State { s := run; state.Done(&s, pl, "P0", now, false); state.Start(&s, now, ""); return s }, true,
+		{"long title", func() state.State {
+			s := run
+			state.Done(&s, pl, "P0", now, false)
+			state.Start(&s, now, state.Origin{})
+			return s
+		}, true,
 			"◆ baton · P1 2/2 A very long phase title tha… · ctx 41%"},
 		{"compacting", func() state.State { s := run; s.Run.Compaction.Status = state.CompactTyped; return s }, true, "◆ baton · compacting…"},
 		// A queued compaction that something is holding must not claim to be compacting: that read

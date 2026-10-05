@@ -20,8 +20,9 @@ func threePhases() plan.Plan {
 
 func TestPhaseLifecycle(t *testing.T) {
 	p := threePhases()
-	st := Attach(p, t0, "abc")
-	if st.Mode != ModeRunning || st.Current != "P0" || st.Phases["P0"].Status != PhaseActive || st.Phases["P0"].StartHead != "abc" {
+	dirt := &Dirt{Files: map[string]string{"a.go": "f1"}}
+	st := Attach(p, t0, Origin{Head: "abc", Dirty: dirt})
+	if st.Mode != ModeRunning || st.Current != "P0" || st.Phases["P0"].Status != PhaseActive || st.Phases["P0"].StartHead != "abc" || st.Phases["P0"].StartDirty != dirt {
 		t.Fatalf("after attach: %+v", st)
 	}
 	if _, err := Done(&st, p, "P1", t0, false); err == nil || !strings.Contains(err.Error(), "not the current phase") {
@@ -40,8 +41,8 @@ func TestPhaseLifecycle(t *testing.T) {
 	if _, err := Done(&st, p, "P1", t0, false); err == nil || !strings.Contains(err.Error(), "has not started yet") {
 		t.Fatalf("finishing the next phase before the boundary compaction: %v", err)
 	}
-	Start(&st, t0.Add(2*time.Hour), "def")
-	if st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P1"].StartHead != "def" {
+	Start(&st, t0.Add(2*time.Hour), Origin{Head: "def"})
+	if st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P1"].StartHead != "def" || st.Phases["P1"].StartDirty != nil {
 		t.Fatalf("after start: %+v", st)
 	}
 	// --force finishes a phase out of order.
@@ -66,7 +67,7 @@ func TestBlockWaitCheckpointPauseResume(t *testing.T) {
 			t.Errorf("%s accepted with no plan attached", name)
 		}
 	}
-	st := Attach(threePhases(), t0, "")
+	st := Attach(threePhases(), t0, Origin{})
 	if err := SetWaiting(&st, "build", 20*time.Minute, t0); err != nil || !st.Waiting.Until.Equal(t0.Add(20*time.Minute)) {
 		t.Fatalf("waiting: %v %+v", err, st.Waiting)
 	}
@@ -251,7 +252,7 @@ func TestOwnership(t *testing.T) {
 	if st.Owner != nil {
 		t.Fatal("release")
 	}
-	re := Reattach(State{Owner: &Owner{Instance: "x"}}, threePhases(), t0, "")
+	re := Reattach(State{Owner: &Owner{Instance: "x"}}, threePhases(), t0, Origin{})
 	if re.Owner == nil || re.Owner.Instance != "x" {
 		t.Fatal("reattach dropped the owner")
 	}
@@ -267,7 +268,7 @@ func TestEventFieldsCannotOverrideReservedKeys(t *testing.T) {
 }
 
 func TestWaitsAreBounded(t *testing.T) {
-	st := Attach(threePhases(), t0, "")
+	st := Attach(threePhases(), t0, Origin{})
 	if err := SetWaiting(&st, "the deploy", MaxWait, t0); err != nil {
 		t.Fatal(err)
 	}

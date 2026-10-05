@@ -3,10 +3,8 @@ package hooks
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/ozzyfromspace/baton/internal/brief"
-	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -18,7 +16,12 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 	if err != nil {
 		return Result{}, nil
 	}
-	head := gitx.Head(filepath.Dir(s.Dir))
+	// What the repository looks like as the next phase starts (read before taking the lock: git can be
+	// slow). Only a boundary starts a phase.
+	var origin state.Origin
+	if cur, err := s.Load(); err == nil && cur.BoundaryOwed {
+		origin = state.OriginOf(s.Dir)
+	}
 	kind := ""
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if st.Mode != state.ModeRunning {
@@ -34,7 +37,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 		switch {
 		case ours && comp.Reason == "boundary" && st.BoundaryOwed:
 			kind = brief.Boundary
-			state.Start(st, c.Now, head)
+			state.Start(st, c.Now, origin)
 		case ours && comp.Reason == "checkpoint":
 			kind = brief.Checkpoint
 			st.CheckpointOwed = false

@@ -23,8 +23,8 @@ import (
 func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", cmdAttach)
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
-	register("done", "mark the current phase finished: done <phase> [--notes TEXT]", cmdDone)
-	register("blocked", "report that you cannot continue without the human: blocked <reason>", cmdBlocked)
+	register("done", "mark the current phase finished: done <phase> [--notes TEXT] [--keep-dirty WHY]", cmdDone)
+	register("blocked", "report that you cannot continue without the human: blocked <reason> [--keep-dirty WHY]", cmdBlocked)
 	register("waiting", "declare a bounded wait: waiting <what> --until <duration, e.g. 20m>", cmdWaiting)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("pause", "stop baton from acting until resume (the human takes the wheel)", cmdPause)
@@ -106,14 +106,15 @@ func cmdAttach(args []string, io IO) int {
 	if err := s.SavePlan(pl); err != nil {
 		return fail(io, "%v", err)
 	}
-	head := gitx.Head(filepath.Dir(s.Dir))
-	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), head); return nil }); err != nil {
-		return fail(io, "%v", err)
-	}
+	root := filepath.Dir(s.Dir)
 	if err := state.ExcludeFromGit(s.Dir); err != nil {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
-	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases)})
+	origin := state.OriginOf(s.Dir)
+	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), origin); return nil }); err != nil {
+		return fail(io, "%v", err)
+	}
+	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "git": gitx.Usable(root)})
 	fmt.Fprintf(io.Out, "baton: attached %q — %d phases. Current phase: %s (%s).\n", pl.Title, len(pl.Phases), pl.Phases[0].ID, pl.Phases[0].Title)
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton elevate (or start claude with `baton`).")
@@ -212,14 +213,21 @@ func contextLine(cu state.ContextUse, io IO) string {
 }
 
 func cmdDone(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"notes"}, []string{"force"})
+	p, err := parseArgs(args, []string{"notes", "keep-dirty"}, []string{"force"})
 	if err != nil || len(p.pos) != 1 {
-		return fail(io, "usage: baton done <phase> [--notes TEXT] [--force]%s", errSuffix(err))
+		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--force]%s", errSuffix(err))
 	}
 	id := p.pos[0]
 	s, pl, ok := storeAndPlan(io)
 	if !ok {
 		return 1
+	}
+	work := checkWork(s, id)
+	keep := strings.TrimSpace(p.vals["keep-dirty"])
+	if len(work.fresh) > 0 && keep == "" {
+		s.Event("refused", map[string]any{"command": "done", "phase": id, "why": "uncommitted work", "files": len(work.fresh)})
+		return fail(io, "not done — %s leaves uncommitted work that was not there when it started:\n%s\n%s If it truly cannot be committed, say why: baton done %s --keep-dirty \"<why>\"",
+			id, fileList(work.fresh), commitAdvice("--notes"), id)
 	}
 	var next string
 	var startHead string
@@ -235,7 +243,12 @@ func cmdDone(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	s.AppendHandoff(id, p.vals["notes"])
-	s.Event("phase_done", map[string]any{"phase": id, "next": next})
+	done := map[string]any{"phase": id, "next": next}
+	if len(work.fresh) > 0 {
+		done["keep_dirty"], done["files"] = keep, len(work.fresh)
+	}
+	s.Event("phase_done", done)
+	work.report(io, id, keep)
 	if startHead != "" && startHead == gitx.Head(filepath.Dir(s.Dir)) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
 	}
@@ -252,17 +265,111 @@ func cmdDone(args []string, io IO) int {
 }
 
 func cmdBlocked(args []string, io IO) int {
-	reason := strings.TrimSpace(strings.Join(args, " "))
+	p, err := parseArgs(args, []string{"keep-dirty"}, nil)
+	if err != nil {
+		return fail(io, "usage: baton blocked <reason> [--keep-dirty WHY]%s", errSuffix(err))
+	}
+	reason := strings.TrimSpace(strings.Join(p.pos, " "))
 	s, _, ok := storeAndPlan(io)
 	if !ok {
 		return 1
 	}
+	st, err := s.Load()
+	if err != nil {
+		return fail(io, "%v", err)
+	}
+	work := checkWork(s, st.Current)
+	keep := strings.TrimSpace(p.vals["keep-dirty"])
+	if len(work.fresh) > 0 && keep == "" && reason != "" {
+		s.Event("refused", map[string]any{"command": "blocked", "phase": st.Current, "why": "uncommitted work", "files": len(work.fresh)})
+		return fail(io, "not recorded — %s leaves uncommitted work that was not there when it started, and a blocked run can sit for hours:\n%s\n%s If it truly cannot be committed, say why: baton blocked \"<reason>\" --keep-dirty \"<why>\"",
+			st.Current, fileList(work.fresh), commitAdvice("your reason"))
+	}
 	if _, err := s.Update(func(st *state.State) error { return state.SetBlocked(st, reason, io.Now()) }); err != nil {
 		return fail(io, "%v", err)
 	}
-	s.Event("blocked", map[string]any{"reason": reason})
+	blocked := map[string]any{"reason": reason}
+	if len(work.fresh) > 0 {
+		blocked["keep_dirty"], blocked["files"] = keep, len(work.fresh)
+	}
+	s.Event("blocked", blocked)
+	work.report(io, st.Current, keep)
 	fmt.Fprintln(io.Out, "baton: recorded. End your turn; baton will bring the human in.")
 	return 0
+}
+
+// workLeft is what the gate on uncommitted work found when a phase ends or the run halts. It applies only
+// where git is usable (gitx.Usable); a plain folder has nothing to commit and is never refused.
+//
+// The gate prompts the model to commit before it leaves work behind; it is not the guarantee. A model
+// can get past any gate it can satisfy itself (docs/research/escalation.md, S2), so the host also
+// snapshots uncommitted work whenever the run halts.
+type workLeft struct {
+	fresh []string // new or changed since the phase started: refused without --keep-dirty
+	kept  []string // already there when the phase started, and unchanged: only noted
+	warn  string   // baton could not tell the two apart, so it warns instead
+}
+
+// checkWork compares the uncommitted work now with what there was when phase started.
+func checkWork(s *state.Store, phase string) workLeft {
+	root := filepath.Dir(s.Dir)
+	if !gitx.Usable(root) {
+		return workLeft{}
+	}
+	paths, err := state.Uncommitted(s.Dir)
+	if err != nil {
+		return workLeft{warn: fmt.Sprintf("baton: warning — could not read git status (%v). Make sure this phase's work is committed.", err)}
+	}
+	if len(paths) == 0 {
+		return workLeft{}
+	}
+	var start *state.Dirt
+	if st, err := s.Load(); err == nil && st.Phases[phase] != nil {
+		start = st.Phases[phase].StartDirty
+	}
+	switch {
+	case start == nil:
+		return workLeft{warn: fmt.Sprintf("baton: warning — there is uncommitted work, and baton has no record of what was uncommitted when %s started:\n%s\nIf this phase made it, commit it.", phase, fileList(paths))}
+	case start.Over || len(paths) > gitx.MaxDirty:
+		return workLeft{warn: fmt.Sprintf("baton: warning — %d paths are uncommitted, too many for baton to check one by one. Make sure this phase's work is committed.", len(paths))}
+	}
+	fresh, kept := gitx.Since(start.Files, gitx.Fingerprint(root, paths))
+	return workLeft{fresh: fresh, kept: kept}
+}
+
+// report prints what the gate let through.
+func (w workLeft) report(io IO, phase, keep string) {
+	if w.warn != "" {
+		fmt.Fprintln(io.Out, w.warn)
+	}
+	if len(w.fresh) > 0 && keep != "" {
+		fmt.Fprintf(io.Out, "baton: leaving %d %s uncommitted (--keep-dirty: %s).\n", len(w.fresh), plural(len(w.fresh), "file", "files"), keep)
+	}
+	if n := len(w.kept); n > 0 {
+		fmt.Fprintf(io.Out, "baton: note — %d uncommitted %s already there when %s started and %s not changed; baton leaves %s alone:\n%s\n",
+			n, plural(n, "file was", "files were"), phase, plural(n, "has", "have"), plural(n, "it", "them"), fileList(w.kept))
+	}
+}
+
+// commitAdvice is how to get past the gate, in the wording proven in the S2 replay: commit, degraded if
+// need be, and never lose work to get a clean tree.
+func commitAdvice(where string) string {
+	return "Commit it first, degraded if need be (e.g. --no-gpg-sign if signing fails), and say how to repair that in " + where + ". " +
+		"Never discard, stash, reset or unstage work to get a clean tree."
+}
+
+// fileList indents paths one per line, at most 15 of them.
+func fileList(paths []string) string {
+	const most = 15
+	var b strings.Builder
+	for i, p := range paths {
+		if i == most {
+			fmt.Fprintf(&b, "    … and %d more\n", len(paths)-most)
+			break
+		}
+		b.WriteString("    " + p + "\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func cmdWaiting(args []string, io IO) int {
@@ -302,6 +409,12 @@ func cmdCheckpoint(args []string, io IO) int {
 	}
 	s.AppendHandoff(st.Current+" (checkpoint)", p.vals["notes"])
 	s.Event("checkpoint", map[string]any{"phase": st.Current})
+	if work := checkWork(s, st.Current); len(work.fresh) > 0 {
+		fmt.Fprintf(io.Out, "baton: note — %d %s changed in %s %s not committed yet:\n%s\nIf they are a finished step, commit them before you end your turn.\n",
+			len(work.fresh), plural(len(work.fresh), "file", "files"), st.Current, plural(len(work.fresh), "is", "are"), fileList(work.fresh))
+	} else if work.warn != "" {
+		fmt.Fprintln(io.Out, work.warn)
+	}
 	fmt.Fprintf(io.Out, "baton: checkpoint recorded. End your turn now: baton compacts the context and you continue %s from your notes.\n", st.Current)
 	return 0
 }
