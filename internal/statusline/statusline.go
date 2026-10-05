@@ -28,11 +28,18 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 	if !havePlan || st.Mode == state.ModeIdle {
 		return mark
 	}
+	p := st.PendingProposal()
 	switch {
 	case st.Mode == state.ModeComplete:
 		return mark + " · ✓ plan complete"
 	case st.Mode == state.ModePaused:
 		return mark + " · paused"
+	case st.ReviewDue != "":
+		return mark + " · ⚠ review due"
+	case p != nil && p.Untimed == "" && !p.Deadline.IsZero():
+		return mark + " · ? proposal · goes ahead " + p.Deadline.Local().Format("15:04")
+	case p != nil || st.Run.Escalation != nil && st.Run.Escalation.Kind == "decision":
+		return mark + " · ? proposal · waiting on you"
 	case st.Run.Escalation != nil:
 		return mark + " · ⚠ waiting on you"
 	case st.Blocked != nil:

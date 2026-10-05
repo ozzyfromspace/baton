@@ -17,6 +17,7 @@ func TestSegment(t *testing.T) {
 	now := time.Now()
 	run := state.Attach(pl, now, state.Origin{})
 	run.Run.Context = &state.ContextUse{UsedPct: 41.4}
+	deadline := time.Date(2026, 10, 5, 15, 33, 0, 0, time.Local)
 	cases := []struct {
 		name string
 		st   func() state.State
@@ -42,6 +43,28 @@ func TestSegment(t *testing.T) {
 		}, true, "◆ baton · compact held: the human has a draft in the in…"},
 		{"escalated", func() state.State { s := run; s.Run.Escalation = &state.Escalation{}; return s }, true, "◆ baton · ⚠ waiting on you"},
 		{"paused", func() state.State { s := run; s.Mode = state.ModePaused; return s }, true, "◆ baton · paused"},
+		{"proposal", func() state.State {
+			s := run
+			state.AddProposal(&s, state.Decision{What: "commit unsigned", Deadline: deadline}, now)
+			return s
+		}, true, "◆ baton · ? proposal · goes ahead " + deadline.Local().Format("15:04")},
+		{"untimed proposal", func() state.State {
+			s := run
+			state.AddProposal(&s, state.Decision{What: "push the branch", Untimed: "'push' looks outward-facing"}, now)
+			return s
+		}, true, "◆ baton · ? proposal · waiting on you"},
+		{"held proposal", func() state.State {
+			s := run
+			s.Decisions = nil
+			s.Run.Escalation = &state.Escalation{Kind: "decision", Reason: "proposal d1 waits for you"}
+			return s
+		}, true, "◆ baton · ? proposal · waiting on you"},
+		{"review due", func() state.State {
+			s := run
+			s.Run.Escalation = &state.Escalation{Kind: "review"}
+			state.DueReview(&s, "P0", now)
+			return s
+		}, true, "◆ baton · ⚠ review due"},
 		{"complete", func() state.State { s := run; s.Mode = state.ModeComplete; return s }, true, "◆ baton · ✓ plan complete"},
 		{"waiting", func() state.State { s := run; state.SetWaiting(&s, "the build", time.Hour, now); return s }, true, "◆ baton · P0 1/2 The overlay · ctx 41% · waiting: the build"},
 		{"tokens against the limit", func() state.State {
