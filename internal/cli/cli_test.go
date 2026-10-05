@@ -52,3 +52,14 @@ func TestHookPanicFailsOpenThroughCLI(t *testing.T) {
 		t.Fatalf("code %d stdout %q", code, out.String())
 	}
 }
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, c := range []struct {
+		have, want string
+		ok         bool
+	}{{"2.1.289", "2.1.289", true}, {"2.1.300", "2.1.289", true}, {"2.2.0", "2.1.289", true}, {"2.1.288", "2.1.289", false}, {"1.9.999", "2.1.289", false}} {
+		if versionAtLeast(c.have, c.want) != c.ok {
+			t.Errorf("%s >= %s", c.have, c.want)
+		}
+	}
+}
