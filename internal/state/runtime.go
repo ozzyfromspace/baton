@@ -19,6 +19,10 @@ type Runtime struct {
 
 	// Dialog is set while Claude Code waits on the human: a permission prompt or a question.
 	Dialog *Dialog `json:"dialog,omitempty"`
+	// Gate is why baton may not type right now, in its own words, or "" when it may. It exists so a
+	// human can tell a blocked run from a working one: a queued compaction used to render on the status
+	// line as "compacting…" however long it had been held, which claims something is happening.
+	Gate string `json:"gate,omitempty"`
 	// Subagents counts subagents currently running.
 	Subagents int `json:"subagents"`
 	// Background is the in-flight background work Claude Code reported at the last Stop.

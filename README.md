@@ -25,7 +25,9 @@ baton takes every one of those decisions away from the model. The model does the
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
 - **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. If nobody answers within 20 minutes, it keeps going. Claude Code's own auto-compaction remains the backstop.
 - **No questions mid-run.** While a plan runs, the model may not stop to ask you questions, because nobody may be there. It decides and notes its assumption, or reports itself blocked, which notifies you. Questions in turns you started yourself still get through.
-- **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits, API errors. Nothing baton waits on can hold it forever. Every wait has a deadline or a fallback, and whatever needs you is pushed again until it's resolved.
+- **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits, API errors. **Every gate either clears by itself or expires into action**, so nothing baton waits on can hold a run — a half-typed message is saved and taken out of the box, a hung background subagent is overridden, an open turn and a never-settling screen stop being trusted after their ceilings. Whatever still needs you is pushed again until it's resolved.
+- **One exception, and it is deliberate: an open permission prompt.** Keystrokes landing in a prompt *select* an option, so a baton that typed through one could approve a tool call you never approved. That wait is escalated and pushed; it is never overridden.
+- **Drafts.** If an unsent draft is in the way of a compaction, baton saves it and clears the box rather than waiting. `baton drafts` hands it back. Each one is a file holding exactly the text, so `cat .baton/drafts/*.txt` works even if baton will not start.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification.
 - **Status line.** A permanent `◆ baton · P6 6/23 <title> · ctx 412k/810k` segment sits in front of your own status line. It shows the context size against the limit.
 
@@ -63,6 +65,7 @@ Inside the session:
 | `/baton plan <goal>` | Plan the work in plan mode, in a format baton can run, then attach the approved plan and start it. |
 | `/baton attach [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. |
 | `/baton status` | Show where the run stands. |
+| `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |
 | `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. |
 | `/baton elevate` | Hand a plain `claude` session to baton (see below). |
 | `/baton setup` | Check this machine and list what's missing. |
@@ -94,7 +97,7 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 
 ## Privacy and safety
 
-- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and short `[baton] …` reminders when a session stalls. It never types while you have a draft in the input box, a dialog is open, or you've typed in the last few seconds. Every action is announced in the session and logged to `.baton/events.jsonl`.
+- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and short `[baton] …` reminders when a session stalls. It never types while a dialog is open or you've typed in the last few seconds. An unsent **draft** no longer holds it either: after a grace period baton saves the text to `.baton/drafts/` and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to `.baton/events.jsonl`.
 - **Settings.** baton never edits your Claude Code settings. Its hooks, status line and an allow rule for its own CLI are passed to each hosted session with `claude --settings`.
 - **Notifications.** Pushes go to the ntfy topic you configure and say only that you're needed, unless you turn on `details`.
 - **Downloads.** The binary download is verified against checksums committed to this repository. Set `BATON_BIN` to use a binary you built yourself.

@@ -28,6 +28,13 @@ func TestSegment(t *testing.T) {
 		{"long title", func() state.State { s := run; state.Done(&s, pl, "P0", now, false); state.Start(&s, now, ""); return s }, true,
 			"◆ baton · P1 2/2 A very long phase title tha… · ctx 41%"},
 		{"compacting", func() state.State { s := run; s.Run.Compaction.Status = state.CompactTyped; return s }, true, "◆ baton · compacting…"},
+		// A queued compaction that something is holding must not claim to be compacting: that read
+		// "compacting…" for 35 minutes on 2026-10-05 and looked exactly like a hung session.
+		{"compaction held", func() state.State {
+			s := run
+			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "the human has a draft in the input box"
+			return s
+		}, true, "◆ baton · compact held: the human has a draft in the in…"},
 		{"escalated", func() state.State { s := run; s.Run.Escalation = &state.Escalation{}; return s }, true, "◆ baton · ⚠ waiting on you"},
 		{"paused", func() state.State { s := run; s.Mode = state.ModePaused; return s }, true, "◆ baton · paused"},
 		{"complete", func() state.State { s := run; s.Mode = state.ModeComplete; return s }, true, "◆ baton · ✓ plan complete"},

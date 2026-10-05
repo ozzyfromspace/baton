@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +47,7 @@ type View struct {
 	LastOutput   time.Time // last byte claude wrote to the screen
 	LastHumanKey time.Time // last keystroke from the human (terminal reports excluded)
 	Draft        bool      // the human typed since their last Enter: the input box may hold their text
+	DraftText    string    // that draft as typed, so baton can save it before clearing the box
 	Owner        bool      // this session drives the project's plan
 }
 
@@ -57,6 +59,9 @@ type Controller interface {
 // Injector types into claude as if at the keyboard.
 type Injector interface {
 	Type(text string, enter bool) error
+	// ClearInput empties Claude Code's input box (Ctrl-C) and forgets the draft baton was tracking.
+	// It is how a draft stops being able to hold a run: baton saves the text first, then clears.
+	ClearInput() error
 }
 
 // Run hosts claude until it exits and returns its exit code.
@@ -76,7 +81,11 @@ func Run(cfg Config) (int, error) {
 
 	owner := claim(cfg)
 	args := cfg.Args
-	env := append([]string(nil), cfg.Env...)
+	// Always start from an environment with no BATON_* in it. A session started inside another one
+	// inherits them, and a non-owner that kept them would run hooks pointed at the FIRST session's
+	// instance and .baton directory — writing another plan's state from a session that is not driving
+	// it. The owner sets its own below.
+	env := withoutBatonVars(cfg.Env)
 	if owner {
 		args = append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, args...)
 		if cfg.Autocompact != "" {
@@ -145,6 +154,8 @@ type session struct {
 	lastOutput   atomic.Int64
 	lastHumanKey atomic.Int64
 	draft        atomic.Bool
+	draftText    atomic.Value // string
+	keysMu       sync.Mutex   // keys is fed by pumpInput and reset by the controller
 	keys         keyTracker
 	lastPanic    time.Time // controller goroutine only
 }
@@ -170,10 +181,16 @@ func (h *session) pumpInput() {
 	for {
 		n, err := h.cfg.Stdin.Read(buf)
 		if n > 0 {
-			if h.keys.feed(buf[:n]) {
-				h.lastHumanKey.Store(h.cfg.Now().UnixNano())
+			now := h.cfg.Now()
+			h.keysMu.Lock()
+			human := h.keys.feed(buf[:n], now)
+			draft, text := h.keys.draft(), h.keys.draftText()
+			h.keysMu.Unlock()
+			if human {
+				h.lastHumanKey.Store(now.UnixNano())
 			}
-			h.draft.Store(h.keys.draft())
+			h.draft.Store(draft)
+			h.draftText.Store(text)
 			h.mu.Lock()
 			_, werr := h.pty.Write(buf[:n])
 			h.mu.Unlock()
@@ -206,6 +223,41 @@ func (h *session) Type(text string, enter bool) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// withoutBatonVars copies env with every BATON_* variable dropped.
+func withoutBatonVars(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "BATON_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+func (h *session) draftOf() string {
+	t, _ := h.draftText.Load().(string)
+	return t
+}
+
+// ClearInput empties Claude Code's input box and forgets the draft. Ctrl-C is what empties that box (the
+// key tracker reads it the same way), and the tracker is reset explicitly because it only ever sees the
+// human's stdin — it cannot observe baton's own write.
+func (h *session) ClearInput() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg.Logf("host: clearing the input box")
+	if _, err := h.pty.Write([]byte{0x03}); err != nil {
+		return err
+	}
+	h.keysMu.Lock()
+	h.keys.clear()
+	h.keysMu.Unlock()
+	h.draft.Store(false)
+	h.draftText.Store("")
 	return nil
 }
 
@@ -250,6 +302,7 @@ func (h *session) loop(stop <-chan struct{}, owner bool) {
 			LastOutput:   time.Unix(0, h.lastOutput.Load()),
 			LastHumanKey: time.Unix(0, h.lastHumanKey.Load()),
 			Draft:        h.draft.Load(),
+			DraftText:    h.draftOf(),
 			Owner:        owner,
 		})
 	}

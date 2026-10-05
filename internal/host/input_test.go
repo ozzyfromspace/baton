@@ -1,6 +1,9 @@
 package host
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestKeyTrackerFollowsTheInputBox(t *testing.T) {
 	cases := []struct {
@@ -51,10 +54,59 @@ func TestKeyTrackerFollowsTheInputBox(t *testing.T) {
 		var k keyTracker
 		var human bool
 		for _, ch := range c.chunks {
-			human = k.feed([]byte(ch))
+			human = k.feed([]byte(ch), time.Time{})
 		}
 		if human != c.human || k.draft() != c.draft {
 			t.Errorf("%s: human %v draft %v, want %v %v", c.name, human, k.draft(), c.human, c.draft)
 		}
+	}
+}
+
+// 🚨 THE ONE THAT BIT. A bracketed paste latches on ESC[200~ and only a cleanly parsed ESC[201~
+// unlatches it — and in paste mode Enter adds a line instead of clearing the box. So a lost end marker
+// meant the draft flag could never go back down, and on 2026-10-05 that held a real run's compaction
+// for 35 minutes with nothing but a human able to clear it.
+func TestALostPasteEndMarkerDoesNotLatchTheDraftForever(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 7, 0, 0, 0, time.UTC)
+	var k keyTracker
+	k.feed([]byte("\x1b[200~pasted text"), t0) // …and the end marker never arrives
+
+	// The control: inside PasteMax this really is a paste, so Enter is a newline and the box keeps text.
+	k.feed([]byte("\r"), t0.Add(time.Second))
+	if !k.draft() {
+		t.Fatal("cleared the box during a live paste")
+	}
+	// Past the bound it is a lost marker, so Enter clears as it always should.
+	k.feed([]byte("\r"), t0.Add(PasteMax+time.Second))
+	if k.draft() {
+		t.Fatalf("a lost paste end marker still latches the draft: chars=%d lines=%d", k.chars, k.lines)
+	}
+}
+
+// An X10 mouse report's three payload bytes are skipped blind. ESC is never one of them, so skipping it
+// would eat the next sequence's prefix — one way the end marker above goes missing.
+func TestABlindMouseSkipDoesNotSwallowTheNextSequence(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 7, 0, 0, 0, time.UTC)
+	var k keyTracker
+	k.feed([]byte("\x1b[200~x"), t0)
+	// A mouse report whose payload is truncated, immediately followed by the paste end marker.
+	k.feed([]byte("\x1b[M\x1b[201~"), t0)
+	k.feed([]byte("\r"), t0)
+	if k.draft() {
+		t.Fatalf("the skip swallowed the end marker: chars=%d lines=%d", k.chars, k.lines)
+	}
+}
+
+// baton saves the draft before it clears the box, so the tracker has to remember what was typed.
+func TestTheTrackerKeepsTheDraftText(t *testing.T) {
+	t0 := time.Date(2026, 10, 5, 7, 0, 0, 0, time.UTC)
+	var k keyTracker
+	k.feed([]byte("hello worldX\x7f"), t0) // a typo, backspaced
+	if got := k.draftText(); got != "hello world" {
+		t.Fatalf("draft text %q", got)
+	}
+	k.feed([]byte("\r"), t0) // sent: nothing is left to hand back
+	if got := k.draftText(); got != "" {
+		t.Fatalf("draft text survived Enter: %q", got)
 	}
 }

@@ -27,6 +27,8 @@ type Timing struct {
 	FailedRetry    time.Duration // a failed compaction is tried again after this, then 3× longer each round
 	ResumeNudge    time.Duration // no turn this long after a compaction: type a reminder
 	ResumeEscalate time.Duration // still nothing this long after the reminder: bring the human in
+	DraftGrace     time.Duration // a draft holding baton this long is saved and cleared, and baton carries on
+	RescueBackoff  time.Duration // and the box is not cleared again within this, however the flag reads
 	DraftEscalate  time.Duration // a human draft blocking baton this long: tell them
 	StaleTurn      time.Duration // an open turn with no hook activity this long is not trusted to be open
 	IdleNudge      time.Duration // no hook activity this long mid-plan: type a reminder (then escalate)
@@ -44,7 +46,8 @@ type Timing struct {
 var DefaultTiming = Timing{
 	Quiet: 1500 * time.Millisecond, QuietMax: 30 * time.Second, HandsOff: 3 * time.Second,
 	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute,
-	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute, DraftEscalate: 2 * time.Minute,
+	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
+	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: 20 * time.Minute, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute,
@@ -78,6 +81,10 @@ type Loop struct {
 	openSince time.Time // since when every gate but the quiet screen has been open
 	noisyLog  bool      // the never-quiet screen was reported
 	staleLog  time.Time // the turn whose staleness was reported
+	dialogLog time.Time // the dialog whose staleness was reported
+	agentsLog bool      // background subagents have been overridden once
+	rescues   int       // drafts taken out of the input box this session
+	rescuedAt time.Time // when the last one was taken
 	heldWhy   string    // what has been holding back something baton needs to type
 	heldSince time.Time
 	wished    bool // something wanted to type this tick
@@ -111,6 +118,15 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.resolve(v, st)
 	l.remind(v, st)
 
+	// A draft must never be able to hold a run. If one is in the way of something baton needs to type,
+	// save it where `baton drafts` hands it back, clear the box, and carry on.
+	if l.why == gateDraft && l.owed(st) && l.rescueDraft(v, st, in) {
+		// The box is empty as of a moment ago; the host's next view will say so too. Re-gate without
+		// it so the work baton was holding goes out on this tick rather than the next.
+		v.Draft, v.DraftText = false, ""
+		l.why = l.gate(v, st)
+	}
+
 	comp := st.Run.Compaction
 	switch comp.Status {
 	case state.CompactQueued:
@@ -137,6 +153,20 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if !l.wished {
 		l.heldWhy = ""
 	}
+	l.publishGate(st)
+}
+
+// publishGate records the current gate so the status line can say what a run is waiting for. Written
+// only when it changes: a tick is 250ms and this is a file.
+func (l *Loop) publishGate(st state.State) {
+	shown := l.why
+	if !l.wished {
+		shown = "" // nothing wanted to type, so nothing is being held up
+	}
+	if shown == st.Run.Gate {
+		return
+	}
+	l.update(func(st *state.State) { st.Run.Gate = shown })
 }
 
 // Flush sends any queued notices now; the host calls it when the session ends.
@@ -187,7 +217,7 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		why = gateTurn
 	case st.Run.Dialog != nil:
 		why = gateDialog
-	case busyAgents(st):
+	case busyAgents(st) && !l.agentsStale(v, st):
 		why = gateAgents
 	case v.Draft:
 		why = gateDraft
@@ -227,6 +257,29 @@ func (l *Loop) turnStale(v host.View, st state.State) bool {
 	return true
 }
 
+// gateDialog has NO ceiling, deliberately, and it is the one gate that keeps one.
+//
+// `Run.Dialog` is set while Claude Code waits on the human — "a permission prompt or a question".
+// Keystrokes landing in a permission prompt SELECT an option, so a baton that stopped trusting that
+// flag and typed anyway could approve a tool call nobody approved. Every other gate expires into
+// action; this one may not, because the thing on the other side of it is the human's consent. A plan
+// that waits for an answer is working as intended, and that wait is escalated and pushed.
+//
+// agentsStale reports background subagents that have held baton for BackgroundMax. They used to hold it
+// for good: the gate escalated once and then waited on a human. A hung subagent must not be able to
+// park a plan, and a compaction is safe to take while one runs — the work reports when it finishes.
+func (l *Loop) agentsStale(v host.View, st state.State) bool {
+	if l.heldWhy != gateAgents || v.Now.Sub(l.since(l.heldSince)) < l.Timing.BackgroundMax {
+		return false
+	}
+	if !l.agentsLog {
+		l.agentsLog = true
+		l.logf("loop: background subagents have held baton for %s; carrying on anyway", l.Timing.BackgroundMax)
+		l.Store.Event("agents_overridden", map[string]any{"after": l.Timing.BackgroundMax.String()})
+	}
+	return true
+}
+
 // busyAgents reports background subagents or workflows. Background shells (a dev server, a long build)
 // do not hold a compaction: they keep running across it and report when they finish. (Foreground
 // subagents need no check of their own: they run inside the main turn, which the turn gate covers.)
@@ -239,9 +292,73 @@ func busyAgents(st state.State) bool {
 	return false
 }
 
+// owed reports work baton must type to make progress: a compaction at a boundary or a checkpoint. A
+// nudge is deliberately not owed — a reminder arriving late costs nothing, and clearing somebody's input
+// box to send one would be rude.
+func (l *Loop) owed(st state.State) bool {
+	switch st.Run.Compaction.Status {
+	case state.CompactQueued, state.CompactFailed:
+		return true
+	}
+	return st.BoundaryOwed || st.CheckpointOwed
+}
+
+// rescueDraft saves the draft in the input box and clears it, so the gate opens on the next tick. A
+// half-typed message used to hold a run for as long as it sat there: measured 2026-10-05, a plan sat
+// with a compaction queued for 35 minutes, and only a person noticing could have cleared it.
+//
+// Two conditions, and both matter. HandsOff means nobody has touched a key for a moment, so this never
+// snatches a line out from under someone mid-word. DraftGrace means the draft has actually been in
+// baton's way for a while, so an ordinary message being composed and sent is never touched — sending it
+// clears the box anyway.
+//
+// An empty draft is the dead-reckoning case: keyTracker counts keystrokes and errs toward "there is a
+// draft", so it can drift there with nothing in the box. SaveDraft writes nothing for that, and the
+// clear puts the flag back where reality is — so this fixes a phantom draft too, at no cost.
+func (l *Loop) rescueDraft(v host.View, st state.State, in host.Injector) bool {
+	// Something wants to type, which is what keeps heldSince from being reset at the end of the tick.
+	l.wished = true
+	if v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
+		return false
+	}
+	if l.heldWhy != gateDraft {
+		l.heldWhy, l.heldSince = gateDraft, v.Now
+		return false
+	}
+	if v.Now.Sub(l.since(l.heldSince)) < l.Timing.DraftGrace {
+		return false
+	}
+	// A flag that stays up however often it is cleared is the stuck-flag case this whole change exists
+	// for, and clearing the box on every tick would make baton the thing destroying somebody's typing.
+	// One clear per backoff: the run still moves, and the cost of a wrong reading stays bounded.
+	if !l.rescuedAt.IsZero() && v.Now.Sub(l.since(l.rescuedAt)) < l.Timing.RescueBackoff {
+		return false
+	}
+	path, err := l.Store.SaveDraft(v.DraftText, st.Current, v.Now)
+	if err != nil {
+		l.logf("loop: saving the draft: %v", err)
+		return false // never throw away text baton failed to save
+	}
+	if err := in.ClearInput(); err != nil {
+		l.logf("loop: clearing the input box: %v", err)
+		return false
+	}
+	l.rescues, l.rescuedAt = l.rescues+1, v.Now
+	l.heldWhy = ""
+	fields := map[string]any{"chars": len(v.DraftText)}
+	if path != "" {
+		fields["path"] = path
+		l.logf("loop: saved a %d-character draft to %s and cleared the input box", len(v.DraftText), path)
+	} else {
+		l.logf("loop: the input box tracked a draft with no text in it; cleared")
+	}
+	l.Store.Event("draft_rescued", fields)
+	return true
+}
+
 // held is called whenever baton needs to type something and the gate says no. Most gates clear by
-// themselves; the two that depend on someone else are reported once they have held baton back too long:
-// a human draft (the human must send or clear it) and background subagents (which may have hung).
+// themselves or expire into action; held only REPORTS, so nothing it is told about can hold a run. The
+// exception is gateDialog, which is the human's consent and keeps its wait (see the note above).
 func (l *Loop) held(v host.View, st state.State, task string) {
 	l.wished = true
 	if l.heldWhy != l.why {
@@ -251,8 +368,10 @@ func (l *Loop) held(v host.View, st state.State, task string) {
 	var kind, reason string
 	switch l.why {
 	case gateDraft:
+		// Kept as a notice only. rescueDraft clears the draft well before this, so seeing it means the
+		// rescue itself is failing — which is worth telling someone about, not worth waiting on.
 		limit, kind = l.Timing.DraftEscalate, "draft"
-		reason = fmt.Sprintf("baton needs to %s, but there is a draft in the input box: send it with Enter, or clear it with Ctrl-C", task)
+		reason = fmt.Sprintf("baton needs to %s and could not clear the draft in the input box; it will keep trying", task)
 	case gateAgents:
 		limit, kind = l.Timing.BackgroundMax, "stuck"
 		reason = fmt.Sprintf("baton has needed to %s for %s, but background subagents are still running", task, l.Timing.BackgroundMax)

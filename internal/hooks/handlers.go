@@ -138,7 +138,25 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	if owed == "" {
 		return Result{}, nil
 	}
+	// While something has gone wrong, let the model LOOK. The block exists to stop work before a
+	// compaction, and reading is not work — but it refused every tool, so in the one incident where a
+	// human needed help, the agent could not read `.baton/events.jsonl` to diagnose it.
+	if readOnlyTool(str(c.Input, "tool_name")) {
+		if live, lerr := s.Load(); lerr == nil && live.Run.Escalation != nil {
+			return Result{}, nil
+		}
+	}
 	return permission("deny", NudgePrefix+" End your turn now: "+owed+". Do not start further work in this turn."), nil
+}
+
+// readOnlyTool names the tools that only read. Bash is deliberately absent: a command line can do
+// anything, and baton must not be the thing that decides which ones are safe.
+func readOnlyTool(name string) bool {
+	switch name {
+	case "Read", "Grep", "Glob", "NotebookRead":
+		return true
+	}
+	return false
 }
 
 // batonQuestion reports an AskUserQuestion call that puts only baton's own questions (escalations, the

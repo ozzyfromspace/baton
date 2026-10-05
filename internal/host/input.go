@@ -3,7 +3,15 @@ package host
 import (
 	"strconv"
 	"strings"
+	"time"
 )
+
+// PasteMax bounds a bracketed paste. ESC[200~ latches paste mode and only a cleanly parsed ESC[201~
+// unlatches it, so a lost or split end marker would latch it forever — and in paste mode Enter adds a
+// line instead of clearing the box, which means the draft flag could never go back down. Measured
+// 2026-10-05: that is exactly how one run sat with a compaction queued for 35 minutes. A paste arrives
+// in one burst; anything still "pasting" after this is a lost end marker.
+const PasteMax = 2 * time.Second
 
 // The host must know whether a *human* is typing, and whether the input box may hold their draft:
 // baton never types over a draft, and holds off while someone is at the keyboard. But not every byte
@@ -23,22 +31,41 @@ type keyTracker struct {
 	chars   int    // characters on the current line of the draft
 	lines   int    // completed lines of the draft (Shift+Enter, "\" + Enter, pasted newlines)
 	escaped bool   // the last character was "\": Claude Code reads the next Enter as a newline
+	text    []rune // what those characters were, so a draft baton clears can be handed back
+	pasteAt time.Time
 }
+
+// draftText is the draft as typed, for baton to save before it clears the box. It is a best-effort
+// reconstruction: cursor movement is not modelled, so text inserted mid-line with the arrow keys lands
+// at the end. Recovering an approximation of what someone typed beats losing it.
+func (k *keyTracker) draftText() string { return string(k.text) }
 
 // draft reports whether the input box may hold text the human typed.
 func (k *keyTracker) draft() bool { return k.chars > 0 || k.lines > 0 }
 
 // feed processes a chunk of stdin and reports whether any of it came from the human (as opposed to
 // terminal reports).
-func (k *keyTracker) feed(b []byte) (human bool) {
+func (k *keyTracker) feed(b []byte, now time.Time) (human bool) {
+	// A paste that never ended is a lost end marker. Unlatch it before reading anything else, or every
+	// Enter from here on adds a line instead of clearing the box.
+	if k.inPaste && !k.pasteAt.IsZero() && now.Sub(k.pasteAt) > PasteMax {
+		k.inPaste, k.pasteAt = false, time.Time{}
+	}
 	for _, c := range b {
 		if k.skip > 0 {
-			k.skip--
-			continue
+			// An X10 mouse report's three payload bytes are skipped blind. ESC can never be one of
+			// them, so treat it as the start of the next sequence rather than eating that sequence's
+			// prefix — which is one way the paste end marker above goes missing.
+			if c == 0x1b {
+				k.skip = 0
+			} else {
+				k.skip--
+				continue
+			}
 		}
 		if len(k.esc) > 0 {
 			k.esc = append(k.esc, c)
-			if done, h := k.finishEscape(); done {
+			if done, h := k.finishEscape(now); done {
 				human = human || h
 			}
 			continue
@@ -53,6 +80,7 @@ func (k *keyTracker) feed(b []byte) (human bool) {
 				k.newline()
 			} else if c >= 0x20 {
 				k.chars++
+				k.text = append(k.text, rune(c))
 			}
 			continue
 		}
@@ -87,12 +115,17 @@ func (k *keyTracker) key(c byte) {
 	case c < 0x20: // other control keys move the cursor or open views: the box is unchanged
 	default:
 		k.chars++
+		k.text = append(k.text, rune(c))
 		k.escaped = c == '\\'
 	}
 }
 
-func (k *keyTracker) clear()   { k.chars, k.lines = 0, 0 }
-func (k *keyTracker) newline() { k.lines++; k.chars = 0 }
+func (k *keyTracker) clear() { k.chars, k.lines, k.text = 0, 0, nil }
+func (k *keyTracker) newline() {
+	k.lines++
+	k.chars = 0
+	k.text = append(k.text, '\n')
+}
 func (k *keyTracker) backspace() {
 	switch {
 	case k.chars > 0:
@@ -101,11 +134,14 @@ func (k *keyTracker) backspace() {
 		k.lines-- // joined with the line above, whose length is unknown: assume it holds text
 		k.chars = 1
 	}
+	if n := len(k.text); n > 0 {
+		k.text = k.text[:n-1]
+	}
 }
 
 // finishEscape decides whether k.esc is a complete sequence and, if so, applies it and reports whether
 // it came from the human.
-func (k *keyTracker) finishEscape() (done, human bool) {
+func (k *keyTracker) finishEscape(now time.Time) (done, human bool) {
 	s := k.esc
 	if len(s) < 2 {
 		return false, false
@@ -123,7 +159,7 @@ func (k *keyTracker) finishEscape() (done, human bool) {
 		body := string(s[2 : len(s)-1])
 		switch {
 		case body == "200" && last == '~':
-			k.inPaste = true
+			k.inPaste, k.pasteAt = true, now
 			return reset(true)
 		case body == "201" && last == '~':
 			k.inPaste = false
@@ -206,6 +242,7 @@ func (k *keyTracker) kittyKey(body string) {
 		k.chars = 0
 	case plain && cp >= 32 && cp != 127:
 		k.chars++
+		k.text = append(k.text, rune(cp))
 		k.escaped = cp == '\\'
 	}
 }

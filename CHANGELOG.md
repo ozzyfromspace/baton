@@ -4,6 +4,50 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-05
+
+A run could be parked indefinitely by a half-typed message. Found live: a plan sat with a compaction
+queued for **35 minutes** while `compacting…` showed on the status line, and only a human noticing could
+have cleared it. An unattended harness that has to be watched is not one, so every gate that could hold
+forever now expires into action.
+
+### Fixed
+- **A draft no longer holds a run.** When an unsent draft is in the way of something baton must type, it
+  is saved to `.baton/drafts/` and the input box is cleared. Two conditions keep it polite: nobody has
+  touched a key for `HandsOff`, and the draft has been in the way for `DraftGrace` (20s) — so an ordinary
+  message being composed and sent is never touched. Not more than once per `RescueBackoff` (2m), so a
+  flag that stays up however often it is cleared cannot make baton the thing destroying your typing.
+- **A lost bracketed-paste end marker latched the draft flag forever.** `ESC[200~` put the key tracker in
+  paste mode and only a cleanly parsed `ESC[201~` took it out — and in paste mode Enter adds a line
+  instead of clearing the box, so the flag could never go back down. This was the root cause of the
+  incident above. Paste mode is now bounded by `PasteMax` (2s).
+- **An X10 mouse report no longer swallows the sequence after it.** Its three payload bytes were skipped
+  blind; ESC is never one of them, so skipping it ate the next escape's prefix — one way the paste end
+  marker went missing.
+- **A hung background subagent no longer blocks a compaction for good.** The gate escalated once and then
+  waited on a human; it now carries on after `BackgroundMax`. A compaction does not cancel background
+  work — it reports when it finishes.
+- **The status line no longer claims to be compacting while it is held.** It reads
+  `compact held: <reason>`, because "compacting…" for 35 minutes is indistinguishable from a hang.
+- **A nested session no longer inherits `BATON_*`.** A second `claude` started inside a hosted session
+  picked up `BATON_DIR` and `BATON_INSTANCE`, so its hooks would write another plan's state. They are
+  stripped unless baton is wiring that session itself. (It also made `go test` fail inside a baton
+  session, which is how it was found.)
+- **The PreToolUse block lets the model read while an escalation is live.** It refused every tool, so in
+  the one incident where a human needed help, the agent could not read `.baton/events.jsonl` to diagnose
+  it. `Read`, `Grep`, `Glob` and `NotebookRead` are allowed; Bash is deliberately not.
+
+### Added
+- **`baton drafts`** (and `/baton drafts`): list what baton took out of the input box, newest first.
+  `--last` or `N` prints one raw, `--path` prints where it lives. Each draft is a file holding exactly
+  the text and nothing else, so `cat` recovers it even if baton will not start.
+- `Run.Gate` in `.baton/state.json`: why baton may not type right now, in its own words.
+
+### Unchanged, deliberately
+- **An open permission prompt still waits, with no ceiling.** Keystrokes landing in a prompt select an
+  option, so overriding that gate could approve a tool call nobody approved. Every other gate expires
+  into action; this one is the human's consent and may not. It is escalated and pushed instead.
+
 ## [0.1.0] - 2026-10-05
 
 The first release: everything in the two release candidates below, plus:

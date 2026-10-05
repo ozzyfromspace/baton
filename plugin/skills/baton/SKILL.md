@@ -17,6 +17,7 @@ Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode, then run it.
 - `/baton attach [plan file]`: run a plan that already exists.
 - `/baton status`: where the run stands.
+- `/baton drafts`: drafts baton saved out of the input box (`--last` prints the newest).
 - `/baton pause` / `/baton resume`: take or give back the wheel.
 - `/baton elevate`: hand this session over to baton.
 - `/baton setup`: check this machine and say what is left to set up.
@@ -25,6 +26,14 @@ Explain briefly:
 ## status
 
 Run `baton status` and show its output verbatim.
+
+## drafts
+
+Run `baton drafts` (passing through any `--last`, `N` or `--path`) and show its output verbatim.
+
+baton clears an unsent draft rather than waiting on it — a half-typed message used to be able to park a
+whole run — and saves the text first. Each draft is a file under `.baton/drafts/` holding exactly what
+was typed, so `cat` recovers it even if baton will not start.
 
 ## plan <goal>
 
@@ -91,3 +100,8 @@ Run `baton update` and show its output. It updates the plugin through Claude Cod
 - Background work (a dev server, a build, a background subagent) is not a status. If you stop to wait for it, declare the wait with `baton waiting "<what>" --until <how long it should take>`; waits are capped at 2 hours.
 - Don't ask the human questions (AskUserQuestion) while a plan runs: nobody may be there, and the run would wait. Decide, note your assumption, and carry on, or run `baton blocked "<your question>"` if you truly cannot continue. (baton refuses such questions unless the human started the turn.)
 - Never type `/compact` yourself. baton does that at the right moment.
+- If the human's unsent draft is in the way of a compaction, baton saves it to `.baton/drafts/` and
+  clears the input box. That is deliberate and needs nothing from you; if they ask where their message
+  went, run `baton drafts`.
+- One gate is never overridden: an **open permission prompt**. baton cannot answer it and must not type
+  through it, so if a run is waiting on one, the human really is the only way forward.

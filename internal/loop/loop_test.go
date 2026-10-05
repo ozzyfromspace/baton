@@ -13,14 +13,22 @@ import (
 )
 
 type typed struct {
-	mu   sync.Mutex
-	text []string
+	mu      sync.Mutex
+	text    []string
+	cleared int
 }
 
 func (t *typed) Type(s string, enter bool) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.text = append(t.text, s)
+	return nil
+}
+
+func (t *typed) ClearInput() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cleared++
 	return nil
 }
 
@@ -211,22 +219,68 @@ func TestResumedModelIsNotNudged(t *testing.T) {
 	}
 }
 
-func TestADraftBlockingACompactionIsReported(t *testing.T) {
+// A draft used to hold a compaction for as long as it sat in the box — measured 2026-10-05, a real run
+// sat queued for 35 minutes and only a human noticing could have cleared it. It is saved and cleared now.
+func TestADraftIsSavedAndClearedRatherThanBlocking(t *testing.T) {
 	r := newRig(t)
-	r.view.Draft = true
-	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
-	if len(r.in.text) != 0 || len(r.push.kinds) != 1 || r.push.kinds[0] != "draft" {
-		t.Fatalf("typed %q pushes %v", r.in.text, r.push.kinds)
+	r.view.Draft, r.view.DraftText = true, "half a thought I had not sent"
+
+	// The control: inside DraftGrace nothing is touched, so an ordinary message being composed and
+	// then sent is never taken away.
+	r.run(DefaultTiming.DraftGrace - 10*time.Second)
+	if len(r.in.text) != 0 || r.in.cleared != 0 {
+		t.Fatalf("acted inside the grace: typed %q cleared %d", r.in.text, r.in.cleared)
 	}
-	if e := r.state().Run.Escalation; e == nil || !strings.Contains(e.Reason, "Ctrl-C") {
-		t.Fatalf("escalation %+v", e)
+
+	r.run(DefaultTiming.DraftGrace + 30*time.Second)
+	if r.in.cleared != 1 {
+		t.Fatalf("the input box was not cleared: %d", r.in.cleared)
 	}
-	// The human clears it: the escalation goes, and the compaction is typed.
-	r.view.Draft = false
-	r.tick(time.Second)
-	r.tick(time.Second)
-	if r.state().Run.Escalation != nil || len(r.in.text) != 1 {
-		t.Fatalf("after clearing: escalation %+v typed %q", r.state().Run.Escalation, r.in.text)
+	if len(r.in.text) == 0 || r.in.text[0] != "/compact" {
+		t.Fatalf("a draft still blocks the compaction: %q", r.in.text)
+	}
+	// The text is recoverable, and the file is nothing but the text.
+	drafts, err := r.loop.Store.Drafts()
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("drafts %+v err %v", drafts, err)
+	}
+	if drafts[0].Text != "half a thought I had not sent" || drafts[0].Phase != "P1" {
+		t.Fatalf("draft %+v", drafts[0])
+	}
+	// And nobody is asked to do anything about it.
+	if len(r.push.kinds) != 0 {
+		t.Fatalf("pushed for something baton handled itself: %v", r.push.kinds)
+	}
+}
+
+// Mid-word is the one moment not to take somebody's line away.
+func TestADraftIsNotTakenWhileSomebodyIsTyping(t *testing.T) {
+	r := newRig(t)
+	r.view.Draft, r.view.DraftText = true, "still typing"
+	for i := 0; i < 60; i++ {
+		r.view.LastHumanKey = r.now // a key every tick
+		r.tick(time.Second)
+	}
+	if r.in.cleared != 0 || len(r.in.text) != 0 {
+		t.Fatalf("interrupted a live typist: cleared %d typed %q", r.in.cleared, r.in.text)
+	}
+	r.run(DefaultTiming.DraftGrace + 30*time.Second)
+	if r.in.cleared != 1 || len(r.in.text) == 0 || r.in.text[0] != "/compact" {
+		t.Fatalf("after hands off: cleared %d typed %q", r.in.cleared, r.in.text)
+	}
+}
+
+// keyTracker counts keystrokes and errs toward "there is a draft", so it can report one when the box is
+// empty. That must cost nothing: no file, and the run still moves.
+func TestAPhantomDraftWritesNoFileAndStillCompacts(t *testing.T) {
+	r := newRig(t)
+	r.view.Draft, r.view.DraftText = true, ""
+	r.run(DefaultTiming.DraftGrace + 30*time.Second)
+	if r.in.cleared != 1 || len(r.in.text) == 0 || r.in.text[0] != "/compact" {
+		t.Fatalf("cleared %d typed %q", r.in.cleared, r.in.text)
+	}
+	if drafts, _ := r.loop.Store.Drafts(); len(drafts) != 0 {
+		t.Fatalf("saved an empty draft: %+v", drafts)
 	}
 }
 
@@ -266,18 +320,19 @@ func TestAStaleTurnStopsBlocking(t *testing.T) {
 	}
 }
 
-// Background subagents may hold a compaction, but not forever without telling anyone.
-func TestHungBackgroundSubagentsAreReported(t *testing.T) {
+// Background subagents may hold a compaction for a while — they finish and report on their own — but a
+// hung one must not park the plan. They used to hold it for good: the gate escalated once and then
+// waited on a human. After BackgroundMax baton carries on; a compaction does not cancel the work.
+func TestHungBackgroundSubagentsStopBlocking(t *testing.T) {
 	r := newRig(t)
 	r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent", Status: "running"}} })
-	r.run(DefaultTiming.BackgroundMax + time.Minute)
-	if e := r.state().Run.Escalation; len(r.in.text) != 0 || e == nil || e.Kind != "stuck" || !strings.Contains(e.Reason, "background subagents") {
-		t.Fatalf("typed %q escalation %+v", r.in.text, e)
+	r.run(DefaultTiming.BackgroundMax - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed while a subagent was running: %q", r.in.text)
 	}
-	r.set(func(st *state.State) { st.Run.Background = nil })
-	r.run(5 * time.Second)
-	if e := r.state().Run.Escalation; e != nil || len(r.in.text) != 1 {
-		t.Fatalf("after the subagents finished: typed %q escalation %+v", r.in.text, e)
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 || r.in.text[0] != "/compact" {
+		t.Fatalf("a hung subagent still blocks: %q", r.in.text)
 	}
 }
 
@@ -296,11 +351,23 @@ func TestSleepDoesNotFailACompaction(t *testing.T) {
 	}
 }
 
+// stalls raises a real escalation for the push-mechanics tests below: a compaction baton ran, after
+// which the model never took its next turn. It is deliberately NOT a draft — a draft no longer waits
+// for anybody (see TestADraftIsSavedAndClearedRatherThanBlocking), so it cannot stand in for one.
+func (r *rig) stalls() {
+	r.set(func(st *state.State) {
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, ByBaton: true, Finished: r.now}
+	})
+	r.run(DefaultTiming.ResumeNudge + DefaultTiming.ResumeEscalate + 30*time.Second)
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "stalled" {
+		r.t.Fatalf("the fixture did not escalate: %+v", e)
+	}
+}
+
 // One escalation push is easy to miss; unresolved ones are pushed again, a few times.
 func TestUnresolvedEscalationsAreRepeated(t *testing.T) {
 	r := newRig(t)
-	r.view.Draft = true
-	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
+	r.stalls()
 	r.run(Reminders[1] + time.Minute)
 	if len(r.push.kinds) != 3 {
 		t.Fatalf("pushes %v", r.push.kinds)
@@ -311,10 +378,9 @@ func TestUnresolvedEscalationsAreRepeated(t *testing.T) {
 func TestFailedPushesAreRetried(t *testing.T) {
 	r := newRig(t)
 	r.push.fail = 1
-	r.view.Draft = true
-	r.run(DefaultTiming.DraftEscalate + 20*time.Second)
+	r.stalls()
 	r.run(2 * DefaultTiming.NoticeRetry)
-	if len(r.push.kinds) != 2 || len(r.state().Run.Notices) != 0 {
+	if len(r.push.kinds) == 0 || len(r.state().Run.Notices) != 0 {
 		t.Fatalf("pushes %v queued %v", r.push.kinds, r.state().Run.Notices)
 	}
 }

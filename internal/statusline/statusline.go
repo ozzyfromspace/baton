@@ -37,6 +37,10 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 		return mark + " · ⚠ waiting on you"
 	case st.Blocked != nil:
 		return mark + " · ⚠ blocked"
+	case st.Run.Compaction.InFlight() && st.Run.Gate != "":
+		// Never claim a compaction is happening while something holds it back. That read
+		// "compacting…" for 35 minutes once, which is indistinguishable from a hung session.
+		return mark + " · compact held: " + clip(st.Run.Gate, 32)
 	case st.Run.Compaction.InFlight():
 		return mark + " · compacting…"
 	}
