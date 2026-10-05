@@ -1,22 +1,80 @@
 #!/bin/sh
-# baton launcher. It runs the baton binary for this machine:
-#   1. $BATON_BIN, which baton sets inside the sessions it hosts (so the CLI always matches the host),
-#      and which developers can point at a local build;
-#   2. the installed binary in ~/.baton/bin.
-# Downloading a release binary on first use is added with the release tooling.
+# baton launcher: runs the baton binary that matches this plugin's version.
+#
+#   1. $BATON_BIN, set by baton inside the sessions it hosts (so the CLI always matches the host) and
+#      usable by developers to point at a local build;
+#   2. ${BATON_HOME:-~/.baton}/bin/<version>/baton, downloaded on first use from this version's GitHub
+#      release and checked against the sha256 in this plugin's checksums.txt before it is ever run.
+#
+# The download needs curl or wget, and shasum or sha256sum: tools every macOS and Linux machine has.
+set -u
+first="${1:-}"
 
-# The plugin's Stop hook runs on every turn of every session; it only matters while an elevation is
-# pending, so answer the common case here without starting the binary.
-if [ "${1:-}" = "elevate-stop" ]; then
+# The plugin's Stop hook runs on every turn of every session, and only matters while an elevation is
+# pending. Answer the common case here without starting (or downloading) anything.
+if [ "$first" = "elevate-stop" ]; then
   [ -n "${BATON_HOST:-}" ] && exit 0
   for f in "${BATON_HOME:-$HOME/.baton}/elevate/"*.json; do [ -e "$f" ] && break; exit 0; done
 fi
+
 if [ -n "${BATON_BIN:-}" ] && [ -x "$BATON_BIN" ]; then
   exec "$BATON_BIN" "$@"
 fi
-if [ -x "${BATON_HOME:-$HOME/.baton}/bin/baton" ]; then
-  exec "${BATON_HOME:-$HOME/.baton}/bin/baton" "$@"
+
+fail() {
+  echo "baton: $*" >&2
+  [ "$first" = "elevate-stop" ] && exit 0 # a hook must never block claude
+  exit 1
+}
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || fail "cannot locate the plugin"
+root=$(dirname -- "$here")
+version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json" | head -n 1)
+[ -n "$version" ] || fail "cannot read the plugin version from $root/.claude-plugin/plugin.json"
+home="${BATON_HOME:-$HOME/.baton}"
+bin="$home/bin/v$version/baton"
+
+if [ ! -x "$bin" ]; then
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) fail "this platform ($(uname -s)) has no baton release yet" ;;
+  esac
+  case "$(uname -m)" in
+    arm64 | aarch64) arch=arm64 ;;
+    x86_64 | amd64) arch=amd64 ;;
+    *) fail "this architecture ($(uname -m)) has no baton release yet" ;;
+  esac
+  asset="baton_v${version}_${os}_${arch}"
+  want=$(awk -v a="$asset" '$2 == a { print $1 }' "$root/checksums.txt" 2>/dev/null)
+  [ -n "$want" ] || fail "no checksum for $asset in this plugin; was it built for a release?"
+  url="https://github.com/ozzyfromspace/baton/releases/download/v$version/$asset"
+
+  mkdir -p "$home/bin/v$version" || fail "cannot create $home/bin"
+  tmp="$bin.download.$$"
+  echo "baton: downloading baton v$version ($os/$arch) — one time" >&2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 -o "$tmp" "$url" || { rm -f "$tmp"; fail "download failed: $url"; }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$tmp" "$url" || { rm -f "$tmp"; fail "download failed: $url"; }
+  else
+    fail "need curl or wget to download $url"
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    got=$(shasum -a 256 "$tmp" | awk '{ print $1 }')
+  elif command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$tmp" | awk '{ print $1 }')
+  else
+    rm -f "$tmp"
+    fail "need shasum or sha256sum to verify the download"
+  fi
+  if [ "$got" != "$want" ]; then
+    rm -f "$tmp"
+    fail "checksum mismatch for $asset (expected $want, got $got); not running it"
+  fi
+  chmod +x "$tmp" && mv -f "$tmp" "$bin" || fail "cannot install $bin"
+  # The `baton` on your PATH (via `baton init`) always points at the newest installed version.
+  ln -sfn "v$version/baton" "$home/bin/baton" 2>/dev/null || true
 fi
-[ "${1:-}" = "elevate-stop" ] && exit 0
-echo "baton: the baton binary is not installed yet; run /baton setup" >&2
-exit 1
+
+exec "$bin" "$@"
