@@ -83,16 +83,22 @@ type Session struct {
 func NewProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"config", "user.name", "baton e2e"}, {"config", "user.email", "e2e@baton.invalid"},
-		{"config", "commit.gpgsign", "false"}, {"config", "tag.gpgsign", "false"},
-	} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %s", args, out)
-		}
-	}
+	Git(t, dir, "init", "-q")
+	Git(t, dir, "config", "user.name", "baton e2e")
+	Git(t, dir, "config", "user.email", "e2e@baton.invalid")
+	Git(t, dir, "config", "commit.gpgsign", "false")
+	Git(t, dir, "config", "tag.gpgsign", "false")
 	return dir
+}
+
+// Git runs git in dir and returns its output, failing the test if git fails.
+func Git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
 }
 
 // NewPlainProject makes a throwaway folder that is not a git repository. baton runs a plan there the same

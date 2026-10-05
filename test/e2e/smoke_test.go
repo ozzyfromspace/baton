@@ -38,11 +38,8 @@ func Attach(t *testing.T, dir, doc string) {
 	}
 	// The plan is part of the project, as it would be in real use: a run starts from a clean tree.
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		for _, args := range [][]string{{"add", "plan.md"}, {"commit", "-q", "-m", "docs: the plan"}} {
-			if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
-				t.Fatalf("git %v: %s", args, out)
-			}
-		}
+		Git(t, dir, "add", "plan.md")
+		Git(t, dir, "commit", "-q", "-m", "docs: the plan")
 	}
 }
 
