@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -24,7 +25,7 @@ func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", cmdAttach)
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
 	register("done", "mark the current phase finished: done <phase> [--notes TEXT] [--keep-dirty WHY]", cmdDone)
-	register("blocked", "report that you cannot continue without the human: blocked <reason> [--keep-dirty WHY]", cmdBlocked)
+	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("waiting", "declare a bounded wait: waiting <what> --until <duration, e.g. 20m>", cmdWaiting)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("pause", "stop baton from acting until resume (the human takes the wheel)", cmdPause)
@@ -178,6 +179,9 @@ func cmdStatus(args []string, io IO) int {
 	}
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)
+		if st.Blocked.Tried != "" {
+			fmt.Fprintf(io.Out, "  tried: %s\n", st.Blocked.Tried)
+		}
 	}
 	if st.Waiting != nil {
 		fmt.Fprintf(io.Out, "waiting: %s (until %s)\n", st.Waiting.What, st.Waiting.Until.Local().Format("15:04"))
@@ -249,8 +253,7 @@ func cmdDone(args []string, io IO) int {
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {
 		s.Event("refused", map[string]any{"command": "done", "phase": id, "why": "uncommitted work", "files": len(work.fresh)})
-		return fail(io, "not done — %s leaves uncommitted work that was not there when it started:\n%s\n%s If it truly cannot be committed, say why: baton done %s --keep-dirty \"<why>\"",
-			id, fileList(work.fresh), commitAdvice("--notes"), id)
+		return fail(io, "%s", decide.UncommittedRefusal("done", id, fileList(work.fresh)))
 	}
 	var next string
 	var startHead string
@@ -288,14 +291,20 @@ func cmdDone(args []string, io IO) int {
 }
 
 func cmdBlocked(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"keep-dirty"}, nil)
-	if err != nil {
-		return fail(io, "usage: baton blocked <reason> [--keep-dirty WHY]%s", errSuffix(err))
-	}
+	p, err := parseArgs(args, []string{"tried", "keep-dirty"}, nil)
 	reason := strings.TrimSpace(strings.Join(p.pos, " "))
+	if err != nil || reason == "" {
+		return fail(io, "usage: baton blocked \"<why>\" --tried \"<what you tried>\" [--keep-dirty \"<why it stays uncommitted>\"]%s", errSuffix(err))
+	}
 	s, _, ok := storeAndPlan(io)
 	if !ok {
 		return 1
+	}
+	tried := strings.TrimSpace(p.vals["tried"])
+	if tried == "" {
+		s.Event("refused", map[string]any{"command": "blocked", "why": "no --tried"})
+		return fail(io, "not recorded — blocked stops the whole run until the human answers, so it needs --tried \"<what you tried>\".\n%s",
+			decide.Playbook(gitx.Usable(filepath.Dir(s.Dir)), config.EscalationFromEnv(io.Env).Timeout))
 	}
 	st, err := s.Load()
 	if err != nil {
@@ -303,15 +312,20 @@ func cmdBlocked(args []string, io IO) int {
 	}
 	work := checkWork(s, st.Current)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
-	if len(work.fresh) > 0 && keep == "" && reason != "" {
+	if len(work.fresh) > 0 && keep == "" {
 		s.Event("refused", map[string]any{"command": "blocked", "phase": st.Current, "why": "uncommitted work", "files": len(work.fresh)})
-		return fail(io, "not recorded — %s leaves uncommitted work that was not there when it started, and a blocked run can sit for hours:\n%s\n%s If it truly cannot be committed, say why: baton blocked \"<reason>\" --keep-dirty \"<why>\"",
-			st.Current, fileList(work.fresh), commitAdvice("your reason"))
+		return fail(io, "%s", decide.UncommittedRefusal("blocked", st.Current, fileList(work.fresh)))
 	}
-	if _, err := s.Update(func(st *state.State) error { return state.SetBlocked(st, reason, io.Now()) }); err != nil {
+	if _, err := s.Update(func(st *state.State) error {
+		if err := state.SetBlocked(st, reason, io.Now()); err != nil {
+			return err
+		}
+		st.Blocked.Tried = tried
+		return nil
+	}); err != nil {
 		return fail(io, "%v", err)
 	}
-	blocked := map[string]any{"reason": reason}
+	blocked := map[string]any{"reason": reason, "tried": tried}
 	if len(work.fresh) > 0 {
 		blocked["keep_dirty"], blocked["files"] = keep, len(work.fresh)
 	}
@@ -372,13 +386,6 @@ func (w workLeft) report(io IO, phase, keep string) {
 		fmt.Fprintf(io.Out, "baton: note — %d uncommitted %s already there when %s started and %s not changed; baton leaves %s alone:\n%s\n",
 			n, plural(n, "file was", "files were"), phase, plural(n, "has", "have"), plural(n, "it", "them"), fileList(w.kept))
 	}
-}
-
-// commitAdvice is how to get past the gate, in the wording proven in the S2 replay: commit, degraded if
-// need be, and never lose work to get a clean tree.
-func commitAdvice(where string) string {
-	return "Commit it first, degraded if need be (e.g. --no-gpg-sign if signing fails), and say how to repair that in " + where + ". " +
-		"Never discard, stash, reset or unstage work to get a clean tree."
 }
 
 // fileList indents paths one per line, at most 15 of them.

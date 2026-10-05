@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -184,7 +185,7 @@ func claimsBaton(in map[string]any) bool {
 func questionRefusal(pending []issued) string {
 	if len(pending) > 0 {
 		return NudgePrefix + " While a plan runs, the only question that may be put to the human is the one baton issued, exactly as issued. " +
-			"To ask it, " + pending[0].call() + ". For anything else, decide yourself: pick the most reasonable option, note the assumption, and carry on."
+			"To ask it, " + pending[0].Call() + ". For anything else, decide yourself: pick the most reasonable option, note the assumption, and carry on."
 	}
 	return NudgePrefix + " baton is running this plan unattended, so a question would stop the run until someone answers it. " +
 		"Decide yourself: pick the most reasonable option, note the assumption (in your commit message and your `baton done` notes), and carry on. " +
@@ -402,7 +403,7 @@ func dialogKey(in map[string]any) string {
 	if str(in, "tool_name") == "AskUserQuestion" {
 		qs := questions(in)
 		for i, q := range qs {
-			qs[i] = normalize(q)
+			qs[i] = decide.Normalize(q)
 		}
 		return strings.Join(qs, "\n")
 	}
@@ -544,12 +545,12 @@ func contextValves(st *state.State, vs valve.Settings) valveAction {
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
 		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
 		q := warnQuestion(used, lim, vs.WarnTimeout)
-		st.Run.WarnQuestion = q.question
+		st.Run.WarnQuestion = q.Text
 		return valveAction{
 			event:  "context_warning",
 			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
 			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
-			tell:   NudgePrefix + " Context warning. Before anything else, " + q.call() + ". baton acts on the answer itself; then follow what it tells you.",
+			tell:   NudgePrefix + " Context warning. Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you.",
 		}
 	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
 		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):
@@ -576,20 +577,8 @@ func warnQuestion(used int, lim valve.Limits, timeout time.Duration) issued {
 	}
 	q := fmt.Sprintf("baton: the context holds %s tokens, past the %s warning line. Claude Code compacts it on its own at about %s. Checkpoint now? "+
 		"If nobody answers within %s, baton picks Keep going.",
-		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt), spell(timeout))
-	return issued{kind: "context_warning", question: q, options: warnOptions}
-}
-
-// spell says a duration the way people do: "20 minutes", "1 minute", "45s".
-func spell(d time.Duration) string {
-	switch {
-	case d == time.Minute:
-		return "1 minute"
-	case d > time.Minute && d%time.Minute == 0:
-		return fmt.Sprintf("%d minutes", d/time.Minute)
-	default:
-		return d.String()
-	}
+		valve.Tokens(used), valve.Tokens(lim.Warn), valve.Tokens(lim.AutoAt), decide.Spell(timeout))
+	return issued{"context_warning", decide.Question{Text: q, Options: decide.WarnOptions}}
 }
 
 // notification records Claude Code's notifications. One of them is authoritative about the session:

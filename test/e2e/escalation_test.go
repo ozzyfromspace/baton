@@ -57,7 +57,7 @@ func TestBlockedAsksTheHumanAndResumes(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
 	s := Start(t, dir, "--model", "haiku",
-		`This phase needs a decision only the human can make. Run exactly: baton blocked "need the human to pick a greeting" — then end your turn and follow baton's instructions.`)
+		`This phase needs a decision only the human can make. Run exactly: baton blocked "need the human to pick a greeting" --tried "the plan does not say which greeting" — then end your turn and follow baton's instructions.`)
 	s.Trust()
 	waitSequence(t, s, 3*time.Minute,
 		func(e map[string]any) bool { return e["kind"] == "escalated" && e["type"] == "blocked" },

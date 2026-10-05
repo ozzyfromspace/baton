@@ -40,6 +40,7 @@ var headline = map[string]string{
 	"session_ended":     "the session ended mid-plan",
 	"rate_limit":        "paused by a usage limit",
 	"dialog":            "claude is waiting for your answer",
+	"note":              "the run decided something without you",
 }
 
 func (m *multi) Notify(project, kind, detail string) error {

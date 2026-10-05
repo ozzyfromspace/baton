@@ -3,7 +3,6 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -640,25 +639,6 @@ func TestAnAwkwardReasonStillMatches(t *testing.T) {
 	f.fire("PostToolUse", answer(ask(q, escalationLabels...), "Continue"))
 	if st := f.state(); st.Blocked != nil || st.Run.Dialogs.AnyOpen() {
 		t.Fatalf("not resumed: %+v", st)
-	}
-}
-
-func TestSanitize(t *testing.T) {
-	for in, want := range map[string]string{
-		"plain":                         "plain",
-		"  two\n lines\t\tand tabs ":    "two lines and tabs",
-		`say "hi"`:                      "say 'hi'",
-		`C:\path\to`:                    "C:/path/to",
-		"bell\x07 and nul\x00":          "bell and nul",
-		"em — dash, ünïcode, 🎺 trumpet": "em — dash, ünïcode, 🎺 trumpet",
-	} {
-		got := Sanitize(in)
-		if got != want {
-			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
-		}
-		if quoted := fmt.Sprintf("%q", got); quoted != `"`+got+`"` {
-			t.Errorf("%q still needs escaping: %s", got, quoted)
-		}
 	}
 }
 

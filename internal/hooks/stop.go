@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -148,7 +149,7 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 		d.emit("escalated", map[string]any{"type": kind, "reason": reason})
 	}
 	if e.Question == "" {
-		e.Question = Sanitize("baton: " + reason)
+		e.Question = decide.Sanitize("baton: " + reason)
 	}
 	if !e.Asked {
 		e.Asked = true
@@ -161,7 +162,7 @@ func escalate(st *state.State, d *decision, kind, reason string, now time.Time) 
 // askReason makes the model put a fixed question to the human. AskUserQuestion reaches every device the
 // human uses, which is why baton routes the in-session escalation through it.
 func askReason(question string) string {
-	return "[baton] Bring the human in now: " + issued{"escalation", question, escalationOptions}.call() +
+	return "[baton] Bring the human in now: " + decide.Question{Text: question, Options: decide.EscalationOptions}.Call() +
 		". baton acts on the answer itself; then follow what it tells you."
 }
 

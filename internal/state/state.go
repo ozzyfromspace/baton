@@ -39,9 +39,10 @@ type PhaseState struct {
 	StartDirty *Dirt `json:"start_dirty,omitempty"`
 }
 
-// Block is a reason the model cannot continue without a human.
+// Block is a reason the model cannot continue without a human, and what it tried first.
 type Block struct {
 	Reason string    `json:"reason"`
+	Tried  string    `json:"tried,omitempty"`
 	Since  time.Time `json:"since"`
 }
 
@@ -68,6 +69,11 @@ type State struct {
 	// CheckpointAsked: the human chose "Checkpoint now"; the model may finish its step first, and the
 	// next stop becomes a checkpoint whether or not the model ran `baton checkpoint`.
 	CheckpointAsked bool `json:"checkpoint_asked,omitempty"`
+	// Decisions are the notes and proposals of this run, oldest first.
+	Decisions []Decision `json:"decisions,omitempty"`
+	// ReviewDue is the phase whose decisions without the human reached max_auto_decisions: baton stops
+	// for the human to review them before anything else, and takes no further notes or proposals.
+	ReviewDue string `json:"review_due,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }

@@ -53,9 +53,10 @@ func TestBlockedAndDoneRefuseWorkThePhaseLeftUncommitted(t *testing.T) {
 	gittest.Write(t, root, "a.txt", "changed by P0\n")
 	gittest.Write(t, root, "src/new.txt", "made by P0\n")
 
-	for _, args := range [][]string{{"blocked", "need", "a", "key"}, {"done", "P0"}} {
+	for _, args := range [][]string{{"blocked", "need", "a", "key", "--tried", "the vault"}, {"done", "P0"}} {
 		why := s.fails(args...)
-		for _, want := range []string{"    a.txt\n    src/new.txt\n", "Commit it first, degraded if need be (e.g. --no-gpg-sign", "Never discard, stash, reset or unstage work", "--keep-dirty \"<why>\""} {
+		for _, want := range []string{"    a.txt\n    src/new.txt\n", "Commit it first, degraded if need be (e.g. --no-gpg-sign", "baton note \"<what you did>\" --undo \"<how to repair it>\"",
+			"Never discard, stash, reset or unstage work", "--keep-dirty \"<why"} {
 			if !strings.Contains(why, want) {
 				t.Errorf("%v: refusal lacks %q:\n%s", args, want, why)
 			}
@@ -103,8 +104,8 @@ func TestBlockedAndDoneRefuseWorkThePhaseLeftUncommitted(t *testing.T) {
 	// An empty reason is no reason.
 	s.startNext()
 	gittest.Write(t, root, "r1.txt", "R1\n")
-	s.fails("blocked", "stuck", "--keep-dirty", " ")
-	s.must("", "blocked", "stuck", "--keep-dirty", "it is the thing I am stuck on")
+	s.fails("blocked", "stuck", "--tried", "everything", "--keep-dirty", " ")
+	s.must("", "blocked", "stuck", "--tried", "everything", "--keep-dirty", "it is the thing I am stuck on")
 }
 
 // A phase that started before baton recorded its uncommitted work (a run from an older baton, or a
@@ -146,7 +147,7 @@ func TestWithoutGitNothingIsRefusedOrCommitted(t *testing.T) {
 			s, planFile, root := setup(t)
 			s.attach(planFile)
 			var said strings.Builder
-			for _, args := range [][]string{{"checkpoint"}, {"blocked", "need", "a", "key", "--keep-dirty", "ignored"}, {"resume"}, {"done", "P0"}} {
+			for _, args := range [][]string{{"checkpoint"}, {"blocked", "need", "a", "key", "--tried", "the vault", "--keep-dirty", "ignored"}, {"resume"}, {"done", "P0"}} {
 				gittest.Write(t, root, args[0]+".txt", "work\n")
 				code, out, errs := s.run("", args...)
 				if code != 0 {

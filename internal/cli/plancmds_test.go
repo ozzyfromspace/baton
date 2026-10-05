@@ -90,8 +90,9 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 	}
 
 	s.must("", "waiting", "the", "build", "--until", "20m")
-	s.must("", "blocked", "need", "a", "product", "decision")
-	if st := s.must("", "status"); !strings.Contains(st, "blocked: need a product decision") || strings.Contains(st, "waiting:") {
+	s.mustFail("needs --tried", "blocked", "need", "a", "product", "decision")
+	s.must("", "blocked", "need", "a", "product", "decision", "--tried", "the spec and the issue tracker")
+	if st := s.must("", "status"); !strings.Contains(st, "blocked: need a product decision\n  tried: the spec and the issue tracker") || strings.Contains(st, "waiting:") {
 		t.Fatalf("status when blocked: %s", st)
 	}
 	s.must("", "resume")
@@ -126,7 +127,7 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 
 func TestCommandsWithoutAPlan(t *testing.T) {
 	s, _ := newSession(t)
-	for _, args := range [][]string{{"done", "P0"}, {"blocked", "x"}, {"waiting", "x", "--until", "1m"}, {"checkpoint"}} {
+	for _, args := range [][]string{{"done", "P0"}, {"blocked", "x", "--tried", "y"}, {"waiting", "x", "--until", "1m"}, {"checkpoint"}} {
 		s.mustFail("no plan is attached", args...)
 	}
 	if out := s.must("", "status"); !strings.Contains(out, "no plan attached") {
