@@ -24,7 +24,10 @@ make build      # ./dist/baton for this machine
 make test       # unit tests
 make cross      # all release targets into ./dist
 make e2e        # real-claude scenarios (needs BATON_E2E=1, costs a few cents)
+make release-prep VERSION=v0.1.0   # pin checksums + plugin version, then commit and tag
 ```
+
+End-to-end tests run real `claude --model haiku` (no auto mode on Haiku, so tests approve dialogs with `AutoApprove`). They isolate `BATON_HOME`, never notify, and remove any plan file plan mode writes to `~/.claude/plans`.
 
 ## Conventions
 
