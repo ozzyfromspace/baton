@@ -33,10 +33,13 @@ type Config struct {
 	Autocompact string // passed as --autocompact when non-empty, e.g. "810k"
 	Stdin       *os.File
 	Stdout      *os.File
-	Env         []string // the child's base environment
-	Now         func() time.Time
-	Logf        func(format string, a ...any)
-	Controller  Controller // nil: pure passthrough
+	Env         []string // the child's base environment; any BATON_* in it is dropped
+	// BatonEnv is baton's own environment for the session it drives: the context valves' settings, a
+	// pending command after elevation. Only an owner gets it.
+	BatonEnv   []string
+	Now        func() time.Time
+	Logf       func(format string, a ...any)
+	Controller Controller // nil: pure passthrough
 	// TypeDelay and EnterDelay pace injected keystrokes so Claude Code reads them as typing, not a paste.
 	TypeDelay, EnterDelay time.Duration
 }
@@ -91,6 +94,7 @@ func Run(cfg Config) (int, error) {
 		if cfg.Autocompact != "" {
 			args = append([]string{"--autocompact", cfg.Autocompact}, args...)
 		}
+		env = append(env, cfg.BatonEnv...)
 		env = append(env, "BATON_HOST=1", "BATON_DIR="+cfg.Store.Dir, "BATON_INSTANCE="+cfg.Instance,
 			"BATON_BIN="+cfg.BatonBin, "BATON_VERSION="+cfg.Version)
 	}

@@ -83,15 +83,16 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, valves.Env()...)
-	env = append(env, extraEnv...)
+	// baton's own settings travel separately: the host drops every BATON_* from the inherited
+	// environment, and these must reach the hooks and the status line.
+	batonEnv := append(valves.Env(), extraEnv...)
 	controller := &loop.Loop{
 		Store: st, Notify: notify.New(cfg), Project: filepath.Base(filepath.Dir(dir)),
 		Timing: timing, Logf: logf,
 	}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Store: st, Instance: instance, Version: version.Version,
-		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, Now: io.Now, Logf: logf,
+		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: controller,
 	})
 	if err != nil {

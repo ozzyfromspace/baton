@@ -210,14 +210,34 @@ func TestControllerSeesDraftsAndCanType(t *testing.T) {
 	}
 }
 
+// The session gets baton's own settings (the valves, a pending command after elevation), but nothing
+// BATON_* it inherited: that belongs to some other session. v0.1.1 dropped both, so the hooks ran on
+// default valves and an elevated session never got its pending command.
+func TestTheSessionGetsBatonsOwnEnvironment(t *testing.T) {
+	r := startRig(t, func(c *Config) {
+		c.Env = append(c.Env, "BATON_DIR=/someone/else/.baton", "BATON_WARN_TOKENS=5")
+		c.BatonEnv = []string{"BATON_WARN_TOKENS=1000", "BATON_COMPACT_CAP=810000", "BATON_PENDING=baton done P3"}
+	})
+	r.quit()
+	_, env := r.start()
+	for k, want := range map[string]string{"BATON_WARN_TOKENS": "1000", "BATON_COMPACT_CAP": "810000", "BATON_PENDING": "baton done P3"} {
+		if env[k] != want {
+			t.Errorf("%s = %q, want %q", k, env[k], want)
+		}
+	}
+	if env["BATON_DIR"] == "/someone/else/.baton" {
+		t.Error("an inherited BATON_DIR reached the session")
+	}
+}
+
 func TestSecondHostRunsAsPlainPassthrough(t *testing.T) {
 	store, _ := state.Open(filepath.Join(t.TempDir(), ".baton"), "other", time.Now)
 	store.Update(func(st *state.State) error { return state.Claim(st, "other", 1, time.Now()) })
-	r := startRig(t, func(c *Config) { c.Store = store })
+	r := startRig(t, func(c *Config) { c.Store = store; c.BatonEnv = []string{"BATON_WARN_TOKENS=1000"} })
 	r.waitScreen("runs as plain claude")
 	r.quit()
 	args, env := r.start()
-	if strings.Contains(strings.Join(args, " "), "--settings") || env["BATON_HOST"] != "" {
+	if strings.Contains(strings.Join(args, " "), "--settings") || env["BATON_HOST"] != "" || env["BATON_WARN_TOKENS"] != "" {
 		t.Fatalf("non-owner got baton wiring: args %v env %v", args, env)
 	}
 }
