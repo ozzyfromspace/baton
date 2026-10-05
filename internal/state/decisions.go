@@ -122,12 +122,29 @@ func Resolve(st *State, id, by, answer string, now time.Time) error {
 	return fmt.Errorf("no proposal %s", id)
 }
 
-// Held reports a halt only the human may clear (a hard block, a proposal held for them, a review) that
+// DueReview stops the run for the human to review the decisions phase made without them.
+func DueReview(st *State, phase string, now time.Time) { st.ReviewDue, st.ReviewAt = phase, now }
+
+// Reviewed records that the human went over the decisions of the phase under review, and lets the run
+// make decisions without them again.
+func Reviewed(st *State) {
+	for i := range st.Decisions {
+		if d := &st.Decisions[i]; d.Phase == st.ReviewDue && d.WithoutHuman() {
+			d.Reviewed = true
+		}
+	}
+	st.ReviewDue, st.ReviewAt = "", time.Time{}
+}
+
+// Held reports a halt only the human may clear (a hard block, a review, a proposal held for them) that
 // they have not taken part in since it began. While one holds, the model must not be able to clear it
 // with a command of its own: if it could, blocked would stop being a signal anyone can trust.
 func (st State) Held() (what string, since time.Time, held bool) {
 	if b := st.Blocked; b != nil && !st.Run.HumanAt.After(b.Since) {
 		return "blocked: " + b.Reason, b.Since, true
+	}
+	if st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) {
+		return "a review of the decisions " + st.ReviewDue + " made without them", st.ReviewAt, true
 	}
 	if e := st.Run.Escalation; e != nil && humanDecides[e.Kind] && !st.Run.HumanAt.After(e.Since) {
 		return e.Reason, e.Since, true

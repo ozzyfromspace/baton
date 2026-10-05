@@ -46,6 +46,11 @@ func TestStopDecisionTable(t *testing.T) {
 				state.Done(st, pl, "P0", tStop, false)
 				st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactTyped}
 			}},
+		{name: "a review comes before the boundary", block: true, reason: "P0 has made 0 decisions without you", notice: "review",
+			setup: func(st *state.State) {
+				state.Done(st, pl, "P0", tStop, false)
+				state.DueReview(st, "P0", tStop)
+			}},
 		{name: "a proposal not yet put to the human", block: true, reason: "You stopped, but put your proposal d1 to the human first: call the AskUserQuestion tool",
 			setup: func(st *state.State) {
 				state.AddProposal(st, state.Decision{What: "skip it", Question: "baton: x. Unless you answer by 12:05, I will skip it."}, tStop)

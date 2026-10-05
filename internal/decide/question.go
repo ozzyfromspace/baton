@@ -44,6 +44,12 @@ var EscalationOptions = []Option{
 	{"Pause baton", "I'll take it from here"},
 }
 
+// ReviewOptions are the answers to a review of the decisions a phase made without the human.
+var ReviewOptions = []Option{
+	{"Continue", "I've seen them; let the run go on"},
+	{"Pause baton", "I'll take it from here"},
+}
+
 // WarnOptions are the context question's answers. The default, Keep going, is third on purpose: baton
 // types 3 when nobody answers, and in a permission prompt 3 is "No" (docs/research/escalation.md).
 var WarnOptions = []Option{
@@ -62,6 +68,15 @@ var ProposalOptions = []Option{
 // AskFirst says to put a proposal to the human before anything else: until it is, nothing moves.
 func AskFirst(id, question string) string {
 	return fmt.Sprintf("put your proposal %s to the human first: %s", id, Question{question, ProposalOptions}.Call())
+}
+
+// ReviewQuestion is the question that stops the run for the human to review the decisions phase made
+// without them.
+func ReviewQuestion(phase string, n int) Question {
+	return Question{
+		Text:    fmt.Sprintf("baton: %s has made %d decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let the run go on?", phase, n),
+		Options: ReviewOptions,
+	}
 }
 
 // Deadline is when a proposal made at now goes ahead: timeout later, rounded up to the minute, since the

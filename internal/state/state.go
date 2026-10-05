@@ -73,7 +73,9 @@ type State struct {
 	Decisions []Decision `json:"decisions,omitempty"`
 	// ReviewDue is the phase whose decisions without the human reached max_auto_decisions: baton stops
 	// for the human to review them before anything else, and takes no further notes or proposals.
-	ReviewDue string `json:"review_due,omitempty"`
+	// ReviewAt is when it became due.
+	ReviewDue string    `json:"review_due,omitempty"`
+	ReviewAt  time.Time `json:"review_at,omitzero"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }
@@ -224,11 +226,14 @@ func Pause(st *State) error {
 
 // Resume gives the session back to baton and clears any block.
 func Resume(st *State) error {
-	if st.Mode != ModePaused && st.Blocked == nil && st.Run.Escalation == nil {
+	if st.Mode != ModePaused && st.Blocked == nil && st.Run.Escalation == nil && st.ReviewDue == "" {
 		return fmt.Errorf("nothing to resume (mode: %s)", st.Mode)
 	}
 	if st.Mode == ModePaused {
 		st.Mode = ModeRunning
+	}
+	if st.ReviewDue != "" {
+		Reviewed(st) // the human chose to let the run go on
 	}
 	st.Blocked, st.Run.Escalation = nil, nil
 	st.Run.Progress()

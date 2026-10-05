@@ -270,6 +270,100 @@ func TestToolsAreHeldUntilAProposalIsAsked(t *testing.T) {
 
 }
 
+// While a review is due the turn must end, and the review question gets through. A turn the human
+// started after the review came due is not held.
+func TestToolsAreHeldForAReview(t *testing.T) {
+	f := newFixture(t, true)
+	f.store.Update(func(st *state.State) error { state.DueReview(st, "P0", f.now); return nil })
+	if r := denyReason(f.fire("PreToolUse", bash("ls"))); !strings.Contains(r, "End your turn now: P0 has made as many decisions") {
+		t.Fatalf("not held for the review: %q", r)
+	}
+	stop := f.fire("Stop", map[string]any{})
+	reason, _ := stop["reason"].(string)
+	q := f.state().Run.Escalation.Question
+	if stop["decision"] != "block" || !strings.Contains(reason, q) || !strings.Contains(reason, `"Continue"`) {
+		t.Fatalf("stop: %v", stop)
+	}
+	if r := denyReason(f.fire("PreToolUse", ask(q, "Continue", "Pause baton"))); r != "" {
+		t.Fatalf("the review question was held: %s", r)
+	}
+	// The human typing is the human taking part: their turn is not held.
+	f.now = f.now.Add(time.Minute)
+	f.fire("UserPromptSubmit", map[string]any{"prompt": "undo d1 first"})
+	if r := denyReason(f.fire("PreToolUse", bash("git log"))); r != "" {
+		t.Fatalf("the human's turn was held: %s", r)
+	}
+}
+
+// The review question: Continue marks the phase's decisions reviewed and lets the run go on; Pause baton
+// hands it to the human, who hands it back with /baton resume.
+func TestAReviewEndsWithTheHumansAnswer(t *testing.T) {
+	for _, a := range []string{"Continue", "Pause baton"} {
+		t.Run(a, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.store.Update(func(st *state.State) error {
+				state.AddNote(st, "skipped the flaky test", "re-enable it", f.now)
+				state.AddNote(st, "used the staging key", "", f.now)
+				state.DueReview(st, "P0", f.now)
+				return nil
+			})
+			f.fire("Stop", map[string]any{})
+			q := f.state().Run.Escalation.Question
+			if !strings.Contains(q, "P0 has made 2 decisions without you") {
+				t.Fatalf("question %q", q)
+			}
+			f.now = f.now.Add(time.Minute)
+			f.fire("PermissionRequest", ask(q, "Continue", "Pause baton"))
+			if d := f.state().Run.Dialogs[0]; d.Kind != "review" {
+				t.Fatalf("dialog %+v", d)
+			}
+			out := f.fire("PostToolUse", answer(ask(q, "Continue", "Pause baton"), a))
+			st := f.state()
+			if st.ReviewDue != "" || !st.Decisions[0].Reviewed || !st.Decisions[1].Reviewed || st.Unattended("P0") != 0 {
+				t.Fatalf("not reviewed: %q %+v", st.ReviewDue, st.Decisions)
+			}
+			if !st.Run.HumanAt.Equal(f.now) || !f.logged("review_resolved", map[string]any{"phase": "P0", "answer": a}) {
+				t.Fatalf("human at %v, events %v", st.Run.HumanAt, f.events())
+			}
+			want := map[string]string{"Continue": state.ModeRunning, "Pause baton": state.ModePaused}[a]
+			if st.Mode != want || additionalContext(out) == "" {
+				t.Fatalf("mode %s, told %q", st.Mode, additionalContext(out))
+			}
+			if a == "Continue" && st.Run.Escalation != nil {
+				t.Fatalf("escalation left: %+v", st.Run.Escalation)
+			}
+		})
+	}
+}
+
+// A proposal that goes ahead on the timer and reaches the cap: the model may still do it, then the turn
+// ends for a review.
+func TestAGoAheadAtTheCapIsDoneThenReviewed(t *testing.T) {
+	f := newFixture(t, true)
+	f.vars = map[string]string{"BATON_MAX_AUTO_DECISIONS": "1"}
+	call := f.propose(false)
+	f.fire("PermissionRequest", call)
+	f.store.Update(func(st *state.State) error { st.Run.Dialogs[0].AutoAnswered = f.now; return nil })
+	f.now = f.now.Add(time.Minute)
+	out := f.fire("PostToolUse", answer(call, "Go ahead"))
+	if st := f.state(); st.ReviewDue != "P0" || !f.logged("review_due", map[string]any{"phase": "P0"}) {
+		t.Fatalf("review due %q", st.ReviewDue)
+	}
+	if !strings.Contains(additionalContext(out), "once it is done, end your turn") {
+		t.Fatalf("told %q", additionalContext(out))
+	}
+	if r := denyReason(f.fire("PreToolUse", bash("git commit --no-gpg-sign -m P0"))); r != "" {
+		t.Fatalf("the go-ahead itself was held: %s", r)
+	}
+	f.now = f.now.Add(time.Minute)
+	if stop := f.fire("Stop", map[string]any{}); stop["decision"] != "block" || f.state().Run.Escalation.Kind != "review" {
+		t.Fatalf("stop: %v", stop)
+	}
+	if r := denyReason(f.fire("PreToolUse", bash("ls"))); r == "" {
+		t.Fatal("not held once the turn ended")
+	}
+}
+
 // No other question of baton's while a proposal waits on the human: one at a time.
 func TestNoContextQuestionWhileAProposalWaits(t *testing.T) {
 	f := newFixture(t, true)

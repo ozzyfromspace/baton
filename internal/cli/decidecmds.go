@@ -62,7 +62,7 @@ func cmdNote(args []string, io IO) int {
 		}
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "note", Text: what, At: io.Now()})
 		if count = st.Unattended(d.Phase); decide.CapReached(count, most) {
-			st.ReviewDue = d.Phase
+			state.DueReview(st, d.Phase, io.Now())
 		}
 		return nil
 	})
@@ -112,6 +112,9 @@ func cmdPropose(args []string, io IO) int {
 	}
 	d.Question = q.Text
 	_, err = s.Update(func(st *state.State) error {
+		if st.ReviewDue != "" {
+			return reviewRefusal(st)
+		}
 		if err := guard(io, st, "not recorded", false); err != nil {
 			return err
 		}
@@ -122,8 +125,6 @@ func cmdPropose(args []string, io IO) int {
 			return refusal{"compaction owed", "not recorded — baton must compact the context first. End your turn now; if the proposal still applies after the compaction, make it then."}
 		case pending != nil:
 			return refusal{"proposal pending", pendingRefusal(*pending)}
-		case st.ReviewDue != "":
-			return reviewRefusal(st)
 		}
 		var err error
 		d, err = state.AddProposal(st, d, io.Now())

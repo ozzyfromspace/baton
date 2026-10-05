@@ -90,6 +90,8 @@ func TestHeldUntilTheHumanTakesPart(t *testing.T) {
 		{"decision", func(st *State) { st.Run.Escalation = &Escalation{Kind: "decision", Reason: "deciding", Since: at} }, before, true},
 		{"review", func(st *State) { st.Run.Escalation = &Escalation{Kind: "review", Since: at} }, time.Time{}, true},
 		{"review, human since", func(st *State) { st.Run.Escalation = &Escalation{Kind: "review", Since: at} }, after, false},
+		{"review due", func(st *State) { DueReview(st, "P0", at) }, before, true},
+		{"review due, human since", func(st *State) { DueReview(st, "P0", at) }, after, false},
 		{"stalled is the watchdog's", func(st *State) { st.Run.Escalation = &Escalation{Kind: "stalled", Since: at} }, time.Time{}, false},
 	} {
 		st := running(t)
@@ -103,5 +105,23 @@ func TestHeldUntilTheHumanTakesPart(t *testing.T) {
 	SetBlocked(&st, "need a key", at)
 	if what, since, _ := st.Held(); what != "blocked: need a key" || !since.Equal(at) {
 		t.Errorf("%q %v", what, since)
+	}
+}
+
+// A review ends when the human lets the run go on: the phase's decisions without them are marked
+// reviewed, and no longer count toward the cap.
+func TestResumingReviewsTheDecisions(t *testing.T) {
+	st := running(t)
+	AddNote(&st, "a", "", t0)
+	AddNote(&st, "b", "", t0)
+	DueReview(&st, "P0", t0)
+	if err := Resume(&st); err != nil {
+		t.Fatal(err)
+	}
+	if st.ReviewDue != "" || !st.ReviewAt.IsZero() || st.Unattended("P0") != 0 || !st.Decisions[1].Reviewed {
+		t.Fatalf("%q %+v", st.ReviewDue, st.Decisions)
+	}
+	if err := Resume(&st); err == nil {
+		t.Error("resumed with nothing to resume")
 	}
 }

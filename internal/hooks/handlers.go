@@ -99,7 +99,8 @@ func ok(err error) error {
 //
 // And it holds the model where it must not carry on. After `baton done` or `baton checkpoint`, the turn
 // must end so the host can compact; a model that carries on would start the next phase (or keep going)
-// in the old context. And a proposal must be put to the human before anything else happens. So
+// in the old context. Once a phase's decisions without the human reach the cap, the turn must end for
+// the human to review them. And a proposal must be put to the human before anything else happens. So
 // until then every main-agent tool call except baton's own CLI (and the questions baton issued) is
 // denied, with the reason. Subagents are not held: they cannot end the main turn.
 func (h *handlers) preToolUse(c Context) (Result, error) {
@@ -144,6 +145,8 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			hold = endTurn("you asked for a checkpoint and baton must compact the context first")
 		case own:
 			// baton's own question gets through the holds below: it is how they end.
+		case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
+			hold = endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 		case p != nil && !p.Asked:
 			hold = NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
 		}
@@ -479,7 +482,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			if tool == "AskUserQuestion" {
 				auto := !closed.AutoAnswered.IsZero()
 				if v = answeredProposal(st, c, auto); v.event == "" {
-					v = answered(st, c, auto, w)
+					if v = answeredReview(st, c); v.event == "" {
+						v = answered(st, c, auto, w)
+					}
 				}
 			}
 			// No other question while a proposal or a review waits on the human: one at a time.

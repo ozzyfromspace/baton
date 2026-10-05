@@ -87,6 +87,17 @@ func TestNotesCountTowardAReview(t *testing.T) {
 		!s.logged("review_due", map[string]any{"phase": "P0", "decisions": 2.0}) || !s.logged("refused", map[string]any{"command": "note", "why": "review due"}) {
 		t.Errorf("events: %s", s.events())
 	}
+	// The run cannot let itself go on: only the human ends a review.
+	for _, args := range [][]string{{"resume"}, {"done", "P0"}} {
+		if why := s.fails(args...); !strings.Contains(why, "a review of the decisions P0 made without them") {
+			t.Errorf("%v during a review: %s", args, why)
+		}
+	}
+	s.human()
+	s.must("", "resume")
+	if st := s.state(); st.ReviewDue != "" || st.Unattended("P0") != 0 {
+		t.Fatalf("after the human resumed: %q, %d unreviewed", st.ReviewDue, st.Unattended("P0"))
+	}
 
 	// No cap: the count alone.
 	s = attached(t)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -77,7 +78,13 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		v.say = fmt.Sprintf("baton: nobody answered by %s, so baton went ahead with %s — %s", p.Deadline.Local().Format("15:04"), p.ID, p.What)
 		v.tell = fmt.Sprintf("%s Nobody answered your proposal %s by %s, so baton chose Go ahead for the human. Do what you proposed now: %s. "+
 			"If they later ask, it is undone with: %s.", NudgePrefix, p.ID, p.Deadline.Local().Format("15:04"), p.What, p.Undo)
-		v.tell += " Then carry on with " + st.Current + "."
+		if n := st.Unattended(p.Phase); st.ReviewDue == "" && decide.CapReached(n, config.EscalationFromEnv(c.Env).MaxAuto) {
+			state.DueReview(st, p.Phase, c.Now)
+			v.also = append(v.also, event{"review_due", map[string]any{"phase": p.Phase, "decisions": n}})
+			v.tell += " That was the last decision baton lets " + p.Phase + " make without the human: once it is done, end your turn, and baton stops for them to review the decisions."
+		} else {
+			v.tell += " Then carry on with " + st.Current + "."
+		}
 	case "Wait for me":
 		v.also = holdProposal(st, p, state.ByHeld, answer, c.Now)
 		v.say = "baton: holding " + p.ID + " for you — answer in the session when you're ready"
@@ -149,6 +156,51 @@ func released(st *state.State) (event, string, bool) {
 func heldTell(p state.Decision) string {
 	return fmt.Sprintf("%s Your proposal %s (%s) was not answered with Go ahead, and the human has now written to you: their message is the answer. "+
 		"Do what you proposed only if they say so.", NudgePrefix, p.ID, p.What)
+}
+
+// answeredReview acts on the answer to a review of the decisions a phase made without the human.
+func answeredReview(st *state.State, c Context) valveAction {
+	e := st.Run.Escalation
+	if e == nil || e.Kind != "review" || e.Question == "" {
+		return valveAction{}
+	}
+	answer, found := answerTo(c, e.Question)
+	if !found {
+		return valveAction{}
+	}
+	st.Run.HumanAt = c.Now
+	phase := st.ReviewDue
+	v := valveAction{event: "review_resolved", fields: map[string]any{"phase": phase, "answer": answer, "by": state.ByHuman}}
+	switch answer {
+	case "Pause baton":
+		state.Reviewed(st) // the human has taken over, and will hand back with /baton resume
+		if state.Pause(st) == nil {
+			v.also = append(v.also, event{"paused", nil})
+		}
+		v.say = "baton: paused — the human is driving"
+		v.tell = NudgePrefix + " The human chose Pause baton: baton is paused. Wait for the human's instructions."
+	case "Continue":
+		state.Resume(st)
+		v.say = "baton: reviewed — the run goes on"
+		v.tell = NudgePrefix + " The human reviewed the decisions " + phase + " made without them and chose Continue. Carry on with " + st.Current + "."
+	default:
+		state.Resume(st)
+		v.say = "baton: your answer to the review went to Claude"
+		v.tell = fmt.Sprintf("%s The human answered the review of the decisions %s made without them in their own words: %s. "+
+			"That is their instruction: follow it, then carry on with %s.", NudgePrefix, phase, strconv.Quote(answer), st.Current)
+	}
+	return v
+}
+
+// goingAhead reports a proposal the human or the timer let go ahead in the current turn: the model is
+// doing it, and must be let finish even once a review is due.
+func goingAhead(st *state.State) bool {
+	for _, d := range st.Decisions {
+		if r := d.Resolved; d.Kind == state.Proposal && r != nil && r.Answer == "Go ahead" && r.At.After(st.Run.LastStop) {
+			return true
+		}
+	}
+	return false
 }
 
 // announceNotes shows the human, in the session, each note not yet shown, and marks it shown.
