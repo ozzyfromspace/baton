@@ -45,6 +45,8 @@ The evidence is in [docs/research/sessions.md](docs/research/sessions.md).
 ### Fixed
 - **A plan approval's dialog stayed on record until the turn ended.** Its result arrives with an empty
   input, so it never matched the request. baton thought a dialog was open for the rest of that turn.
+- **A moved `BATON_HOME` now reaches hosted sessions.** baton drops its variables from the session it
+  hosts, so baton's commands inside it read the default `~/.baton` (config and records) instead.
 
 ## [0.2.2] - 2026-10-05
 
