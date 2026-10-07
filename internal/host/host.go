@@ -389,6 +389,12 @@ func (h *session) heartbeat(stop <-chan struct{}) {
 			return state.Claim(st, h.cfg.Instance, os.Getpid(), now)
 		}); err != nil {
 			h.cfg.Logf("host: heartbeat failed: %v", err)
+			if st, lerr := s.Load(); lerr == nil && !st.IsOwner(h.cfg.Instance, now) {
+				// Another terminal took the run over while this one's claim had lapsed (the machine
+				// slept): it drives the run now, and this host lets go.
+				h.cfg.Logf("host: run %s is now driven by %s; letting go", filepath.Base(s.Dir), st.Owner.Instance)
+				h.cfg.Project.Unbind(h.cfg.Instance)
+			}
 		}
 	}
 }

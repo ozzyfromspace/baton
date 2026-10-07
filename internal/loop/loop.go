@@ -133,6 +133,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		l.logf("loop: %v", err)
 		return
 	}
+	if st.Owner != nil && !st.IsOwner(l.Store.Instance, v.Now) {
+		return // another terminal drives this run now
+	}
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
 	if !st.Run.ExitAt.IsZero() {
