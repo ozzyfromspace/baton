@@ -8,13 +8,13 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 - **No runtime dependencies for users.** One static Go binary (`CGO_ENABLED=0`), plus sh/PowerShell launchers. No tmux, no AppleScript, no Node/Python at runtime.
 - **Control flow lives in host code, not in model judgment.** If a step only happens because the model remembered to do it, it is a bug waiting to happen; make a hook or the host do it.
 - **Hooks fail open.** For Claude Code hooks, exit code 2 means *block*. A Go panic or a `flag` parse error also exits 2. Every `baton hook` path recovers panics, uses `flag.ContinueOnError`, and exits 0 on internal errors; only the deliberate rewake path exits 2. Each hook event has a test proving a panic exits 0.
-- **Dormant unless hosted.** Anything that runs inside a session (hooks, CLI) does nothing unless `BATON_HOST=1` is set, apart from the explicit elevation path.
+- **Dormant unless hosted.** Anything that runs inside a session (hooks, CLI) does nothing unless `BATON_HOST=1` is set, apart from `/baton start` handing a plain session over (package `elevate`).
 
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
 - `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate, upgrade). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
-- `plugin/` — the Claude Code plugin (skill, launchers, elevation Stop hook). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
+- `plugin/` — the Claude Code plugin (skill, launchers, the Stop hook that finishes `/baton start`). Its `SKILL.md` is a stub that loads the instructions from the binary (`baton skill`, from `internal/cli/skill.md`), so edit those, not the stub; and never put `$ARGUMENTS` in the stub's inline command, which Claude Code substitutes before the shell runs it ([spike 18](spikes/18-skill-inject/)). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 
 ## Commands

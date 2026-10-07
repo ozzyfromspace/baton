@@ -2,6 +2,8 @@
 
 > Approved 2026-10-04. Phases are committed in order; `git log` tells the story. Research behind it: [`research/spikes.md`](research/spikes.md).
 >
+> **v0.3.2 renames two commands and moves the skill into the binary.** Elevation is now `/baton start` (in a shell, `baton start` starts a session) and `/baton stop` is `/baton drop`. The plugin's `SKILL.md` is a stub that loads its instructions from the binary (`baton skill`), so an update reaches every session's `/baton` at once. Where this plan says elevate, read start.
+>
 > **v0.3.1 moves running sessions onto an update.** A host that finds a newer compatible baton installed (`internal/upgrade`) restarts its session on it in place, by exec, resuming the same conversation: once idle, or at the next phase boundary while a plan runs, where the restarted session takes the compaction. Across a major version the session stays put and says so once.
 >
 > **v0.3.0 keeps a run per session and attaches the plan the human approves.** Each Claude Code session has its own run under `.baton/runs/`, so a second terminal in the same project runs a plan of its own instead of running as plain claude; approving a plan with phase headings attaches it and starts P0 after a compaction. Where this plan speaks of one plan per project, read one per session. The evidence is in [`research/sessions.md`](research/sessions.md).

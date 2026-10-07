@@ -49,7 +49,7 @@ Then, in any Claude Code session, run `/baton setup`. On first use the plugin do
 eval "$(~/.baton/bin/baton init zsh)"
 ```
 
-That line puts `baton` on your PATH. It also lets a plain `claude` session hand itself to baton automatically (see [Elevation](#elevation)).
+That line puts `baton` on your PATH. It also lets a plain `claude` session hand itself to baton (see [Starting baton in a running session](#starting-baton-in-a-running-session)).
 
 To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Sessions baton hosts then move to the new version by themselves: each one restarts on it in place, with the same conversation, once it has been idle for two minutes, or at its next phase boundary while a plan runs. Nothing that would end with claude may be running at that moment (background work, a monitor, a scheduled wakeup), and a session never restarts with a draft in the input box. This applies to patch and minor releases (before 1.0, patch releases only). After a major update, a session tells you once and stays on its version until you restart it: exit and run `baton --continue`. Plain `claude` sessions keep the old plugin until they restart.
 
@@ -57,7 +57,7 @@ To update later, run `baton update` (or `/baton update` in a session). It update
 
 ```sh
 baton              # instead of `claude`; it takes the same arguments
-baton --version    # or -v: which baton this is (claude --version for Claude Code's)
+baton --version    # or -v: which baton this is, which one hosts the session, which is installed (claude --version for Claude Code's)
 baton --help       # or -h: every command
 ```
 
@@ -66,20 +66,24 @@ Inside the session:
 | Command | What it does |
 |---|---|
 | `/baton plan <goal>` | Plan the work in plan mode, in a format baton can run. When you approve the plan, baton runs it. |
-| `/baton run [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. (`/baton attach` still works.) |
+| `/baton run [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. |
+| `/baton start` | Hand this session to baton, same conversation (see below). `/baton plan` and `/baton run` do it when they need to. |
 | `/baton status` | Show where the run stands. |
 | `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. |
-| `/baton stop` | End the run. Its plan is set aside, and baton does nothing in this session until the next plan. |
+| `/baton drop` | Drop the run. Its plan is set aside, and baton does nothing in this session until the next plan. |
 | `/baton exit` | Leave baton: this conversation goes on as plain `claude` in the same terminal. |
 | `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |
+| `/baton version` | Which baton this session runs, the one installed, and the latest release. |
 | `/baton setup` | Check this machine and list what's missing. |
 | `/baton update` | Update baton to the latest release (also `baton update` in a shell; `--check` only looks). |
 
 You don't need a command to run a plan you approve in plan mode: baton attaches any approved plan whose phases are headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`, when the session has no plan under way. `/baton plan` writes plans in that format. `/baton run` also takes phases written as bold bullets or table rows.
 
-### Elevation
+The `/baton` skill is a stub: its instructions come from the `baton` binary each time you use it, so after `baton update` every session, hosted or not, follows the new version's instructions at once.
 
-Started a session with plain `claude` and want baton to drive it? Run `/baton plan …` or `/baton run …` there. baton records the session, stops `claude` cleanly when the turn ends, and your shell relaunches **the same conversation** under baton. `/baton plan` does this before planning, so baton is watching when you approve the plan. `/baton exit` does the reverse. Both need the `baton init` line above. Without it, baton tells you what to run by hand: `baton --resume <session id>` to hand a session to baton, `claude --resume <session id>` to leave it.
+### Starting baton in a running session
+
+Started a session with plain `claude` and want baton to drive it? Run `/baton start`, or just `/baton plan …` or `/baton run …`, there. baton records the session, stops `claude` cleanly when the turn ends, and your shell relaunches **the same conversation** under baton. `/baton plan` does this before planning, so baton is watching when you approve the plan. `/baton exit` does the reverse. Both need the `baton init` line above. Without it, baton tells you what to run by hand: `baton --resume <session id>` to hand a session to baton, `claude --resume <session id>` to leave it.
 
 ### Several sessions in one project
 
@@ -182,7 +186,7 @@ See [SECURITY.md](SECURITY.md).
 ```sh
 claude plugin uninstall baton@baton
 claude plugin marketplace remove baton
-rm -rf ~/.baton          # binaries, config and elevation records
+rm -rf ~/.baton          # binaries, config, and records of sessions handed over
 ```
 
 Then remove the `baton init` line from your shell config, and the `.baton/` directory from any project you ran baton in. In a git project, this removes baton's snapshots:

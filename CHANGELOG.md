@@ -4,6 +4,23 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+- **`/baton update` updates `/baton` itself.** The skill's instructions now come from the `baton`
+  binary each time you use `/baton`, so every session, plain or hosted, follows the new version as soon
+  as it is installed, without a restart. The plugin's skill is a stub that loads them.
+- **`/baton version`** shows which baton this session runs, which one is installed, and the latest
+  release. `baton version` in a shell prints the first two.
+
+### Changed
+- **`/baton elevate` is now `/baton start`**, and **`/baton stop` is now `/baton drop`**. The old names
+  are gone. In a shell, `baton start` starts a session, like plain `baton`.
+- The unlisted `baton run` (the same as plain `baton`) is gone.
+
+### Fixed
+- **No claude inside claude.** Inside a Claude Code session, `baton` with an unknown command (a typo, or
+  a command from an older skill) used to be taken for a prompt and start another claude in the Bash
+  tool. It now says so and points to `/baton start`.
+
 ## [0.3.1] - 2026-10-07
 
 ### Added
