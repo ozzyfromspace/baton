@@ -16,14 +16,14 @@ func pluginDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "plugin")
 }
 
-// /baton attach finds the phases, attaches the plan and starts it.
+// /baton run finds the phases, attaches the plan and starts it.
 func TestSkillAttachesAndStartsAPlan(t *testing.T) {
 	dir := NewProject(t)
 	os.WriteFile(filepath.Join(dir, "plan.md"), []byte(twoPhasePlan), 0o644)
 	s := Start(t, dir, "--model", "haiku", "--plugin-dir", pluginDir(t))
 	s.Trust()
 	s.WaitQuiet(3*time.Second, 40*time.Second)
-	s.Type("/baton attach plan.md")
+	s.Type("/baton run plan.md")
 	waitSequence(t, s, 4*time.Minute,
 		func(e map[string]any) bool { return e["kind"] == "attached" && e["phases"] == 2.0 },
 		func(e map[string]any) bool { return e["kind"] == "phase_done" && e["phase"] == "P0" },
