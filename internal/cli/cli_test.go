@@ -264,3 +264,31 @@ func TestRelaunchResumesAPlainSession(t *testing.T) {
 		t.Fatalf("ran %q; said %q", b, stdout.String())
 	}
 }
+
+// A command run inside a hosted session hands itself to the host's binary when another baton ran it
+// (the newest, first on the PATH after an update), and never to itself.
+func TestHostBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no exec on Windows")
+	}
+	exe, _ := os.Executable()
+	other := filepath.Join(t.TempDir(), "baton")
+	os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755)
+	link := filepath.Join(t.TempDir(), "baton")
+	os.Symlink(exe, link)
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": other}, other},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": exe}, ""},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": link}, ""}, // itself, through a link
+		{map[string]string{"BATON_BIN": other}, ""},                   // not hosted
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": filepath.Join(t.TempDir(), "gone")}, ""},
+		{map[string]string{"BATON_HOST": "1"}, ""},
+	} {
+		if got := HostBinary(func(k string) string { return tc.env[k] }); got != tc.want {
+			t.Errorf("%v: %q, want %q", tc.env, got, tc.want)
+		}
+	}
+}

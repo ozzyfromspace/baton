@@ -28,6 +28,30 @@ func init() {
 	register("statusline", "print the status line segment (called by Claude Code's status line)", cmdStatusline)
 }
 
+// HostBinary is the binary a command run inside a hosted session should hand itself to: the one hosting
+// the session, when the `baton` that ran is another. After an update, the newest baton comes first on the
+// PATH while the host still runs its own version, and a session must stay on one version (its hooks, its
+// CLI and its /baton instructions) until the host restarts it. "" means run here.
+func HostBinary(env func(string) string) string {
+	bin := env("BATON_BIN")
+	if env("BATON_HOST") != "1" || bin == "" || !upgrade.CanRestart {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	same := func(a, b string) bool {
+		ra, aerr := filepath.EvalSymlinks(a)
+		rb, berr := filepath.EvalSymlinks(b)
+		return aerr == nil && berr == nil && ra == rb
+	}
+	if fi, err := os.Stat(bin); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 || same(exe, bin) {
+		return ""
+	}
+	return bin
+}
+
 // runHost starts claude inside baton's pseudo-terminal in the current directory. Not from inside a claude
 // session: there, a mistyped or retired command name would be taken for a prompt, and another claude
 // would start inside the Bash tool.

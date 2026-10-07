@@ -6,8 +6,12 @@ import (
 	"os"
 
 	"github.com/ozzyfromspace/baton/internal/cli"
+	"github.com/ozzyfromspace/baton/internal/upgrade"
 )
 
 func main() {
+	if bin := cli.HostBinary(os.Getenv); bin != "" {
+		upgrade.Exec(bin, append([]string{bin}, os.Args[1:]...), os.Environ()) // returns only if it failed
+	}
 	os.Exit(cli.Main(os.Args[1:], cli.StdIO()))
 }
