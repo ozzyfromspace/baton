@@ -55,8 +55,15 @@ func cmdElevate(args []string, io IO) int {
 	if err := elevate.Save(batonRoot(io), rec); err != nil {
 		return fail(io, "cannot record the elevation: %v", err)
 	}
-	if s, err := store(io); err == nil {
-		s.Event("elevate_requested", map[string]any{"tty": tty, "pending": rec.Pending})
+	if p, err := project(io); err == nil {
+		// The session's own run, or the one attached from a shell that it takes over once hosted.
+		s, ok := p.Lookup(sid, "")
+		if !ok {
+			s, ok = p.Pended("")
+		}
+		if ok {
+			s.Event("elevate_requested", map[string]any{"tty": tty, "pending": rec.Pending})
+		}
 	}
 	fmt.Fprintln(io.Out, "baton: elevating. When this turn ends, claude restarts under baton in this terminal, resuming this same conversation. End your turn now.")
 	return 0

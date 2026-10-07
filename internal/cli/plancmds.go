@@ -273,7 +273,12 @@ func printRuns(io IO, runs []state.RunInfo, asJSON bool) {
 		return
 	}
 	fmt.Fprintln(io.Out, "baton: this project has several runs, one per session (newest first):")
-	for _, r := range runs {
+	const most = 10
+	for i, r := range runs {
+		if i == most {
+			fmt.Fprintf(io.Out, "  … and %d older (baton status --json lists them all)\n", len(runs)-most)
+			break
+		}
 		fmt.Fprintf(io.Out, "  %s  %q — %s\n", runLabel(r, io.Now()), r.Title, runProgress(r))
 	}
 	fmt.Fprintln(io.Out, "Run /baton status inside a session for its run in full.")

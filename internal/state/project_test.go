@@ -188,6 +188,14 @@ func TestPickOutsideASession(t *testing.T) {
 	if _, err := p.Pick(""); !errors.As(err, &several) || len(several.Runs) != 2 {
 		t.Fatalf("two runs with plans: %v", err)
 	}
+	a.Update(func(st *State) error { st.Mode = ModeComplete; return nil })
+	if got, err := p.Pick(""); err != nil || got.Dir != b.Dir {
+		t.Fatalf("the one run under way wins over a finished one: %v %v", got, err)
+	}
+	b.Update(func(st *State) error { st.Mode = ModeComplete; return nil })
+	if _, err := p.Pick(""); !errors.As(err, &several) || len(several.Runs) != 2 {
+		t.Fatalf("two finished runs: %v", err)
+	}
 	pend, _ := p.Pending("")
 	if got, err := p.Pick(""); err != nil || got.Dir != pend.Dir {
 		t.Fatalf("a pending run wins: %v %v", got, err)

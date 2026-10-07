@@ -225,6 +225,16 @@ func (p *Project) Unbind(instance string) {
 	})
 }
 
+// Pended returns the run attached outside any session, if there is one.
+func (p *Project) Pended(instance string) (*Store, bool) {
+	id := p.readLink(pendingFile)
+	if !p.runExists(id) {
+		return nil, false
+	}
+	s, err := p.Run(id, instance)
+	return s, err == nil
+}
+
 // Pending returns the run attached outside any session, creating it if there is none. The next baton
 // session started in this project takes it over.
 func (p *Project) Pending(instance string) (*Store, error) {
@@ -329,24 +339,30 @@ func (e ErrSeveralRuns) Error() string {
 }
 
 // Pick returns the run a command run outside any session means: the run attached from a shell if there
-// is one, or else the one run with a plan.
+// is one, or else the one run under way (running or paused), or else the one run with a plan at all.
 func (p *Project) Pick(instance string) (*Store, error) {
 	if id := p.readLink(pendingFile); p.runExists(id) {
 		return p.Run(id, instance)
 	}
-	var withPlan []RunInfo
+	var underWay, withPlan []RunInfo
 	for _, r := range p.Runs() {
 		if r.HasPlan() {
 			withPlan = append(withPlan, r)
+			if r.State.Mode == ModeRunning || r.State.Mode == ModePaused {
+				underWay = append(underWay, r)
+			}
 		}
 	}
-	switch len(withPlan) {
-	case 0:
-		return nil, ErrNoPlan
-	case 1:
-		return p.Run(withPlan[0].ID, instance)
+	for _, runs := range [][]RunInfo{underWay, withPlan} {
+		switch len(runs) {
+		case 0:
+			continue
+		case 1:
+			return p.Run(runs[0].ID, instance)
+		}
+		return nil, ErrSeveralRuns{runs}
 	}
-	return nil, ErrSeveralRuns{withPlan}
+	return nil, ErrNoPlan
 }
 
 // sweepAge is how old a run with nothing in it must be before Sweep removes it, so that a run being
@@ -410,7 +426,10 @@ var legacyFiles = []string{"state.json", "plan.json", "events.jsonl", "handoff.m
 // older baton still drives it, it stays where that baton expects it; it moves once that host is gone.
 // Both versions lock .baton/lock, so the move never meets one of the older baton's writes.
 func (p *Project) migrate() error {
-	if !exists(p.path("state.json")) {
+	// Checked without the lock first: while an older baton drives the run, every hook of every newer
+	// session in the project would otherwise queue on the project's lock just to find that out.
+	var legacy State
+	if b, err := os.ReadFile(p.path("state.json")); err != nil || json.Unmarshal(b, &legacy) != nil || legacy.Owner.Live(p.Now()) {
 		return nil
 	}
 	return p.withLock(func() error {
