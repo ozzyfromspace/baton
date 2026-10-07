@@ -16,6 +16,7 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `15-gates-and-signals/` | Does a status line refreshing every second keep the screen from settling? When does `idle_prompt` fire? ([write-up](../docs/research/reliability.md)) |
 | `14-context-window/` | What does the status line input report about the context under `--autocompact`? ([write-up](../docs/research/context-window.md)) |
 | `16-escalation/` | Can baton answer its own question safely (which dialog is on screen, what each key does)? Does a timed ask with a default keep an incident-like run moving, and can a late answer still undo it? Can uncommitted work be saved without the model? ([write-up](../docs/research/escalation.md)) |
+| `17-sessions/` | Which hooks fire when a plan is approved or sent back, and what they carry? What happens to the session id and the plan file on `/clear`, a "clear context" approval, `--resume`, and two sessions in one directory? (2026-10-07, Claude Code 2.1.292; [write-up](../docs/research/sessions.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 
