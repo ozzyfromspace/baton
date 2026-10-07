@@ -47,10 +47,12 @@ func Write(in Input) string {
 		title = st.Current + " — " + pl.Phases[cur].Title
 	}
 
-	switch in.Kind {
-	case Boundary:
+	switch {
+	case in.Kind == Boundary && first(pl, st):
+		fmt.Fprintf(&b, "[baton] The plan %q (%s) was approved and attached, and the planning conversation compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
+	case in.Kind == Boundary:
 		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
-	case Checkpoint:
+	case in.Kind == Checkpoint:
 		fmt.Fprintf(&b, "[baton] The context was compacted at your checkpoint, mid-phase. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
 	default:
 		fmt.Fprintf(&b, "[baton] Claude Code compacted the context automatically, mid-phase. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
@@ -87,7 +89,7 @@ func Write(in Input) string {
 		}
 	}
 	if notes := strings.TrimSpace(in.Handoff); notes != "" {
-		fmt.Fprintf(&b, "Notes left by earlier phases (.baton/handoff.md, most recent last):\n\n%s\n\n", tail(notes, maxNotes))
+		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))
 	}
 	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
 		b.WriteString(decide.RecordSection(ds) + "\n")
@@ -95,6 +97,16 @@ func Write(in Input) string {
 
 	b.WriteString(in.Words.Closing(st.Current))
 	return b.String()
+}
+
+// first reports that the brief starts the plan's first phase: nothing is done yet.
+func first(pl plan.Plan, st state.State) bool {
+	for _, ph := range pl.Phases {
+		if ps := st.Phases[ph.ID]; ps != nil && ps.Status == state.PhaseDone {
+			return false
+		}
+	}
+	return len(pl.Phases) > 0 && st.Current == pl.Phases[0].ID
 }
 
 func clip(s string, n int) string {

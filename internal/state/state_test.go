@@ -276,3 +276,67 @@ func TestWaitsAreBounded(t *testing.T) {
 		t.Fatalf("an unbounded wait: %v", err)
 	}
 }
+
+func TestAttachAtBoundaryStartsAfterACompaction(t *testing.T) {
+	prev := New()
+	prev.Owner = &Owner{Instance: "h"}
+	st := AttachAtBoundary(prev, threePhases(), t0)
+	if st.Mode != ModeRunning || st.Current != "P0" || !st.BoundaryOwed || st.Phases["P0"].Status != PhasePending || st.Owner == nil {
+		t.Fatalf("%+v", st)
+	}
+	if _, err := Done(&st, threePhases(), "P0", t0, false); err == nil {
+		t.Fatal("P0 finished before it started")
+	}
+	Start(&st, t0, Origin{Head: "abc"})
+	if st.BoundaryOwed || st.Phases["P0"].Status != PhaseActive || st.Phases["P0"].StartHead != "abc" {
+		t.Fatalf("after the brief: %+v", st.Phases["P0"])
+	}
+}
+
+func TestReviseKeepsWhatIsDone(t *testing.T) {
+	p := threePhases()
+	running := func() State {
+		st := Attach(p, t0, Origin{})
+		Done(&st, p, "P0", t0, false)
+		Start(&st, t0, Origin{})
+		return st // P0 done, P1 under way
+	}
+	revised := func(ids ...string) plan.Plan {
+		r := plan.Plan{Version: 1}
+		for _, id := range ids {
+			r.Phases = append(r.Phases, plan.Phase{ID: id, Title: id})
+		}
+		return r
+	}
+
+	st := running()
+	if next := Revise(&st, revised("P0", "P1", "P1b", "P2")); next != "P1" || st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P0"].Status != PhaseDone || st.Phases["P1b"].Status != PhasePending {
+		t.Fatalf("P1 kept: %s %+v", next, st)
+	}
+	st = running()
+	if next := Revise(&st, revised("P0", "P1a", "P1", "P2")); next != "P1a" || !st.BoundaryOwed || st.Phases["P1"].Status != PhasePending {
+		t.Fatalf("a phase inserted before the one under way: %s %+v", next, st)
+	}
+	st = running()
+	st.Mode = ModePaused
+	if next := Revise(&st, revised("P0", "P5")); next != "P5" || !st.BoundaryOwed || st.Mode != ModeRunning {
+		t.Fatalf("P1 dropped: %s %+v", next, st)
+	}
+	st = running()
+	if next := Revise(&st, revised("P0")); next != "" || st.Mode != ModeComplete {
+		t.Fatalf("nothing left: %s %+v", next, st)
+	}
+}
+
+func TestDetachSetsThePlanAside(t *testing.T) {
+	idle := New()
+	if Detach(&idle) == nil {
+		t.Fatal("stopped a run with no plan")
+	}
+	st := Attach(threePhases(), t0, Origin{})
+	st.Owner, st.Run.SessionID, st.Run.Compaction.Epoch = &Owner{Instance: "h"}, "s", 4
+	if err := Detach(&st); err != nil || st.Mode != ModeIdle || st.Current != "" || len(st.Phases) != 0 ||
+		st.Owner == nil || st.Run.SessionID != "s" || st.Run.Compaction.Epoch != 4 {
+		t.Fatalf("%v %+v", err, st)
+	}
+}

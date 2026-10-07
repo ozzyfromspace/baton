@@ -97,8 +97,22 @@ type State struct {
 	// ReviewAt is when it became due.
 	ReviewDue string    `json:"review_due,omitempty"`
 	ReviewAt  time.Time `json:"review_at,omitzero"`
+	// Replan is a plan the human approved while this run had one, until they say what to do with it.
+	Replan *Replan `json:"replan,omitempty"`
+	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
+	// is reported once.
+	PlanDrift string `json:"plan_drift,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
+}
+
+// Replan is a plan the human approved while the run had one. Same says it is in the run's own plan file:
+// Claude Code writes every plan a session makes to the same file, so that is a revision of the plan.
+type Replan struct {
+	File     string    `json:"file"`
+	Same     bool      `json:"same"`
+	Question string    `json:"question"` // the question baton issued, exactly as issued
+	Since    time.Time `json:"since"`
 }
 
 // New is the state of a project with no plan attached.
@@ -116,6 +130,58 @@ func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 	run := prev.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
 	return attachKeeping(prev.Owner, &run, p, now, o)
+}
+
+// AttachAtBoundary is Reattach for a plan whose first phase starts after a compaction, as if a phase
+// before it had just finished: the plan was approved at the end of a long planning conversation, and
+// the first phase starts with a brief instead of all that.
+func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
+	st := Reattach(prev, p, now, Origin{})
+	st.Phases[st.Current] = &PhaseState{Status: PhasePending}
+	st.BoundaryOwed = true
+	return st
+}
+
+// Revise moves the run onto a revision of its plan. Phases already done stay done (matched by id); the
+// run goes on from the first phase of the revision that is not done. If that is the phase under way, it
+// carries on; otherwise it starts after a compaction, as at a phase boundary. It returns that phase, or
+// "" when the revision has nothing left to do.
+func Revise(st *State, p plan.Plan) string {
+	old := st.Phases
+	st.Phases = map[string]*PhaseState{}
+	for _, ph := range p.Phases {
+		if ps := old[ph.ID]; ps != nil && ps.Status == PhaseDone {
+			st.Phases[ph.ID] = ps
+		} else {
+			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
+		}
+	}
+	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked = ModeRunning, nil, nil, false, false
+	st.Run.Progress()
+	next := nextPending(st, p)
+	if next == "" {
+		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
+		return ""
+	}
+	if ps := old[next]; ps != nil && ps.Status == PhaseActive && next == st.Current && !st.BoundaryOwed {
+		st.Phases[next] = ps
+		return next
+	}
+	st.Current, st.BoundaryOwed = next, true
+	return next
+}
+
+// Detach stops the run: its plan is set aside, and baton does nothing until the next plan is attached.
+func Detach(st *State) error {
+	if st.Mode == ModeIdle {
+		return errors.New("no plan is attached, so there is nothing to stop")
+	}
+	run := st.Run
+	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
+	owner := st.Owner
+	*st = New()
+	st.Owner, st.Run = owner, run
+	return nil
 }
 
 func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Origin) State {

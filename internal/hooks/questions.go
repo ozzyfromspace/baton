@@ -14,7 +14,7 @@ import (
 // issued is a question baton told the model to put to the human, word for word, and what kind of
 // dialog it makes.
 type issued struct {
-	kind string // "escalation", "review", "proposal" or "context_warning"
+	kind string // "escalation", "review", "proposal", "context_warning" or "replan"
 	decide.Question
 }
 
@@ -34,6 +34,9 @@ func issuedQuestions(st *state.State) []issued {
 	}
 	if q := st.Run.WarnQuestion; q != "" {
 		out = append(out, issued{"context_warning", decide.Question{Text: q, Options: decide.WarnOptions}})
+	}
+	if r := st.Replan; r != nil {
+		out = append(out, issued{"replan", replanQuestion(r)})
 	}
 	return out
 }

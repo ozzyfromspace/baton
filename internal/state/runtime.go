@@ -60,7 +60,12 @@ type Runtime struct {
 	LastError    *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.
 	PendingDone string `json:"pending_done,omitempty"`
-	Ended       *Ended `json:"ended,omitempty"`
+	// PlanFile is the plan file of the plan approval last asked for, and ClearedPlan a plan the human
+	// approved with "clear context": Claude Code then fires no PostToolUse for it, only SessionEnd(clear)
+	// with the approval still on screen (docs/research/sessions.md).
+	PlanFile    string    `json:"plan_file,omitempty"`
+	ClearedPlan *Approval `json:"cleared_plan,omitempty"`
+	Ended       *Ended    `json:"ended,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.
@@ -258,6 +263,12 @@ type Notice struct {
 	// Tries and NextTry: a notice whose delivery failed stays queued and is retried.
 	Tries   int       `json:"tries,omitempty"`
 	NextTry time.Time `json:"next_try,omitzero"`
+}
+
+// Approval is a plan the human approved, by its file.
+type Approval struct {
+	File string    `json:"file"`
+	At   time.Time `json:"at"`
 }
 
 // Ended records the session ending.

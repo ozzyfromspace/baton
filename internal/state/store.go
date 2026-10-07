@@ -155,6 +155,16 @@ func (s *Store) SavePlan(p plan.Plan) error {
 	return s.withLock(func() error { return writeAtomic(s.PlanPath(), append(b, '\n')) })
 }
 
+// WritePlan writes plan.json from inside an Update callback, which already holds the lock that SavePlan
+// takes: a plan attached or revised in the same step as the state that goes with it.
+func (s *Store) WritePlan(p plan.Plan) error {
+	b, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.PlanPath(), append(b, '\n'))
+}
+
 // LoadPlan reads plan.json.
 func (s *Store) LoadPlan() (plan.Plan, error) { return plan.Load(s.PlanPath()) }
 

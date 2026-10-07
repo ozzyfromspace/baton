@@ -192,3 +192,64 @@ func Load(path string) (Plan, error) {
 	}
 	return p, nil
 }
+
+// Shaped reports whether a suggested spec is a plan baton can attach without help: at least two phases,
+// each starting at a heading of its own (## P0 — Title). baton attaches such a plan the moment the human
+// approves it; anything else needs the model to check the spec (`baton attach --suggest`).
+func Shaped(spec Spec) bool {
+	if len(spec.Phases) < 2 {
+		return false
+	}
+	for _, ph := range spec.Phases {
+		if !strings.HasPrefix(ph.Anchor, "#") {
+			return false
+		}
+	}
+	return true
+}
+
+// Recheck reads the plan document again and compares it with the text baton attached. changed is false
+// when it is that text. When it changed, err says what no longer fits: a phase still to run (one of
+// remaining), the rules or the end anchor missing, duplicated or out of order, or the file gone. With
+// err nil, adopted is p with the new text's hash, and baton follows the new text.
+func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error) {
+	doc, err := os.ReadFile(p.File)
+	if err != nil {
+		return p, true, fmt.Errorf("the plan file cannot be read: %w", err)
+	}
+	sum := sha256.Sum256(doc)
+	if hex.EncodeToString(sum[:]) == p.SHA256 {
+		return p, false, nil
+	}
+	spec := Spec{Title: p.Title, RulesAnchor: p.RulesAnchor, EndAnchor: p.EndAnchor}
+	keep := map[string]bool{}
+	for _, id := range remaining {
+		keep[id] = true
+	}
+	for _, ph := range p.Phases {
+		if keep[ph.ID] {
+			spec.Phases = append(spec.Phases, ph)
+		}
+	}
+	if len(spec.Phases) == 0 {
+		adopted = p
+		adopted.SHA256 = hex.EncodeToString(sum[:])
+		return adopted, true, nil
+	}
+	if _, err := Build(p.File, doc, spec); err != nil {
+		return p, true, err
+	}
+	adopted = p
+	adopted.SHA256 = hex.EncodeToString(sum[:])
+	return adopted, true, nil
+}
+
+// SHA reports the hash of the plan document as it is now, or "" if it cannot be read.
+func (p Plan) SHA() string {
+	doc, err := os.ReadFile(p.File)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(doc)
+	return hex.EncodeToString(sum[:])
+}

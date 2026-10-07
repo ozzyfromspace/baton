@@ -132,3 +132,53 @@ func TestSectionAfterEditReportsTheMissingAnchor(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestShaped(t *testing.T) {
+	for _, c := range []struct {
+		doc  string
+		want bool
+	}{
+		{"# T\n\n## P0 — A\nx\n\n## P1 — B\ny\n", true},
+		{"# T\n\n### Phase 1: A\nx\n\n### Phase 2: B\ny\n", true},
+		{"# T\n\n## P0 — Only one\nx\n", false},
+		{"# T\n\n- **P0 A:** x\n- **P1 B:** y\n", false},
+		{"# Fix the login bug\n\nChange the check in auth.go.\n", false},
+	} {
+		if got := Shaped(Suggest([]byte(c.doc))); got != c.want {
+			t.Errorf("%q: %v, want %v", c.doc, got, c.want)
+		}
+	}
+}
+
+func TestRecheckFollowsEditsThatKeepThePhases(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "plan.md")
+	doc := "# T\n\n## Standing rules\nr\n\n## P0 — A\nx\n\n## P1 — B\ny\n\n## P2 — C\nz\n\n## Verification\nv\n"
+	os.WriteFile(file, []byte(doc), 0o644)
+	p, err := Build(file, []byte(doc), Suggest([]byte(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := Recheck(p, []string{"P1", "P2"}); changed || err != nil {
+		t.Fatalf("unchanged file: %v %v", changed, err)
+	}
+	// P1's instructions edited: every phase still there, so baton follows the new text.
+	os.WriteFile(file, []byte(strings.Replace(doc, "y\n", "y, and also w\n", 1)), 0o644)
+	adopted, changed, err := Recheck(p, []string{"P1", "P2"})
+	if !changed || err != nil || adopted.SHA256 == p.SHA256 || adopted.SHA256 != adopted.SHA() {
+		t.Fatalf("edited: %v %v %s", changed, err, adopted.SHA256)
+	}
+	// A done phase's heading may go; one still to run may not.
+	os.WriteFile(file, []byte(strings.Replace(doc, "## P0 — A", "## P0 — A (done)", 1)), 0o644)
+	if _, _, err := Recheck(p, []string{"P1", "P2"}); err != nil {
+		t.Errorf("a done phase renamed: %v", err)
+	}
+	os.WriteFile(file, []byte("# Another plan\n\n## P0 — Other\nq\n"), 0o644)
+	if _, changed, err := Recheck(p, []string{"P1", "P2"}); !changed || err == nil || !strings.Contains(err.Error(), "## P1 — B") {
+		t.Errorf("replaced by another plan: %v %v", changed, err)
+	}
+	os.Remove(file)
+	if _, changed, err := Recheck(p, []string{"P1"}); !changed || err == nil {
+		t.Errorf("file gone: %v %v", changed, err)
+	}
+}

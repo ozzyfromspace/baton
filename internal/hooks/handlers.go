@@ -170,6 +170,8 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 		p := st.PendingProposal()
 		switch {
+		case st.BoundaryOwed && !started(st):
+			hold = endTurn("baton attached the plan the human approved, and compacts the planning conversation before " + st.Current + " begins")
 		case st.BoundaryOwed:
 			hold = endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
 		case st.CheckpointOwed:
@@ -180,6 +182,8 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			hold = endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 		case p != nil && !p.Asked:
 			hold = NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
+		case st.Replan != nil:
+			hold = replanHold(st.Replan)
 		}
 		return nil
 	})
@@ -389,6 +393,10 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.Ended = &state.Ended{Reason: reason, At: c.Now}
 		st.Run.TurnOpen = false
+		if reason == "clear" && st.Run.PlanFile != "" && planOnScreen(st) {
+			// Approved with "clear context", most likely: the next session's first tool call confirms it.
+			st.Run.ClearedPlan = &state.Approval{File: st.Run.PlanFile, At: c.Now}
+		}
 		if st.Mode == state.ModeRunning && !deliberateEnd[reason] {
 			notice(st, "session_ended", "the session ended mid-plan ("+reason+")", c.Now)
 		}
@@ -398,6 +406,16 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 		s.Event("session_end", map[string]any{"reason": reason})
 	}
 	return Result{}, ok(err)
+}
+
+// planOnScreen reports a plan approval of the main agent's still on record.
+func planOnScreen(st *state.State) bool {
+	for _, d := range st.Run.Dialogs {
+		if d.Tool == "ExitPlanMode" && d.Agent == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // deliberateEnd are session-end reasons that mean the human chose to end the session.
@@ -428,6 +446,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
+		st.Run.ClearedPlan = nil   // a "clear context" approval starts working with no prompt
 		events, tell = vanished(st, c.Now, by == "human")
 		if by == "human" {
 			// The human is engaged: whatever baton escalated, they have it now, and the model may act on
@@ -438,6 +457,13 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			var record string
 			if told, record = tellDecisions(st); record != "" {
 				tell = strings.TrimSpace(tell + "\n\n" + record)
+			}
+			if r := st.Replan; r != nil {
+				// The question about the plan they approved went unanswered, and they wrote instead.
+				st.Replan = nil
+				events = append(events, event{"replan_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
+				tell = strings.TrimSpace(tell + "\n\n" + NudgePrefix + " baton's question about the plan the human approved (" + r.File +
+					") went unanswered, so baton changed nothing. Their message is what to do; if they want that plan run, `/baton run` attaches it.")
 			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
@@ -482,6 +508,8 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 			// A plan the human sent back fires no hook at all, so its dialog is still on record when the
 			// model asks again. Only one plan is ever on screen: this one replaces it.
 			st.Run.Dialogs.CloseExact("", tool, dialogKey(c.Input))
+			ti, _ := c.Input["tool_input"].(map[string]any)
+			st.Run.PlanFile = str(ti, "planFilePath")
 		}
 		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
 		open = len(st.Run.Dialogs)
@@ -553,16 +581,24 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		}
 		if c.Event == "PostToolUse" {
 			w := words(c, s)
-			if tool == "AskUserQuestion" {
+			switch tool {
+			case "ExitPlanMode":
+				v = approved(st, s, c, approvedFile(c.Input), false, w)
+			case "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero()
-				if v = answeredProposal(st, c, auto); v.event == "" {
-					if v = answeredReview(st, c); v.event == "" {
-						v = answered(st, c, auto, w)
+				if v = answeredReplan(st, s, c, w); v.event == "" {
+					if v = answeredProposal(st, c, auto); v.event == "" {
+						if v = answeredReview(st, c); v.event == "" {
+							v = answered(st, c, auto, w)
+						}
 					}
 				}
 			}
-			// No other question while a proposal or a review waits on the human: one at a time.
-			if v.event == "" && st.PendingProposal() == nil && st.ReviewDue == "" {
+			if file, ok := clearedApproval(st, c); ok && v.event == "" {
+				v = approved(st, s, c, file, true, w)
+			}
+			// No other question while a proposal, a review or an approved plan waits on the human: one at a time.
+			if v.event == "" && st.PendingProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
 			notes = announceNotes(st)

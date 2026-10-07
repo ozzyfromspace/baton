@@ -219,6 +219,9 @@ func cmdStatus(args []string, io IO) int {
 		return 0
 	}
 	fmt.Fprintf(io.Out, "baton: %q — %s%s\nplan: %s\n", pl.Title, st.Mode, map[bool]string{true: " (hosted)", false: " (not hosted)"}[hosted(io)], pl.File)
+	if sha := pl.SHA(); sha != pl.SHA256 && st.Mode != state.ModeComplete {
+		fmt.Fprintln(io.Out, "  (the plan file changed since baton last read it; baton checks it again at the next stop)")
+	}
 	for _, ph := range pl.Phases {
 		mark, extra := "·", ""
 		if ps := st.Phases[ph.ID]; ps != nil {

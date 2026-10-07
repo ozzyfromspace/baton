@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -25,8 +26,17 @@ func (h *handlers) stop(c Context) (Result, error) {
 	_, _, err = h.update(c, func(st *state.State, s *state.Store) error {
 		recordStop(st, c)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
+		drift, ev := planDrift(st, s, pl, c.Now)
+		if ev != nil {
+			dropped = append(dropped, *ev)
+			pl, _ = s.LoadPlan()
+		}
 		d = decideStop(st, pl, c.Now, words(c, s))
 		d.events = append(dropped, d.events...)
+		if drift != "" {
+			msg, _ := d.out()["systemMessage"].(string)
+			d.say(strings.TrimSpace(drift + "\n" + msg))
+		}
 		return nil
 	})
 	if err != nil {
@@ -96,10 +106,24 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		q := decide.ReviewQuestion(st.ReviewDue, st.Unattended(st.ReviewDue))
 		escalateAsking(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", q, now)
+	case st.Replan != nil:
+		// The human approved a plan mid-run, and the model stopped without asking what to do with it.
+		st.Run.StopBlocks++
+		if st.Run.StopBlocks <= MaxStopBlocks {
+			d.refuse(NudgePrefix + " You stopped, but put baton's question about the plan the human approved to them first: " + replanQuestion(st.Replan).Call() + ". baton acts on the answer itself; then follow what it tells you.")
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "approved plan not asked"})
+			return d
+		}
+		st.Replan = nil
+		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times without asking you about the plan you approved", st.Run.StopBlocks), now)
 	case st.BoundaryOwed:
 		queueCompaction(st, "boundary", now)
 		st.Run.StopBlocks = 0
-		d.say(fmt.Sprintf("baton: phase done → compacting, then %s starts", cur))
+		if started(st) {
+			d.say(fmt.Sprintf("baton: phase done → compacting, then %s starts", cur))
+		} else {
+			d.say(fmt.Sprintf("baton: plan attached → compacting the planning conversation, then %s starts", cur))
+		}
 		d.emit("compact_queued", map[string]any{"reason": "boundary", "epoch": st.Run.Compaction.Epoch, "next": st.Current})
 	case st.CheckpointOwed:
 		queueCompaction(st, "checkpoint", now)
@@ -195,6 +219,17 @@ func notice(st *state.State, kind, text string, now time.Time) {
 func queueCompaction(st *state.State, reason string, now time.Time) {
 	c := &st.Run.Compaction
 	*c = state.Compaction{Epoch: c.Epoch + 1, Status: state.CompactQueued, Reason: reason, Queued: now, Rewoken: c.Rewoken}
+}
+
+// started reports whether any phase of the run has started: before that, a boundary owed is the one
+// between planning and the first phase.
+func started(st *state.State) bool {
+	for _, ps := range st.Phases {
+		if ps.Status != state.PhasePending {
+			return true
+		}
+	}
+	return false
 }
 
 func phaseTitle(pl plan.Plan, id string) string {
