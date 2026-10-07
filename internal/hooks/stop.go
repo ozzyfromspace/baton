@@ -37,6 +37,11 @@ func (h *handlers) stop(c Context) (Result, error) {
 			msg, _ := d.out()["systemMessage"].(string)
 			d.say(strings.TrimSpace(drift + "\n" + msg))
 		}
+		if newer := newerBaton(st, c); newer != "" {
+			msg, _ := d.out()["systemMessage"].(string)
+			d.say(strings.TrimSpace(msg + "\n" + newer))
+			d.emit("newer_baton", map[string]any{"version": st.Run.NewerNoted})
+		}
 		return nil
 	})
 	if err != nil {

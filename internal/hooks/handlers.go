@@ -283,10 +283,17 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	var pl plan.Plan
 	var havePlan bool
 	var events []event
+	var restarted *state.Restart
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = nil
 		if source == "startup" || source == "resume" {
 			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
+		}
+		if source == "resume" && st.Run.Restart != nil {
+			if c.Now.Sub(st.Run.Restart.At) < restartWindow {
+				restarted = st.Run.Restart
+			}
+			st.Run.Restart = nil
 		}
 		if source != "compact" {
 			st.Run.TurnOpen, st.Run.Subagents = false, 0
@@ -306,6 +313,16 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
 	}
+	note := ""
+	if restarted != nil {
+		running := c.Env("BATON_VERSION")
+		s.Event("restarted", map[string]any{"from": restarted.From, "to": restarted.To, "version": running})
+		if running == restarted.To {
+			note = fmt.Sprintf("baton: restarted this session on baton %s (was %s) · ", running, restarted.From)
+		} else {
+			note = fmt.Sprintf("baton: could not restart this session on baton %s; it stays on %s · ", restarted.To, running)
+		}
+	}
 	if p, err := s.LoadPlan(); err == nil && st.Mode != state.ModeIdle {
 		pl, havePlan = p, true
 	}
@@ -313,16 +330,20 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		return h.afterCompaction(c, s)
 	}
 	if !havePlan {
-		return Result{Output: map[string]any{"systemMessage": "baton: hosting this session (no plan attached — /baton plan or /baton attach)"}}, nil
+		return Result{Output: map[string]any{"systemMessage": note + "baton: hosting this session (no plan attached — /baton plan or /baton run)"}}, nil
 	}
 	return Result{Output: map[string]any{
-		"systemMessage": "baton: hosting · " + progressLine(pl, st),
+		"systemMessage": note + "baton: hosting · " + progressLine(pl, st),
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":     "SessionStart",
 			"additionalContext": Primer(pl, st, words(c, s)),
 		},
 	}}, nil
 }
+
+// restartWindow is how long a restart on a newer baton may take to reach the restarted session's
+// SessionStart; a record older than that belongs to a restart that never happened.
+const restartWindow = 10 * time.Minute
 
 // sessionStartRewake runs in the background when a session resumes. After an elevation it wakes the model
 // with what it was about to do (BATON_PENDING, set by the relaunch), exactly once.
@@ -401,7 +422,7 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 			// Approved with "clear context", most likely: the next session's first tool call confirms it.
 			st.Run.ClearedPlan = &state.Approval{File: st.Run.PlanFile, At: c.Now}
 		}
-		if st.Mode == state.ModeRunning && !deliberateEnd[reason] {
+		if st.Mode == state.ModeRunning && !deliberateEnd[reason] && st.Run.Restart == nil { // a restart resumes it
 			notice(st, "session_ended", "the session ended mid-plan ("+reason+")", c.Now)
 		}
 		return nil
