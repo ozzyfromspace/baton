@@ -40,6 +40,10 @@ type Config struct {
 	// nobody answered) before baton stops for them to review; 5 by default, 0 for no limit
 	// (BATON_MAX_AUTO_DECISIONS).
 	MaxAutoDecisions *int `json:"max_auto_decisions,omitempty"`
+	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
+	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
+	// (BATON_AUTO_RESTART=0).
+	AutoRestart *bool `json:"auto_restart,omitempty"`
 
 	// The environment's values for the two above, which Escalation checks against their own bounds.
 	envTimeout, envMaxAuto string
@@ -67,6 +71,18 @@ const (
 // Path is where the config file lives, under baton's root directory (~/.baton, or $BATON_HOME).
 func Path(root string) string { return filepath.Join(root, "config.json") }
 
+// Root is baton's root directory: $BATON_HOME, or ~/.baton.
+func Root(env func(string) string) string {
+	if r := env("BATON_HOME"); r != "" {
+		return r
+	}
+	home := env("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	return filepath.Join(home, ".baton")
+}
+
 // Load reads the config file (a missing or unreadable file is an empty config) and applies the
 // environment overrides and defaults.
 func Load(root string, env func(string) string) Config {
@@ -83,6 +99,10 @@ func Load(root string, env func(string) string) Config {
 	if v := env("BATON_NOTIFY_DESKTOP"); v != "" {
 		on := v != "0" && v != "false"
 		c.Desktop = &on
+	}
+	if v := env("BATON_AUTO_RESTART"); v != "" {
+		on := v != "0" && v != "false"
+		c.AutoRestart = &on
 	}
 	if v := env("BATON_AUTOCOMPACT"); v != "" {
 		c.Autocompact = v
@@ -224,3 +244,6 @@ func short(d time.Duration) string {
 
 // DesktopOn reports whether desktop notifications are enabled.
 func (c Config) DesktopOn() bool { return c.Desktop == nil || *c.Desktop }
+
+// Restarts reports whether hosted sessions restart on a newer baton by themselves.
+func (c Config) Restarts() bool { return c.AutoRestart == nil || *c.AutoRestart }

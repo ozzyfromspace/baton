@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,18 +11,29 @@ import (
 func TestLoadFileEnvAndDefaults(t *testing.T) {
 	root := t.TempDir()
 	c := Load(root, func(string) string { return "" })
-	if c.Autocompact != DefaultAutocompact || *c.CheckpointPct != DefaultCheckpointPct || *c.WarnPct != DefaultWarnPct || c.NtfyServer != DefaultNtfyServer || !c.DesktopOn() {
+	if c.Autocompact != DefaultAutocompact || *c.CheckpointPct != DefaultCheckpointPct || *c.WarnPct != DefaultWarnPct || c.NtfyServer != DefaultNtfyServer || !c.DesktopOn() || !c.Restarts() {
 		t.Fatalf("defaults: %+v", c)
 	}
-	os.WriteFile(Path(root), []byte(`{"ntfy_topic":"file","details":true,"autocompact":"off","checkpoint_pct":50,"warn_pct":0}`), 0o644)
+	os.WriteFile(Path(root), []byte(`{"ntfy_topic":"file","details":true,"autocompact":"off","checkpoint_pct":50,"warn_pct":0,"auto_restart":false}`), 0o644)
 	c = Load(root, func(string) string { return "" })
-	if c.NtfyTopic != "file" || !c.Details || c.Autocompact != "" || *c.CheckpointPct != 50 || *c.WarnPct != 0 {
+	if c.NtfyTopic != "file" || !c.Details || c.Autocompact != "" || *c.CheckpointPct != 50 || *c.WarnPct != 0 || c.Restarts() {
 		t.Fatalf("file: %+v", c)
 	}
-	env := map[string]string{"BATON_NTFY_TOPIC": "env", "BATON_NOTIFY_DESKTOP": "0", "BATON_AUTOCOMPACT": "600k", "BATON_CHECKPOINT_PCT": "0", "BATON_WARN_PCT": "80"}
+	env := map[string]string{"BATON_NTFY_TOPIC": "env", "BATON_NOTIFY_DESKTOP": "0", "BATON_AUTOCOMPACT": "600k", "BATON_CHECKPOINT_PCT": "0", "BATON_WARN_PCT": "80", "BATON_AUTO_RESTART": "1"}
 	c = Load(root, func(k string) string { return env[k] })
-	if c.NtfyTopic != "env" || c.DesktopOn() || c.Autocompact != "600k" || *c.CheckpointPct != 0 || *c.WarnPct != 80 {
+	if c.NtfyTopic != "env" || c.DesktopOn() || c.Autocompact != "600k" || *c.CheckpointPct != 0 || *c.WarnPct != 80 || !c.Restarts() {
 		t.Fatalf("env: %+v", c)
+	}
+}
+
+func TestRoot(t *testing.T) {
+	env := map[string]string{"HOME": "/home/x"}
+	if got := Root(func(k string) string { return env[k] }); got != filepath.Join("/home/x", ".baton") {
+		t.Fatalf("Root = %q", got)
+	}
+	env["BATON_HOME"] = "/elsewhere"
+	if got := Root(func(k string) string { return env[k] }); got != "/elsewhere" {
+		t.Fatalf("Root with BATON_HOME = %q", got)
 	}
 }
 
