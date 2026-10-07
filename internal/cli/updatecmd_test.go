@@ -12,16 +12,19 @@ import (
 	"testing"
 )
 
-func TestCompareVersions(t *testing.T) {
+func TestUpdatedSaysWhatBecomesOfRunningSessions(t *testing.T) {
 	for _, c := range []struct {
-		a, b string
-		want int
+		running, to string
+		restarts    bool
+		want        string
 	}{
-		{"0.1.0", "v0.1.0", 0}, {"0.1.0", "0.1.0-rc.2", 1}, {"0.1.0-rc.2", "0.1.0-rc.10", -1},
-		{"0.1.0-rc.2", "0.1.0-rc.2", 0}, {"0.2.0", "0.1.9", 1}, {"1.0.0", "0.99.99", 1}, {"0.1.0-rc.1", "0.1.0-beta.1", 1},
+		{"v0.3.1", "v0.3.2", true, "Sessions baton hosts restart on it by themselves once idle"},
+		{"v0.3.1", "v0.3.2", false, "Sessions already running keep the old version until they restart"},
+		{"v0.3.2", "v0.4.0", true, "a major update. Sessions already running stay on v0.3.2 until they restart"},
+		{"dev", "v0.4.0", true, "Sessions baton hosts restart on it by themselves"},
 	} {
-		if got := compareVersions(c.a, c.b); got != c.want {
-			t.Errorf("%s vs %s: %d, want %d", c.a, c.b, got, c.want)
+		if got := updated(c.running, c.to, c.restarts); !strings.Contains(got, c.want) {
+			t.Errorf("%s → %s (restarts %v): %q", c.running, c.to, c.restarts, got)
 		}
 	}
 }

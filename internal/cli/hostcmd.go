@@ -19,6 +19,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/statusline"
+	"github.com/ozzyfromspace/baton/internal/upgrade"
 	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -79,7 +80,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout = escalation.Timeout
 	// Shorter watchdog timings, for tests and impatient humans.
-	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace, "BATON_WARN_TIMEOUT": &timing.WarnTimeout} {
+	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
 			*field = d
 		}
@@ -99,17 +100,29 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		// `baton exit` leaves its record there for the shell to find).
 		batonEnv = append(batonEnv, "BATON_HOME="+home)
 	}
+	if !cfg.Restarts() {
+		batonEnv = append(batonEnv, "BATON_AUTO_RESTART=0") // so the hooks tell the human the session stays put
+	}
 	if tty := elevate.ProcTTY(strconv.Itoa(os.Getpid())); tty != "" {
 		// The terminal the human sees. claude runs on baton's own pseudo-terminal, so its tty is not
 		// the one the shell's prompt hook looks for when `baton exit` hands the session back.
 		batonEnv = append(batonEnv, "BATON_TTY="+tty)
 	}
-	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf}
+	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version}
+	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
+		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
+		controller.Newer = w.Newer
+	}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: controller,
 	})
+	if to, session, ok := controller.Restart(); ok && err == nil {
+		host.Release(proj, instance)
+		controller.Flush()
+		return restartOn(io, to, session, args, logf)
+	}
 	defer host.Release(proj, instance)
 	controller.Ended() // save uncommitted work as the session ends
 	if st, ok := proj.Lookup("", instance); ok {
@@ -128,6 +141,42 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	controller.Flush()
 	return code
+}
+
+// restartOn hands this process over to baton `to`, resuming the session on it: the same pid, terminal
+// and claude flags, with the new binary hosting the same conversation. It returns only if that failed,
+// after trying to resume the session on this binary instead (which then leaves `to` alone).
+func restartOn(io IO, to, session string, args []string, logf func(string, ...any)) int {
+	argv := append(append([]string{"baton"}, elevate.KeepUserArgs(args)...), "--resume", session)
+	env := os.Environ()
+	path := upgrade.Bin(batonRoot(io), to)
+	v, err := upgrade.Probe(path)
+	if err == nil && v != to {
+		err = fmt.Errorf("it reports version %q", v)
+	}
+	if err == nil {
+		fmt.Fprintf(io.Out, "baton: restarting this session on baton %s (was %s)…\n", to, version.Version)
+		logf("host: restarting on baton %s: %s %q", to, path, argv)
+		err = upgrade.Exec(path, argv, env)
+	}
+	logf("host: could not restart on baton %s: %v", to, err)
+	fmt.Fprintf(io.Err, "baton: could not restart on baton %s (%v); resuming the session on %s\n", to, err, version.Version)
+	exe, xerr := os.Executable()
+	if xerr == nil {
+		xerr = upgrade.Exec(exe, argv, append(withoutVar(env, "BATON_RESTART_SKIP"), "BATON_RESTART_SKIP="+to))
+	}
+	return fail(io, "could not resume the session either (%v); resume it with: baton --resume %s", xerr, session)
+}
+
+// withoutVar copies env without the variable name: on exec, the first of two entries would win.
+func withoutVar(env []string, name string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, name+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // sessionOf works out the session id claude will run under, when baton can know it at launch: the
@@ -313,12 +362,7 @@ func fileLogger(path, instance string, now func() time.Time) func(string, ...any
 }
 
 // batonRoot is baton's own directory: $BATON_HOME, or ~/.baton.
-func batonRoot(io IO) string {
-	if r := io.Env("BATON_HOME"); r != "" {
-		return r
-	}
-	return filepath.Join(homeDir(io), ".baton")
-}
+func batonRoot(io IO) string { return config.Root(io.Env) }
 
 // homeDir prefers the injected HOME so tests never touch the developer's real settings.
 func homeDir(io IO) string {

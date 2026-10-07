@@ -52,6 +52,15 @@ func TestKeepArgs(t *testing.T) {
 	if got := KeepArgs(argv); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%v", got)
 	}
+	// A claude process baton hosts carries baton's own --settings and --autocompact; leaving baton drops
+	// them. The arguments a human gave baton keep theirs across a restart.
+	argv = []string{"--settings", `{"hooks":{}}`, "--autocompact", "810k", "--model", "haiku", "--session-id", "abc", "go on"}
+	if got := KeepArgs(argv); !reflect.DeepEqual(got, []string{"--model", "haiku"}) {
+		t.Fatalf("KeepArgs: %v", got)
+	}
+	if got := KeepUserArgs(argv); !reflect.DeepEqual(got, []string{"--settings", `{"hooks":{}}`, "--autocompact", "810k", "--model", "haiku"}) {
+		t.Fatalf("KeepUserArgs: %v", got)
+	}
 }
 
 func TestInitScripts(t *testing.T) {

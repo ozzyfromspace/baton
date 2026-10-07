@@ -9,10 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/upgrade"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
 
@@ -45,8 +46,8 @@ func cmdUpdate(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	fmt.Fprintf(io.Out, "baton: latest release %s; installed plugin %s; this binary %s\n", latest, "v"+plug.Version, version.Version)
-	pluginCurrent := compareVersions(plug.Version, latest) >= 0
-	binaryCurrent := devBuild(version.Version) || compareVersions(version.Version, latest) >= 0
+	pluginCurrent := upgrade.Compare(plug.Version, latest) >= 0
+	binaryCurrent := devBuild(version.Version) || upgrade.Compare(version.Version, latest) >= 0
 	if pluginCurrent && binaryCurrent {
 		fmt.Fprintln(io.Out, "baton: up to date.")
 		return 0
@@ -67,7 +68,7 @@ func cmdUpdate(args []string, io IO) int {
 		if plug, err = installedPlugin(claude); err != nil {
 			return fail(io, "%v", err)
 		}
-		if compareVersions(plug.Version, latest) < 0 {
+		if upgrade.Compare(plug.Version, latest) < 0 {
 			return fail(io, "the plugin is still at v%s after the update; try `claude plugin marketplace update` and `claude plugin update %s` yourself", plug.Version, plug.ID)
 		}
 	}
@@ -86,8 +87,20 @@ func cmdUpdate(args []string, io IO) int {
 		return fail(io, "the plugin updated to v%s, but its binary could not be installed: %v\n%s", plug.Version, err, out)
 	}
 	fmt.Fprint(io.Out, out)
-	fmt.Fprintf(io.Out, "baton: updated to v%s. Sessions already running keep the old version until they restart: exit and run `baton --continue` (or start a new one).\n", plug.Version)
+	fmt.Fprintln(io.Out, updated(version.Version, "v"+plug.Version, config.Load(batonRoot(io), io.Env).Restarts() && upgrade.CanRestart))
 	return 0
+}
+
+// updated says what becomes of the sessions already running once baton updated from `running` to `to`.
+func updated(running, to string, restarts bool) string {
+	switch {
+	case upgrade.Release(running) && !upgrade.Compatible(running, to):
+		return fmt.Sprintf("baton: updated to %s, a major update. Sessions already running stay on %s until they restart: exit and run `baton --continue` (or start a new one). Read what changed first: %s", to, running, upgrade.ChangelogURL)
+	case restarts:
+		return fmt.Sprintf("baton: updated to %s. Sessions baton hosts restart on it by themselves once idle (with a plan running, at its next phase boundary). Other sessions keep the old version until they restart: exit and run `baton --continue`.", to)
+	default:
+		return fmt.Sprintf("baton: updated to %s. Sessions already running keep the old version until they restart: exit and run `baton --continue` (or start a new one).", to)
+	}
 }
 
 // devBuild reports a binary built from a checkout rather than a release (`make build` stamps it with
@@ -176,52 +189,4 @@ func run(name string, args, env []string, timeout time.Duration) (string, error)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	return out.String(), err
-}
-
-// compareVersions orders semantic versions ("0.1.0", "v0.1.0-rc.2"): -1, 0 or 1. A release sorts after
-// its pre-releases; pre-release identifiers compare numerically where they are numbers.
-func compareVersions(a, b string) int {
-	a, b = strings.TrimPrefix(a, "v"), strings.TrimPrefix(b, "v")
-	ac, apre, _ := strings.Cut(a, "-")
-	bc, bpre, _ := strings.Cut(b, "-")
-	if c := compareDotted(ac, bc); c != 0 {
-		return c
-	}
-	switch {
-	case apre == bpre:
-		return 0
-	case apre == "":
-		return 1
-	case bpre == "":
-		return -1
-	}
-	return compareDotted(apre, bpre)
-}
-
-func compareDotted(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < max(len(as), len(bs)); i++ {
-		var x, y string
-		if i < len(as) {
-			x = as[i]
-		}
-		if i < len(bs) {
-			y = bs[i]
-		}
-		xn, xerr := strconv.Atoi(x)
-		yn, yerr := strconv.Atoi(y)
-		switch {
-		case xerr == nil && yerr == nil && xn != yn:
-			if xn < yn {
-				return -1
-			}
-			return 1
-		case (xerr != nil || yerr != nil) && x != y:
-			if x < y {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
 }

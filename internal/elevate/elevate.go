@@ -119,14 +119,32 @@ var keepFlags = map[string]bool{
 	"--dangerously-skip-permissions": false, "--verbose": false, "--strict-mcp-config": false,
 }
 
+// userFlags are flags worth keeping from the arguments a human gave baton itself. They are not kept from
+// a claude process's command line, where baton may have put them (its own --settings and --autocompact),
+// and a session leaving baton must not take those along.
+var userFlags = map[string]bool{
+	"--autocompact": true, "--settings": true, "--setting-sources": true, "--append-system-prompt": true, "--system-prompt": true,
+}
+
 // KeepArgs picks the flags worth keeping out of claude's original command line. Prompts and
 // session-selection flags are dropped: the relaunch resumes this session explicitly.
-func KeepArgs(argv []string) []string {
+func KeepArgs(argv []string) []string { return keepArgs(argv, keepFlags) }
+
+// KeepUserArgs is KeepArgs for the claude arguments a human gave baton, kept when baton restarts the
+// session on a newer version of itself.
+func KeepUserArgs(argv []string) []string { return keepArgs(argv, keepFlags, userFlags) }
+
+func keepArgs(argv []string, sets ...map[string]bool) []string {
 	var out []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		name, _, hasEq := strings.Cut(a, "=")
-		takesValue, ok := keepFlags[name]
+		var takesValue, ok bool
+		for _, set := range sets {
+			if v, in := set[name]; in {
+				takesValue, ok = v, true
+			}
+		}
 		if !ok {
 			continue
 		}
