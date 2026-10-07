@@ -1,0 +1,6 @@
+#!/bin/sh
+# Prints where it ran from and the PATH it saw, so the skill shows which copy the session picks up.
+echo "spkbin ran: $0"
+echo "baton on PATH: $(command -v baton)"
+echo "PATH: $PATH"
+echo "BATON_BIN: ${BATON_BIN:-unset}"
