@@ -4,6 +4,15 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- **A hosted session stays on one version until it restarts.** After an update, the newest `baton` comes
+  first on the PATH, so the model's `baton` commands and `/baton`'s instructions ran the new version while
+  the session's host and hooks still ran the old one. A `baton` run inside a hosted session now hands
+  itself to the host's binary. This is what keeps a session on its version after a major update.
+- **`baton update` says what happens to each kind of session**: hosted sessions restart on the new
+  version (or, after a major update, stay put), and plain sessions use it the next time they run
+  `/baton`. It used to say every running session kept the old version until restarted.
+
 ## [0.3.2] - 2026-10-07
 
 ### Added

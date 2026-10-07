@@ -51,7 +51,7 @@ eval "$(~/.baton/bin/baton init zsh)"
 
 That line puts `baton` on your PATH. It also lets a plain `claude` session hand itself to baton (see [Starting baton in a running session](#starting-baton-in-a-running-session)).
 
-To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Sessions baton hosts then move to the new version by themselves: each one restarts on it in place, with the same conversation, once it has been idle for two minutes, or at its next phase boundary while a plan runs. Nothing that would end with claude may be running at that moment (background work, a monitor, a scheduled wakeup), and a session never restarts with a draft in the input box. This applies to patch and minor releases (before 1.0, patch releases only). After a major update, a session tells you once and stays on its version until you restart it: exit and run `baton --continue`. Plain `claude` sessions keep the old plugin until they restart.
+To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Sessions baton hosts then move to the new version by themselves: each one restarts on it in place, with the same conversation, once it has been idle for two minutes, or at its next phase boundary while a plan runs. Nothing that would end with claude may be running at that moment (background work, a monitor, a scheduled wakeup), and a session never restarts with a draft in the input box. This applies to patch and minor releases (before 1.0, patch releases only). After a major update, a session tells you once and stays on its version until you restart it: exit and run `baton --continue`. Until a hosted session restarts, every `baton` command in it, and its `/baton`, run the version that hosts it. A plain `claude` session uses the new version the next time you run `/baton` there (with the `baton init` line in your shell; without it, once the session restarts).
 
 ## Use
 
@@ -79,7 +79,7 @@ Inside the session:
 
 You don't need a command to run a plan you approve in plan mode: baton attaches any approved plan whose phases are headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`, when the session has no plan under way. `/baton plan` writes plans in that format. `/baton run` also takes phases written as bold bullets or table rows.
 
-The `/baton` skill is a stub: its instructions come from the `baton` binary each time you use it, so after `baton update` every session, hosted or not, follows the new version's instructions at once.
+The `/baton` skill is a stub: its instructions come from the `baton` binary each time you use it, so they always match the baton that carries them out, and a session never needs a restart just to pick up new instructions.
 
 ### Starting baton in a running session
 
