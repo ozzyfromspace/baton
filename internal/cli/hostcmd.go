@@ -28,8 +28,19 @@ func init() {
 	register("statusline", "print the status line segment (called by Claude Code's status line)", cmdStatusline)
 }
 
-// runHost starts claude inside baton's pseudo-terminal in the current directory.
-func runHost(args []string, io IO) int { return runHostWith(args, io, nil) }
+// runHost starts claude inside baton's pseudo-terminal in the current directory. Not from inside a claude
+// session: there, a mistyped or retired command name would be taken for a prompt, and another claude
+// would start inside the Bash tool.
+func runHost(args []string, io IO) int {
+	if io.Env("BATON_HOST") != "1" && io.Env("CLAUDE_CODE_SESSION_ID") != "" {
+		what := "`baton` starts a new claude session"
+		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+			what = fmt.Sprintf("%q is not a baton command, and `baton <prompt>` starts a new claude session", args[0])
+		}
+		return fail(io, "%s; this is already one. To hand it to baton, run /baton start; `baton help` lists baton's commands.", what)
+	}
+	return runHostWith(args, io, nil)
+}
 
 // runHostWith is runHost with extra environment for the session (e.g. BATON_PENDING after elevation).
 func runHostWith(args []string, io IO, extraEnv []string) int {

@@ -174,7 +174,7 @@ func Revise(st *State, p plan.Plan) string {
 // Detach stops the run: its plan is set aside, and baton does nothing until the next plan is attached.
 func Detach(st *State) error {
 	if st.Mode == ModeIdle {
-		return errors.New("no plan is attached, so there is nothing to stop")
+		return errors.New("no plan is attached, so there is nothing to drop")
 	}
 	run := st.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
@@ -200,7 +200,7 @@ func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Or
 }
 
 // ErrNoPlan is returned by transitions that need an attached plan.
-var ErrNoPlan = errors.New("no plan is attached (run /baton attach or /baton plan first)")
+var ErrNoPlan = errors.New("no plan is attached (run /baton plan or /baton run first)")
 
 // Done marks phase id finished. Unless force is set, id must be the current phase. It returns the id of
 // the next phase ("" when the plan is complete).

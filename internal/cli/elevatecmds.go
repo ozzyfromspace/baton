@@ -15,33 +15,40 @@ import (
 )
 
 func init() {
-	register("elevate", "hand this plain claude session to baton (same conversation): elevate [what to do next]", cmdElevate)
+	register("start", "start baton: in a plain claude session, hand it to baton (same conversation); in a shell, start a session: start [what to do next]", cmdStart)
 	register("exit", "leave baton: once the turn ends, this conversation goes on as plain claude in this terminal", cmdExit)
 	register("init", "print shell setup for your shell config: eval \"$(baton init zsh|bash)\"", cmdInit)
 	// Internal commands, called by the shell hook, the plugin's Stop hook and each other.
-	register("relaunch", "(internal) relaunch an elevated session in this terminal", cmdRelaunch)
-	register("elevate-stop", "(internal) plugin Stop hook: stop an elevating claude once its turn ends", cmdElevateStop)
+	register("relaunch", "(internal) relaunch a session in this terminal, under baton or as plain claude", cmdRelaunch)
+	register("elevate-stop", "(internal) plugin Stop hook: stop a claude that asked for baton once its turn ends", cmdElevateStop)
 	register("elevate-kill", "(internal) stop a claude process cleanly", cmdElevateKill)
 }
 
-func cmdElevate(args []string, io IO) int {
+// cmdStart starts baton wherever it is run. In a plain claude session it hands the session over (package
+// elevate): once the turn ends, claude stops and the shell resumes the same conversation under baton. In a
+// shell it starts a hosted session, as plain `baton` does, with any arguments for claude.
+func cmdStart(args []string, io IO) int {
 	if hosted(io) {
 		fmt.Fprintln(io.Out, "baton: this session is already hosted by baton; nothing to do.")
 		return 0
 	}
-	if !elevate.Supported {
-		return fail(io, "elevation is not supported on this platform yet; exit and start the session with `baton --resume <session id>`")
+	sid := io.Env("CLAUDE_CODE_SESSION_ID")
+	if sid == "" {
+		return runHost(args, io)
 	}
-	pid, sid := io.Env("CLAUDE_PID"), io.Env("CLAUDE_CODE_SESSION_ID")
-	if pid == "" || sid == "" {
-		return fail(io, "run this from inside a claude session (CLAUDE_PID and CLAUDE_CODE_SESSION_ID are not set)")
+	if !elevate.Supported {
+		return fail(io, "/baton start cannot hand a running session over on this platform yet; exit and start the session with `baton --resume %s`", sid)
+	}
+	pid := io.Env("CLAUDE_PID")
+	if pid == "" {
+		return fail(io, "cannot find this claude process (CLAUDE_PID is not set); exit and start the session with `baton --resume %s`", sid)
 	}
 	tty := elevate.ProcTTY(pid)
 	if tty == "" {
 		return fail(io, "this claude session has no terminal (the desktop app or an IDE panel?), so it cannot be relaunched under baton")
 	}
 	if !elevate.ShellHookInstalled(homeDir(io), io.Env) {
-		fmt.Fprintf(io.Out, "baton: this shell does not relaunch elevated sessions yet, so baton will not stop claude. Either:\n"+
+		fmt.Fprintf(io.Out, "baton: this shell does not restart sessions under baton yet, so baton will not stop claude. Either:\n"+
 			"  • add  eval \"$(baton init zsh)\"  (or bash) to your shell config and open a new terminal, or\n"+
 			"  • exit this session (/exit) and run:  baton --resume %s\n", sid)
 		return 0
@@ -53,7 +60,7 @@ func cmdElevate(args []string, io IO) int {
 		Pending: strings.TrimSpace(strings.Join(args, " ")), Created: io.Now(),
 	}
 	if err := elevate.Save(batonRoot(io), rec); err != nil {
-		return fail(io, "cannot record the elevation: %v", err)
+		return fail(io, "cannot record the session to restart: %v", err)
 	}
 	if p, err := project(io); err == nil {
 		// The session's own run, or the one attached from a shell that it takes over once hosted.
@@ -62,14 +69,14 @@ func cmdElevate(args []string, io IO) int {
 			s, ok = p.Pended("")
 		}
 		if ok {
-			s.Event("elevate_requested", map[string]any{"tty": tty, "pending": rec.Pending})
+			s.Event("start_requested", map[string]any{"tty": tty, "pending": rec.Pending})
 		}
 	}
-	fmt.Fprintln(io.Out, "baton: elevating. When this turn ends, claude restarts under baton in this terminal, resuming this same conversation. End your turn now.")
+	fmt.Fprintln(io.Out, "baton: starting baton. When this turn ends, claude restarts under baton in this terminal, resuming this same conversation. End your turn now.")
 	return 0
 }
 
-// cmdExit is elevation in reverse: the host stops claude once the turn ends, and the shell's prompt hook
+// cmdExit is /baton start in reverse: the host stops claude once the turn ends, and the shell's prompt hook
 // resumes the same conversation as plain claude. A running plan is paused first: nothing would drive it.
 func cmdExit(args []string, io IO) int {
 	if len(args) != 0 {
@@ -229,7 +236,7 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 	}
 	for _, t := range in.BackgroundTasks {
 		if t.Type != "monitor" {
-			say(io, "baton: elevation waits until background work finishes (it would be stopped with claude)")
+			say(io, "baton: starting baton waits until background work finishes (it would be stopped with claude)")
 			return 0
 		}
 	}

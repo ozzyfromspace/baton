@@ -266,20 +266,20 @@ func TestTwoSessionsRunTwoPlans(t *testing.T) {
 	}
 }
 
-func TestStopSetsThePlanAside(t *testing.T) {
+func TestDropSetsThePlanAside(t *testing.T) {
 	s, planFile := newSession(t)
 	s.attach(planFile)
-	if out := s.must("", "stop"); !strings.Contains(out, "baton: stopped \"") || !strings.Contains(out, "does nothing in this session until the next plan") {
-		t.Fatalf("stop: %s", out)
+	if out := s.must("", "drop"); !strings.Contains(out, "baton: dropped \"") || !strings.Contains(out, "does nothing in this session until the next plan") {
+		t.Fatalf("drop: %s", out)
 	}
 	if out := s.must("", "status"); !strings.Contains(out, "no plan attached") {
-		t.Fatalf("status after stop: %s", out)
+		t.Fatalf("status after drop: %s", out)
 	}
-	if !strings.Contains(s.events(), `"kind":"stopped"`) {
+	if !strings.Contains(s.events(), `"kind":"dropped"`) {
 		t.Errorf("events: %s", s.events())
 	}
-	s.mustFail("nothing to stop", "stop")
-	s.attach(planFile) // a stopped run takes the next plan without --replace
+	s.mustFail("nothing to drop", "drop")
+	s.attach(planFile) // a dropped run takes the next plan without --replace
 }
 
 func TestExitExplainsWhenTheShellCannotResume(t *testing.T) {

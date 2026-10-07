@@ -64,8 +64,8 @@ func cmdSetup(_ []string, io IO) int {
 	}
 	if elevate.Supported {
 		check(elevate.ShellHookInstalled(homeDir(io), io.Env),
-			"plain claude sessions can hand themselves to baton (/baton elevate)",
-			fmt.Sprintf("for automatic elevation (and `baton` on your PATH), add this line to your ~/.%src and open a new terminal:\n      eval \"$(%s init %s)\"", shell, filepath.Join(binDir, "baton"), shell))
+			"plain claude sessions can hand themselves to baton (/baton start)",
+			fmt.Sprintf("for /baton start in plain sessions (and `baton` on your PATH), add this line to your ~/.%src and open a new terminal:\n      eval \"$(%s init %s)\"", shell, filepath.Join(binDir, "baton"), shell))
 	}
 
 	cfg := config.Load(root, io.Env)
@@ -79,9 +79,9 @@ func cmdSetup(_ []string, io IO) int {
 	} else {
 		note(contextSummary(flag, vs))
 	}
-	note("permissions: sessions started with `baton` allow baton's own CLI automatically; for plain sessions (elevation), add the rule Bash(baton:*) with /permissions")
+	note("permissions: sessions started with `baton` allow baton's own CLI automatically; for plain sessions (/baton start), add the rule Bash(baton:*) with /permissions")
 	if ok {
-		fmt.Fprintln(io.Out, "ready: start a session with `baton` (same arguments as `claude`), then /baton plan <goal> or /baton attach <plan>.")
+		fmt.Fprintln(io.Out, "ready: start a session with `baton` (same arguments as `claude`), then /baton plan <goal> or /baton run <plan>.")
 	}
 	return 0
 }

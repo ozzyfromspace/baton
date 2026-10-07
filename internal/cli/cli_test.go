@@ -56,6 +56,59 @@ func TestVersionAndHelp(t *testing.T) {
 	}
 }
 
+// baton version also says which baton hosts this session and which is installed: after an update they
+// can differ from the binary on the PATH until the session restarts.
+func TestVersionTellsTheSessionAndInstalledVersions(t *testing.T) {
+	home := t.TempDir()
+	if runtime.GOOS != "windows" {
+		os.MkdirAll(filepath.Join(home, "bin", "v0.3.2"), 0o755)
+		os.WriteFile(filepath.Join(home, "bin", "v0.3.2", "baton"), []byte("#!/bin/sh\n"), 0o755)
+		os.Symlink(filepath.Join("v0.3.2", "baton"), filepath.Join(home, "bin", "baton"))
+	}
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"BATON_HOST": "1", "BATON_VERSION": "v0.3.1"}, "this session: hosted by baton v0.3.1"},
+		{map[string]string{"CLAUDE_CODE_SESSION_ID": "sess-1"}, "this session: plain Claude Code, not hosted by baton (/baton start hands it over)"},
+	} {
+		tc.env["BATON_HOME"] = home
+		io, out, _ := testIO("", tc.env)
+		if code := Main([]string{"version"}, io); code != 0 || !strings.Contains(out.String(), tc.want) {
+			t.Errorf("%v: code %d\n%s", tc.env, code, out.String())
+		}
+		if runtime.GOOS != "windows" && !strings.Contains(out.String(), "installed: baton v0.3.2") {
+			t.Errorf("no installed version:\n%s", out.String())
+		}
+	}
+	io, out, _ := testIO("", map[string]string{"BATON_HOME": t.TempDir()})
+	if Main([]string{"version"}, io); strings.Contains(out.String(), "this session") || strings.Contains(out.String(), "installed") {
+		t.Errorf("from a shell, with nothing installed:\n%s", out.String())
+	}
+}
+
+// Inside a claude session, `baton <anything that is not a command>` must not start another claude in
+// the Bash tool: a mistyped or retired command name would otherwise be taken for a prompt.
+func TestNoClaudeStartsInsideASession(t *testing.T) {
+	for _, args := range [][]string{{"elevate", "Begin the plan."}, {"stauts"}, {}, {"--continue"}} {
+		io, _, errb := testIO("", map[string]string{"CLAUDE_CODE_SESSION_ID": "sess-1", "BATON_CLAUDE": "/nonexistent/claude"})
+		if code := Main(args, io); code == 0 || !strings.Contains(errb.String(), "this is already one. To hand it to baton, run /baton start") {
+			t.Errorf("%v: code %d, %q", args, code, errb.String())
+		}
+	}
+	io, _, errb := testIO("", map[string]string{"CLAUDE_CODE_SESSION_ID": "sess-1"})
+	if Main([]string{"elevate"}, io); !strings.Contains(errb.String(), `"elevate" is not a baton command`) {
+		t.Errorf("a retired name: %q", errb.String())
+	}
+}
+
+func TestStartInAHostedSessionDoesNothing(t *testing.T) {
+	io, out, _ := testIO("", map[string]string{"BATON_HOST": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"})
+	if code := Main([]string{"start"}, io); code != 0 || !strings.Contains(out.String(), "already hosted by baton") {
+		t.Fatalf("code %d: %s", code, out.String())
+	}
+}
+
 // A malformed hook invocation must never exit 2 (which Claude Code reads as "block").
 func TestHookArgumentProblemsFailOpen(t *testing.T) {
 	hosted := map[string]string{"BATON_HOST": "1"}

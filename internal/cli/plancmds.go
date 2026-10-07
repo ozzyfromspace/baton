@@ -30,7 +30,7 @@ func init() {
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("pause", "stop baton from acting until resume (the human takes the wheel)", cmdPause)
 	register("resume", "let baton drive again (also clears a block)", cmdResume)
-	register("stop", "end the run: its plan is set aside, and baton does nothing until the next plan", cmdStop)
+	register("drop", "drop the run: its plan is set aside, and baton does nothing until the next plan", cmdDrop)
 }
 
 // project opens the project a command runs in: the one the host named (BATON_DIR) inside a hosted
@@ -164,7 +164,7 @@ func cmdAttach(args []string, io IO) int {
 	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "git": gitx.Usable(root)})
 	fmt.Fprintf(io.Out, "baton: attached %q — %d phases. Current phase: %s (%s).\n", pl.Title, len(pl.Phases), pl.Phases[0].ID, pl.Phases[0].Title)
 	if !hosted(io) {
-		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton elevate (or start claude with `baton`).")
+		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
 	}
 	return 0
 }
@@ -690,9 +690,9 @@ func cmdResume(_ []string, io IO) int {
 	return simpleTransition(io, "resume", "resumed", resume, "baton: resumed. baton drives the plan again.")
 }
 
-func cmdStop(args []string, io IO) int {
+func cmdDrop(args []string, io IO) int {
 	if len(args) != 0 {
-		return fail(io, "usage: baton stop")
+		return fail(io, "usage: baton drop")
 	}
 	s, err := store(io)
 	if err != nil {
@@ -700,10 +700,10 @@ func cmdStop(args []string, io IO) int {
 	}
 	pl, _ := s.LoadPlan()
 	if _, err := s.Update(state.Detach); err != nil {
-		return refused(io, s, "stop", err)
+		return refused(io, s, "drop", err)
 	}
-	s.Event("stopped", map[string]any{"plan": pl.File})
-	fmt.Fprintf(io.Out, "baton: stopped %q. Its plan is set aside (its history stays in baton's event log), and baton does nothing in this session until the next plan: /baton plan or /baton run.\n", pl.Title)
+	s.Event("dropped", map[string]any{"plan": pl.File})
+	fmt.Fprintf(io.Out, "baton: dropped %q. Its plan is set aside (its history stays in baton's event log), and baton does nothing in this session until the next plan: /baton plan or /baton run.\n", pl.Title)
 	return 0
 }
 

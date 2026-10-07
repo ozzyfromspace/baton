@@ -103,6 +103,25 @@ func updated(running, to string, restarts bool) string {
 	}
 }
 
+// cmdVersion prints this binary's version and who made it, then what the human needs to tell versions
+// apart: the baton hosting this session (which may be older than the `baton` on the PATH until the session
+// restarts) and the newest one installed.
+func cmdVersion(_ []string, io IO) int {
+	fmt.Fprintln(io.Out, "baton", version.Version) // first, and alone on its line: scripts read it
+	fmt.Fprintln(io.Out, version.Credit())
+	fmt.Fprintln(io.Out, version.Homepage)
+	switch {
+	case hosted(io):
+		fmt.Fprintf(io.Out, "this session: hosted by baton %s\n", io.Env("BATON_VERSION"))
+	case io.Env("CLAUDE_CODE_SESSION_ID") != "":
+		fmt.Fprintln(io.Out, "this session: plain Claude Code, not hosted by baton (/baton start hands it over)")
+	}
+	if v, ok := upgrade.Installed(batonRoot(io)); ok {
+		fmt.Fprintf(io.Out, "installed: baton %s\n", v)
+	}
+	return 0
+}
+
 // devBuild reports a binary built from a checkout rather than a release (`make build` stamps it with
 // `git describe`, e.g. v0.1.0-rc.2-3-gcec9574-dirty): there is nothing to update it to.
 func devBuild(v string) bool { return v == "dev" || strings.Contains(v, "-g") }
