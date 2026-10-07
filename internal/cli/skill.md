@@ -96,7 +96,7 @@ baton will not stop claude while background tasks or subagents are still running
 
 ## version
 
-Run `baton version`, then `baton update --check`, and show both outputs. If this session runs an older baton than the one installed, say what happens next: a session baton hosts restarts on the newer one by itself once idle (unless it is a major update); a plain session keeps its version until it restarts.
+Run `baton version`, then `baton update --check`, and show both outputs. If baton hosts this session on an older version than the one installed, say what happens next: the session restarts on the newer one by itself once idle, or at its next phase boundary while a plan runs; after a major update, it stays on its version until the user restarts it (exit, then `baton --continue`).
 
 ## setup
 
@@ -109,7 +109,7 @@ Do not edit the user's shell config or baton's config yourself unless they ask y
 
 ## update
 
-Run `baton update` (passing through `--check`) and show its output. It updates the plugin through Claude Code, then downloads and verifies the matching binary. If it updated, relay what it says about the sessions already running, this one included: sessions baton hosts restart on the new version by themselves once idle, unless it was a major update.
+Run `baton update` (passing through `--check`) and show its output. It updates the plugin through Claude Code, then downloads and verifies the matching binary. If it updated, relay what it says about the sessions already running, this one included.
 
 ## While a plan runs
 

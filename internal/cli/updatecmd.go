@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/upgrade"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -87,20 +88,30 @@ func cmdUpdate(args []string, io IO) int {
 		return fail(io, "the plugin updated to v%s, but its binary could not be installed: %v\n%s", plug.Version, err, out)
 	}
 	fmt.Fprint(io.Out, out)
-	fmt.Fprintln(io.Out, updated(version.Version, "v"+plug.Version, config.Load(batonRoot(io), io.Env).Restarts() && upgrade.CanRestart))
+	fmt.Fprintln(io.Out, updated(version.Version, "v"+plug.Version, config.Load(batonRoot(io), io.Env).Restarts() && upgrade.CanRestart,
+		elevate.ShellHookInstalled(homeDir(io), io.Env)))
 	return 0
 }
 
 // updated says what becomes of the sessions already running once baton updated from `running` to `to`.
-func updated(running, to string, restarts bool) string {
+// Hosted sessions move to a compatible release by themselves (package upgrade) and otherwise stay on their
+// version until restarted. Plain sessions run the newest `baton` on the PATH, if `baton init` put it
+// there, so their next /baton uses the new version; without it, they keep the plugin they started with.
+func updated(running, to string, restarts, shellHook bool) string {
+	var hosted string
 	switch {
 	case upgrade.Release(running) && !upgrade.Compatible(running, to):
-		return fmt.Sprintf("baton: updated to %s, a major update. Sessions already running stay on %s until they restart: exit and run `baton --continue` (or start a new one). Read what changed first: %s", to, running, upgrade.ChangelogURL)
+		hosted = fmt.Sprintf("This is a major update: sessions baton hosts stay on %s until you restart them (exit, then `baton --continue`). Read what changed first: %s", running, upgrade.ChangelogURL)
 	case restarts:
-		return fmt.Sprintf("baton: updated to %s. Sessions baton hosts restart on it by themselves once idle (with a plan running, at its next phase boundary). Other sessions keep the old version until they restart: exit and run `baton --continue`.", to)
+		hosted = "Sessions baton hosts restart on it by themselves once idle (with a plan running, at the next phase boundary)."
 	default:
-		return fmt.Sprintf("baton: updated to %s. Sessions already running keep the old version until they restart: exit and run `baton --continue` (or start a new one).", to)
+		hosted = "Sessions baton hosts stay on their version until you restart them (exit, then `baton --continue`)."
 	}
+	plain := "Plain claude sessions use it the next time they run /baton."
+	if !shellHook {
+		plain = "Plain claude sessions use it once they restart."
+	}
+	return fmt.Sprintf("baton: updated to %s. %s %s", to, hosted, plain)
 }
 
 // cmdVersion prints this binary's version and who made it, then what the human needs to tell versions

@@ -14,17 +14,21 @@ import (
 
 func TestUpdatedSaysWhatBecomesOfRunningSessions(t *testing.T) {
 	for _, c := range []struct {
-		running, to string
-		restarts    bool
-		want        string
+		running, to         string
+		restarts, shellHook bool
+		want                []string
 	}{
-		{"v0.3.1", "v0.3.2", true, "Sessions baton hosts restart on it by themselves once idle"},
-		{"v0.3.1", "v0.3.2", false, "Sessions already running keep the old version until they restart"},
-		{"v0.3.2", "v0.4.0", true, "a major update. Sessions already running stay on v0.3.2 until they restart"},
-		{"dev", "v0.4.0", true, "Sessions baton hosts restart on it by themselves"},
+		{"v0.3.2", "v0.3.3", true, true, []string{"baton: updated to v0.3.3. Sessions baton hosts restart on it by themselves once idle", "Plain claude sessions use it the next time they run /baton."}},
+		{"v0.3.2", "v0.3.3", false, true, []string{"Sessions baton hosts stay on their version until you restart them", "the next time they run /baton"}},
+		{"v0.3.2", "v0.4.0", true, true, []string{"This is a major update: sessions baton hosts stay on v0.3.2 until you restart them", "Read what changed first"}},
+		{"v0.3.2", "v0.3.3", true, false, []string{"Plain claude sessions use it once they restart."}},
+		{"dev", "v0.4.0", true, true, []string{"Sessions baton hosts restart on it by themselves"}},
 	} {
-		if got := updated(c.running, c.to, c.restarts); !strings.Contains(got, c.want) {
-			t.Errorf("%s → %s (restarts %v): %q", c.running, c.to, c.restarts, got)
+		got := updated(c.running, c.to, c.restarts, c.shellHook)
+		for _, want := range c.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%+v: no %q in %q", c, want, got)
+			}
 		}
 	}
 }
