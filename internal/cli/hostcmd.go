@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/notify"
@@ -93,6 +94,16 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
+	if home := io.Env("BATON_HOME"); home != "" {
+		// baton's home moved: the CLI inside the session must find the same config and records (a
+		// `baton exit` leaves its record there for the shell to find).
+		batonEnv = append(batonEnv, "BATON_HOME="+home)
+	}
+	if tty := elevate.ProcTTY(strconv.Itoa(os.Getpid())); tty != "" {
+		// The terminal the human sees. claude runs on baton's own pseudo-terminal, so its tty is not
+		// the one the shell's prompt hook looks for when `baton exit` hands the session back.
+		batonEnv = append(batonEnv, "BATON_TTY="+tty)
+	}
 	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf}
 	code, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,

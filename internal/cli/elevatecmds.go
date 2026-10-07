@@ -85,7 +85,7 @@ func cmdExit(args []string, io IO) int {
 		fmt.Fprintln(io.Out, "baton: baton cannot hand this session back by itself here. To leave baton, "+manual)
 		return 0
 	}
-	tty := elevate.ProcTTY(pid)
+	tty := io.Env("BATON_TTY") // the human's terminal: claude's own is baton's pseudo-terminal
 	if tty == "" || !elevate.ShellHookInstalled(homeDir(io), io.Env) {
 		fmt.Fprintln(io.Out, "baton: this shell does not resume sessions for baton yet (the `baton init` line is not in its config). To leave baton, "+manual)
 		return 0
@@ -103,7 +103,7 @@ func cmdExit(args []string, io IO) int {
 	paused := false
 	s.Update(func(st *state.State) error {
 		paused = state.Pause(st) == nil
-		st.Run.ExitAt = io.Now()
+		st.Run.ExitAt, st.Run.SessionID = io.Now(), sid // the session leaving, whose record the host completes
 		return nil
 	})
 	s.Event("exit_requested", map[string]any{"paused": paused})

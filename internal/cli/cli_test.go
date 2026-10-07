@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +192,9 @@ func TestTheSessionIsKnownAtLaunchWhenItCanBe(t *testing.T) {
 // After `baton exit`, the shell's prompt hook resumes the conversation as plain claude: no baton host,
 // none of baton's environment.
 func TestRelaunchResumesAPlainSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in claude is a shell script")
+	}
 	home, dir, out := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "args")
 	fake := filepath.Join(t.TempDir(), "claude")
 	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" > "+out+"\nenv | grep '^BATON_' >> "+out+"\nexit 0\n"), 0o755)

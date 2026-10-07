@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -291,5 +293,37 @@ func TestExitExplainsWhenTheShellCannotResume(t *testing.T) {
 	delete(s.env, "BATON_HOST")
 	if out := s.must("", "exit"); !strings.Contains(out, "not hosted by baton") {
 		t.Fatalf("exit, unhosted: %s", out)
+	}
+}
+
+// baton exit, up to the hand-over: the record the shell's prompt hook looks for is keyed by the human's
+// terminal (BATON_TTY, from the host), not claude's, which is baton's own pseudo-terminal; once claude
+// has stopped, the host marks it so the shell resumes the session.
+func TestExitLeavesARecordForTheShell(t *testing.T) {
+	if !elevate.Supported {
+		t.Skip("leaving baton in place is not supported here")
+	}
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	home := t.TempDir()
+	for k, v := range map[string]string{"BATON_HOME": home, "BATON_SHELL_HOOK": "1", "BATON_TTY": "/dev/ttys042", "CLAUDE_PID": strconv.Itoa(os.Getpid())} {
+		s.env[k] = v
+	}
+	out := s.must("", "exit")
+	if !strings.Contains(out, "leaving baton") || !strings.Contains(out, "baton --resume sess-1") {
+		t.Fatalf("exit: %s", out)
+	}
+	rec, err := elevate.Load(home, "ttys042")
+	if err != nil || !rec.Plain || rec.SessionID != "sess-1" || !rec.Stopped.IsZero() {
+		t.Fatalf("record %+v %v", rec, err)
+	}
+	if st := s.state(); st.Mode != state.ModePaused || st.Run.ExitAt.IsZero() {
+		t.Fatalf("state %+v", st)
+	}
+	io, _, _ := testIO("", s.env)
+	io.Now = func() time.Time { return s.now }
+	leftBaton(io, s.store())
+	if rec, _ := elevate.Load(home, "ttys042"); rec.Stopped.IsZero() || !s.state().Run.ExitAt.IsZero() {
+		t.Fatalf("after claude stopped: %+v", rec)
 	}
 }
