@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ozzyfromspace/baton/internal/version"
 )
 
 func TestUpdatedSaysWhatBecomesOfRunningSessions(t *testing.T) {
@@ -30,6 +32,44 @@ func TestUpdatedSaysWhatBecomesOfRunningSessions(t *testing.T) {
 				t.Errorf("%+v: no %q in %q", c, want, got)
 			}
 		}
+	}
+}
+
+// Inside a session that has not restarted on the update yet, `baton update` runs on the session's own,
+// older binary. The installed one is current, so there is nothing to download, and it says when the
+// session moves over instead of claiming to have updated again.
+func TestUpdateInASessionNotYetRestarted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"tag_name": "v0.3.3"}`)
+	}))
+	defer srv.Close()
+	old := version.Version
+	version.Version = "v0.3.2"
+	defer func() { version.Version = old }()
+	dir, home := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(home, "bin", "v0.3.3"), 0o755)
+	os.WriteFile(filepath.Join(home, "bin", "v0.3.3", "baton"), []byte("#!/bin/sh\n"), 0o755)
+	os.Symlink(filepath.Join("v0.3.3", "baton"), filepath.Join(home, "bin", "baton"))
+	claude, calls := fakeClaude(t, dir, "0.3.3", "0.3.3")
+	for _, c := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"BATON_HOST": "1"}, "baton: up to date: v0.3.3 is installed. This session runs v0.3.2 until it restarts on v0.3.3 by itself, once idle"},
+		{map[string]string{"BATON_HOST": "1", "BATON_AUTO_RESTART": "0"}, "This session runs v0.3.2 until you restart it: exit and run `baton --continue`."},
+		{map[string]string{}, "baton: up to date: v0.3.3 is installed (this copy of baton is v0.3.2)."},
+	} {
+		c.env["BATON_CLAUDE"], c.env["BATON_RELEASES_URL"], c.env["BATON_HOME"] = claude, srv.URL, home
+		io, out, _ := testIO("", c.env)
+		if code := Main([]string{"update"}, io); code != 0 || !strings.Contains(out.String(), c.want) || strings.Contains(out.String(), "updated to") {
+			t.Errorf("%v: code %d\n%s", c.env, code, out.String())
+		}
+		if !strings.Contains(out.String(), "installed plugin v0.3.3, binary v0.3.3; this binary v0.3.2") {
+			t.Errorf("first line:\n%s", out.String())
+		}
+	}
+	if strings.Contains(calls(), "plugin update") {
+		t.Errorf("updated a current plugin: %s", calls())
 	}
 }
 
@@ -67,7 +107,7 @@ func TestUpdate(t *testing.T) {
 	defer srv.Close()
 	dir := t.TempDir()
 	claude, calls := fakeClaude(t, dir, "0.1.0", "0.2.0")
-	env := map[string]string{"BATON_CLAUDE": claude, "BATON_RELEASES_URL": srv.URL}
+	env := map[string]string{"BATON_CLAUDE": claude, "BATON_RELEASES_URL": srv.URL, "BATON_HOME": t.TempDir()}
 
 	io, out, _ := testIO("", env)
 	if code := Main([]string{"update", "--check"}, io); code != 0 || !strings.Contains(out.String(), "v0.2.0 is available") || strings.Contains(calls(), "plugin update") {

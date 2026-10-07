@@ -46,11 +46,24 @@ func cmdUpdate(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	fmt.Fprintf(io.Out, "baton: latest release %s; installed plugin %s; this binary %s\n", latest, "v"+plug.Version, version.Version)
+	// A session baton hosts runs `baton update` on its own binary (HostBinary), which is older than the
+	// installed one until the session restarts: the installed binary is what counts.
+	installed, _ := upgrade.Installed(batonRoot(io))
+	line := fmt.Sprintf("baton: latest release %s; installed plugin v%s", latest, plug.Version)
+	if installed != "" {
+		line += ", binary " + installed
+	}
+	fmt.Fprintf(io.Out, "%s; this binary %s\n", line, version.Version)
+	restarts := config.Load(batonRoot(io), io.Env).Restarts() && upgrade.CanRestart
 	pluginCurrent := upgrade.Compare(plug.Version, latest) >= 0
-	binaryCurrent := devBuild(version.Version) || upgrade.Compare(version.Version, latest) >= 0
+	binaryCurrent := devBuild(version.Version) || upgrade.Compare(version.Version, latest) >= 0 ||
+		installed != "" && upgrade.Compare(installed, latest) >= 0
 	if pluginCurrent && binaryCurrent {
-		fmt.Fprintln(io.Out, "baton: up to date.")
+		if installed != "" && !devBuild(version.Version) && upgrade.Compare(version.Version, installed) < 0 {
+			fmt.Fprintln(io.Out, behind(version.Version, installed, hosted(io), restarts))
+		} else {
+			fmt.Fprintln(io.Out, "baton: up to date.")
+		}
 		return 0
 	}
 	if p.bools["check"] {
@@ -88,9 +101,21 @@ func cmdUpdate(args []string, io IO) int {
 		return fail(io, "the plugin updated to v%s, but its binary could not be installed: %v\n%s", plug.Version, err, out)
 	}
 	fmt.Fprint(io.Out, out)
-	fmt.Fprintln(io.Out, updated(version.Version, "v"+plug.Version, config.Load(batonRoot(io), io.Env).Restarts() && upgrade.CanRestart,
-		elevate.ShellHookInstalled(homeDir(io), io.Env)))
+	fmt.Fprintln(io.Out, updated(version.Version, "v"+plug.Version, restarts, elevate.ShellHookInstalled(homeDir(io), io.Env)))
 	return 0
+}
+
+// behind says that baton is up to date while this copy of it is older than the one installed: the one
+// hosting a session that has not restarted on the update yet.
+func behind(running, installed string, hostedSession, restarts bool) string {
+	switch {
+	case !hostedSession:
+		return fmt.Sprintf("baton: up to date: %s is installed (this copy of baton is %s).", installed, running)
+	case restarts && upgrade.Compatible(running, installed):
+		return fmt.Sprintf("baton: up to date: %s is installed. This session runs %s until it restarts on %s by itself, once idle (with a plan running, at the next phase boundary).", installed, running, installed)
+	default:
+		return fmt.Sprintf("baton: up to date: %s is installed. This session runs %s until you restart it: exit and run `baton --continue`.", installed, running)
+	}
 }
 
 // updated says what becomes of the sessions already running once baton updated from `running` to `to`.
