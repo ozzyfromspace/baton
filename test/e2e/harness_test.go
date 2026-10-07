@@ -268,6 +268,24 @@ func (s *Session) Type(text string) {
 	s.pty.Write([]byte("\r"))
 }
 
+// Key sends raw keys, such as "\x1b[Z" (shift+tab), with no Enter.
+func (s *Session) Key(keys string) {
+	s.pty.Write([]byte(keys))
+	time.Sleep(400 * time.Millisecond)
+}
+
+// PlanMode switches the session into plan mode with shift+tab, as a person would.
+func (s *Session) PlanMode() bool {
+	for i := 0; i < 5; i++ {
+		if strings.Contains(s.Screen(), "planmodeon") {
+			return true
+		}
+		s.Key("\x1b[Z")
+		time.Sleep(800 * time.Millisecond)
+	}
+	return strings.Contains(s.Screen(), "planmodeon")
+}
+
 // AutoApprove plays a human who approves every dialog Claude Code opens (permission prompts, plan-mode
 // entry and plan approval). Haiku has no auto mode, so tests that let the model act freely need it.
 func (s *Session) AutoApprove() {
@@ -301,7 +319,7 @@ func (s *Session) RemovePlansAfter() {
 	plans := filepath.Join(home, ".claude", "plans")
 	s.t.Cleanup(func() {
 		for _, e := range s.Events() {
-			if p, _ := e["plan"].(string); e["kind"] == "attached" && filepath.Dir(p) == plans {
+			if p, _ := e["plan"].(string); (e["kind"] == "attached" || e["kind"] == "plan_not_attached") && filepath.Dir(p) == plans {
 				os.Remove(p)
 			}
 		}
