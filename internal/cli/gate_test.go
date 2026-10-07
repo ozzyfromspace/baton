@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
@@ -199,5 +200,28 @@ func TestStatusListsSnapshots(t *testing.T) {
 	json.Unmarshal([]byte(s.must("", "status", "--json")), &js)
 	if len(js.Snapshots) != 1 || js.Snapshots[0].Ref != saved.Ref {
 		t.Errorf("status --json: %+v", js)
+	}
+}
+
+// With another session working in the same checkout, a phase is held only to the files this session's
+// edit tools wrote: the rest may be the other session's, and committing them would take its work.
+func TestASharedCheckoutHoldsAPhaseToItsOwnEdits(t *testing.T) {
+	s, planFile, root := newRepoSession(t)
+	s.attach(planFile)
+	p, _ := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
+	p.Bind(state.Binding{Session: "sess-2", Instance: "inst-2"}) // the other terminal, live
+	gittest.Write(t, root, "mine.txt", "P0's\n")
+	gittest.Write(t, root, "theirs.txt", "the other session's\n")
+	s.set(func(x *state.State) { x.Touched("mine.txt") })
+
+	why := s.fails("done", "P0")
+	if !strings.Contains(why, "    mine.txt") || strings.Contains(why, "theirs.txt") {
+		t.Fatalf("refusal:\n%s", why)
+	}
+	gittest.Git(t, root, "add", "mine.txt")
+	gittest.Git(t, root, "commit", "-q", "-m", "P0")
+	out := s.must("", "done", "P0")
+	if !strings.Contains(out, "another baton session is working in this checkout, and 1 uncommitted file changed during P0") || !strings.Contains(out, "    theirs.txt") {
+		t.Fatalf("done:\n%s", out)
 	}
 }

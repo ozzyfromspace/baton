@@ -37,6 +37,27 @@ type PhaseState struct {
 	// refuse only the work this phase left uncommitted. nil when it is not known: a project without git,
 	// or a phase that started before baton recorded it.
 	StartDirty *Dirt `json:"start_dirty,omitempty"`
+	// Edited lists the files this session's edit tools wrote during the phase (paths as git reports
+	// them). When another session works in the same checkout, they are the only uncommitted work the
+	// phase can be held to: the rest may be the other session's.
+	Edited []string `json:"edited,omitempty"`
+}
+
+// MaxEdited bounds the files a phase records as edited; past it, it stops recording.
+const MaxEdited = 2000
+
+// Touched records that this session's edit tools wrote path during the current phase.
+func (st *State) Touched(path string) {
+	ps := st.Phases[st.Current]
+	if ps == nil || len(ps.Edited) >= MaxEdited {
+		return
+	}
+	for _, p := range ps.Edited {
+		if p == path {
+			return
+		}
+	}
+	ps.Edited = append(ps.Edited, path)
 }
 
 // Block is a reason the model cannot continue without a human, and what it tried first.

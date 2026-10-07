@@ -140,7 +140,18 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var hold string
 	var refuseQuestion string
 	var pending []issued
+	var sweep string
+	var others []state.RunInfo
+	if str(c.Input, "tool_name") == "Bash" {
+		ti, _ := c.Input["tool_input"].(map[string]any)
+		sweep = sweepingGit(str(ti, "command"))
+	}
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		if sweep != "" {
+			if others = sharedCheckout(s); len(others) > 0 {
+				return nil
+			}
+		}
 		own := false
 		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
 			// A human-started turn may ask the human anything, except a question passed off as baton's:
@@ -174,6 +185,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, ok(err)
+	}
+	if len(others) > 0 {
+		var ids []string
+		for _, r := range others {
+			ids = append(ids, r.ID)
+		}
+		s.Event("git_refused", map[string]any{"command": sweep, "others": ids})
+		res := permission("deny", gitRefusal(sweep, others))
+		res.Output["systemMessage"] = "baton: refused `" + sweep + "` — another baton session is working in this checkout"
+		return res, nil
 	}
 	if refuseQuestion != "" {
 		s.Event("question_refused", map[string]any{"questions": len(questions(c.Input)), "issued": len(pending)})
@@ -522,6 +543,11 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var notes string
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
+		if c.Event == "PostToolUse" {
+			if path := editedPath(c.Input, s.Root); path != "" {
+				st.Touched(path)
+			}
+		}
 		if str(c.Input, "agent_id") != "" {
 			return nil
 		}

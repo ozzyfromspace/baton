@@ -527,7 +527,11 @@ func cmdBlocked(args []string, io IO) int {
 type workLeft struct {
 	fresh []string // new or changed since the phase started: refused without --keep-dirty
 	kept  []string // already there when the phase started, and unchanged: only noted
-	warn  string   // baton could not tell the two apart, so it warns instead
+	// others are new or changed since the phase started, while another session works in the same
+	// checkout, and this session's edit tools never wrote them: they may be that session's, so they are
+	// only noted.
+	others []string
+	warn   string // baton could not tell the two apart, so it warns instead
 }
 
 // checkWork compares the uncommitted work now with what there was when phase started.
@@ -544,8 +548,9 @@ func checkWork(s *state.Store, phase string) workLeft {
 		return workLeft{}
 	}
 	var start *state.Dirt
+	var edited []string
 	if st, err := s.Load(); err == nil && st.Phases[phase] != nil {
-		start = st.Phases[phase].StartDirty
+		start, edited = st.Phases[phase].StartDirty, st.Phases[phase].Edited
 	}
 	switch {
 	case start == nil:
@@ -554,7 +559,22 @@ func checkWork(s *state.Store, phase string) workLeft {
 		return workLeft{warn: fmt.Sprintf("baton: warning — %d paths are uncommitted, too many for baton to check one by one. Make sure this phase's work is committed.", len(paths))}
 	}
 	fresh, kept := gitx.Since(start.Files, gitx.Fingerprint(root, paths))
-	return workLeft{fresh: fresh, kept: kept}
+	w := workLeft{fresh: fresh, kept: kept}
+	if p, err := state.OpenProject(filepath.Join(root, state.DirName), s.Now); err == nil && len(p.Others(filepath.Base(s.Dir))) > 0 {
+		mine := map[string]bool{}
+		for _, e := range edited {
+			mine[e] = true
+		}
+		w.fresh = nil
+		for _, f := range fresh {
+			if mine[f] {
+				w.fresh = append(w.fresh, f)
+			} else {
+				w.others = append(w.others, f)
+			}
+		}
+	}
+	return w
 }
 
 // report prints what the gate let through.
@@ -564,6 +584,11 @@ func (w workLeft) report(io IO, phase, keep string) {
 	}
 	if len(w.fresh) > 0 && keep != "" {
 		fmt.Fprintf(io.Out, "baton: leaving %d %s uncommitted (--keep-dirty: %s).\n", len(w.fresh), plural(len(w.fresh), "file", "files"), keep)
+	}
+	if n := len(w.others); n > 0 {
+		fmt.Fprintf(io.Out, "baton: note — another baton session is working in this checkout, and %d uncommitted %s changed during %s without this session editing %s; "+
+			"%s may be the other session's, so baton leaves %s alone (commit only your own files, by path):\n%s\n",
+			n, plural(n, "file", "files"), phase, plural(n, "it", "them"), plural(n, "it", "they"), plural(n, "it", "them"), fileList(w.others))
 	}
 	if n := len(w.kept); n > 0 {
 		fmt.Fprintf(io.Out, "baton: note — %d uncommitted %s already there when %s started and %s not changed; baton leaves %s alone:\n%s\n",
