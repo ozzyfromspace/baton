@@ -15,18 +15,25 @@ import (
 
 type fixture struct {
 	t     *testing.T
-	dir   string
-	store *state.Store
+	dir   string       // the project's .baton directory
+	store *state.Store // the session's run
 	now   time.Time
 	inst  string
+	sid   string            // the session every hook is for, unless its input names another
 	vars  map[string]string // extra environment for the hooks
 }
 
 func newFixture(t *testing.T, withPlan bool) *fixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), ".baton")
-	f := &fixture{t: t, dir: dir, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), inst: "inst-1"}
-	f.store, _ = state.Open(dir, f.inst, func() time.Time { return f.now })
+	f := &fixture{t: t, dir: dir, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), inst: "inst-1", sid: "sess-1"}
+	p, err := state.OpenProject(dir, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.store, err = p.Bind(state.Binding{Session: f.sid, Instance: f.inst}); err != nil {
+		t.Fatal(err)
+	}
 	if withPlan {
 		doc := []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b.\n")
 		docPath := filepath.Join(filepath.Dir(dir), "plan.md")
@@ -36,10 +43,17 @@ func newFixture(t *testing.T, withPlan bool) *fixture {
 			t.Fatal(err)
 		}
 		f.store.SavePlan(pl)
-		f.store.Update(func(st *state.State) error { *st = state.Attach(pl, f.now, state.Origin{}); return nil })
+		f.store.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, f.now, state.Origin{}); return nil })
 	}
-	f.store.Update(func(st *state.State) error { return state.Claim(st, f.inst, 1, f.now) })
 	return f
+}
+
+func (f *fixture) clock() time.Time { return f.now }
+
+// events is the session's run's event log.
+func (f *fixture) eventLog() string {
+	b, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl"))
+	return string(b)
 }
 
 func (f *fixture) env(instance string) func(string) string {
@@ -59,11 +73,12 @@ func (f *fixture) fire(event string, input map[string]any) map[string]any {
 func (f *fixture) fireAs(instance, event string, input map[string]any) map[string]any {
 	f.t.Helper()
 	input["hook_event_name"] = event
+	if _, ok := input["session_id"]; !ok {
+		input["session_id"] = f.sid
+	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
-	h := Handlers(Deps{Open: func(env func(string) string) (*state.Store, error) {
-		return state.Open(env("BATON_DIR"), env("BATON_INSTANCE"), func() time.Time { return f.now })
-	}})
+	h := Handlers(Deps{Open: OpenRun(f.clock)})
 	if code := Dispatch(event, bytes.NewReader(raw), &out, &errb, f.env(instance), func() time.Time { return f.now }, h); code != 0 {
 		f.t.Fatalf("%s exited %d: %s", event, code, errb.String())
 	}
@@ -91,7 +106,7 @@ func TestSessionStartPrimer(t *testing.T) {
 		t.Fatalf("no plan: %v", out)
 	}
 	f = newFixture(t, true)
-	out := f.fire("SessionStart", map[string]any{"source": "startup", "session_id": "s-1"})
+	out := f.fire("SessionStart", map[string]any{"source": "startup"})
 	ctx := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
 	for _, want := range []string{"hosted by baton", "Current phase: P0 — First", "baton done <phase>", "baton note", "baton propose", "baton blocked \"<why>\" --tried", "baton waiting", "Never type /compact"} {
 		if !strings.Contains(ctx, want) {
@@ -101,19 +116,23 @@ func TestSessionStartPrimer(t *testing.T) {
 	if !strings.Contains(out["systemMessage"].(string), "0/2 phases done · current P0") {
 		t.Errorf("systemMessage: %v", out["systemMessage"])
 	}
-	if f.state().Run.SessionID != "s-1" {
+	if f.state().Run.SessionID != f.sid {
 		t.Error("session id not recorded")
 	}
 	if strings.Contains(ctx, "Decisions made without the human") {
 		t.Errorf("a record with nothing in it:\n%s", ctx)
 	}
 
-	// After a /clear the model has none of the run in context: the primer brings the record back.
+	// After a /clear the model has none of the run in context: the primer brings the record back. The
+	// cleared conversation has a new session id, and keeps its run.
 	f.store.Update(func(st *state.State) error {
 		_, err := state.AddNote(st, "committed P0 unsigned", "re-sign it", f.now)
 		return err
 	})
-	out = f.fire("SessionStart", map[string]any{"source": "clear"})
+	out = f.fire("SessionStart", map[string]any{"source": "clear", "session_id": "sess-after-clear"})
+	if f.state().Run.SessionID != "sess-after-clear" {
+		t.Errorf("the run did not follow the cleared session: %q", f.state().Run.SessionID)
+	}
 	ctx = out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
 	if !strings.Contains(ctx, ".)\n\nDecisions made without the human so far (if they ask, each has its undo):\n\n- d1 (P0, ") ||
 		!strings.HasSuffix(ctx, "noted: committed P0 unsigned. Undo: re-sign it") {
@@ -123,8 +142,9 @@ func TestSessionStartPrimer(t *testing.T) {
 
 func TestNonOwnerSessionIsDormant(t *testing.T) {
 	f := newFixture(t, true)
-	if out := f.fireAs("someone-else", "SessionStart", map[string]any{"source": "startup"}); out != nil {
-		t.Fatalf("non-owner produced output: %v", out)
+	out := f.fireAs("someone-else", "SessionStart", map[string]any{"source": "startup"})
+	if msg, _ := out["systemMessage"].(string); !strings.Contains(msg, "another baton terminal is running this conversation's plan") || out["hookSpecificOutput"] != nil {
+		t.Fatalf("non-owner said %v", out)
 	}
 	f.fireAs("someone-else", "UserPromptSubmit", map[string]any{"prompt": "hi"})
 	if f.state().Run.TurnOpen {
@@ -214,7 +234,7 @@ func TestCompactionLifecycle(t *testing.T) {
 	if c := f.state().Run.Compaction; c.Status != state.CompactQueued || c.Epoch != 2 || c.Reason != "boundary" {
 		t.Fatalf("not queued after the precompute: %+v", c)
 	}
-	events, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
+	events, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl"))
 	if strings.Count(string(events), `"kind":"compact_started"`) != 2 || !strings.Contains(string(events), `"kind":"compact_finished"`) ||
 		!strings.Contains(string(events), `"kind":"precompact_auto"`) {
 		t.Fatalf("events: %s", events)
@@ -464,7 +484,7 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	if st := f.state(); st.Blocked != nil || st.Run.Escalation != nil || st.Mode != state.ModeRunning {
 		t.Fatalf("not resumed: %+v", st)
 	}
-	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"resumed"`) {
+	if b, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"resumed"`) {
 		t.Fatalf("events: %s", b)
 	}
 	q = f.blocked("something")
@@ -594,7 +614,7 @@ func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
 	if d, _ := decide(f, ask("Which database should I use?", "Postgres", "SQLite")); d != "" {
 		t.Fatalf("paused: %q", d)
 	}
-	if b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 10 {
+	if b, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl")); strings.Count(string(b), `"kind":"question_refused"`) != 10 {
 		t.Fatalf("events: %s", b)
 	}
 }
@@ -828,7 +848,7 @@ func TestAnAnswerBatonTypedIsAttributedToTheTimeout(t *testing.T) {
 			f.store.Update(func(st *state.State) error { st.Run.Dialogs[0].AutoAnswered = f.now; return nil })
 		}
 		out := f.fire("PostToolUse", answer(ask(q, "Checkpoint now", "Pause baton", "Keep going"), "Keep going"))
-		b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
+		b, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl"))
 		want := map[bool]string{false: `"by":"human"`, true: `"by":"timeout"`}[auto]
 		if !strings.Contains(string(b), `"kind":"answered"`) || !strings.Contains(string(b), want) {
 			t.Fatalf("auto=%v events: %s", auto, b)

@@ -32,12 +32,57 @@ func init() {
 	register("resume", "let baton drive again (also clears a block)", cmdResume)
 }
 
-func store(io IO) (*state.Store, error) {
+// project opens the project a command runs in: the one the host named (BATON_DIR) inside a hosted
+// session, or else the one the current directory is in.
+func project(io IO) (*state.Project, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	return state.Open(state.Locate(cwd, io.Env), io.Env("BATON_INSTANCE"), io.Now)
+	return state.OpenProject(state.Locate(cwd, io.Env), io.Now)
+}
+
+// instance is the host instance a command runs under, or "" outside a hosted session.
+func instance(io IO) string {
+	if hosted(io) {
+		return io.Env("BATON_INSTANCE")
+	}
+	return ""
+}
+
+// store returns the run a command is about. Inside a Claude Code session (the Bash tool has the session
+// id) that is the session's own run; a plain session with none has no plan. From a shell, it is the run
+// the command can only mean (state.Project.Pick).
+func store(io IO) (*state.Store, error) {
+	p, err := project(io)
+	if err != nil {
+		return nil, err
+	}
+	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
+	if s, ok := p.Lookup(sid, inst); ok {
+		return s, nil
+	}
+	switch {
+	case inst != "" && sid != "":
+		return p.Bind(state.Binding{Session: sid, Instance: inst}) // hosted, before any hook bound it
+	case sid != "" || inst != "":
+		return nil, state.ErrNoPlan
+	}
+	return p.Pick(inst)
+}
+
+// attachTo returns the run a plan is attached to: the session's own, created if need be, or from a
+// shell the run the next baton session started here takes over.
+func attachTo(io IO) (*state.Store, error) {
+	p, err := project(io)
+	if err != nil {
+		return nil, err
+	}
+	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
+	if sid != "" || inst != "" {
+		return p.Bind(state.Binding{Session: sid, Instance: inst})
+	}
+	return p.Pending("")
 }
 
 func fail(io IO, format string, a ...any) int {
@@ -93,7 +138,7 @@ func cmdAttach(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "the spec does not match the plan document:\n%v", err)
 	}
-	s, err := store(io)
+	s, err := attachTo(io)
 	if err != nil {
 		return fail(io, "%v", err)
 	}
@@ -136,7 +181,19 @@ func cmdStatus(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	s, err := store(io)
-	if err != nil {
+	var several state.ErrSeveralRuns
+	switch {
+	case errors.As(err, &several):
+		printRuns(io, several.Runs, p.bools["json"])
+		return 0
+	case errors.Is(err, state.ErrNoPlan):
+		if p.bools["json"] {
+			fmt.Fprintln(io.Out, `{"state": null}`)
+		} else {
+			fmt.Fprintln(io.Out, "baton: no plan attached here.")
+		}
+		return 0
+	case err != nil:
 		return fail(io, "%v", err)
 	}
 	st, err := s.Load()
@@ -146,7 +203,7 @@ func cmdStatus(args []string, io IO) int {
 	pl, perr := s.LoadPlan()
 	snaps := gitx.Snapshots(s.Root)
 	if p.bools["json"] {
-		out := map[string]any{"state": st, "baton_dir": s.Dir, "hosted": hosted(io)}
+		out := map[string]any{"state": st, "baton_dir": s.Dir, "run": filepath.Base(s.Dir), "hosted": hosted(io)}
 		if perr == nil {
 			out["plan"] = pl
 		}
@@ -195,7 +252,65 @@ func cmdStatus(args []string, io IO) int {
 	}
 	printDecisions(io, st)
 	printSnapshots(io, snaps)
+	printOthers(io, s)
 	return 0
+}
+
+// printRuns lists a project's runs, for `baton status` from a shell when there is more than one.
+func printRuns(io IO, runs []state.RunInfo, asJSON bool) {
+	if asJSON {
+		var out []map[string]any
+		for _, r := range runs {
+			out = append(out, map[string]any{"run": r.ID, "title": r.Title, "mode": r.State.Mode, "current": r.State.Current,
+				"sessions": r.Sessions, "live": r.Live(io.Now())})
+		}
+		b, _ := json.MarshalIndent(map[string]any{"runs": out}, "", "  ")
+		fmt.Fprintln(io.Out, string(b))
+		return
+	}
+	fmt.Fprintln(io.Out, "baton: this project has several runs, one per session (newest first):")
+	for _, r := range runs {
+		fmt.Fprintf(io.Out, "  %s  %q — %s\n", runLabel(r, io.Now()), r.Title, runProgress(r))
+	}
+	fmt.Fprintln(io.Out, "Run /baton status inside a session for its run in full.")
+}
+
+// printOthers names the other sessions working in the same working tree right now.
+func printOthers(io IO, s *state.Store) {
+	p, err := state.OpenProject(filepath.Join(s.Root, state.DirName), io.Now)
+	if err != nil {
+		return
+	}
+	others := p.Others(filepath.Base(s.Dir))
+	if len(others) == 0 {
+		return
+	}
+	fmt.Fprintln(io.Out, "other baton sessions working in this checkout:")
+	for _, r := range others {
+		title := r.Title
+		if !r.HasPlan() {
+			title = "no plan"
+		}
+		fmt.Fprintf(io.Out, "  %s  %q — %s\n", runLabel(r, io.Now()), title, runProgress(r))
+	}
+}
+
+func runLabel(r state.RunInfo, now time.Time) string {
+	label := short(r.ID)
+	switch {
+	case r.Pending:
+		label += " (for the next session)"
+	case r.Live(now):
+		label += fmt.Sprintf(" (running, pid %d)", r.State.Owner.PID)
+	}
+	return label
+}
+
+func runProgress(r state.RunInfo) string {
+	if r.State.Current != "" && r.State.Mode != state.ModeComplete {
+		return r.State.Mode + ", on " + r.State.Current
+	}
+	return r.State.Mode
 }
 
 // printWaitingOnYou shows what of the run's decisions waits on the human: a proposal, one held for them,

@@ -7,7 +7,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -133,18 +132,14 @@ func recordHookFailure(event, msg string, io IO) {
 		return
 	}
 	msg = strings.TrimSpace(strings.SplitN(msg, "\n", 2)[0])
-	if s, err := state.Open(dir, io.Env("BATON_INSTANCE"), io.Now); err == nil {
-		s.Event("hook_failed", map[string]any{"event": event, "error": msg})
+	if p, err := state.OpenProject(dir, io.Now); err == nil {
+		if s, ok := p.Lookup(io.Env("CLAUDE_CODE_SESSION_ID"), io.Env("BATON_INSTANCE")); ok {
+			s.Event("hook_failed", map[string]any{"event": event, "error": msg})
+		}
 	}
 	fileLogger(filepath.Join(dir, "baton.log"), io.Env("BATON_INSTANCE"), io.Now)("hook %s failed open: %s", event, msg)
 }
 
 // hookHandlers maps event names to handlers. Hooks find the project through BATON_DIR, which the host
-// sets for everything inside the session it hosts.
-var hookHandlers = hooks.Handlers(hooks.Deps{Open: func(env func(string) string) (*state.Store, error) {
-	dir := env("BATON_DIR")
-	if dir == "" {
-		return nil, errors.New("BATON_DIR is not set")
-	}
-	return state.Open(dir, env("BATON_INSTANCE"), time.Now)
-}})
+// sets for everything inside the session it hosts, and their run through the session id.
+var hookHandlers = hooks.Handlers(hooks.Deps{Open: hooks.OpenRun(time.Now)})

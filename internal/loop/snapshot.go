@@ -61,7 +61,7 @@ func (l *Loop) saveWork(v host.View, st state.State) {
 // it once the session has exited.
 func (l *Loop) Ended() {
 	l.saving.Wait()
-	if !l.owner {
+	if !l.owner || l.Store == nil {
 		return
 	}
 	st, err := l.Store.Load()

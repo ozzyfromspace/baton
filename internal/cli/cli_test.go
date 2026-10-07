@@ -11,6 +11,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -133,13 +134,55 @@ func TestHookFailuresAreRecorded(t *testing.T) {
 	hookHandlers = map[string]hooks.Handler{"Stop": func(hooks.Context) (hooks.Result, error) {
 		return hooks.Result{}, fmt.Errorf("baton state is locked by another process")
 	}}
-	dir := t.TempDir()
-	io, _, _ := testIO(`{}`, map[string]string{"BATON_HOST": "1", "BATON_DIR": dir, "BATON_INSTANCE": "i"})
+	dir := filepath.Join(t.TempDir(), ".baton")
+	p, _ := state.OpenProject(dir, nil)
+	run, err := p.Bind(state.Binding{Session: "sess", Instance: "i"}) // as the session's first hook did
+	if err != nil {
+		t.Fatal(err)
+	}
+	io, _, _ := testIO(`{}`, map[string]string{"BATON_HOST": "1", "BATON_DIR": dir, "BATON_INSTANCE": "i", "CLAUDE_CODE_SESSION_ID": "sess"})
 	if code := Main([]string{"hook", "Stop"}, io); code != 0 {
 		t.Fatalf("code %d", code)
 	}
-	b, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	b, _ := os.ReadFile(filepath.Join(run.Dir, "events.jsonl"))
 	if !strings.Contains(string(b), `"kind":"hook_failed"`) || !strings.Contains(string(b), "locked by another process") {
 		t.Fatalf("events: %s", b)
+	}
+}
+
+// baton binds a session to its run at launch whenever it can know the session id: one it chooses for a
+// new session, or the one being resumed.
+func TestTheSessionIsKnownAtLaunchWhenItCanBe(t *testing.T) {
+	const id = "16c4eeb9-22e9-4156-b87a-5f6dba0c9747"
+	for _, c := range []struct {
+		args []string
+		want string // "new": a fresh id, passed as --session-id
+	}{
+		{nil, "new"},
+		{[]string{"--model", "haiku", "fix the bug"}, "new"},
+		{[]string{"--resume", id}, id},
+		{[]string{"-r", id, "--model", "x"}, id},
+		{[]string{"--resume=" + id}, id},
+		{[]string{"--session-id", id}, id},
+		{[]string{"--resume"}, ""},
+		{[]string{"--resume", "the auth refactor"}, ""},
+		{[]string{"--continue"}, ""},
+		{[]string{"-c", "--model", "x"}, ""},
+		{[]string{"--resume", id, "--fork-session"}, ""},
+		{[]string{"-p", "hi"}, ""},
+	} {
+		got, args := sessionOf(c.args)
+		added := len(args) == len(c.args)+2 && args[len(args)-2] == "--session-id" && args[len(args)-1] == got
+		switch {
+		case c.want == "new" && (!looksLikeSessionID(got) || !added):
+			t.Errorf("%v: got %q, args %v", c.args, got, args)
+		case c.want != "new" && (got != c.want || len(args) != len(c.args)):
+			t.Errorf("%v: got %q, args %v; want %q", c.args, got, args, c.want)
+		}
+	}
+	a, _ := sessionOf(nil)
+	b, _ := sessionOf(nil)
+	if a == b {
+		t.Error("two new sessions got the same id")
 	}
 }

@@ -35,7 +35,7 @@ func (f *fixture) propose(untimed bool) map[string]any {
 
 // events lists the events logged so far, without their timestamps and instance.
 func (f *fixture) events() []map[string]any {
-	b, _ := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
+	b, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl"))
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		var e map[string]any

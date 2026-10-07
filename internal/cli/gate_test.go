@@ -29,7 +29,7 @@ func (s *session) attach(planFile string) {
 }
 
 func (s *session) events() string {
-	b, _ := os.ReadFile(filepath.Join(s.env["BATON_DIR"], "events.jsonl"))
+	b, _ := os.ReadFile(filepath.Join(s.store().Dir, "events.jsonl"))
 	return string(b)
 }
 
@@ -68,7 +68,7 @@ func TestBlockedAndDoneRefuseWorkThePhaseLeftUncommitted(t *testing.T) {
 	if n := strings.Count(s.events(), `"kind":"refused"`); n != 2 {
 		t.Errorf("%d refused events: %s", n, s.events())
 	}
-	if st, _ := state.Open(s.env["BATON_DIR"], "", nil); st != nil {
+	if st := s.store(); st != nil {
 		if x, _ := st.Load(); x.Blocked != nil || x.Phases["P0"].Status != state.PhaseActive {
 			t.Fatalf("a refused command changed the state: %+v", x)
 		}
@@ -113,7 +113,7 @@ func TestBlockedAndDoneRefuseWorkThePhaseLeftUncommitted(t *testing.T) {
 func TestUnknownStartOnlyWarns(t *testing.T) {
 	s, planFile, root := newRepoSession(t)
 	s.attach(planFile)
-	st, _ := state.Open(s.env["BATON_DIR"], "", nil)
+	st := s.store()
 	st.Update(func(x *state.State) error { x.Phases["P0"].StartDirty = nil; return nil })
 	gittest.Write(t, root, "new.txt", "x\n")
 	out := s.must("", "done", "P0")

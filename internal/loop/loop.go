@@ -119,7 +119,10 @@ type Loop struct {
 
 // Tick runs once per host tick.
 func (l *Loop) Tick(v host.View, in host.Injector) {
-	if !v.Owner {
+	if v.Store != nil && (l.Store == nil || v.Store.Dir != l.Store.Dir) {
+		l.drive(v.Store)
+	}
+	if !v.Owner || l.Store == nil {
 		return
 	}
 	l.owner = true
@@ -190,8 +193,24 @@ func (l *Loop) publishGate(st state.State) {
 	l.update(func(st *state.State) { st.Run.Gate = shown })
 }
 
+// drive switches the loop to the run s: the one the session was bound to once it started, or another one
+// after the human switched conversations. What the loop remembered about the previous run's progress
+// does not carry over; what it knows about the terminal does.
+func (l *Loop) drive(s *state.Store) {
+	if l.Store != nil {
+		l.logf("loop: now driving %s (was %s)", s.Dir, l.Store.Dir)
+	}
+	l.Store = s
+	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	l.rateNotified, l.errNudged, l.errRetries = false, time.Time{}, 0
+	l.alone, l.aloneAt, l.heldWhy, l.heldSince = state.Dialog{}, time.Time{}, "", time.Time{}
+}
+
 // Flush sends any queued notices now; the host calls it when the session ends.
 func (l *Loop) Flush() {
+	if l.Store == nil {
+		return
+	}
 	if st, err := l.Store.Load(); err == nil {
 		l.sendNotices(host.View{Now: l.Store.Now()}, st)
 	}

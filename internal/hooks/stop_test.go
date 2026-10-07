@@ -185,11 +185,12 @@ func TestRefusalsCountThenEscalate(t *testing.T) {
 func (f *fixture) fireCode(event string, input map[string]any) (int, string) {
 	f.t.Helper()
 	input["hook_event_name"] = event
+	if _, ok := input["session_id"]; !ok {
+		input["session_id"] = f.sid
+	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
-	h := Handlers(Deps{Open: func(env func(string) string) (*state.Store, error) {
-		return state.Open(env("BATON_DIR"), env("BATON_INSTANCE"), func() time.Time { return f.now })
-	}})
+	h := Handlers(Deps{Open: OpenRun(f.clock)})
 	code := Dispatch(event, bytes.NewReader(raw), &out, &errb, f.env(f.inst), func() time.Time { return f.now }, h)
 	return code, errb.String()
 }

@@ -78,6 +78,7 @@ func clip(s string, n int) string {
 
 // Input is the part of Claude Code's status line input baton reads.
 type Input struct {
+	SessionID string `json:"session_id"`
 	Workspace struct {
 		ProjectDir string `json:"project_dir"`
 	} `json:"workspace"`

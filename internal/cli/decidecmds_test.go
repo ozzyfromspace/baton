@@ -20,7 +20,7 @@ func attached(t *testing.T) *session {
 }
 
 func (s *session) set(fn func(*state.State)) {
-	st, _ := state.Open(s.env["BATON_DIR"], "", nil)
+	st := s.store()
 	st.Update(func(x *state.State) error { fn(x); return nil })
 }
 
@@ -51,7 +51,7 @@ func (s *session) human() {
 }
 
 func (s *session) state() state.State {
-	st, _ := state.Open(s.env["BATON_DIR"], "", nil)
+	st := s.store()
 	x, _ := st.Load()
 	return x
 }
@@ -164,7 +164,7 @@ func askFrom(t *testing.T, instructions string) map[string]any {
 	for _, l := range callLabel.FindAllStringSubmatch(instructions, -1) {
 		opts = append(opts, map[string]any{"label": l[1], "description": "…"})
 	}
-	return map[string]any{"session_id": "s", "tool_name": "AskUserQuestion", "tool_input": map[string]any{
+	return map[string]any{"session_id": "sess-1", "tool_name": "AskUserQuestion", "tool_input": map[string]any{
 		"questions": []any{map[string]any{"question": m[1], "header": "baton", "options": opts, "multiSelect": false}},
 	}}
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,18 +27,21 @@ const TickInterval = 250 * time.Millisecond
 
 // Config describes one hosted session.
 type Config struct {
-	Claude      string   // claude executable
-	Args        []string // the user's claude arguments
-	BatonBin    string   // absolute path of the baton binary hooks should call
-	Store       *state.Store
-	Instance    string
+	Claude   string   // claude executable
+	Args     []string // the user's claude arguments
+	BatonBin string   // absolute path of the baton binary hooks should call
+	Project  *state.Project
+	Instance string
+	// Session is the session id claude runs under, when baton knows it at launch: one it chose for a new
+	// session (--session-id), or one being resumed. Otherwise ("") the session's first hook binds it.
+	Session     string
 	Version     string
 	Autocompact string // passed as --autocompact when non-empty, e.g. "810k"
 	Stdin       *os.File
 	Stdout      *os.File
 	Env         []string // the child's base environment; any BATON_* in it is dropped
 	// BatonEnv is baton's own environment for the session it drives: the context valves' settings, a
-	// pending command after elevation. Only an owner gets it.
+	// pending command after elevation.
 	BatonEnv   []string
 	Now        func() time.Time
 	Logf       func(format string, a ...any)
@@ -55,7 +59,9 @@ type View struct {
 	LastHumanKey time.Time // last keystroke from the human (terminal reports excluded)
 	Draft        bool      // the human typed since their last Enter: the input box may hold their text
 	DraftText    string    // that draft as typed, so baton can save it before clearing the box
-	Owner        bool      // this session drives the project's plan
+	// Store is the run this host drives (nil until the session is bound to one), and Owner says it does.
+	Store *state.Store
+	Owner bool
 }
 
 // Controller decides, on every tick, whether baton should act.
@@ -89,21 +95,17 @@ func Run(cfg Config) (int, error) {
 		cfg.HangupGrace = 5 * time.Second
 	}
 
-	owner := claim(cfg)
-	args := cfg.Args
+	bind(cfg)
+	args := append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, cfg.Args...)
+	if cfg.Autocompact != "" {
+		args = append([]string{"--autocompact", cfg.Autocompact}, args...)
+	}
 	// Always start from an environment with no BATON_* in it. A session started inside another one
-	// inherits them, and a non-owner that kept them would run hooks pointed at the FIRST session's
-	// instance and .baton directory — writing another plan's state from a session that is not driving
-	// it. The owner sets its own below.
-	env := withoutBatonVars(cfg.Env)
-	if owner {
-		args = append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, args...)
-		if cfg.Autocompact != "" {
-			args = append([]string{"--autocompact", cfg.Autocompact}, args...)
-		}
-		env = append(env, cfg.BatonEnv...)
-		env = append(env, "BATON_HOST=1", "BATON_DIR="+cfg.Store.Dir, "BATON_INSTANCE="+cfg.Instance,
-			"BATON_BIN="+cfg.BatonBin, "BATON_VERSION="+cfg.Version)
+	// inherits them, and hooks that kept them would write the FIRST session's run.
+	env := append(withoutBatonVars(cfg.Env), cfg.BatonEnv...)
+	env = append(env, "BATON_HOST=1", "BATON_INSTANCE="+cfg.Instance, "BATON_BIN="+cfg.BatonBin, "BATON_VERSION="+cfg.Version)
+	if cfg.Project != nil {
+		env = append(env, "BATON_DIR="+cfg.Project.Dir)
 	}
 	cmd := exec.Command(cfg.Claude, args...)
 	cmd.Env = env
@@ -117,10 +119,9 @@ func Run(cfg Config) (int, error) {
 	}
 	p, err := pty.Start(cmd, rows, cols)
 	if err != nil {
-		release(cfg, owner)
 		return 1, fmt.Errorf("starting %s: %w", cfg.Claude, err)
 	}
-	cfg.Logf("host: started %s (pid %d), owner=%v", cfg.Claude, cmd.Process.Pid, owner)
+	cfg.Logf("host: started %s (pid %d), session %q", cfg.Claude, cmd.Process.Pid, cfg.Session)
 
 	// From here on the user's terminal is raw; restore it on every way out, panics included.
 	if interactive {
@@ -128,8 +129,6 @@ func Run(cfg Config) (int, error) {
 			defer term.Restore(int(cfg.Stdin.Fd()), old)
 		}
 	}
-	defer release(cfg, owner)
-
 	h := &session{cfg: cfg, pty: p, cmd: cmd, interactive: interactive, exited: make(chan struct{})}
 	h.lastOutput.Store(cfg.Now().UnixNano())
 
@@ -142,8 +141,8 @@ func Run(cfg Config) (int, error) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); h.loop(stop, owner) }()
-	go func() { defer wg.Done(); h.heartbeat(stop, owner) }()
+	go func() { defer wg.Done(); h.loop(stop) }()
+	go func() { defer wg.Done(); h.heartbeat(stop) }()
 
 	werr := cmd.Wait()
 	close(h.exited)
@@ -174,6 +173,8 @@ type session struct {
 	keysMu       sync.Mutex   // keys is fed by pumpInput and reset by the controller
 	keys         keyTracker
 	lastPanic    time.Time // controller goroutine only
+	runMu        sync.Mutex
+	run          *state.Store // the run last bound to this host, cached by runOf
 }
 
 // pumpOutput copies claude's screen to the user's terminal. If the terminal is gone it keeps reading and
@@ -204,8 +205,8 @@ func (h *session) pumpOutput() {
 func (h *session) hangUp(why string) {
 	h.hangupOnce.Do(func() {
 		h.cfg.Logf("host: the terminal is gone (%s); ending %s", why, h.cfg.Claude)
-		if h.cfg.Store != nil {
-			h.cfg.Store.Event("terminal_gone", map[string]any{"why": why})
+		if s, _ := h.runOf(); s != nil {
+			s.Event("terminal_gone", map[string]any{"why": why})
 		}
 		go func() {
 			for _, sig := range hangupSignals {
@@ -315,13 +316,35 @@ func (h *session) ClearInput() error {
 	return nil
 }
 
-// heartbeat keeps this session's claim on the project fresh. It runs on its own, so a controller that is
-// busy (typing, or waiting on a slow notification) can never let the claim lapse: a lapsed claim makes
-// every hook dormant.
-func (h *session) heartbeat(stop <-chan struct{}, owner bool) {
-	if !owner {
-		return
+// runOf returns the run this host drives, and whether it is newly bound since the last call. The
+// session's hooks bind it (state.Project.Bind), so it can change while claude runs: from none to one
+// once the session starts, or to another one when the human switches conversations.
+func (h *session) runOf() (s *state.Store, fresh bool) {
+	if h.cfg.Project == nil {
+		return nil, false
 	}
+	id := h.cfg.Project.HostRun(h.cfg.Instance)
+	h.runMu.Lock()
+	defer h.runMu.Unlock()
+	if id == "" {
+		h.run = nil
+		return nil, false
+	}
+	if h.run != nil && filepath.Base(h.run.Dir) == id {
+		return h.run, false
+	}
+	s, err := h.cfg.Project.Run(id, h.cfg.Instance)
+	if err != nil {
+		return nil, false
+	}
+	h.run = s
+	return s, true
+}
+
+// heartbeat keeps this host's claim on its run fresh. It runs on its own, so a controller that is busy
+// (typing, or waiting on a slow notification) can never let the claim lapse: a run whose claim lapsed
+// can be taken over by another terminal resuming the same conversation.
+func (h *session) heartbeat(stop <-chan struct{}) {
 	tick := time.NewTicker(state.OwnerTTL / 6)
 	defer tick.Stop()
 	for {
@@ -330,8 +353,12 @@ func (h *session) heartbeat(stop <-chan struct{}, owner bool) {
 			return
 		case <-tick.C:
 		}
+		s, _ := h.runOf()
+		if s == nil {
+			continue
+		}
 		now := h.cfg.Now()
-		if _, err := h.cfg.Store.Update(func(st *state.State) error {
+		if _, err := s.Update(func(st *state.State) error {
 			return state.Claim(st, h.cfg.Instance, os.Getpid(), now)
 		}); err != nil {
 			h.cfg.Logf("host: heartbeat failed: %v", err)
@@ -339,10 +366,7 @@ func (h *session) heartbeat(stop <-chan struct{}, owner bool) {
 	}
 }
 
-func (h *session) loop(stop <-chan struct{}, owner bool) {
-	if h.cfg.Controller == nil {
-		return
-	}
+func (h *session) loop(stop <-chan struct{}) {
 	tick := time.NewTicker(TickInterval)
 	defer tick.Stop()
 	for {
@@ -351,13 +375,22 @@ func (h *session) loop(stop <-chan struct{}, owner bool) {
 			return
 		case <-tick.C:
 		}
+		s, fresh := h.runOf()
+		if fresh {
+			s.Event("host_started", map[string]any{"pid": os.Getpid(), "version": h.cfg.Version, "git": gitx.Usable(s.Root)})
+			h.cfg.Logf("host: driving run %s", filepath.Base(s.Dir))
+		}
+		if h.cfg.Controller == nil {
+			continue
+		}
 		h.tick(View{
 			Now:          h.cfg.Now(),
 			LastOutput:   time.Unix(0, h.lastOutput.Load()),
 			LastHumanKey: time.Unix(0, h.lastHumanKey.Load()),
 			Draft:        h.draft.Load(),
 			DraftText:    h.draftOf(),
-			Owner:        owner,
+			Store:        s,
+			Owner:        s != nil,
 		})
 	}
 }
@@ -368,38 +401,43 @@ func (h *session) tick(v View) {
 	defer func() {
 		if r := recover(); r != nil {
 			h.cfg.Logf("host: controller panic: %v", r)
-			if h.cfg.Store != nil && v.Now.Sub(h.lastPanic) > time.Minute {
+			if v.Store != nil && v.Now.Sub(h.lastPanic) > time.Minute {
 				h.lastPanic = v.Now
-				h.cfg.Store.Event("controller_panic", map[string]any{"error": fmt.Sprint(r)})
+				v.Store.Event("controller_panic", map[string]any{"error": fmt.Sprint(r)})
 			}
 		}
 	}()
 	h.cfg.Controller.Tick(v, h)
 }
 
-// claim makes this session the project's owner, or explains why it runs as a plain passthrough.
-func claim(cfg Config) bool {
-	if cfg.Store == nil {
-		return false
-	}
-	_, err := cfg.Store.Update(func(st *state.State) error {
-		return state.Claim(st, cfg.Instance, os.Getpid(), cfg.Now())
-	})
-	if err != nil {
-		fmt.Fprintf(cfg.Stdout, "baton: %v — this session runs as plain claude (no baton hooks).\r\n", err)
-		cfg.Logf("host: not owner: %v", err)
-		return false
-	}
-	cfg.Store.Event("host_started", map[string]any{"pid": os.Getpid(), "version": cfg.Version, "git": gitx.Usable(cfg.Store.Root)})
-	return true
-}
-
-func release(cfg Config, owner bool) {
-	if !owner {
+// bind binds the session baton knows at launch to its run, so the host drives it from the first tick.
+// If another baton terminal drives that run (the same conversation resumed twice), this one says so: its
+// hooks stay out of the run until that terminal goes away, and then take it over.
+func bind(cfg Config) {
+	if cfg.Project == nil || cfg.Session == "" {
 		return
 	}
-	cfg.Store.Update(func(st *state.State) error { state.Release(st, cfg.Instance); return nil })
-	cfg.Store.Event("host_stopped", nil)
+	s, err := cfg.Project.Bind(state.Binding{Session: cfg.Session, Instance: cfg.Instance})
+	if err != nil {
+		cfg.Logf("host: binding session %s: %v", cfg.Session, err)
+		return
+	}
+	if st, err := s.Load(); err == nil && !st.IsOwner(cfg.Instance, cfg.Now()) && st.Owner != nil {
+		fmt.Fprintf(cfg.Stdout, "baton: another baton terminal (pid %d, since %s) is running this conversation's plan; this one leaves it alone until that one exits.\r\n",
+			st.Owner.PID, st.Owner.Started.Local().Format("15:04"))
+		cfg.Logf("host: run %s is driven by %s", filepath.Base(s.Dir), st.Owner.Instance)
+	}
+}
+
+// Release lets go of the run the host drives, if any, once claude has exited.
+func Release(p *state.Project, instance string) {
+	if p == nil {
+		return
+	}
+	if s, ok := p.Lookup("", instance); ok {
+		s.Event("host_stopped", nil)
+	}
+	p.Unbind(instance)
 }
 
 func exitCode(cmd *exec.Cmd, err error) int {

@@ -74,7 +74,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 // postCompactRewake runs in the background after a manual compaction ("asyncRewake"). If baton asked
 // for that compaction, it wakes the idle model exactly once per compaction.
 func (h *handlers) postCompactRewake(c Context) (Result, error) {
-	s, err := h.d.Open(c.Env)
+	s, err := h.d.Open(c)
 	if err != nil {
 		return Result{}, err
 	}

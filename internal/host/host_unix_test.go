@@ -39,6 +39,7 @@ type rig struct {
 	out      string // fakeclaude's record directory
 	stdinW   *os.File
 	stdoutR  *os.File // the user's screen: closing it is closing the terminal
+	proj     *state.Project
 	screen   *strings.Builder
 	screenMu sync.Mutex
 	done     chan struct{}
@@ -64,16 +65,17 @@ func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {
 			}
 		}
 	}()
-	store, _ := state.Open(filepath.Join(t.TempDir(), ".baton"), "inst-1", time.Now)
+	r.proj, _ = state.OpenProject(filepath.Join(t.TempDir(), ".baton"), time.Now)
 	cfg := Config{
-		Claude: fakeClaude, Args: []string{"--model", "haiku"}, BatonBin: "/opt/baton/bin/baton", Store: store,
-		Instance: "inst-1", Version: "test", Autocompact: "810k", Stdin: stdinR, Stdout: stdoutW,
+		Claude: fakeClaude, Args: []string{"--model", "haiku"}, BatonBin: "/opt/baton/bin/baton", Project: r.proj,
+		Instance: "inst-1", Session: "sess-1", Version: "test", Autocompact: "810k", Stdin: stdinR, Stdout: stdoutW,
 		Env:       append(os.Environ(), append([]string{"FAKE_OUT=" + r.out, "FAKE_EXIT=7"}, extraEnv...)...),
 		TypeDelay: time.Millisecond, EnterDelay: 5 * time.Millisecond,
 	}
 	if cfgMod != nil {
 		cfgMod(&cfg)
 	}
+	r.proj = cfg.Project
 	go func() {
 		defer close(r.done)
 		r.code, r.err = Run(cfg)
@@ -233,15 +235,56 @@ func TestTheSessionGetsBatonsOwnEnvironment(t *testing.T) {
 	}
 }
 
-func TestSecondHostRunsAsPlainPassthrough(t *testing.T) {
-	store, _ := state.Open(filepath.Join(t.TempDir(), ".baton"), "other", time.Now)
-	store.Update(func(st *state.State) error { return state.Claim(st, "other", 1, time.Now()) })
-	r := startRig(t, func(c *Config) { c.Store = store; c.BatonEnv = []string{"BATON_WARN_TOKENS=1000"} })
-	r.waitScreen("runs as plain claude")
-	r.quit()
+// wired reports whether claude was started with baton's hooks and environment.
+func (r *rig) wired() bool {
 	args, env := r.start()
-	if strings.Contains(strings.Join(args, " "), "--settings") || env["BATON_HOST"] != "" || env["BATON_WARN_TOKENS"] != "" {
-		t.Fatalf("non-owner got baton wiring: args %v env %v", args, env)
+	return strings.Contains(strings.Join(args, " "), "--settings") && env["BATON_HOST"] == "1" && env["BATON_DIR"] == r.proj.Dir
+}
+
+// A second baton terminal in the same working tree is a second session with a run of its own. Until
+// v0.3 it ran as plain claude, because a project had one run.
+func TestEveryTerminalDrivesItsOwnRun(t *testing.T) {
+	proj, _ := state.OpenProject(filepath.Join(t.TempDir(), ".baton"), time.Now)
+	first, _ := proj.Bind(state.Binding{Session: "sess-0", Instance: "first"}) // another terminal, live
+	ctl := &recordingController{typed: true}
+	r := startRig(t, func(c *Config) { c.Project, c.Controller = proj, ctl })
+	time.Sleep(3 * TickInterval)
+	v := ctl.last()
+	r.quit()
+	if !r.wired() {
+		t.Fatal("the second terminal was not wired")
+	}
+	if !v.Owner || v.Store == nil || filepath.Base(v.Store.Dir) != "sess-1" {
+		t.Fatalf("second terminal drives %+v", v)
+	}
+	if st, _ := first.Load(); !st.IsOwner("first", time.Now()) {
+		t.Fatal("the first terminal lost its run")
+	}
+	Release(proj, "inst-1") // as runHost does once the session has ended
+	if proj.HostRun("inst-1") != "" {
+		t.Error("the host still points at its run after it exited")
+	}
+	if b, _ := os.ReadFile(filepath.Join(v.Store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"host_started"`) || !strings.Contains(string(b), `"kind":"host_stopped"`) {
+		t.Errorf("events:\n%s", b)
+	}
+}
+
+// The same conversation resumed in a second terminal while the first still runs its plan: the second
+// says so and leaves the run alone.
+func TestASecondTerminalOnTheSameConversationLeavesItsRunAlone(t *testing.T) {
+	proj, _ := state.OpenProject(filepath.Join(t.TempDir(), ".baton"), time.Now)
+	run, _ := proj.Bind(state.Binding{Session: "sess-1", Instance: "first"})
+	ctl := &recordingController{typed: true}
+	r := startRig(t, func(c *Config) { c.Project, c.Controller = proj, ctl })
+	r.waitScreen("another baton terminal")
+	time.Sleep(3 * TickInterval)
+	v := ctl.last()
+	r.quit()
+	if !r.wired() || v.Owner || v.Store != nil {
+		t.Fatalf("wired %v, view %+v", r.wired(), v)
+	}
+	if st, _ := run.Load(); !st.IsOwner("first", time.Now()) {
+		t.Fatal("the second terminal took the run")
 	}
 }
 
@@ -263,8 +306,8 @@ func TestASessionEndsWhenItsTerminalIsGone(t *testing.T) {
 		{"baton gets SIGHUP", []string{"FAKE_HUP=loop"}, true, 129},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var store *state.Store
-			r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond; store = c.Store }, tc.env...)
+			r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond }, tc.env...)
+			store, _ := r.proj.Run("sess-1", "")
 			if tc.sighup {
 				// Registered here too, so a SIGHUP that arrives before the host's own handler cannot end the
 				// test binary.

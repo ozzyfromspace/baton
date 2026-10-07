@@ -1,10 +1,11 @@
-// Package state keeps baton's per-project files under .baton/ and serializes every change to them.
+// Package state keeps baton's files under .baton/ and serializes every change to them. A project (see
+// Project) holds one run per session, and a run's directory holds:
 //
-//	.baton/plan.json     the attached plan (see package plan)
-//	.baton/state.json    progress and the host's runtime state machine
-//	.baton/events.jsonl  one line per decision baton makes: the audit trail
-//	.baton/handoff.md    notes the model leaves for the phases after it
-//	.baton/lock          held (flock) for the duration of every update
+//	plan.json     the attached plan (see package plan)
+//	state.json    progress and the host's runtime state machine
+//	events.jsonl  one line per decision baton makes: the audit trail
+//	handoff.md    notes the model leaves for the phases after it
+//	lock          held (flock) for the duration of every update
 //
 // Hooks, the host and the model-facing CLI are separate processes that touch the same files, so every
 // read-modify-write goes through Update, which holds an exclusive lock and replaces state.json atomically.
@@ -56,8 +57,11 @@ func (s *Store) HandoffPath() string { return s.path("handoff.md") }
 // lockTimeout bounds how long any process waits for another's update; updates take milliseconds.
 const lockTimeout = 5 * time.Second
 
-func (s *Store) withLock(fn func() error) error {
-	l := flock.New(s.path("lock"))
+func (s *Store) withLock(fn func() error) error { return withLockFile(s.path("lock"), fn) }
+
+// withLockFile runs fn holding an exclusive lock on path.
+func withLockFile(path string, fn func() error) error {
+	l := flock.New(path)
 	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
 	defer cancel()
 	ok, err := l.TryLockContext(ctx, 20*time.Millisecond)
@@ -78,6 +82,10 @@ func (s *Store) Load() (State, error) {
 	})
 	return st, err
 }
+
+// peek reads state.json without the lock. Writes replace the file whole, so it is never torn; it may
+// be a moment old, which is fine for a listing.
+func (s *Store) peek() (State, error) { return s.read() }
 
 func (s *Store) read() (State, error) {
 	b, err := os.ReadFile(s.path("state.json"))

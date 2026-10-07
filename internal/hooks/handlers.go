@@ -23,8 +23,29 @@ const NudgePrefix = "[baton]"
 
 // Deps gives handlers access to the project's state.
 type Deps struct {
-	// Open returns the store for the session's .baton directory, given the hook's environment.
-	Open func(env func(string) string) (*state.Store, error)
+	// Open returns the run of the session the hook is for (OpenRun, in production).
+	Open func(c Context) (*state.Store, error)
+}
+
+// OpenRun returns the run a hook's session belongs to, in the project the host named in BATON_DIR,
+// binding the session to its host first (state.Project.Bind). A SessionStart after /clear, or after a
+// plan approved with "clear context", carries the host's run into the new session id.
+func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
+	return func(c Context) (*state.Store, error) {
+		dir := c.Env("BATON_DIR")
+		if dir == "" {
+			return nil, fmt.Errorf("BATON_DIR is not set")
+		}
+		p, err := state.OpenProject(dir, now)
+		if err != nil {
+			return nil, err
+		}
+		return p.Bind(state.Binding{
+			Session:  str(c.Input, "session_id"),
+			Instance: c.Env("BATON_INSTANCE"),
+			Carry:    c.Event == "SessionStart" && str(c.Input, "source") == "clear",
+		})
+	}
 }
 
 // Handlers returns baton's handler for each hook event.
@@ -55,7 +76,7 @@ type handlers struct{ d Deps }
 
 // update applies fn to the state if this session owns the project; a non-owner session is dormant.
 func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
-	s, err := h.d.Open(c.Env)
+	s, err := h.d.Open(c)
 	if err != nil {
 		return nil, state.State{}, err
 	}
@@ -245,6 +266,10 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		}
 		return nil
 	})
+	if err == errNotOwner && source != "compact" {
+		return Result{Output: map[string]any{"systemMessage": "baton: another baton terminal is running this conversation's plan; " +
+			"this one leaves it alone until that one exits"}}, nil
+	}
 	if err != nil {
 		return Result{}, ok(err)
 	}

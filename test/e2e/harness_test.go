@@ -1,7 +1,7 @@
 //go:build !windows
 
 // Package e2e drives real claude sessions through baton, the way a human at a terminal would. The tests
-// cost a few cents each and only run with BATON_E2E=1 (make e2e). They assert on .baton/events.jsonl
+// cost a few cents each and only run with BATON_E2E=1 (make e2e). They assert on the runs' events.jsonl
 // and files the scenario writes, never on screen contents, which are only kept for debugging.
 package e2e
 
@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -32,8 +33,11 @@ func TestMain(m *testing.M) {
 	// Run from inside a baton-hosted session, this process inherits that session's BATON_DIR, and every
 	// baton command a test runs would act on the developer's live run. Nothing here may see the
 	// developer's baton or keyring: baton's home and gpg's are throwaway directories for every command.
+	// Nor may a baton command a test runs from here (an attach from the "shell") think it is inside the
+	// developer's Claude Code session, whose id it would take for its own.
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "BATON_") && k != "BATON_E2E" && k != "BATON_E2E_SONNET" {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "BATON_") && k != "BATON_E2E" && k != "BATON_E2E_SONNET" || strings.HasPrefix(k, "CLAUDE") {
 			os.Unsetenv(k)
 		}
 	}
@@ -304,15 +308,41 @@ func (s *Session) RemovePlansAfter() {
 	})
 }
 
-// Events reads .baton/events.jsonl.
+// Events reads the event logs of every run in the project (.baton/runs/*/events.jsonl), oldest first.
+// A test with one session sees that session's run.
 func (s *Session) Events() []map[string]any {
-	f, err := os.Open(filepath.Join(s.Dir, ".baton", "events.jsonl"))
+	logs, _ := filepath.Glob(filepath.Join(s.Dir, ".baton", "runs", "*", "events.jsonl"))
+	var out []map[string]any
+	for _, path := range logs {
+		out = append(out, readEvents(path)...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return eventTime(out[i]).Before(eventTime(out[j])) })
+	return out
+}
+
+// OwnEvents reads the event log of this session's run alone: the run whose host is this baton process.
+func (s *Session) OwnEvents() []map[string]any {
+	logs, _ := filepath.Glob(filepath.Join(s.Dir, ".baton", "runs", "*", "events.jsonl"))
+	for _, path := range logs {
+		evs := readEvents(path)
+		for _, e := range evs {
+			if pid, _ := e["pid"].(float64); e["kind"] == "host_started" && int(pid) == s.cmd.Process.Pid {
+				return evs
+			}
+		}
+	}
+	return nil
+}
+
+func readEvents(path string) []map[string]any {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
 	var out []map[string]any
 	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4<<20)
 	for sc.Scan() {
 		var e map[string]any
 		if json.Unmarshal(sc.Bytes(), &e) == nil {
@@ -320,6 +350,12 @@ func (s *Session) Events() []map[string]any {
 		}
 	}
 	return out
+}
+
+func eventTime(e map[string]any) time.Time {
+	ts, _ := e["ts"].(string)
+	t, _ := time.Parse(time.RFC3339Nano, ts)
+	return t
 }
 
 // WaitEvent waits for an event of the given kind and returns it.

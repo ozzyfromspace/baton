@@ -16,7 +16,7 @@ const MaxStopBlocks = 3
 // stop decides what happens when the model ends its turn. The decision depends only on recorded state
 // (what the CLI and the other hooks wrote), never on what the model said.
 func (h *handlers) stop(c Context) (Result, error) {
-	s, err := h.d.Open(c.Env)
+	s, err := h.d.Open(c)
 	if err != nil {
 		return Result{}, err
 	}

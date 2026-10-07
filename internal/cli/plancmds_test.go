@@ -26,8 +26,23 @@ func newSession(t *testing.T) (*session, string) {
 	}
 	planFile := filepath.Join(dir, "plan.md")
 	os.WriteFile(planFile, doc, 0o644)
-	return &session{t: t, env: map[string]string{"BATON_DIR": filepath.Join(dir, ".baton"), "BATON_HOST": "1"},
+	return &session{t: t, env: map[string]string{"BATON_DIR": filepath.Join(dir, ".baton"), "BATON_HOST": "1",
+		"BATON_INSTANCE": "inst", "CLAUDE_CODE_SESSION_ID": "sess-1"},
 		now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}, planFile
+}
+
+// store is the session's run, as the hooks would have bound it.
+func (s *session) store() *state.Store {
+	s.t.Helper()
+	p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	st, err := p.Bind(state.Binding{Session: "sess-1"})
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return st
 }
 
 func (s *session) run(stdin string, args ...string) (int, string, string) {
@@ -39,8 +54,8 @@ func (s *session) run(stdin string, args ...string) (int, string, string) {
 
 // startNext does what the post-compaction hook does at a phase boundary: start the next phase.
 func (s *session) startNext() {
-	st, _ := state.Open(s.env["BATON_DIR"], "", func() time.Time { return s.now })
-	origin := state.OriginOf(filepath.Dir(s.env["BATON_DIR"]))
+	st := s.store()
+	origin := state.OriginOf(st.Root)
 	st.Update(func(x *state.State) error { state.Start(x, s.now, origin); return nil })
 }
 
@@ -81,7 +96,7 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 	if !strings.Contains(out, "Next phase: P1 (The one-liners)") || !strings.Contains(out, "End your turn now") {
 		t.Fatalf("done: %s", out)
 	}
-	handoff, _ := os.ReadFile(filepath.Join(s.env["BATON_DIR"], "handoff.md"))
+	handoff, _ := os.ReadFile(filepath.Join(s.store().Dir, "handoff.md"))
 	if !strings.Contains(string(handoff), "## P0") || !strings.Contains(string(handoff), "Overlay closes modals") {
 		t.Fatalf("handoff: %s", handoff)
 	}
@@ -122,7 +137,7 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 		t.Fatalf("mode = %q", status.State.Mode)
 	}
 
-	events, _ := os.ReadFile(filepath.Join(s.env["BATON_DIR"], "events.jsonl"))
+	events, _ := os.ReadFile(filepath.Join(s.store().Dir, "events.jsonl"))
 	for _, kind := range []string{"attached", "phase_done", "waiting", "blocked", "resumed", "checkpoint", "paused"} {
 		if !strings.Contains(string(events), `"kind":"`+kind+`"`) {
 			t.Errorf("no %s event in %s", kind, events)
@@ -181,9 +196,7 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
 	os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"statusLine":{"type":"command","command":"echo user-line"}}`), 0o644)
 	s.env["HOME"] = home
-	s.env["BATON_INSTANCE"] = "inst"
-	st, _ := state.Open(s.env["BATON_DIR"], "inst", func() time.Time { return s.now })
-	st.Update(func(x *state.State) error { return state.Claim(x, "inst", 1, s.now) })
+	st := s.store()
 
 	s.env["BATON_COMPACT_CAP"] = "810000"
 	raw, _ := json.Marshal(map[string]any{
@@ -205,6 +218,7 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 		t.Fatalf("status (hosted) lacks %q:\n%s", want, out)
 	}
 	delete(s.env, "BATON_HOST") // from a plain shell: the config's settings, the reading's limit
+	delete(s.env, "CLAUDE_CODE_SESSION_ID")
 	delete(s.env, "BATON_COMPACT_CAP")
 	s.env["BATON_HOME"] = t.TempDir()
 	if out := s.must("", "status"); !strings.Contains(out, want) {
@@ -220,5 +234,32 @@ func TestAttachSuggestedAndInlineSpec(t *testing.T) {
 	inline := `{"title":"Inline","phases":[{"id":"P0","title":"The overlay","anchor":"## P0 — The overlay"},{"id":"R1","title":"Roster","anchor":"## R1 — The roster can grow"}]}`
 	if out := s.must("", "attach", planFile, "--replace", "--spec", inline); !strings.Contains(out, `"Inline" — 2 phases`) {
 		t.Fatalf("inline spec: %s", out)
+	}
+}
+
+// Two sessions in one working tree each run a plan of their own. From a shell, status lists both; in a
+// session, it shows that session's run and names the other one.
+func TestTwoSessionsRunTwoPlans(t *testing.T) {
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	other := &session{t: t, now: s.now, env: map[string]string{"BATON_DIR": s.env["BATON_DIR"], "BATON_HOST": "1",
+		"BATON_INSTANCE": "inst-2", "CLAUDE_CODE_SESSION_ID": "sess-2"}}
+	other.attach(planFile)
+	other.must("", "done", "P0")
+	if st := s.state(); st.Current != "P0" || st.Phases["P0"].Status != state.PhaseActive {
+		t.Fatalf("the other session's done moved this run: %+v", st)
+	}
+
+	out := s.must("", "status")
+	if !strings.Contains(out, "▶ P0") || !strings.Contains(out, "other baton sessions working in this checkout:\n  sess-2 (running, pid") {
+		t.Fatalf("status in session 1:\n%s", out)
+	}
+	shell := &session{t: t, now: s.now, env: map[string]string{"BATON_DIR": s.env["BATON_DIR"]}}
+	out = shell.must("", "status")
+	if !strings.Contains(out, "several runs") || !strings.Contains(out, "sess-1") || !strings.Contains(out, "on P1") {
+		t.Fatalf("status from a shell:\n%s", out)
+	}
+	if errs := shell.fails("done", "P0"); !strings.Contains(errs, "run this inside the session whose run you mean") {
+		t.Fatalf("done from a shell: %s", errs)
 	}
 }

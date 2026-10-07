@@ -53,12 +53,14 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		return io.Env(k)
 	})
 	instance := newInstanceID()
-	st, err := state.Open(dir, instance, io.Now)
+	proj, err := state.OpenProject(dir, io.Now)
 	if err != nil {
-		return fail(io, "cannot create %s: %v", dir, err)
+		return fail(io, "cannot use %s: %v", dir, err)
 	}
-	state.ExcludeFromGit(st.Root)
+	proj.Sweep()
+	state.ExcludeFromGit(proj.Root)
 	logf := fileLogger(filepath.Join(dir, "baton.log"), instance, io.Now)
+	session, args := sessionOf(args)
 
 	claude := io.Env("BATON_CLAUDE")
 	if claude == "" {
@@ -91,20 +93,18 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
-	controller := &loop.Loop{
-		Store: st, Notify: notify.New(cfg), Project: filepath.Base(st.Root),
-		Timing: timing, Logf: logf,
-	}
+	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf}
 	code, err := host.Run(host.Config{
-		Claude: claude, Args: args, BatonBin: exe, Store: st, Instance: instance, Version: version.Version,
+		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: controller,
 	})
+	defer host.Release(proj, instance)
 	controller.Ended() // save uncommitted work as the session ends
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	if code != 0 && code != 130 && code != 143 { // not a deliberate Ctrl-C or termination
+	if st, ok := proj.Lookup("", instance); ok && code != 0 && code != 130 && code != 143 { // not a deliberate Ctrl-C or termination
 		st.Update(func(s *state.State) error {
 			if s.Mode == state.ModeRunning && s.Run.Ended == nil {
 				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: fmt.Sprintf("claude exited with code %d mid-plan", code), At: io.Now()})
@@ -116,6 +116,73 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	return code
 }
 
+// sessionOf works out the session id claude will run under, when baton can know it at launch: the
+// session being resumed by id, or, for a new session, one baton chooses and passes as --session-id, so
+// the run is bound before claude has drawn anything. It returns "" when claude picks the session itself
+// (--continue, the --resume picker, a fork, a PR or cloud session); the session's first hook binds it.
+func sessionOf(args []string) (string, []string) {
+	var resumed string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		name, val, hasVal := strings.Cut(a, "=")
+		switch name {
+		case "--session-id":
+			if !hasVal && i+1 < len(args) {
+				val = args[i+1]
+			}
+			return val, args
+		case "-c", "--continue", "--fork-session", "--from-pr", "--teleport", "--cloud", "--bg", "--background", "-p", "--print", "--no-session-persistence":
+			return "", args
+		case "-r", "--resume":
+			if !hasVal && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				val, hasVal = args[i+1], true
+			}
+			if !hasVal || !looksLikeSessionID(val) {
+				return "", args // the picker, or a search term
+			}
+			resumed = val
+		}
+	}
+	if resumed != "" {
+		return resumed, args
+	}
+	id := newSessionID()
+	return id, append(append([]string{}, args...), "--session-id", id)
+}
+
+// looksLikeSessionID reports a UUID, the form Claude Code's session ids take.
+func looksLikeSessionID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// newSessionID returns a random (version 4) UUID.
+func newSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 // cmdStatusline renders the status line of a hosted session. It must always print something and never
 // fail: a broken status line is worse than a plain one.
 func cmdStatusline(_ []string, io IO) int {
@@ -125,10 +192,12 @@ func cmdStatusline(_ []string, io IO) int {
 	var pl plan.Plan
 	havePlan := false
 	if dir := io.Env("BATON_DIR"); dir != "" && io.Env("BATON_STATUSLINE_NESTED") == "" {
-		if s, err := state.Open(dir, io.Env("BATON_INSTANCE"), io.Now); err == nil {
-			st, _ = recordContext(s, in, io)
-			if p, err := s.LoadPlan(); err == nil {
-				pl, havePlan = p, true
+		if p, err := state.OpenProject(dir, io.Now); err == nil {
+			if s, ok := p.Lookup(in.SessionID, io.Env("BATON_INSTANCE")); ok {
+				st, _ = recordContext(s, in, io)
+				if p, err := s.LoadPlan(); err == nil {
+					pl, havePlan = p, true
+				}
 			}
 		}
 	}

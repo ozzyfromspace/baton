@@ -9,7 +9,7 @@ import (
 )
 
 // The heart of baton: a two-phase plan runs to completion with one compaction at the boundary and no
-// keystrokes from anyone. Every step is asserted from .baton/events.jsonl.
+// keystrokes from anyone. Every step is asserted from the run's events.jsonl.
 func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
