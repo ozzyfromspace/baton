@@ -758,6 +758,26 @@ func TestDialogsCloseOnlyOnAnExactMatch(t *testing.T) {
 	}
 }
 
+// A plan approval's result has an empty tool_input (docs/research/sessions.md), so it cannot be matched
+// by its input. It still closes its dialog; and a plan the human sent back, which fires no hook, leaves
+// no second entry behind when the model asks again.
+func TestPlanApprovalClosesItsDialog(t *testing.T) {
+	f := newFixture(t, true)
+	plan := func(text string) map[string]any {
+		return map[string]any{"tool_name": "ExitPlanMode", "tool_input": map[string]any{"plan": text, "planFilePath": "/p/x.md"}}
+	}
+	f.fire("PermissionRequest", plan("first draft"))
+	f.fire("PermissionRequest", plan("second draft")) // the first was sent back
+	if got := openDialogs(f); !equal(got, []string{"/ExitPlanMode"}) {
+		t.Fatalf("after asking twice: %v", got)
+	}
+	f.fire("PostToolUse", map[string]any{"tool_name": "ExitPlanMode", "tool_input": map[string]any{},
+		"tool_response": map[string]any{"plan": "second draft", "filePath": "/p/x.md"}})
+	if got := openDialogs(f); len(got) != 0 {
+		t.Fatalf("after approval: %v", got)
+	}
+}
+
 // What proves a dialog is gone: the main turn ending (Stop, StopFailure) or a new prompt closes the main
 // agent's; a subagent's stays until that subagent stops or the session goes idle.
 func TestDialogSweeps(t *testing.T) {

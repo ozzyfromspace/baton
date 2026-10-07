@@ -433,6 +433,11 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 				kind = iq.kind // baton's own question, exactly as issued: the only kind the host may answer
 			}
 		}
+		if tool == "ExitPlanMode" && agent == "" {
+			// A plan the human sent back fires no hook at all, so its dialog is still on record when the
+			// model asks again. Only one plan is ever on screen: this one replaces it.
+			st.Run.Dialogs.CloseExact("", tool, dialogKey(c.Input))
+		}
 		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
 		open = len(st.Run.Dialogs)
 		if kind == "proposal" {
@@ -455,10 +460,14 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 
 // dialogKey identifies a tool call across its PermissionRequest and its result, which have no
 // tool_use_id in common. A question is known by its question texts (its result adds the answers to its
-// input); any other call by a hash of its input, which is the same in both (measured for Bash, Write,
-// Edit and Read).
+// input); a plan approval by its tool alone, since its result's input is empty and only one is ever on
+// screen (docs/research/sessions.md); any other call by a hash of its input, which is the same in both
+// (measured for Bash, Write, Edit and Read).
 func dialogKey(in map[string]any) string {
-	if str(in, "tool_name") == "AskUserQuestion" {
+	switch str(in, "tool_name") {
+	case "ExitPlanMode":
+		return "plan"
+	case "AskUserQuestion":
 		qs := questions(in)
 		for i, q := range qs {
 			qs[i] = decide.Normalize(q)
