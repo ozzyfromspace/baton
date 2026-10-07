@@ -38,7 +38,7 @@ func TestSkillStubLoadsTheInstructionsSafely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stub := string(b)
+	stub := strings.ReplaceAll(string(b), "\r\n", "\n") // a Windows checkout has CRLF line endings
 	if !strings.Contains(stub, "\n!`baton skill`\n") || !strings.Contains(stub, "\nallowed-tools: Bash(baton skill)\n") {
 		t.Fatalf("the stub does not load baton skill with permission to:\n%s", stub)
 	}
