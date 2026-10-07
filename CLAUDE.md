@@ -13,7 +13,7 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
-- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
+- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate, upgrade). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
 - `plugin/` — the Claude Code plugin (skill, launchers, elevation Stop hook). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 

@@ -4,6 +4,17 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+- **An update reaches the sessions already running.** After `baton update`, every session baton hosts
+  moves to the new version by itself: it restarts in place (the same terminal, the same process, the same
+  conversation) once it has been idle for two minutes, or, with a plan running, at its next phase
+  boundary, where the restarted session takes the compaction. It never restarts with a turn, a dialog or
+  a draft open, or while anything that would end with claude runs (background work, a monitor, a
+  scheduled wakeup). Only compatible releases are taken this way: patch and minor releases, or before
+  1.0, patch releases. After a major update, a session says so once and stays on its version until you
+  restart it. `"auto_restart": false` in `~/.baton/config.json` turns it off. Sessions started on
+  v0.3.0 or earlier need one last restart by hand.
+
 ## [0.3.0] - 2026-10-07
 
 A campaign finished, and the next one was planned and approved in the same session. baton still held the

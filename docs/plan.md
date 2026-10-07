@@ -2,6 +2,8 @@
 
 > Approved 2026-10-04. Phases are committed in order; `git log` tells the story. Research behind it: [`research/spikes.md`](research/spikes.md).
 >
+> **v0.3.1 moves running sessions onto an update.** A host that finds a newer compatible baton installed (`internal/upgrade`) restarts its session on it in place, by exec, resuming the same conversation: once idle, or at the next phase boundary while a plan runs, where the restarted session takes the compaction. Across a major version the session stays put and says so once.
+>
 > **v0.3.0 keeps a run per session and attaches the plan the human approves.** Each Claude Code session has its own run under `.baton/runs/`, so a second terminal in the same project runs a plan of its own instead of running as plain claude; approving a plan with phase headings attaches it and starts P0 after a compaction. Where this plan speaks of one plan per project, read one per session. The evidence is in [`research/sessions.md`](research/sessions.md).
 >
 > **v0.2.0 changed how a run reaches the human.** The model has three ways to do it (`note`, a timed `propose`, and `blocked --tried`). baton snapshots uncommitted work whenever the run halts, and runs a plan the same way in a folder without git. That design, and the spikes behind it, are in [`escalation.md`](escalation.md). Where this plan says a blocked run escalates, read that.

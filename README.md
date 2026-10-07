@@ -51,7 +51,7 @@ eval "$(~/.baton/bin/baton init zsh)"
 
 That line puts `baton` on your PATH. It also lets a plain `claude` session hand itself to baton automatically (see [Elevation](#elevation)).
 
-To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Running sessions keep their version until you restart them.
+To update later, run `baton update` (or `/baton update` in a session). It updates the plugin through Claude Code, then downloads and verifies the matching binary. Sessions baton hosts then move to the new version by themselves: each one restarts on it in place, with the same conversation, once it has been idle for two minutes, or at its next phase boundary while a plan runs. Nothing that would end with claude may be running at that moment (background work, a monitor, a scheduled wakeup), and a session never restarts with a draft in the input box. This applies to patch and minor releases (before 1.0, patch releases only). After a major update, a session tells you once and stays on its version until you restart it: exit and run `baton --continue`. Plain `claude` sessions keep the old plugin until they restart.
 
 ## Use
 
@@ -161,6 +161,7 @@ Optional settings live in `~/.baton/config.json`. Environment variables override
 | `warn_pct` | `BATON_WARN_PCT` | `90` | Context fill (% of the limit, but never under 200k tokens) at which baton asks you whether to checkpoint now or keep going. If nobody answers within 20 minutes, baton answers "Keep going" itself, and Claude Code compacts on its own when the context is full. If Claude Code would compact first (small windows), the question moves to before that point. `0` turns it off. |
 | `escalation_timeout` | `BATON_ESCALATION_TIMEOUT` | `5m` | How long a proposal waits for you before baton goes ahead with it: 1m to 2h. It never goes ahead within a minute of the question appearing, and a key press restarts the clock. |
 | `max_auto_decisions` | `BATON_MAX_AUTO_DECISIONS` | `5` | How many decisions one phase may make without you (notes, and proposals that went ahead because nobody answered) before baton stops for you to review them. `0` means no limit. |
+| `auto_restart` | `BATON_AUTO_RESTART` | `true` | Restart hosted sessions on a newer compatible baton once it is installed (see [Install](#install)). `false` keeps each session on its version until you restart it. |
 
 With the defaults on a 1M-token model, baton asks for a checkpoint at 486k tokens and asks you at 729k, and Claude Code compacts on its own at about 777k. `/baton setup` prints the numbers for your settings.
 

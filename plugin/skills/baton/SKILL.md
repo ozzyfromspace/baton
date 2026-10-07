@@ -113,7 +113,7 @@ Do not edit the user's shell config or baton's config yourself unless they ask y
 
 ## update
 
-Run `baton update` and show its output. It updates the plugin through Claude Code, then downloads and verifies the matching binary. If it updated, tell the user that sessions already running (this one included) keep the old version until they restart: exit and run `baton --continue`, or start a new session with `baton`.
+Run `baton update` and show its output. It updates the plugin through Claude Code, then downloads and verifies the matching binary. If it updated, relay what it says about the sessions already running, this one included: sessions baton hosts restart on the new version by themselves once idle, unless it was a major update.
 
 ## While a plan runs
 
