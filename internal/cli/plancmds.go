@@ -107,11 +107,11 @@ func cmdAttach(args []string, io IO) int {
 	if err := s.SavePlan(pl); err != nil {
 		return fail(io, "%v", err)
 	}
-	root := filepath.Dir(s.Dir)
-	if err := state.ExcludeFromGit(s.Dir); err != nil {
+	root := s.Root
+	if err := state.ExcludeFromGit(root); err != nil {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
-	origin := state.OriginOf(s.Dir)
+	origin := state.OriginOf(root)
 	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), origin); return nil }); err != nil {
 		return fail(io, "%v", err)
 	}
@@ -144,7 +144,7 @@ func cmdStatus(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	pl, perr := s.LoadPlan()
-	snaps := gitx.Snapshots(filepath.Dir(s.Dir))
+	snaps := gitx.Snapshots(s.Root)
 	if p.bools["json"] {
 		out := map[string]any{"state": st, "baton_dir": s.Dir, "hosted": hosted(io)}
 		if perr == nil {
@@ -323,7 +323,7 @@ func cmdDone(args []string, io IO) int {
 	}
 	s.Event("phase_done", done)
 	work.report(io, id, keep)
-	if startHead != "" && startHead == gitx.Head(filepath.Dir(s.Dir)) {
+	if startHead != "" && startHead == gitx.Head(s.Root) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
 	}
 	var mine []state.Decision
@@ -417,11 +417,11 @@ type workLeft struct {
 
 // checkWork compares the uncommitted work now with what there was when phase started.
 func checkWork(s *state.Store, phase string) workLeft {
-	root := filepath.Dir(s.Dir)
+	root := s.Root
 	if !gitx.Usable(root) {
 		return workLeft{}
 	}
-	paths, err := state.Uncommitted(s.Dir)
+	paths, err := state.Uncommitted(root)
 	if err != nil {
 		return workLeft{warn: fmt.Sprintf("baton: warning — could not read git status (%v). Make sure this phase's work is committed.", err)}
 	}
@@ -556,7 +556,7 @@ func simpleTransition(io IO, command, kind string, fn func(*state.State) error, 
 
 // words is what the model-facing text depends on in this project.
 func words(io IO, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(filepath.Dir(s.Dir)), Timeout: config.EscalationFromEnv(io.Env).Timeout}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(io.Env).Timeout}
 }
 
 func storeAndPlan(io IO) (*state.Store, plan.Plan, bool) {

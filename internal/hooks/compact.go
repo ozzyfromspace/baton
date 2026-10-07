@@ -20,7 +20,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 	// slow). Only a boundary starts a phase.
 	var origin state.Origin
 	if cur, err := s.Load(); err == nil && cur.BoundaryOwed {
-		origin = state.OriginOf(s.Dir)
+		origin = state.OriginOf(s.Root)
 	}
 	kind := ""
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {

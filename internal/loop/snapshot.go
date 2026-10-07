@@ -2,7 +2,6 @@ package loop
 
 import (
 	"errors"
-	"path/filepath"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
@@ -47,7 +46,7 @@ func (l *Loop) saveWork(v host.View, st state.State) {
 		return
 	}
 	l.halted = true
-	if !gitx.Usable(filepath.Dir(l.Store.Dir)) || !l.snapping.CompareAndSwap(false, true) {
+	if !gitx.Usable(l.Store.Root) || !l.snapping.CompareAndSwap(false, true) {
 		return
 	}
 	l.saving.Add(1)
@@ -79,7 +78,7 @@ func (l *Loop) save(phase, why string) {
 		snapshot = gitx.Snapshot
 	}
 	start := time.Now()
-	saved, err := snapshot(filepath.Dir(l.Store.Dir), l.Store.Now(), phase, why)
+	saved, err := snapshot(l.Store.Root, l.Store.Now(), phase, why)
 	switch {
 	case errors.Is(err, gitx.ErrNoGit):
 		return

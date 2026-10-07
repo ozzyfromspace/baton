@@ -200,7 +200,7 @@ func TestExcludeFromGitIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755)
 	for i := 0; i < 2; i++ {
-		if err := ExcludeFromGit(filepath.Join(root, ".baton")); err != nil {
+		if err := ExcludeFromGit(root); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -217,7 +217,7 @@ func TestExcludeFromGitFollowsWorktreeFile(t *testing.T) {
 	os.MkdirAll(gitdir, 0o755)
 	os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("../.."), 0o644)
 	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644)
-	if err := ExcludeFromGit(filepath.Join(wt, ".baton")); err != nil {
+	if err := ExcludeFromGit(wt); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(filepath.Join(main, ".git", "info", "exclude")); err != nil || !strings.Contains(string(b), ".baton/") {

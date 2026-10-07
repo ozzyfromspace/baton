@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -319,7 +318,7 @@ func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 // words is what the model-facing text depends on in this project: whether git is usable there, and how
 // long a proposal waits for the human.
 func words(c Context, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(filepath.Dir(s.Dir)), Timeout: config.EscalationFromEnv(c.Env).Timeout}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout}
 }
 
 func progressLine(pl plan.Plan, st state.State) string {

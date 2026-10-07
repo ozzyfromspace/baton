@@ -1,7 +1,6 @@
 package state
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
@@ -21,14 +20,13 @@ type Origin struct {
 	Dirty *Dirt
 }
 
-// OriginOf reads the origin of a phase starting now, in the project whose state lives in batonDir.
-func OriginOf(batonDir string) Origin {
-	root := filepath.Dir(batonDir)
+// OriginOf reads the origin of a phase starting now, in the working tree root.
+func OriginOf(root string) Origin {
 	if !gitx.Usable(root) {
 		return Origin{}
 	}
 	o := Origin{Head: gitx.Head(root)}
-	if paths, err := Uncommitted(batonDir); err == nil {
+	if paths, err := Uncommitted(root); err == nil {
 		o.Dirty = &Dirt{}
 		if len(paths) > gitx.MaxDirty {
 			o.Dirty.Over = true
@@ -39,16 +37,16 @@ func OriginOf(batonDir string) Origin {
 	return o
 }
 
-// Uncommitted lists the uncommitted work in the project whose state lives in batonDir: every path
-// gitx.Dirty finds except baton's own files, which change all the time and are nobody's work (they are
-// normally excluded from git, but not when git arrived after baton did, or the user tracks them).
-// Without git it returns gitx.ErrNoGit.
-func Uncommitted(batonDir string) ([]string, error) {
-	paths, err := gitx.Dirty(filepath.Dir(batonDir))
+// Uncommitted lists the uncommitted work in the working tree root: every path gitx.Dirty finds except
+// baton's own files, which change all the time and are nobody's work (they are normally excluded from
+// git, but not when git arrived after baton did, or the user tracks them). Without git it returns
+// gitx.ErrNoGit.
+func Uncommitted(root string) ([]string, error) {
+	paths, err := gitx.Dirty(root)
 	if err != nil {
 		return nil, err
 	}
-	own := filepath.Base(batonDir) + "/"
+	own := DirName + "/"
 	work := paths[:0]
 	for _, p := range paths {
 		if !strings.HasPrefix(p, own) {

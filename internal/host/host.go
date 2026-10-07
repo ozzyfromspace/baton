@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -391,7 +390,7 @@ func claim(cfg Config) bool {
 		cfg.Logf("host: not owner: %v", err)
 		return false
 	}
-	cfg.Store.Event("host_started", map[string]any{"pid": os.Getpid(), "version": cfg.Version, "git": gitx.Usable(filepath.Dir(cfg.Store.Dir))})
+	cfg.Store.Event("host_started", map[string]any{"pid": os.Getpid(), "version": cfg.Version, "git": gitx.Usable(cfg.Store.Root)})
 	return true
 }
 

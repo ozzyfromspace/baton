@@ -57,7 +57,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "cannot create %s: %v", dir, err)
 	}
-	state.ExcludeFromGit(dir)
+	state.ExcludeFromGit(st.Root)
 	logf := fileLogger(filepath.Join(dir, "baton.log"), instance, io.Now)
 
 	claude := io.Env("BATON_CLAUDE")
@@ -92,7 +92,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
 	controller := &loop.Loop{
-		Store: st, Notify: notify.New(cfg), Project: filepath.Base(filepath.Dir(dir)),
+		Store: st, Notify: notify.New(cfg), Project: filepath.Base(st.Root),
 		Timing: timing, Logf: logf,
 	}
 	code, err := host.Run(host.Config{

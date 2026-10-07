@@ -30,7 +30,7 @@ func newRepoRig(t *testing.T) (*rig, string) {
 func newRigAt(t *testing.T, dir string) *rig {
 	r := &rig{t: t, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), in: &typed{}, push: &pushes{}}
 	store, _ := state.Open(dir, "inst", func() time.Time { return r.now })
-	state.ExcludeFromGit(dir)
+	state.ExcludeFromGit(filepath.Dir(dir))
 	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "a"}, {ID: "P1", Title: "b"}}}
 	store.Update(func(st *state.State) error {
 		*st = state.Attach(pl, r.now, state.Origin{})

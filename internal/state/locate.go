@@ -51,10 +51,13 @@ func homeBaton(env func(string) string) string {
 	return filepath.Join(h, ".baton")
 }
 
-// ExcludeFromGit adds ".baton/" to the repository's info/exclude so baton's state never shows up in
-// `git status` and the user's .gitignore is never touched. Without git (gitx.Usable) it does nothing.
-func ExcludeFromGit(batonDir string) error {
-	root := filepath.Dir(batonDir)
+// DirName is the directory baton keeps a project's state in, at the root of its working tree.
+const DirName = ".baton"
+
+// ExcludeFromGit adds ".baton/" to the info/exclude of the repository whose working tree is root, so
+// baton's state never shows up in `git status` and the user's .gitignore is never touched. Without git
+// (gitx.Usable) it does nothing.
+func ExcludeFromGit(root string) error {
 	if !gitx.Usable(root) {
 		return nil
 	}

@@ -24,19 +24,25 @@ import (
 	"github.com/ozzyfromspace/baton/internal/plan"
 )
 
-// Store is a handle on one project's .baton directory.
+// Store is a handle on one run's directory.
 type Store struct {
 	Dir      string
+	Root     string // the working tree the run works in
 	Instance string // BATON_INSTANCE of the writer, recorded on events
 	Now      func() time.Time
 }
 
-// Open returns a store for dir (the .baton directory itself), creating it if needed.
+// Open returns a store for dir, creating it if needed. Its working tree is dir's parent: the shape of a
+// project's .baton directory before runs were kept per session (see Project for where runs live now).
 func Open(dir, instance string, now func() time.Time) (*Store, error) {
+	return openIn(dir, filepath.Dir(dir), instance, now)
+}
+
+func openIn(dir, root, instance string, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{Dir: dir, Instance: instance, Now: now}, nil
+	return &Store{Dir: dir, Root: root, Instance: instance, Now: now}, nil
 }
 
 func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
