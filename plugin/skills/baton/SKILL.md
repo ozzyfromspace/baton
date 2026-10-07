@@ -1,6 +1,6 @@
 ---
 name: baton
-description: Run a multi-phase plan with baton, which hosts this Claude Code session and compacts the context at every phase boundary so a long plan runs unattended. Use when the user runs /baton (plan, attach, status, pause, resume, elevate, setup, help), or asks to run, attach, pause or resume a plan with baton.
+description: Run a multi-phase plan with baton, which hosts this Claude Code session and compacts the context at every phase boundary so a long plan runs unattended. Use when the user runs /baton (plan, run, status, pause, resume, stop, exit, drafts, setup, update, help), or asks to plan, run, pause, resume or stop a plan with baton, or to leave baton.
 ---
 
 # /baton
@@ -14,14 +14,17 @@ Act on the first word of the arguments. If there is none, treat it as `help`.
 ## help
 
 Explain briefly:
-- `/baton plan <goal>`: plan the work in plan mode, then run it.
-- `/baton attach [plan file]`: run a plan that already exists.
+- `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
+- `/baton run [plan file]`: run a plan that already exists.
 - `/baton status`: where the run stands.
-- `/baton drafts`: drafts baton saved out of the input box (`--last` prints the newest).
 - `/baton pause` / `/baton resume`: take or give back the wheel.
-- `/baton elevate`: hand this session over to baton.
+- `/baton stop`: end the run; baton does nothing more until the next plan.
+- `/baton exit`: leave baton; this conversation goes on as plain Claude Code.
+- `/baton drafts`: drafts baton saved out of the input box (`--last` prints the newest).
 - `/baton setup`: check this machine and say what is left to set up.
 - `/baton update`: update baton to the latest release.
+
+Each session runs its own plan, so several terminals can each run one in the same project.
 
 ## status
 
@@ -32,20 +35,26 @@ Run `baton status` and show its output verbatim.
 Run `baton drafts` (passing through any `--last`, `N` or `--path`) and show its output verbatim.
 
 baton clears an unsent draft rather than waiting on it — a half-typed message used to be able to park a
-whole run — and saves the text first. Each draft is a file under `.baton/drafts/` holding exactly what
-was typed, so `cat` recovers it even if baton will not start.
+whole run — and saves the text first. Each draft is a file in the run's `drafts/` folder (`baton drafts
+--path` prints it) holding exactly what was typed, so `cat` recovers it even if baton will not start.
 
 ## plan <goal>
 
-1. Call the `EnterPlanMode` tool and plan the goal as a formal, multi-phase plan. Write the plan so baton can run it:
+1. Make sure baton hosts this session, so that baton itself is watching when the user approves the plan: run `baton elevate "Plan this goal in plan mode, as /baton plan describes: <goal>"`.
+   - If it says the session is already hosted by baton, go on to step 2.
+   - If it says "elevating", end your turn immediately (see **elevate**). Once the session is hosted, you are handed the goal again; then go on to step 2.
+   - If it cannot elevate (the shell does not relaunch sessions yet, or there is no terminal), tell the user so in one line and go on to step 2. After the approval, attach the plan yourself as described under **run**.
+2. Call the `EnterPlanMode` tool and plan the goal as a formal, multi-phase plan. Write the plan so baton can run it:
    - Give each phase its own heading in this exact form: `## P0 — <title>`, `## P1 — <title>`, and so on, in order.
    - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed (in a git repository; otherwise saved).
    - Size each phase to finish comfortably in one context window. Between phases, context is compacted and only the plan, the brief and your notes carry over, so each phase must be understandable from the plan document alone.
    - If the run has rules that apply to every phase, put them in a `## Standing rules` section before the first phase.
    - End with a `## Verification` section.
-2. When the user approves the plan (ExitPlanMode), attach it as described under **attach** below, using the plan file you just wrote, and then start P0.
+3. When the user approves the plan, baton attaches it by itself and tells you so. Do what it says: normally that is to end your turn, so baton can compact the planning conversation away and start P0 with a fresh brief. Do not attach the plan yourself, and do not start P0 in the same turn.
+   - If baton says the plan was **not attached** (for example, it found no phase headings), attach it as described under **run**.
+   - If a run is already under way, baton prints a question for the user about the approved plan. Ask it exactly as printed; baton acts on the answer.
 
-## attach [plan file]
+## run [plan file]
 
 1. Find the plan document:
    - the path given in the arguments, or
@@ -60,17 +69,30 @@ was typed, so `cat` recovers it even if baton will not start.
    - If the suggestion is right as printed: `baton attach <file> --suggested`.
    - Otherwise pass the corrected spec inline, in single quotes: `baton attach <file> --spec '{"title": …, "phases": [ … ]}'`.
 
-   If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running, ask the user before adding `--replace`.
+   If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running in this session, ask the user before adding `--replace`.
 4. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so elevate instead of starting: run `baton elevate "Begin the first phase of the attached plan."` and end your turn (see **elevate**).
 5. Otherwise, begin the first phase.
+
+`/baton attach` is the old name of `/baton run`: treat it the same.
 
 ## pause / resume
 
 Run `baton pause` or `baton resume` and report the result in one line. Pause hands the session to the human: baton stops compacting, nudging and escalating. Resume gives it back to baton and also clears a "blocked" state.
 
+## stop
+
+Run `baton stop` and report the result in one line. The run's plan is set aside (its history stays in baton's log) and baton does nothing in this session until the next plan. The session stays hosted.
+
+## exit
+
+Run `baton exit`.
+
+- **If it says "leaving baton":** end your turn immediately. When the turn ends, baton stops this claude process and the terminal resumes this same conversation as plain Claude Code. A running plan is paused first; relay what baton says about picking it up later.
+- **Otherwise** relay its instructions to the user word for word, then stop.
+
 ## elevate
 
-Elevation hands this plain `claude` session to baton without losing the conversation: same session, same context. It is only needed when this session was not started with `baton`. If `baton status` already reports a hosted session, say so and stop.
+Elevation hands this plain `claude` session to baton without losing the conversation: same session, same context. `/baton plan` and `/baton run` do it when they need to; on its own it is rarely needed. If `baton status` already reports a hosted session, say so and stop.
 
 Run `baton elevate "<what you should do next once hosted>"`, for example `baton elevate "Begin the first phase of the attached plan."`. Then:
 
@@ -104,8 +126,11 @@ Run `baton update` and show its output. It updates the plugin through Claude Cod
 - Background work (a dev server, a build, a background subagent) is not a status. If you stop to wait for it, declare the wait with `baton waiting "<what>" --until <how long it should take>`; waits are capped at 2 hours.
 - Don't ask the human questions (AskUserQuestion) of your own while a plan runs: nobody may be there, and the run would wait. Decide and carry on, or use `baton propose`. (baton refuses such questions unless the human started the turn; the questions baton prints for you are the exception.)
 - Never type `/compact` yourself. baton does that at the right moment.
-- If the human's unsent draft is in the way of a compaction, baton saves it to `.baton/drafts/` and
+- If the human's unsent draft is in the way of a compaction, baton saves it among its drafts and
   clears the input box. That is deliberate and needs nothing from you; if they ask where their message
   went, run `baton drafts`.
+- Another baton session may be running its own plan in the same checkout. While one is, baton refuses
+  git commands that take every change (`git add -A` or `.`, `commit -a`, `stash`, `reset --hard`,
+  `checkout .`, `clean -f`): stage and commit your own files by path, and leave the rest alone.
 - One gate is never overridden: an **open permission prompt**. baton cannot answer it and must not type
   through it, so if a run is waiting on one, the human really is the only way forward.
