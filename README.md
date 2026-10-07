@@ -2,7 +2,7 @@
 
 **Run a long, multi-phase Claude Code plan unattended. baton compacts the context at every phase boundary, in one live terminal session you can watch.**
 
-You plan the work in plan mode, approve it, and walk away. baton keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. If something needs you, it tells you on whatever device you're on.
+You plan the work in plan mode, approve it, and walk away. baton picks up the plan the moment you approve it, and keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. If something needs you, it tells you on whatever device you're on.
 
 > Status: **v0.2.2**. macOS and Linux. Windows is planned.
 
@@ -20,14 +20,15 @@ baton takes every one of those decisions away from the model. The model does the
 ## How it works
 
 - **Hosting.** `baton` starts `claude` inside a pseudo-terminal it owns and passes every byte through. You see and use the normal Claude Code interface.
-- **State.** The plan's phases live in `.baton/` at the root of your project, which is kept out of git. Each git worktree gets its own, so sessions in different worktrees run separate plans. The model reports progress with `baton done`, `waiting` or `checkpoint`, and reaches you with `note`, `propose` or `blocked`.
+- **One run per session.** Each Claude Code session has a run of its own in `.baton/runs/` at the root of your project, which is kept out of git. So every `baton` terminal can run a plan, in the same project or not ([Several sessions](#several-sessions-in-one-project)). A run stays with its conversation through `--resume`, and through a `/clear` in the same terminal. The model reports progress with `baton done`, `waiting` or `checkpoint`, and reaches you with `note`, `propose` or `blocked`.
+- **Plan approval.** When you approve a plan with phase headings (`## P0 — …`), baton attaches it, compacts the planning conversation away, and starts P0 from a brief. If a run is already under way, it asks you whether to continue with the revised plan or start the new one. baton reads the plan from the file Claude Code wrote, and checks it at every stop: an edit that keeps the phases still to run is followed, and one that loses any pauses the run.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
 - **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. If nobody answers within 20 minutes, it keeps going. Claude Code's own auto-compaction remains the backstop.
 - **No questions mid-run.** While a plan runs, the model may not stop to ask you questions of its own, because nobody may be there. It takes a reversible way forward and tells you, proposes one with a deadline, or reports itself blocked ([When something goes wrong](#when-something-goes-wrong)). Questions in turns you started yourself still get through.
 - **Watchdog.** It catches a session that has gone quiet: idle turns, expired waits, unanswered prompts, usage limits, API errors. **Every gate either clears by itself or expires into action**, so nothing baton waits on can hold a run — a half-typed message is saved and taken out of the box, a hung background subagent is overridden, an open turn and a never-settling screen stop being trusted after their ceilings. Whatever still needs you is pushed again until it's resolved.
 - **One exception, and it is deliberate: an open permission prompt.** Keystrokes landing in a prompt *select* an option, so a baton that typed through one could approve a tool call you never approved. That wait is escalated and pushed; it is never overridden.
-- **Drafts.** If an unsent draft is in the way of a compaction, baton saves it and clears the box rather than waiting. `baton drafts` hands it back. Each one is a file holding exactly the text, so `cat .baton/drafts/*.txt` works even if baton will not start.
+- **Drafts.** If an unsent draft is in the way of a compaction, baton saves it and clears the box rather than waiting. `baton drafts` hands it back. Each one is a file holding exactly the text, so `cat .baton/runs/*/drafts/*.txt` works even if baton will not start.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification. Whenever the run halts, baton first saves any uncommitted work.
 - **Status line.** A permanent `◆ baton · P6 6/23 <title> · ctx 412k/810k` segment sits in front of your own status line. It shows the context size against the limit, and `? proposal · goes ahead 15:33` while a proposal waits on you.
 
@@ -64,20 +65,32 @@ Inside the session:
 
 | Command | What it does |
 |---|---|
-| `/baton plan <goal>` | Plan the work in plan mode, in a format baton can run, then attach the approved plan and start it. |
-| `/baton attach [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. |
+| `/baton plan <goal>` | Plan the work in plan mode, in a format baton can run. When you approve the plan, baton runs it. |
+| `/baton run [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. (`/baton attach` still works.) |
 | `/baton status` | Show where the run stands. |
-| `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |
 | `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. |
-| `/baton elevate` | Hand a plain `claude` session to baton (see below). |
+| `/baton stop` | End the run. Its plan is set aside, and baton does nothing in this session until the next plan. |
+| `/baton exit` | Leave baton: this conversation goes on as plain `claude` in the same terminal. |
+| `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |
 | `/baton setup` | Check this machine and list what's missing. |
 | `/baton update` | Update baton to the latest release (also `baton update` in a shell; `--check` only looks). |
 
-baton finds phases by short ids at the start of headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`. They can also be bold bullets or table rows. `/baton plan` writes plans in that format.
+You don't need a command to run a plan you approve in plan mode: baton attaches any approved plan whose phases are headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`, when the session has no plan under way. `/baton plan` writes plans in that format. `/baton run` also takes phases written as bold bullets or table rows.
 
 ### Elevation
 
-Started a session with plain `claude` and want baton to drive it? Run `/baton plan …` or `/baton attach …` there. baton records the session, stops `claude` cleanly when the turn ends, and your shell relaunches **the same conversation** under baton. This needs the `baton init` line above. Without it, baton tells you to exit and run `baton --resume <session id>`.
+Started a session with plain `claude` and want baton to drive it? Run `/baton plan …` or `/baton run …` there. baton records the session, stops `claude` cleanly when the turn ends, and your shell relaunches **the same conversation** under baton. `/baton plan` does this before planning, so baton is watching when you approve the plan. `/baton exit` does the reverse. Both need the `baton init` line above. Without it, baton tells you what to run by hand: `baton --resume <session id>` to hand a session to baton, `claude --resume <session id>` to leave it.
+
+### Several sessions in one project
+
+Each `baton` terminal runs its own session's plan, so you can run two plans in one project at once, or keep one terminal for a plan and another for everything else. `baton status` in a session shows its own run and names the other sessions working in the checkout. From a plain shell it lists every run.
+
+Two sessions in one checkout share its files and its git index, so while another baton session is live there:
+
+- baton refuses git commands that take every change (`git add -A` or `.`, `commit -a`, `stash`, `reset --hard`, `checkout .` or `restore .`, `clean -f`), and the model stages its own files by path;
+- `baton done` only holds a phase to the files this session's edit tools wrote, so the model is never asked to commit the other session's work.
+
+For full isolation (separate builds, test runs and branches), give each plan its own git worktree, which gets its own `.baton/`.
 
 ### Without git
 
@@ -118,7 +131,7 @@ baton also asks the model to commit before it halts: `blocked` and `done` refuse
 - every decision the run made without you, with its undo;
 - the snapshots, with the command to restore one.
 
-`baton done` lists each phase's decisions, and the plan-complete notice gives the count. Everything is also logged to `.baton/events.jsonl`.
+`baton done` lists each phase's decisions, and the plan-complete notice gives the count. Everything is also logged to the run's `events.jsonl` (`.baton/runs/<session>/events.jsonl`).
 
 **How it reaches you.**
 
@@ -155,8 +168,8 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 
 ## Privacy and safety
 
-- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and short `[baton] …` reminders when a session stalls. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text to `.baton/drafts/` and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to `.baton/events.jsonl`.
-- **Git.** baton never commits, stages or changes your files. All it writes to a repository is its snapshot refs under `refs/baton/`, and a line in `.git/info/exclude` that keeps `.baton/` out of git.
+- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and short `[baton] …` reminders when a session stalls. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text among the run's drafts and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to the run's `events.jsonl`.
+- **Git.** baton never commits, stages or changes your files. All it writes to a repository is its snapshot refs under `refs/baton/`, and a line in `.git/info/exclude` that keeps `.baton/` out of git. The only git commands it ever refuses are the ones above, and only while another baton session works in the same checkout.
 - **Settings.** baton never edits your Claude Code settings. Its hooks, status line and an allow rule for its own CLI are passed to each hosted session with `claude --settings`.
 - **Notifications.** Pushes go to the ntfy topic you configure and say only that you're needed, unless you turn on `details`.
 - **Downloads.** The binary download is verified against checksums committed to this repository. Set `BATON_BIN` to use a binary you built yourself.

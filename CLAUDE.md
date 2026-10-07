@@ -1,6 +1,6 @@
 # Working on baton
 
-baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`, and how a run reaches the human (note, propose, blocked; snapshots; answering its own question) is in `docs/escalation.md`. The evidence behind them is in `docs/research/` (`spikes.md`, `reliability.md`, `escalation.md`). Read them before changing how compaction, escalation, hooks, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
+baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`, and how a run reaches the human (note, propose, blocked; snapshots; answering its own question) is in `docs/escalation.md`. The evidence behind them is in `docs/research/` (`spikes.md`, `reliability.md`, `escalation.md`, and `sessions.md` for plan approval and how runs map to sessions). Read them before changing how compaction, escalation, hooks, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
 
 ## Non-negotiables
 
@@ -13,7 +13,7 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
-- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies.
+- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
 - `plugin/` — the Claude Code plugin (skill, launchers, elevation Stop hook). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 
@@ -34,5 +34,5 @@ End-to-end tests run real `claude --model haiku`. Haiku has no auto mode, so tes
 - Go: standard library first; a new dependency needs a reason (current: `creack/pty`, `golang.org/x/term`, `golang.org/x/sys`, `gofrs/flock`).
 - Commits: [Conventional Commits](https://www.conventionalcommits.org/) (`feat(host): …`, `fix(hooks): …`, `docs: …`), one coherent unit per commit, so `git log` reads as the story of the project.
 - Tests: table-driven unit tests next to the code; time-dependent logic takes an injected clock.
-- End-to-end tests assert on `.baton/**/events.jsonl` and hook logs, never on screen contents.
+- End-to-end tests assert on `.baton/runs/*/events.jsonl` and hook logs, never on screen contents.
 - Every user-visible action baton takes is announced in the session (`systemMessage`) and logged to `events.jsonl`.

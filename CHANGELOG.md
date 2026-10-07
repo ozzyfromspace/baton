@@ -4,6 +4,48 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+A campaign finished, and the next one was planned and approved in the same session. baton still held the
+finished run, and the model, not baton, said what to do next: compact, attach the new plan, begin P0. And a
+second `baton` terminal in the same project could not run a plan at all; it ran as plain claude, unless you
+knew to give it a git worktree. baton now attaches the plan you approve, and every session runs its own.
+The evidence is in [docs/research/sessions.md](docs/research/sessions.md).
+
+### Added
+- **Approving a plan runs it.** When you approve a plan whose phases are headings (`## P0 — …`), baton
+  attaches it, compacts the planning conversation away, and starts P0 from a brief: the phase's
+  instructions, the standing rules and nothing else. Approved while a run is under way, the plan is put to
+  you: **Continue with the revised plan** (phases already done stay done) or **Start the new plan from
+  P0**, or for a plan made after a `/clear`, **Keep the current run**. A plan without phase headings is
+  left alone. A plan approved with Claude Code's "clear context" option starts at once.
+- **One run per session.** Every `baton` terminal runs its own session's plan, in the same project or not.
+  A run stays with its conversation through `--resume`, and through `/clear` in the same terminal.
+  `baton status` in a session names the other sessions working in the checkout; from a shell it lists
+  every run. Worktrees are no longer needed to run two plans at once.
+- **A shared checkout is guarded.** While another baton session is live in the same checkout, baton
+  refuses git commands that take every change (`git add -A` or `.`, `commit -a`, `stash`, `reset --hard`,
+  `checkout .` or `restore .`, `clean -f`), and `baton done` holds a phase only to the files this session's
+  edit tools wrote.
+- **The plan file is watched.** baton reads the plan from the file Claude Code wrote, and Claude Code
+  writes every plan a session makes to the same file. At every stop baton compares it with the text it
+  attached: an edit that keeps the phases still to run is followed; one that loses any pauses the run and
+  says why.
+- **`/baton stop`** ends the run; baton does nothing in that session until the next plan.
+- **`/baton exit`** leaves baton: elevation in reverse. A running plan is paused, baton stops claude once
+  the turn ends, and the shell resumes the same conversation as plain Claude Code.
+
+### Changed
+- **`/baton run`** is the new name of `/baton attach` (which still works). `/baton plan` hands a plain
+  session to baton before planning, so baton is watching when you approve. `baton run` in a shell, the
+  same as plain `baton`, is no longer listed in the help.
+- **Where state lives.** `.baton/` holds a run per session: `runs/<session id>/` (plan, state, events,
+  notes, drafts), with `sessions/` and `hosts/` saying which session and which terminal each belongs to. A
+  `.baton/` from an earlier baton is moved into `runs/` the first time v0.3 starts there, once no older
+  baton is driving it. A plan attached from a shell is taken by the next `baton` session started there.
+
+### Fixed
+- **A plan approval's dialog stayed on record until the turn ended.** Its result arrives with an empty
+  input, so it never matched the request. baton thought a dialog was open for the rest of that turn.
+
 ## [0.2.2] - 2026-10-05
 
 ### Fixed
