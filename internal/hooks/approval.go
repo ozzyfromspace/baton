@@ -56,6 +56,7 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": file, "why": first},
 			say: "baton: plan approved — not attached: " + first + " (/baton run attaches it with a corrected spec)"}
 	}
+	st.Run.HumanAt = c.Now // approving a plan is taking part
 	switch st.Mode {
 	case state.ModeRunning, state.ModePaused:
 		cur, _ := s.LoadPlan()

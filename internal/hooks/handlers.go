@@ -74,7 +74,8 @@ func Handlers(d Deps) map[string]Handler {
 
 type handlers struct{ d Deps }
 
-// update applies fn to the state if this session owns the project; a non-owner session is dormant.
+// update applies fn to the state of the session's run if this host drives it; otherwise (the same
+// conversation resumed in another terminal while the first still runs it) the hook is dormant.
 func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
 	s, err := h.d.Open(c)
 	if err != nil {
@@ -283,7 +284,10 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	var havePlan bool
 	var events []event
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
-		st.Run.Ended, st.Run.ExitAt = nil, time.Time{}
+		st.Run.Ended = nil
+		if source == "startup" || source == "resume" {
+			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
+		}
 		if source != "compact" {
 			st.Run.TurnOpen, st.Run.Subagents = false, 0
 			st.Run.Dialogs.Clear()
