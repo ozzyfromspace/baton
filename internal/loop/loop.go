@@ -104,6 +104,7 @@ type Loop struct {
 	aloneAt time.Time
 
 	owner    bool           // this session has owned the project
+	quit     bool           // claude was asked to end: the human is leaving baton
 	halted   bool           // the run is halted, and this halt's snapshot was started
 	snapping atomic.Bool    // a snapshot is running
 	saving   sync.WaitGroup // and Ended waits for it
@@ -134,6 +135,10 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
+	if !st.Run.ExitAt.IsZero() {
+		l.leave(v, st, in)
+		return
+	}
 	if st.Mode != state.ModeRunning {
 		return
 	}
@@ -191,6 +196,19 @@ func (l *Loop) publishGate(st state.State) {
 		return
 	}
 	l.update(func(st *state.State) { st.Run.Gate = shown })
+}
+
+// leave ends claude for a human leaving baton, once the turn is over and nothing is on screen, so the
+// conversation is resumed (as plain Claude Code) between turns.
+func (l *Loop) leave(v host.View, st state.State, in host.Injector) {
+	if l.quit || st.Run.TurnOpen && !l.turnStale(v, st) || st.Run.Dialogs.AnyOpen() || v.Now.Sub(v.LastOutput) < l.Timing.Quiet {
+		return
+	}
+	l.quit = true
+	l.Store.Event("left_baton", nil)
+	if err := in.Quit(); err != nil {
+		l.logf("loop: quitting: %v", err)
+	}
 }
 
 // drive switches the loop to the run s: the one the session was bound to once it started, or another one

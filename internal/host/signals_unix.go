@@ -15,6 +15,9 @@ import (
 // hangupSignals end a session whose terminal is gone, in order, HangupGrace apart.
 var hangupSignals = []os.Signal{syscall.SIGHUP, syscall.SIGTERM, syscall.SIGKILL}
 
+// quitSignals end a session the human is leaving baton from.
+var quitSignals = []os.Signal{syscall.SIGTERM, syscall.SIGKILL}
+
 // forwardSignals keeps claude's terminal size in step with the user's (SIGWINCH) and passes
 // termination signals sent to baton on to claude. SIGHUP means baton's own terminal is gone, so it
 // calls hangup, which makes sure claude ends too. It returns a function that stops forwarding.

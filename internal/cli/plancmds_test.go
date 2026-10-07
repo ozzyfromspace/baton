@@ -263,3 +263,33 @@ func TestTwoSessionsRunTwoPlans(t *testing.T) {
 		t.Fatalf("done from a shell: %s", errs)
 	}
 }
+
+func TestStopSetsThePlanAside(t *testing.T) {
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	if out := s.must("", "stop"); !strings.Contains(out, "baton: stopped \"") || !strings.Contains(out, "does nothing in this session until the next plan") {
+		t.Fatalf("stop: %s", out)
+	}
+	if out := s.must("", "status"); !strings.Contains(out, "no plan attached") {
+		t.Fatalf("status after stop: %s", out)
+	}
+	if !strings.Contains(s.events(), `"kind":"stopped"`) {
+		t.Errorf("events: %s", s.events())
+	}
+	s.mustFail("nothing to stop", "stop")
+	s.attach(planFile) // a stopped run takes the next plan without --replace
+}
+
+func TestExitExplainsWhenTheShellCannotResume(t *testing.T) {
+	s, _ := newSession(t)
+	s.env["HOME"] = t.TempDir() // no `baton init` line in any shell config
+	s.env["CLAUDE_PID"] = "1"
+	out := s.must("", "exit")
+	if !strings.Contains(out, "end this session (/exit) and run:  claude --resume sess-1") {
+		t.Fatalf("exit: %s", out)
+	}
+	delete(s.env, "BATON_HOST")
+	if out := s.must("", "exit"); !strings.Contains(out, "not hosted by baton") {
+		t.Fatalf("exit, unhosted: %s", out)
+	}
+}

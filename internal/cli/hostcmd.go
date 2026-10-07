@@ -101,6 +101,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	})
 	defer host.Release(proj, instance)
 	controller.Ended() // save uncommitted work as the session ends
+	if st, ok := proj.Lookup("", instance); ok {
+		leftBaton(io, st)
+	}
 	if err != nil {
 		return fail(io, "%v", err)
 	}

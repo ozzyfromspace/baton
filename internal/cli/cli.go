@@ -1,7 +1,6 @@
 // Package cli routes baton's command line.
 //
 //	baton [claude args…]        host an interactive claude session (the default)
-//	baton run [-- claude args…] the same, explicitly
 //	baton <subcommand> [args…]  everything else (see `baton help`)
 package cli
 
@@ -36,6 +35,7 @@ func StdIO() IO {
 type command struct {
 	summary string
 	run     func(args []string, io IO) int
+	hidden  bool // works, but is not listed: another name or the default does the same
 }
 
 // commands is filled in by each subcommand's file via register, so this file stays a router.
@@ -46,12 +46,14 @@ func register(name, summary string, run func([]string, IO) int) {
 }
 
 func init() {
-	register("run", "host an interactive claude session (pass claude args after --)", func(args []string, io IO) int {
+	// `baton run` is what plain `baton` does. It is not listed, so that "run" means one thing to a person
+	// reading baton's help: /baton run, which runs a plan.
+	commands["run"] = command{summary: "host an interactive claude session (pass claude args after --)", hidden: true, run: func(args []string, io IO) int {
 		if len(args) > 0 && args[0] == "--" {
 			args = args[1:]
 		}
 		return runHost(args, io)
-	})
+	}}
 	register("hook", "handle a Claude Code hook event (called by the hooks baton installs)", runHook)
 	register("version", "print baton's version and who made it (also -v, --version)", func(_ []string, io IO) int {
 		fmt.Fprintln(io.Out, "baton", version.Version) // first, and alone on its line: scripts read it
@@ -88,7 +90,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  (these two are baton's own; for claude's, run claude --help or claude --version)\n\ncommands:")
 	names := make([]string, 0, len(commands))
 	width := 0
-	for n := range commands {
+	for n, c := range commands {
+		if c.hidden {
+			continue
+		}
 		names = append(names, n)
 		width = max(width, len(n))
 	}

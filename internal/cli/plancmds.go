@@ -30,6 +30,7 @@ func init() {
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("pause", "stop baton from acting until resume (the human takes the wheel)", cmdPause)
 	register("resume", "let baton drive again (also clears a block)", cmdResume)
+	register("stop", "end the run: its plan is set aside, and baton does nothing until the next plan", cmdStop)
 }
 
 // project opens the project a command runs in: the one the host named (BATON_DIR) inside a hosted
@@ -682,6 +683,23 @@ func cmdResume(_ []string, io IO) int {
 		return state.Resume(st)
 	}
 	return simpleTransition(io, "resume", "resumed", resume, "baton: resumed. baton drives the plan again.")
+}
+
+func cmdStop(args []string, io IO) int {
+	if len(args) != 0 {
+		return fail(io, "usage: baton stop")
+	}
+	s, err := store(io)
+	if err != nil {
+		return fail(io, "%v", err)
+	}
+	pl, _ := s.LoadPlan()
+	if _, err := s.Update(state.Detach); err != nil {
+		return refused(io, s, "stop", err)
+	}
+	s.Event("stopped", map[string]any{"plan": pl.File})
+	fmt.Fprintf(io.Out, "baton: stopped %q. Its plan is set aside (its history stays in baton's event log), and baton does nothing in this session until the next plan: /baton plan or /baton run.\n", pl.Title)
+	return 0
 }
 
 func simpleTransition(io IO, command, kind string, fn func(*state.State) error, msg string) int {

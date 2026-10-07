@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -184,5 +185,25 @@ func TestTheSessionIsKnownAtLaunchWhenItCanBe(t *testing.T) {
 	b, _ := sessionOf(nil)
 	if a == b {
 		t.Error("two new sessions got the same id")
+	}
+}
+
+// After `baton exit`, the shell's prompt hook resumes the conversation as plain claude: no baton host,
+// none of baton's environment.
+func TestRelaunchResumesAPlainSession(t *testing.T) {
+	home, dir, out := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "args")
+	fake := filepath.Join(t.TempDir(), "claude")
+	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" > "+out+"\nenv | grep '^BATON_' >> "+out+"\nexit 0\n"), 0o755)
+	now := time.Now()
+	elevate.Save(home, elevate.Record{SessionID: "sess-1", Dir: dir, TTY: "ttys999", Args: []string{"--model", "opus"}, Plain: true, Created: now, Stopped: now})
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	io, stdout, _ := testIO("", map[string]string{"BATON_HOME": home, "BATON_CLAUDE": fake})
+	if code := Main([]string{"relaunch", "--tty", "ttys999"}, io); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	b, _ := os.ReadFile(out)
+	if strings.TrimSpace(string(b)) != "--resume sess-1 --model opus" || !strings.Contains(stdout.String(), "as plain Claude Code") {
+		t.Fatalf("ran %q; said %q", b, stdout.String())
 	}
 }

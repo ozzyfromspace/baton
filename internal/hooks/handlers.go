@@ -283,7 +283,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	var havePlan bool
 	var events []event
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
-		st.Run.Ended = nil
+		st.Run.Ended, st.Run.ExitAt = nil, time.Time{}
 		if source != "compact" {
 			st.Run.TurnOpen, st.Run.Subagents = false, 0
 			st.Run.Dialogs.Clear()

@@ -65,7 +65,10 @@ type Runtime struct {
 	// with the approval still on screen (docs/research/sessions.md).
 	PlanFile    string    `json:"plan_file,omitempty"`
 	ClearedPlan *Approval `json:"cleared_plan,omitempty"`
-	Ended       *Ended    `json:"ended,omitempty"`
+	// ExitAt is when the human asked to leave baton (`baton exit`): once the turn ends, the host stops
+	// claude, and the shell resumes the conversation as plain Claude Code.
+	ExitAt time.Time `json:"exit_at,omitzero"`
+	Ended  *Ended    `json:"ended,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.

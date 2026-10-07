@@ -75,6 +75,9 @@ type Injector interface {
 	// ClearInput empties Claude Code's input box (Ctrl-C) and forgets the draft baton was tracking.
 	// It is how a draft stops being able to hold a run: baton saves the text first, then clears.
 	ClearInput() error
+	// Quit ends claude (SIGTERM, then SIGKILL if it is still there HangupGrace later), so the human
+	// leaves baton: the shell then resumes the conversation as plain Claude Code.
+	Quit() error
 }
 
 // Run hosts claude until it exits and returns its exit code.
@@ -165,6 +168,7 @@ type session struct {
 	interactive  bool          // the user's terminal is a terminal, not a pipe
 	exited       chan struct{} // closed once claude has exited
 	hangupOnce   sync.Once
+	quitOnce     sync.Once
 	mu           sync.Mutex // serializes writes to the pty: human keystrokes vs. injected typing
 	lastOutput   atomic.Int64
 	lastHumanKey atomic.Int64
@@ -296,6 +300,29 @@ func withoutBatonVars(env []string) []string {
 func (h *session) draftOf() string {
 	t, _ := h.draftText.Load().(string)
 	return t
+}
+
+// Quit ends claude once, whatever the controller asks.
+func (h *session) Quit() error {
+	h.quitOnce.Do(func() {
+		h.cfg.Logf("host: quitting %s (the human is leaving baton)", h.cfg.Claude)
+		go func() {
+			for _, sig := range quitSignals {
+				select {
+				case <-h.exited:
+					return
+				default:
+				}
+				h.cmd.Process.Signal(sig)
+				select {
+				case <-h.exited:
+					return
+				case <-time.After(h.cfg.HangupGrace):
+				}
+			}
+		}()
+	})
+	return nil
 }
 
 // ClearInput empties Claude Code's input box and forgets the draft. Ctrl-C is what empties that box (the

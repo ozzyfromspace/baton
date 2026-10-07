@@ -27,14 +27,16 @@ const RelaunchWindow = 60 * time.Second
 
 // Record is ~/.baton/elevate/<terminal>.json.
 type Record struct {
-	SessionID string    `json:"session_id"`
-	Dir       string    `json:"dir"`
-	ClaudePID int       `json:"claude_pid"`
-	TTY       string    `json:"tty"`
-	Args      []string  `json:"args"`    // claude flags worth keeping across the relaunch
-	Pending   string    `json:"pending"` // what the model should do once hosted
-	Created   time.Time `json:"created"`
-	Stopped   time.Time `json:"stopped,omitzero"` // set by the Stop hook just before it stops claude
+	SessionID string   `json:"session_id"`
+	Dir       string   `json:"dir"`
+	ClaudePID int      `json:"claude_pid"`
+	TTY       string   `json:"tty"`
+	Args      []string `json:"args"`    // claude flags worth keeping across the relaunch
+	Pending   string   `json:"pending"` // what the model should do once hosted
+	// Plain: the human is leaving baton (`baton exit`), so the shell resumes the session as plain claude.
+	Plain   bool      `json:"plain,omitempty"`
+	Created time.Time `json:"created"`
+	Stopped time.Time `json:"stopped,omitzero"` // set by the Stop hook just before it stops claude
 }
 
 // Dir is where records live, under baton's root directory (~/.baton, or $BATON_HOME).

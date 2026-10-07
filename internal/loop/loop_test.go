@@ -16,6 +16,7 @@ type typed struct {
 	mu      sync.Mutex
 	text    []string
 	cleared int
+	quit    int
 }
 
 func (t *typed) Type(s string, enter bool) error {
@@ -29,6 +30,13 @@ func (t *typed) ClearInput() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cleared++
+	return nil
+}
+
+func (t *typed) Quit() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.quit++
 	return nil
 }
 
@@ -391,5 +399,26 @@ func TestNonOwnerDoesNothing(t *testing.T) {
 	r.tick(time.Minute)
 	if len(r.in.text) != 0 {
 		t.Fatal("a non-owner typed")
+	}
+}
+
+// Leaving baton (`baton exit`) ends claude between turns, once, and types nothing on the way out.
+func TestLeavingBatonEndsClaudeBetweenTurns(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) { st.Mode, st.Run.ExitAt, st.Run.TurnOpen = state.ModePaused, r.now, true })
+	r.tick(time.Second)
+	if r.in.quit != 0 {
+		t.Fatal("quit mid-turn")
+	}
+	r.set(func(st *state.State) { st.Run.TurnOpen, st.Run.LastStop = false, r.now })
+	r.view.LastOutput = r.now
+	r.tick(500 * time.Millisecond)
+	if r.in.quit != 0 {
+		t.Fatal("quit while the screen was still drawing the turn's end")
+	}
+	r.tick(2 * time.Second)
+	r.tick(time.Second)
+	if r.in.quit != 1 || len(r.in.text) != 0 {
+		t.Fatalf("quit %d times, typed %q", r.in.quit, r.in.text)
 	}
 }

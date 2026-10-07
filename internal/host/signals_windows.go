@@ -12,6 +12,9 @@ import (
 // hangupSignals end a session whose terminal is gone; Windows can only kill.
 var hangupSignals = []os.Signal{os.Kill}
 
+// quitSignals end a session the human is leaving baton from.
+var quitSignals = []os.Signal{os.Kill}
+
 // forwardSignals is a no-op until the ConPTY host lands (P12).
 func forwardSignals(*exec.Cmd, pty.PTY, *os.File, bool, func()) func() { return func() {} }
 
