@@ -218,8 +218,7 @@ func TestASharedCheckoutHoldsAPhaseToItsOwnEdits(t *testing.T) {
 	if !strings.Contains(why, "    mine.txt") || strings.Contains(why, "theirs.txt") {
 		t.Fatalf("refusal:\n%s", why)
 	}
-	gittest.Git(t, root, "add", "mine.txt")
-	gittest.Git(t, root, "commit", "-q", "-m", "P0")
+	gittest.Commit(t, root, "P0", "mine.txt")
 	out := s.must("", "done", "P0")
 	if !strings.Contains(out, "another baton session is working in this checkout, and 1 uncommitted file changed during P0") || !strings.Contains(out, "    theirs.txt") {
 		t.Fatalf("done:\n%s", out)
