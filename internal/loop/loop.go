@@ -45,6 +45,7 @@ type Timing struct {
 	OverloadRetry  time.Duration // first retry after an overload or server error (then backoff)
 	ClockJump      time.Duration // a gap between ticks this long means the machine slept
 	NoticeRetry    time.Duration // a notice that failed to send is retried after this
+	RestartIdle    time.Duration // with no plan running, a session idle this long may restart on a newer baton
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -59,7 +60,7 @@ var DefaultTiming = Timing{
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
-	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, EscalationTimeout: config.DefaultEscalationTimeout,
+	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
 // MaxTries is how many times baton types /compact in one round before it gives up on the round.
@@ -87,6 +88,10 @@ type Loop struct {
 	Logf    func(string, ...any)
 	// Snapshot saves uncommitted work (gitx.Snapshot when nil).
 	Snapshot func(root string, at time.Time, phase, why string) (gitx.Saved, error)
+	// Version is the baton this session runs, and Newer reports a newer one it may restart on ("" if
+	// none; upgrade.Watch). A nil Newer never restarts.
+	Version string
+	Newer   func() string
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -104,7 +109,8 @@ type Loop struct {
 	aloneAt time.Time
 
 	owner    bool           // this session has owned the project
-	quit     bool           // claude was asked to end: the human is leaving baton
+	quit     bool           // claude was asked to end: the human is leaving baton, or baton restarts
+	restart  *restart       // the restart claude was ended for
 	halted   bool           // the run is halted, and this halt's snapshot was started
 	snapping atomic.Bool    // a snapshot is running
 	saving   sync.WaitGroup // and Ended waits for it
@@ -142,7 +148,13 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		l.leave(v, st, in)
 		return
 	}
+	if l.quit {
+		return // claude is on its way out; nothing more may be typed into it
+	}
 	if st.Mode != state.ModeRunning {
+		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
+			l.restartOn(v, st, in)
+		}
 		return
 	}
 	l.why = l.gate(v, st)
@@ -162,6 +174,12 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	comp := st.Run.Compaction
 	switch comp.Status {
 	case state.CompactQueued:
+		// The one point a running plan restarts on a newer baton: a compaction is due, and the
+		// restarted session types it instead. Nothing else in a running plan waits for a restart.
+		if l.upgradeDue(v, st) && l.restartable(v, st, l.why) {
+			l.restartOn(v, st, in)
+			return
+		}
 		l.typeCompact(v, st, in)
 	case state.CompactTyped:
 		if v.Now.Sub(l.since(comp.Typed)) > l.Timing.AckTimeout {
@@ -209,6 +227,62 @@ func (l *Loop) leave(v host.View, st state.State, in host.Injector) {
 	}
 	l.quit = true
 	l.Store.Event("left_baton", nil)
+	if err := in.Quit(); err != nil {
+		l.logf("loop: quitting: %v", err)
+	}
+}
+
+// restart is the newer baton the loop ended claude for, and the conversation to resume on it.
+type restart struct{ to, session string }
+
+// Restart reports that the loop ended claude to restart the session on baton `to`, resuming `session`.
+func (l *Loop) Restart() (to, session string, ok bool) {
+	if l.restart == nil {
+		return "", "", false
+	}
+	return l.restart.to, l.restart.session, true
+}
+
+// upgradeDue reports a newer baton to restart on, for a session baton knows the conversation of.
+func (l *Loop) upgradeDue(v host.View, st state.State) bool {
+	return l.Newer != nil && st.Run.SessionID != "" && l.Newer() != ""
+}
+
+// restartable reports a safe point to restart the session: the moment is the human's and the model's
+// to lose nothing in. Nothing may be on its way (a turn, a dialog, a compaction), and nothing that lives
+// only inside this claude process may be running, because it would end with it: background work of any
+// kind, monitors, session-scoped wakeups. With a plan running, the safe point is a compaction baton is
+// about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
+// human reading its last answer is not interrupted.
+func (l *Loop) restartable(v host.View, st state.State, why string) bool {
+	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 {
+		return false
+	}
+	for _, t := range st.Run.Background {
+		if t.Type == "monitor" {
+			return false
+		}
+	}
+	switch st.Run.Compaction.Status {
+	case state.CompactTyped, state.CompactActive:
+		return false
+	}
+	if st.Mode == state.ModeRunning {
+		return true
+	}
+	idle := latest(v.LastHumanKey, st.Run.LastStop, st.Run.LastActivity, st.Run.TurnStarted)
+	return v.Now.Sub(idle) >= l.Timing.RestartIdle
+}
+
+// restartOn ends claude so the host can restart the session on the newer baton: the host's command
+// resumes the same conversation on it, and the restarted session says so (Runtime.Restart).
+func (l *Loop) restartOn(v host.View, st state.State, in host.Injector) {
+	to := l.Newer()
+	l.quit = true
+	l.restart = &restart{to: to, session: st.Run.SessionID}
+	l.update(func(st *state.State) { st.Run.Restart = &state.Restart{From: l.Version, To: to, At: v.Now} })
+	l.Store.Event("restarting", map[string]any{"from": l.Version, "to": to, "session": st.Run.SessionID, "mode": st.Mode})
+	l.logf("loop: restarting the session on baton %s", to)
 	if err := in.Quit(); err != nil {
 		l.logf("loop: quitting: %v", err)
 	}

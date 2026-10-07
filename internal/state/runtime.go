@@ -68,7 +68,18 @@ type Runtime struct {
 	// ExitAt is when the human asked to leave baton (`baton exit`): once the turn ends, the host stops
 	// claude, and the shell resumes the conversation as plain Claude Code.
 	ExitAt time.Time `json:"exit_at,omitzero"`
-	Ended  *Ended    `json:"ended,omitempty"`
+	// Restart is the newer baton the host is restarting this session on, until the restarted session
+	// has said so; NewerNoted is the newer installed baton the human was last told about.
+	Restart    *Restart `json:"restart,omitempty"`
+	NewerNoted string   `json:"newer_noted,omitempty"`
+	Ended      *Ended   `json:"ended,omitempty"`
+}
+
+// Restart is a host restarting its session on another version of baton (package upgrade).
+type Restart struct {
+	From string    `json:"from"`
+	To   string    `json:"to"`
+	At   time.Time `json:"at"`
 }
 
 // Dialog is an open prompt the human must answer.

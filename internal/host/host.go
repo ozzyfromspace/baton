@@ -75,8 +75,9 @@ type Injector interface {
 	// ClearInput empties Claude Code's input box (Ctrl-C) and forgets the draft baton was tracking.
 	// It is how a draft stops being able to hold a run: baton saves the text first, then clears.
 	ClearInput() error
-	// Quit ends claude (SIGTERM, then SIGKILL if it is still there HangupGrace later), so the human
-	// leaves baton: the shell then resumes the conversation as plain Claude Code.
+	// Quit ends claude (SIGTERM, then SIGKILL if it is still there HangupGrace later): the human is
+	// leaving baton, and the shell resumes the conversation as plain Claude Code; or baton restarts the
+	// session on a newer version of itself.
 	Quit() error
 }
 
@@ -305,7 +306,7 @@ func (h *session) draftOf() string {
 // Quit ends claude once, whatever the controller asks.
 func (h *session) Quit() error {
 	h.quitOnce.Do(func() {
-		h.cfg.Logf("host: quitting %s (the human is leaving baton)", h.cfg.Claude)
+		h.cfg.Logf("host: quitting %s", h.cfg.Claude)
 		go func() {
 			for _, sig := range quitSignals {
 				select {
