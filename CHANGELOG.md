@@ -4,6 +4,8 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-07
+
 ### Fixed
 - **A hosted session stays on one version until it restarts.** After an update, the newest `baton` comes
   first on the PATH, so the model's `baton` commands and `/baton`'s instructions ran the new version while
@@ -332,7 +334,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/ozzyfromspace/baton/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/ozzyfromspace/baton/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/ozzyfromspace/baton/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ozzyfromspace/baton/compare/v0.2.2...v0.3.0
