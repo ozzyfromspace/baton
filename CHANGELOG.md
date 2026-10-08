@@ -4,6 +4,15 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- **A conversation stops following old /baton instructions after an update.** Each `/baton` puts its
+  instructions into the conversation, and an update cannot change what is already there: a long-lived
+  session went on reading the copy it loaded under an older baton until a compaction or the next
+  `/baton`. When a session restarts on a newer baton while idle and the conversation still holds such a
+  copy (baton reads the session's transcript once to tell), the first prompt after the restart hands
+  Claude the current instructions, says the earlier copy is out of date, and tells you it did. A restart
+  at a phase boundary needs none: the compaction it takes the place of clears the old copy.
+
 ## [0.3.4] - 2026-10-07
 
 ### Fixed

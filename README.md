@@ -79,7 +79,7 @@ Inside the session:
 
 You don't need a command to run a plan you approve in plan mode: baton attaches any approved plan whose phases are headings, such as `## P0 — Title`, `### P23: Title` or `## Phase C: Title`, when the session has no plan under way. `/baton plan` writes plans in that format. `/baton run` also takes phases written as bold bullets or table rows.
 
-The `/baton` skill is a stub: its instructions come from the `baton` binary each time you use it, so they always match the baton that carries them out, and a session never needs a restart just to pick up new instructions.
+The `/baton` skill is a stub: its instructions come from the `baton` binary each time you use it, so they always match the baton that carries them out, and a session never needs a restart just to pick up new instructions. A copy loaded earlier stays in the conversation, though; so when a session restarts on a newer baton while idle, and the conversation still holds an older copy, the next prompt hands Claude the current instructions and says the earlier copy is out of date.
 
 ### Starting baton in a running session
 
