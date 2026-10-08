@@ -292,6 +292,11 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		if source == "resume" && st.Run.Restart != nil {
 			if c.Now.Sub(st.Run.Restart.At) < restartWindow {
 				restarted = st.Run.Restart
+				// A restart at a phase boundary takes the place of a compaction, which summarizes any
+				// earlier /baton instructions away; an idle one leaves them in the conversation.
+				if restarted.To == c.Env("BATON_VERSION") && st.Run.Compaction.Status != state.CompactQueued {
+					st.Run.StaleSkill = restarted.From
+				}
 			}
 			st.Run.Restart = nil
 		}
@@ -466,10 +471,11 @@ func TurnSource(prompt string) string {
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
 	var events []event
-	var tell string
+	var tell, staleSkill string
 	var told []string
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
+		staleSkill, st.Run.StaleSkill = st.Run.StaleSkill, ""
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
 		st.Run.ClearedPlan = nil   // a "clear context" approval starts working with no prompt
 		events, tell = vanished(st, c.Now, by == "human")
@@ -503,14 +509,23 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
 	}
+	var says []string
+	if refresh := skillRefresh(c, staleSkill); refresh != "" {
+		tell = strings.TrimSpace(tell + "\n\n" + refresh)
+		s.Event("skill_refreshed", map[string]any{"from": staleSkill, "to": c.Env("BATON_VERSION")})
+		says = append(says, fmt.Sprintf("baton: gave Claude the current /baton instructions (the copy earlier in this conversation is from baton %s)", staleSkill))
+	}
 	if tell == "" {
 		return Result{}, nil
 	}
 	out := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": tell}}
 	if len(told) > 0 {
 		s.Event("decisions_told", map[string]any{"ids": told})
-		out["systemMessage"] = "baton: decisions made without you since you last wrote: " + strings.Join(told, ", ") +
-			" — Claude has them, each with its undo (/baton status lists them)"
+		says = append(says, "baton: decisions made without you since you last wrote: "+strings.Join(told, ", ")+
+			" — Claude has them, each with its undo (/baton status lists them)")
+	}
+	if len(says) > 0 {
+		out["systemMessage"] = strings.Join(says, "\n")
 	}
 	return Result{Output: out}, nil
 }

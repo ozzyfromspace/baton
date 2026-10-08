@@ -72,7 +72,10 @@ type Runtime struct {
 	// has said so; NewerNoted is the newer installed baton the human was last told about.
 	Restart    *Restart `json:"restart,omitempty"`
 	NewerNoted string   `json:"newer_noted,omitempty"`
-	Ended      *Ended   `json:"ended,omitempty"`
+	// StaleSkill is the version a session restarted from while idle: /baton instructions loaded earlier
+	// in the conversation are that version's, and the next prompt is handed the current ones.
+	StaleSkill string `json:"stale_skill,omitempty"`
+	Ended      *Ended `json:"ended,omitempty"`
 }
 
 // Restart is a host restarting its session on another version of baton (package upgrade).

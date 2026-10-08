@@ -2,8 +2,10 @@ package hooks
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/skill"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/upgrade"
 )
@@ -33,4 +35,20 @@ func newerBaton(st *state.State, c Context) string {
 	default:
 		return fmt.Sprintf("baton: baton %s is installed. baton restarts this session on it once the session is idle; the conversation carries on.", to)
 	}
+}
+
+// skillRefresh hands the model the current /baton instructions on the first prompt after the session
+// restarted on a newer baton (from), if the conversation still holds an earlier copy: an update cannot
+// change what is already in a conversation, and the model would go on following the old one. A prompt
+// that is itself a /baton loads the current instructions anyway.
+func skillRefresh(c Context, from string) string {
+	if from == "" || strings.HasPrefix(strings.TrimSpace(str(c.Input, "prompt")), "/baton") {
+		return ""
+	}
+	if held, err := skill.InConversation(str(c.Input, "transcript_path")); err != nil || !held {
+		return ""
+	}
+	return fmt.Sprintf("%s baton was updated from %s to %s since /baton's instructions were loaded in this conversation. "+
+		"That earlier copy is out of date: for anything /baton, follow these current instructions instead.\n\n%s",
+		NudgePrefix, from, c.Env("BATON_VERSION"), skill.Text)
 }
