@@ -154,7 +154,7 @@ func TestWords(t *testing.T) {
 // The skill teaches what baton enforces: the three ways to reach the human, and nothing about creating
 // a repository. (Its instructions live in the binary, which the plugin's SKILL.md loads.)
 func TestTheSkillNamesTheThreeTiers(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "cli", "skill.md"))
+	b, err := os.ReadFile(filepath.Join("..", "skill", "skill.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

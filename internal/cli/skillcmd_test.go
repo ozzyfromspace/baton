@@ -5,26 +5,28 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ozzyfromspace/baton/internal/skill"
 )
 
 // Every /baton subcommand the help lists has its own section, and nothing names a retired command.
 func TestSkillInstructionsCoverEverySubcommand(t *testing.T) {
 	io, out, _ := testIO("", nil)
-	if code := Main([]string{"skill"}, io); code != 0 || out.String() != skillText {
+	if code := Main([]string{"skill"}, io); code != 0 || out.String() != skill.Text {
 		t.Fatalf("baton skill: code %d", code)
 	}
-	help := skillText[strings.Index(skillText, "## help"):strings.Index(skillText, "## status")]
+	help := skill.Text[strings.Index(skill.Text, "## help"):strings.Index(skill.Text, "## status")]
 	listed := regexp.MustCompile("`/baton ([a-z]+)").FindAllStringSubmatch(help, -1)
 	if len(listed) < 10 {
 		t.Fatalf("help lists %d subcommands:\n%s", len(listed), help)
 	}
 	for _, m := range listed {
-		if !regexp.MustCompile(`(?m)^## (` + m[1] + `\b|[a-z]+ / ` + m[1] + `\b)`).MatchString(skillText) {
+		if !regexp.MustCompile(`(?m)^## (` + m[1] + `\b|[a-z]+ / ` + m[1] + `\b)`).MatchString(skill.Text) {
 			t.Errorf("/baton %s is listed but has no section", m[1])
 		}
 	}
 	for _, retired := range []string{"elevate", "`baton stop", "/baton stop", "/baton attach", "$ARGUMENTS"} {
-		if strings.Contains(skillText, retired) {
+		if strings.Contains(skill.Text, retired) {
 			t.Errorf("the instructions mention %q", retired)
 		}
 	}
@@ -48,6 +50,6 @@ func TestSkillStubLoadsTheInstructionsSafely(t *testing.T) {
 		}
 	}
 	if len(stub) > 2000 {
-		t.Errorf("the stub has grown to %d bytes: instructions belong in internal/cli/skill.md", len(stub))
+		t.Errorf("the stub has grown to %d bytes: instructions belong in internal/skill/skill.md", len(stub))
 	}
 }

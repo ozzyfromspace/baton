@@ -13,8 +13,8 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
-- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate, upgrade). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
-- `plugin/` — the Claude Code plugin (skill, launchers, the Stop hook that finishes `/baton start`). Its `SKILL.md` is a stub that loads the instructions from the binary (`baton skill`, from `internal/cli/skill.md`), so edit those, not the stub; and never put `$ARGUMENTS` in the stub's inline command, which Claude Code substitutes before the shell runs it ([spike 18](spikes/18-skill-inject/)). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
+- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate, upgrade, skill). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
+- `plugin/` — the Claude Code plugin (skill, launchers, the Stop hook that finishes `/baton start`). Its `SKILL.md` is a stub that loads the instructions from the binary (`baton skill`, from `internal/skill/skill.md`), so edit those, not the stub; and never put `$ARGUMENTS` in the stub's inline command, which Claude Code substitutes before the shell runs it ([spike 18](spikes/18-skill-inject/)). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 
 ## Commands
