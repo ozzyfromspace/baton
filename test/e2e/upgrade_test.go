@@ -48,13 +48,16 @@ func eventAfter(events []map[string]any, i int, kind string, check func(map[stri
 }
 
 // A newer compatible baton is installed while a session sits idle: the session restarts on it by
-// itself, in the same process, and goes on with the same conversation.
+// itself, in the same process, and goes on with the same conversation. The /baton instructions the
+// conversation loaded before are the old version's, so the first prompt after it is handed the current ones.
 func TestAnIdleSessionRestartsOnANewerBaton(t *testing.T) {
 	dir := NewProject(t)
 	home := installVersions(t, "v9.1.0", "v9.1.1")
 	s := StartProgram(t, dir, []string{"BATON_HOME=" + home, "BATON_RESTART_IDLE=3s"}, filepath.Join(home, "bin", "v9.1.0", "baton"),
-		"--model", "haiku", "Reply with the single word ready, and nothing else.")
+		"--model", "haiku", "--plugin-dir", pluginDir(t))
 	s.Trust()
+	s.WaitQuiet(3*time.Second, 40*time.Second)
+	s.Type("/baton help")
 	s.WaitEvent("turn_started", time.Minute)
 	linkVersion(t, home, "v9.1.1")
 
@@ -89,6 +92,10 @@ func TestAnIdleSessionRestartsOnANewerBaton(t *testing.T) {
 		e, _ := eventAfter(evs, j, "turn_started", func(e map[string]any) bool { return e["by"] == "human" })
 		return e != nil
 	})
+	refreshed := s.WaitEvent("skill_refreshed", 30*time.Second)
+	if refreshed == nil || refreshed["from"] != "v9.1.0" || refreshed["to"] != "v9.1.1" {
+		t.Fatalf("skill_refreshed: %v", refreshed)
+	}
 	sessions, _ := filepath.Glob(filepath.Join(dir, ".baton", "sessions", "*"))
 	if len(sessions) != 1 || filepath.Base(sessions[0]) != restarting["session"] {
 		t.Fatalf("sessions after the restart: %v, want only %v", sessions, restarting["session"])
