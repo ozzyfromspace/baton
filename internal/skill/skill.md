@@ -6,7 +6,7 @@ Act on the first word of the arguments. If there is none, treat it as `help`.
 
 Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
-- `/baton run [plan file]`: run a plan that already exists.
+- `/baton run [plan file]`: run a plan that already exists. If this conversation had other turns, baton compacts them away before the first phase.
 - `/baton start`: hand this session to baton (same conversation); `/baton plan` and `/baton run` do it when they need to.
 - `/baton status`: where the run stands.
 - `/baton pause` / `/baton resume`: take or give back the wheel.
@@ -63,12 +63,14 @@ whole run — and saves the text first. Each draft is a file in the run's `draft
    - Otherwise pass the corrected spec inline, in single quotes: `baton attach <file> --spec '{"title": …, "phases": [ … ]}'`.
 
    If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running in this session, ask the user before adding `--replace`.
-4. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "Begin the first phase of the attached plan."` and end your turn (see **start**).
-5. Otherwise, begin the first phase.
+4. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "The plan is attached. Do what baton says about its first phase."` and end your turn (see **start**).
+5. Otherwise, do what `baton attach` says. In a conversation that had turns before this one, that is to end your turn: baton compacts the conversation, then starts the first phase with a fresh brief. Otherwise, begin the first phase.
 
 ## pause / resume
 
 Run `baton pause` or `baton resume` and report the result in one line. Pause hands the session to the human: baton stops compacting, nudging and escalating. Resume gives it back to baton and also clears a "blocked" state.
+
+If the conversation grew by more than 20k tokens while baton was paused, `baton resume` says so and asks you to record where the phase stands first. Do exactly that: run `baton checkpoint --notes "…"`, including anything from the paused conversation the rest of the phase needs, then end your turn. baton compacts, and the phase goes on from your notes.
 
 ## drop
 
@@ -85,7 +87,7 @@ Run `baton exit`.
 
 This hands a plain `claude` session to baton without losing the conversation: same session, same context. `/baton plan` and `/baton run` do it when they need to.
 
-Run `baton start "<what you should do next once hosted>"`, for example `baton start "Begin the first phase of the attached plan."`, or plain `baton start` if the user gave no next step. Then:
+Run `baton start "<what you should do next once hosted>"`, for example `baton start "The plan is attached. Do what baton says about its first phase."`, or plain `baton start` if the user gave no next step. Then:
 
 - **If it says the session is already hosted by baton:** say so and stop.
 - **If it says "starting baton":** end your turn immediately. When the turn ends, baton stops this claude process. The shell restarts the same conversation under baton, and you will receive the next step.

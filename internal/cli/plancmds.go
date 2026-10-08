@@ -158,11 +158,32 @@ func cmdAttach(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
 	origin := state.OriginOf(root)
-	if _, err := s.Update(func(st *state.State) error { *st = state.Reattach(*st, pl, io.Now(), origin); return nil }); err != nil {
+	inSession := io.Env("CLAUDE_CODE_SESSION_ID") != ""
+	var boundary bool
+	if _, err := s.Update(func(st *state.State) error {
+		// The first phase starts from a brief, after a compaction, unless there is nothing before it to
+		// compact: a hosted conversation whose first turn this is, or a shell (the next session starts
+		// fresh). A plain session is resumed under baton to run the plan, and compacts then.
+		boundary = inSession && (!hosted(io) || st.Run.History)
+		if boundary {
+			*st = state.AttachAtBoundary(*st, pl, io.Now())
+		} else {
+			*st = state.Reattach(*st, pl, io.Now(), origin)
+		}
+		return nil
+	}); err != nil {
 		return fail(io, "%v", err)
 	}
-	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "git": gitx.Usable(root)})
-	fmt.Fprintf(io.Out, "baton: attached %q — %d phases. Current phase: %s (%s).\n", pl.Title, len(pl.Phases), pl.Phases[0].ID, pl.Phases[0].Title)
+	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "git": gitx.Usable(root), "compact_first": boundary})
+	first := pl.Phases[0]
+	switch {
+	case boundary && hosted(io):
+		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. End your turn now: baton compacts this conversation, then starts %s (%s) with a fresh brief.\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+	case boundary:
+		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. %s (%s) starts once baton has compacted this conversation.\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+	default:
+		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. Current phase: %s (%s).\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+	}
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
 	}
@@ -249,6 +270,9 @@ func cmdStatus(args []string, io IO) int {
 	}
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
+	}
+	if st.CheckpointDue {
+		fmt.Fprintln(io.Out, "checkpoint: the conversation grew while baton was paused; Claude records where "+st.Current+" stands, then baton compacts")
 	}
 	printWaitingOnYou(io, &st)
 	if cu := st.Run.Context; cu != nil {
@@ -677,17 +701,37 @@ func cmdCheckpoint(args []string, io IO) int {
 }
 
 func cmdPause(_ []string, io IO) int {
-	return simpleTransition(io, "pause", "paused", state.Pause, "baton: paused. baton will not compact, nudge or escalate until /baton resume.")
+	return simpleTransition(io, "pause", "paused", state.Pause, fmt.Sprintf("baton: paused. baton will not compact, nudge or escalate until /baton resume. "+
+		"If the conversation grows by more than %s tokens meanwhile, the run compacts before it goes on.", valve.Tokens(state.ResumeGrowth)))
 }
 
+// cmdResume gives the run back to baton. If the conversation grew by more than state.ResumeGrowth while
+// it was paused, the phase goes on from a compacted context: the model records where it stands first,
+// and the hooks hold it to that (CheckpointDue).
 func cmdResume(_ []string, io IO) int {
-	resume := func(st *state.State) error {
+	s, err := store(io)
+	if err != nil {
+		return fail(io, "%v", err)
+	}
+	var grew int
+	st, err := s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not resumed", false); err != nil {
 			return err
 		}
+		grew = st.GrownWhilePaused()
 		return state.Resume(st)
+	})
+	if err != nil {
+		return refused(io, s, "resume", err)
 	}
-	return simpleTransition(io, "resume", "resumed", resume, "baton: resumed. baton drives the plan again.")
+	if !st.CheckpointDue {
+		s.Event("resumed", nil)
+		fmt.Fprintln(io.Out, "baton: resumed. baton drives the plan again.")
+		return 0
+	}
+	s.Event("resumed", map[string]any{"grew": grew, "checkpoint_due": true})
+	fmt.Fprintf(io.Out, "baton: resumed. The conversation grew by %s tokens while baton was paused. %s\n", valve.Tokens(grew), decide.CheckpointOnResume(st.Current))
+	return 0
 }
 
 func cmdDrop(args []string, io IO) int {

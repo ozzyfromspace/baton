@@ -340,3 +340,52 @@ func TestDetachSetsThePlanAside(t *testing.T) {
 		t.Fatalf("%v %+v", err, st)
 	}
 }
+
+// A run resumed after the conversation grew by more than ResumeGrowth while it was paused owes a
+// checkpoint before the phase goes on; growth that is small or not known does not.
+func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
+	at := func(tokens int) *ContextUse { return &ContextUse{Tokens: tokens, At: t0} }
+	for _, tc := range []struct {
+		name          string
+		paused, after *ContextUse
+		owed          func(*State)
+		due           bool
+	}{
+		{name: "grew past the line", paused: at(60_000), after: at(60_000 + ResumeGrowth + 1), due: true},
+		{name: "grew a little", paused: at(60_000), after: at(60_000 + ResumeGrowth)},
+		{name: "compacted while paused", paused: at(150_000), after: at(30_000)},
+		{name: "size not known at pause", after: at(200_000)},
+		{name: "a boundary compaction is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.BoundaryOwed = true }},
+		{name: "a checkpoint is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.CheckpointOwed = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := Attach(threePhases(), t0, Origin{})
+			st.Run.Context = tc.paused
+			if err := Pause(&st); err != nil {
+				t.Fatal(err)
+			}
+			st.Run.Context = tc.after
+			if tc.owed != nil {
+				tc.owed(&st)
+			}
+			if err := Resume(&st); err != nil {
+				t.Fatal(err)
+			}
+			if st.CheckpointDue != tc.due || st.Mode != ModeRunning || st.PauseContext != 0 {
+				t.Fatalf("after resume: due %v (want %v), mode %s, pause context %d", st.CheckpointDue, tc.due, st.Mode, st.PauseContext)
+			}
+		})
+	}
+
+	// The checkpoint, or the end of the phase, settles it.
+	for name, settle := range map[string]func(st *State) error{
+		"checkpoint": SetCheckpoint,
+		"done":       func(st *State) error { _, err := Done(st, threePhases(), "P0", t0, false); return err },
+	} {
+		st := Attach(threePhases(), t0, Origin{})
+		st.CheckpointDue = true
+		if err := settle(&st); err != nil || st.CheckpointDue {
+			t.Errorf("%s: err %v, still due %v", name, err, st.CheckpointDue)
+		}
+	}
+}

@@ -127,7 +127,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		if started(st) {
 			d.say(fmt.Sprintf("baton: phase done → compacting, then %s starts", cur))
 		} else {
-			d.say(fmt.Sprintf("baton: plan attached → compacting the planning conversation, then %s starts", cur))
+			d.say(fmt.Sprintf("baton: plan attached → compacting the conversation so far, then %s starts", cur))
 		}
 		d.emit("compact_queued", map[string]any{"reason": "boundary", "epoch": st.Run.Compaction.Epoch, "next": st.Current})
 	case st.CheckpointOwed:
@@ -135,6 +135,21 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: checkpoint → compacting, then %s continues", cur))
 		d.emit("compact_queued", map[string]any{"reason": "checkpoint", "epoch": st.Run.Compaction.Epoch})
+	case st.CheckpointDue:
+		// The human resumed the run after the conversation grew while it was paused, and the model stopped
+		// without recording where the phase stands. Asked enough times, baton compacts without the notes:
+		// the phase goes on from a summary rather than from everything said while it was paused.
+		st.Run.StopBlocks++
+		if st.Run.StopBlocks <= MaxStopBlocks {
+			d.refuse(NudgePrefix + " You stopped first. " + decide.CheckpointOnResume(st.Current))
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "no checkpoint after resume"})
+			return d
+		}
+		st.CheckpointDue = false
+		queueCompaction(st, "checkpoint", now)
+		st.Run.StopBlocks = 0
+		d.say(fmt.Sprintf("baton: no checkpoint notes after resuming → compacting anyway, then %s continues", cur))
+		d.emit("compact_queued", map[string]any{"reason": "checkpoint", "epoch": st.Run.Compaction.Epoch, "notes": false})
 	case p != nil && !p.Asked:
 		// The model proposed something and stopped without asking: nothing would ever answer it.
 		st.Run.StopBlocks++

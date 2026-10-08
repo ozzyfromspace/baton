@@ -49,7 +49,7 @@ func Write(in Input) string {
 
 	switch {
 	case in.Kind == Boundary && first(pl, st):
-		fmt.Fprintf(&b, "[baton] The plan %q (%s) was approved and attached, and the planning conversation compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] The plan %q (%s) was attached, and the conversation before it compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
 	case in.Kind == Boundary:
 		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
 	case in.Kind == Checkpoint:

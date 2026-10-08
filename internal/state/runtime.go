@@ -16,6 +16,10 @@ type Runtime struct {
 	TurnStarted  time.Time `json:"turn_started,omitzero"`
 	LastStop     time.Time `json:"last_stop,omitzero"`
 	LastActivity time.Time `json:"last_activity,omitzero"` // any hook from the main agent or a subagent
+	// History says the conversation has turns before the current one: a turn ended in this session, or
+	// the session resumed an earlier conversation. A plan attached then starts after a compaction, from a
+	// brief, rather than in the middle of whatever came before.
+	History bool `json:"history,omitempty"`
 	// HumanAt is when the human last took part: a prompt they typed, or their answer to one of baton's
 	// questions (not one baton answered for them).
 	HumanAt time.Time `json:"human_at,omitzero"`

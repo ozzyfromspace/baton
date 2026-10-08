@@ -47,16 +47,16 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 	if !f.logged("attached", map[string]any{"plan": file, "phases": float64(2), "by": "approval"}) {
 		t.Errorf("events: %s", f.eventLog())
 	}
-	if d := denyReason(f.fire("PreToolUse", bash("go test ./..."))); !strings.Contains(d, "baton attached the plan the human approved") {
+	if d := denyReason(f.fire("PreToolUse", bash("go test ./..."))); !strings.Contains(d, "baton attached the plan, and compacts the conversation so far before P0 begins") {
 		t.Fatalf("P0's work was not held: %q", d)
 	}
-	if msg := say(f.fire("Stop", map[string]any{})); !strings.Contains(msg, "plan attached → compacting the planning conversation, then P0 (Instruments) starts") {
+	if msg := say(f.fire("Stop", map[string]any{})); !strings.Contains(msg, "plan attached → compacting the conversation so far, then P0 (Instruments) starts") {
 		t.Fatalf("stop said %q", msg)
 	}
 	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
 	f.fire("PreCompact", map[string]any{"trigger": "manual"})
 	brief := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
-	for _, want := range []string{`The plan "The next campaign"`, "was approved and attached", "Now: P0 — Instruments. Begin it now.", "Be careful.", "Measure first."} {
+	for _, want := range []string{`The plan "The next campaign"`, "was attached, and the conversation before it compacted", "Now: P0 — Instruments. Begin it now.", "Be careful.", "Measure first."} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief lacks %q:\n%s", want, brief)
 		}

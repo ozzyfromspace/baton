@@ -123,6 +123,8 @@ func cmdPropose(args []string, io IO) int {
 			return refusal{"not running", fmt.Sprintf("not recorded — baton is not running the plan (mode: %s), so nothing would go ahead with a proposal. Ask the human directly.", st.Mode)}
 		case st.BoundaryOwed || st.CheckpointOwed || st.Run.Compaction.InFlight():
 			return refusal{"compaction owed", "not recorded — baton must compact the context first. End your turn now; if the proposal still applies after the compaction, make it then."}
+		case st.CheckpointDue:
+			return refusal{"checkpoint due", "not recorded — " + decide.CheckpointOnResume(st.Current) + " If the proposal still applies after the compaction, make it then."}
 		case pending != nil:
 			return refusal{"proposal pending", pendingRefusal(*pending)}
 		}

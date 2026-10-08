@@ -90,6 +90,12 @@ type State struct {
 	// CheckpointAsked: the human chose "Checkpoint now"; the model may finish its step first, and the
 	// next stop becomes a checkpoint whether or not the model ran `baton checkpoint`.
 	CheckpointAsked bool `json:"checkpoint_asked,omitempty"`
+	// CheckpointDue: the human resumed the run after the conversation grew while it was paused, so the
+	// phase goes on from a compacted context. Before anything else, the model records where the phase
+	// stands (`baton checkpoint`), and baton compacts.
+	CheckpointDue bool `json:"checkpoint_due,omitempty"`
+	// PauseContext is the context's size in tokens when the run was paused (0: not known).
+	PauseContext int `json:"pause_context,omitempty"`
 	// Decisions are the notes and proposals of this run, oldest first.
 	Decisions []Decision `json:"decisions,omitempty"`
 	// ReviewDue is the phase whose decisions without the human reached max_auto_decisions: baton stops
@@ -133,8 +139,9 @@ func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 }
 
 // AttachAtBoundary is Reattach for a plan whose first phase starts after a compaction, as if a phase
-// before it had just finished: the plan was approved at the end of a long planning conversation, and
-// the first phase starts with a brief instead of all that.
+// before it had just finished: the plan was approved at the end of a planning conversation, or attached
+// in a conversation that had other things in it, and the first phase starts with a brief instead of all
+// that.
 func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
 	st := Reattach(prev, p, now, Origin{})
 	st.Phases[st.Current] = &PhaseState{Status: PhasePending}
@@ -156,7 +163,7 @@ func Revise(st *State, p plan.Plan) string {
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 		}
 	}
-	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked = ModeRunning, nil, nil, false, false
+	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, nil, false, false, false
 	st.Run.Progress()
 	next := nextPending(st, p)
 	if next == "" {
@@ -227,7 +234,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 		return "", fmt.Errorf("phase %s has not started yet: end your turn now, so baton can compact the context before %s begins", id, id)
 	}
 	ps.Status, ps.DoneAt = PhaseDone, now
-	st.Blocked, st.Waiting, st.CheckpointOwed = nil, nil, false
+	st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointDue = nil, nil, false, false
 	st.Run.Progress()
 	st.Run.Escalation = nil
 	next = nextPending(st, p)
@@ -297,27 +304,50 @@ func SetCheckpoint(st *State) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("checkpoints only apply while a plan is running (mode: %s)", st.Mode)
 	}
-	st.CheckpointOwed, st.CheckpointAsked, st.Blocked = true, false, nil
+	st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue, st.Blocked = true, false, false, nil
 	st.Run.Progress()
 	return nil
 }
 
-// Pause hands the session to the human: baton keeps observing but takes no action.
+// ResumeGrowth is how far the context may grow while the run is paused before the phase goes on from a
+// compacted context instead: the human talked about other things meanwhile, and the phase would carry
+// all of it.
+const ResumeGrowth = 20_000
+
+// Pause hands the session to the human: baton keeps observing but takes no action. It notes how large
+// the context is, so that Resume can tell how much the paused conversation added.
 func Pause(st *State) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("nothing to pause (mode: %s)", st.Mode)
 	}
-	st.Mode = ModePaused
+	st.Mode, st.PauseContext = ModePaused, 0
+	if cu := st.Run.Context; cu != nil {
+		st.PauseContext = cu.Used()
+	}
 	return nil
 }
 
-// Resume gives the session back to baton and clears any block.
+// GrownWhilePaused is how many tokens the context grew by since the run was paused, or 0 when that is
+// not known.
+func (st State) GrownWhilePaused() int {
+	if st.Mode != ModePaused || st.PauseContext == 0 || st.Run.Context == nil {
+		return 0
+	}
+	return st.Run.Context.Used() - st.PauseContext
+}
+
+// Resume gives the session back to baton and clears any block. If the context grew by more than
+// ResumeGrowth while the run was paused, a checkpoint is due before the phase goes on (CheckpointDue),
+// unless a compaction is owed already.
 func Resume(st *State) error {
 	if st.Mode != ModePaused && st.Blocked == nil && st.Run.Escalation == nil && st.ReviewDue == "" {
 		return fmt.Errorf("nothing to resume (mode: %s)", st.Mode)
 	}
 	if st.Mode == ModePaused {
-		st.Mode = ModeRunning
+		if st.GrownWhilePaused() > ResumeGrowth && !st.BoundaryOwed && !st.CheckpointOwed {
+			st.CheckpointDue = true
+		}
+		st.Mode, st.PauseContext = ModeRunning, 0
 	}
 	if st.ReviewDue != "" {
 		Reviewed(st) // the human chose to let the run go on

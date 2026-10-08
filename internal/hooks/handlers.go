@@ -120,7 +120,9 @@ func ok(err error) error {
 //
 // And it holds the model where it must not carry on. After `baton done` or `baton checkpoint`, the turn
 // must end so the host can compact; a model that carries on would start the next phase (or keep going)
-// in the old context. Once a phase's decisions without the human reach the cap, the turn must end for
+// in the old context. A run resumed after the conversation grew while it was paused must record where
+// the phase stands first (`baton checkpoint`), so it goes on from a compacted context with those notes.
+// Once a phase's decisions without the human reach the cap, the turn must end for
 // the human to review them. And a proposal must be put to the human before anything else happens. So
 // until then every main-agent tool call except baton's own CLI (and the questions baton issued) is
 // denied, with the reason. Subagents are not held: they cannot end the main turn.
@@ -172,11 +174,13 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		p := st.PendingProposal()
 		switch {
 		case st.BoundaryOwed && !started(st):
-			hold = endTurn("baton attached the plan the human approved, and compacts the planning conversation before " + st.Current + " begins")
+			hold = endTurn("baton attached the plan, and compacts the conversation so far before " + st.Current + " begins")
 		case st.BoundaryOwed:
 			hold = endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
 		case st.CheckpointOwed:
 			hold = endTurn("you asked for a checkpoint and baton must compact the context first")
+		case st.CheckpointDue:
+			hold = NudgePrefix + " Not yet. " + decide.CheckpointOnResume(st.Current)
 		case own:
 			// baton's own question gets through the holds below: it is how they end.
 		case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
@@ -289,6 +293,9 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		if source == "startup" || source == "resume" {
 			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
 		}
+		// A new conversation (or one /clear started over) has nothing before its first turn; a resumed or
+		// compacted one has.
+		st.Run.History = source != "startup" && source != "clear"
 		if source == "resume" && st.Run.Restart != nil {
 			if c.Now.Sub(st.Run.Restart.At) < restartWindow {
 				restarted = st.Run.Restart
@@ -386,6 +393,13 @@ func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 	if st.Mode != state.ModeComplete {
 		if i := pl.Index(st.Current); i >= 0 {
 			fmt.Fprintf(&b, "Current phase: %s — %s (see %s). ", st.Current, pl.Phases[i].Title, pl.File)
+		}
+		switch {
+		case st.Mode != state.ModeRunning:
+		case st.BoundaryOwed:
+			fmt.Fprintf(&b, "%s has not started: baton compacts the context first, so do not start it, and end your turn when you are given one. ", st.Current)
+		case st.CheckpointDue:
+			b.WriteString(decide.CheckpointOnResume(st.Current) + " ")
 		}
 		b.WriteString(w.Reporting())
 	}
@@ -759,7 +773,7 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 	if st.Run.ContextWarned && used < lim.Warn-rearm {
 		st.Run.ContextWarned = false
 	}
-	if st.Mode != state.ModeRunning || st.CheckpointOwed || st.BoundaryOwed || st.Run.Compaction.InFlight() {
+	if st.Mode != state.ModeRunning || st.CheckpointOwed || st.CheckpointDue || st.BoundaryOwed || st.Run.Compaction.InFlight() {
 		return valveAction{}
 	}
 	pct := 100 * float64(used) / float64(lim.Window)
@@ -847,7 +861,7 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 
 // recordStop notes what every Stop tells us; the decision about the stop is made in stop.go.
 func recordStop(st *state.State, c Context) {
-	st.Run.TurnOpen, st.Run.LastStop = false, c.Now
+	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
 	st.Run.Background = tasks(c.Input["background_tasks"])
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
@@ -869,7 +883,7 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
 	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents = false, &e, 0
+		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents, st.Run.History = false, &e, 0, true
 		st.Run.Dialogs.CloseMain()
 		events, _ = vanished(st, c.Now, false)
 		return nil
