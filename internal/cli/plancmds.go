@@ -28,8 +28,8 @@ func init() {
 	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("waiting", "declare a bounded wait: waiting <what> --until <duration, e.g. 20m>", cmdWaiting)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
-	register("pause", "stop baton from acting until resume (the human takes the wheel)", cmdPause)
-	register("resume", "let baton drive again (also clears a block)", cmdResume)
+	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", cmdRun)
+	register("pause", "stop baton from acting until /baton run (the human takes the wheel)", cmdPause)
 	register("drop", "drop the run: its plan is set aside, and baton does nothing until the next plan", cmdDrop)
 }
 
@@ -366,7 +366,7 @@ func printWaitingOnYou(io IO, st *state.State) {
 	}
 	if st.ReviewDue != "" {
 		fmt.Fprintf(io.Out, "review due: %s has made %d decisions without you, as many as it may before you go over them (below). "+
-			"Answer baton's question in the session, or /baton resume to let the run go on.\n", st.ReviewDue, st.Unattended(st.ReviewDue))
+			"Answer baton's question in the session, or /baton run to let the run go on.\n", st.ReviewDue, st.Unattended(st.ReviewDue))
 	}
 }
 
@@ -442,6 +442,12 @@ func cmdDone(args []string, io IO) int {
 	if err := guard(io, &cur, "not done", true); err != nil {
 		return refused(io, s, "done", err)
 	}
+	// The plan file is read again as the phase ends, so a phase the human just added to it comes next.
+	adopted, changed, rerr := plan.Recheck(pl, state.Remaining(cur, pl))
+	followed := changed && rerr == nil && s.WritePlan(adopted) == nil
+	if followed {
+		pl = adopted
+	}
 	work := checkWork(s, id)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {
@@ -456,6 +462,12 @@ func cmdDone(args []string, io IO) int {
 		}
 		if ps := st.Phases[id]; ps != nil {
 			startHead = ps.StartHead
+		}
+		if followed {
+			st.PlanDrift = ""
+			if added := state.Extend(st, pl); len(added) > 0 {
+				s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
+			}
 		}
 		var err error
 		next, err = state.Done(st, pl, id, io.Now(), p.bools["force"])
@@ -701,37 +713,175 @@ func cmdCheckpoint(args []string, io IO) int {
 }
 
 func cmdPause(_ []string, io IO) int {
-	return simpleTransition(io, "pause", "paused", state.Pause, fmt.Sprintf("baton: paused. baton will not compact, nudge or escalate until /baton resume. "+
+	return simpleTransition(io, "pause", "paused", state.Pause, fmt.Sprintf("baton: paused. baton will not compact, nudge or escalate until /baton run. "+
 		"If the conversation grows by more than %s tokens meanwhile, the run compacts before it goes on.", valve.Tokens(state.ResumeGrowth)))
 }
 
-// cmdResume gives the run back to baton. If the conversation grew by more than state.ResumeGrowth while
-// it was paused, the phase goes on from a compacted context: the model records where it stands first,
-// and the hooks hold it to that (CheckpointDue).
-func cmdResume(_ []string, io IO) int {
+// cmdRun is the first step of /baton run: it decides what running a plan means in this session, so that
+// the model does not have to. The session's own plan carries on (no file, or its file): a run paused or
+// stopped for the human is resumed, and a running one is left alone. Any other plan is attached (baton
+// attach), but never over a run underway without the human's say, and a finished plan is never run
+// again by accident.
+func cmdRun(args []string, io IO) int {
+	p, err := parseArgs(args, nil, nil)
+	if err != nil || len(p.pos) > 1 {
+		return fail(io, "usage: baton run [plan file]%s", errSuffix(err))
+	}
+	var file, name string
+	if len(p.pos) == 1 {
+		name = p.pos[0]
+		if file, err = filepath.Abs(name); err != nil {
+			return fail(io, "%v", err)
+		}
+	}
+	attach := func(why string) int {
+		if file == "" {
+			fmt.Fprintf(io.Out, "baton: %s, so attach a plan: find its file and attach it as /baton run describes.\n", why)
+		} else {
+			fmt.Fprintf(io.Out, "baton: %s, so attach %s: baton attach %s --suggest\n", why, name, name)
+		}
+		return 0
+	}
 	s, err := store(io)
+	switch {
+	case errors.Is(err, state.ErrNoPlan):
+		return attach("no plan is underway in this session")
+	case err != nil:
+		return fail(io, "%v", err)
+	}
+	st, err := s.Load()
 	if err != nil {
 		return fail(io, "%v", err)
 	}
+	pl, perr := s.LoadPlan()
+	if st.Mode == state.ModeIdle || perr != nil {
+		return attach("no plan is underway in this session")
+	}
+	same := file == "" || file == pl.File
+	switch {
+	case st.Mode == state.ModeComplete && !same:
+		return attach(fmt.Sprintf("%q, this session's last plan, is complete", pl.Title))
+	case st.Mode == state.ModeComplete:
+		switch adopted, changed, err := plan.Recheck(pl, nil); {
+		case changed && err == nil && len(adopted.Phases) > len(pl.Phases):
+			return runAdded(io, s, adopted)
+		case changed && err != nil && pl.SHA() != "":
+			// Nothing done is checked again, so what fails is a phase the file adds.
+			first := strings.SplitN(err.Error(), "\n", 2)[0]
+			return fail(io, "%q is complete, and its file adds phases baton cannot follow: %s. Fix %s, then /baton run again.", pl.Title, first, filepath.Base(pl.File))
+		}
+		if file == "" {
+			fmt.Fprintf(io.Out, "baton: %q is complete: every phase is done, so there is nothing to run. Ask the human which plan to run next.\n", pl.Title)
+			return 0
+		}
+		fmt.Fprintf(io.Out, "baton: %q is complete: every phase is done, so there is nothing to run. To run it again from the start, /baton drop it first, then /baton run it.\n", pl.Title)
+		return 0
+	case !same:
+		fmt.Fprintf(io.Out, "baton: %q is %s in this session, at %s. Running %s instead discards that run's progress: ask the human first, and only if they agree, attach %s with --replace.\n",
+			pl.Title, st.Mode, phaseLabel(pl, st.Current), name, name)
+		return 0
+	case !st.Resumable():
+		fmt.Fprintf(io.Out, "baton: %q is already running, at %s. Nothing to resume.\n", pl.Title, phaseLabel(pl, st.Current))
+		return 0
+	}
+	return resume(io, s, pl, st)
+}
+
+// runAdded runs the phases the human added to a plan after it finished: they start after a compaction,
+// as a phase does at a boundary, and the phases done stay done.
+func runAdded(io IO, s *state.Store, pl plan.Plan) int {
+	if err := s.WritePlan(pl); err != nil {
+		return fail(io, "%v", err)
+	}
+	var added []string
+	var next string
+	if _, err := s.Update(func(st *state.State) error {
+		added = state.Extend(st, pl)
+		st.PlanDrift = ""
+		next = state.Revise(st, pl)
+		return nil
+	}); err != nil {
+		return fail(io, "%v", err)
+	}
+	s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
+	s.Event("revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next, "by": "run"})
+	fmt.Fprintf(io.Out, "baton: %q was complete, and its file now adds %s. ", pl.Title, phaseLabels(pl, added))
+	if hosted(io) {
+		fmt.Fprintf(io.Out, "End your turn now: baton compacts this conversation, then starts %s with a fresh brief.\n", phaseLabel(pl, next))
+		return 0
+	}
+	fmt.Fprintf(io.Out, "%s starts once baton has compacted this conversation.\n", phaseLabel(pl, next))
+	fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
+	return 0
+}
+
+// resume gives a paused or stopped run back to baton. A plan file that changed so that baton can no
+// longer follow it keeps the run paused. If the conversation grew by more than state.ResumeGrowth while
+// the run was paused, the phase goes on from a compacted context: the model records where it stands
+// first, and the hooks hold it to that (CheckpointDue).
+func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
+	adopted, changed, err := plan.Recheck(pl, state.Remaining(cur, pl))
+	if err != nil {
+		first := strings.SplitN(err.Error(), "\n", 2)[0]
+		s.Event("refused", map[string]any{"command": "run", "why": "plan file changed"})
+		return fail(io, "not resumed — the plan file changed, and baton can no longer follow it: %s. Fix %s so that every phase still to run is there, then /baton run again. "+
+			"To run the edited plan from P0 instead, ask the human, and only if they agree, attach it with --replace.", first, filepath.Base(pl.File))
+	}
+	if changed {
+		if err := s.WritePlan(adopted); err != nil {
+			return fail(io, "%v", err)
+		}
+		pl = adopted
+	}
 	var grew int
+	var added []string
 	st, err := s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not resumed", false); err != nil {
 			return err
+		}
+		if changed {
+			st.PlanDrift = ""
+			added = state.Extend(st, pl)
 		}
 		grew = st.GrownWhilePaused()
 		return state.Resume(st)
 	})
 	if err != nil {
-		return refused(io, s, "resume", err)
+		return refused(io, s, "run", err)
 	}
+	if len(added) > 0 {
+		s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
+		fmt.Fprintf(io.Out, "baton: the plan file now adds %s, which run in turn.\n", phaseLabels(pl, added))
+	}
+	at := phaseLabel(pl, st.Current)
 	if !st.CheckpointDue {
 		s.Event("resumed", nil)
-		fmt.Fprintln(io.Out, "baton: resumed. baton drives the plan again.")
+		fmt.Fprintf(io.Out, "baton: resumed %q at %s. baton drives the plan again.\n", pl.Title, at)
 		return 0
 	}
 	s.Event("resumed", map[string]any{"grew": grew, "checkpoint_due": true})
-	fmt.Fprintf(io.Out, "baton: resumed. The conversation grew by %s tokens while baton was paused. %s\n", valve.Tokens(grew), decide.CheckpointOnResume(st.Current))
+	fmt.Fprintf(io.Out, "baton: resumed %q at %s. The conversation grew by %s tokens while baton was paused. %s\n", pl.Title, at, valve.Tokens(grew), decide.CheckpointOnResume(st.Current))
 	return 0
+}
+
+// phaseLabels names phases as the human knows them: "P3 (Polish) and P4 (Docs)".
+func phaseLabels(pl plan.Plan, ids []string) string {
+	var names []string
+	for _, id := range ids {
+		names = append(names, phaseLabel(pl, id))
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// phaseLabel is a phase as the human knows it: "P2 (The one-liners)".
+func phaseLabel(pl plan.Plan, id string) string {
+	if i := pl.Index(id); i >= 0 {
+		return id + " (" + pl.Phases[i].Title + ")"
+	}
+	return id
 }
 
 func cmdDrop(args []string, io IO) int {

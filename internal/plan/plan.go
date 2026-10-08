@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -211,7 +212,8 @@ func Shaped(spec Spec) bool {
 // Recheck reads the plan document again and compares it with the text baton attached. changed is false
 // when it is that text. When it changed, err says what no longer fits: a phase still to run (one of
 // remaining), the rules or the end anchor missing, duplicated or out of order, or the file gone. With
-// err nil, adopted is p with the new text's hash, and baton follows the new text.
+// err nil, adopted is p with the new text's hash, and baton follows the new text, including the phases
+// it adds (Added): they join the run in document order, after the phases already done.
 func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error) {
 	doc, err := os.ReadFile(p.File)
 	if err != nil {
@@ -221,27 +223,69 @@ func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error)
 	if hex.EncodeToString(sum[:]) == p.SHA256 {
 		return p, false, nil
 	}
+	text := string(doc)
 	spec := Spec{Title: p.Title, RulesAnchor: p.RulesAnchor, EndAnchor: p.EndAnchor}
 	keep := map[string]bool{}
 	for _, id := range remaining {
 		keep[id] = true
 	}
+	var done []Phase
 	for _, ph := range p.Phases {
 		if keep[ph.ID] {
 			spec.Phases = append(spec.Phases, ph)
+		} else {
+			done = append(done, ph)
 		}
 	}
+	added := Added(p, doc)
+	if len(added) > 0 {
+		spec.Phases = append(spec.Phases, added...)
+		sort.SliceStable(spec.Phases, func(i, j int) bool {
+			return strings.Index(text, spec.Phases[i].Anchor) < strings.Index(text, spec.Phases[j].Anchor)
+		})
+		// A phase added after the end marker (## Verification) is the last one now, and runs to the end.
+		last := strings.Index(text, spec.Phases[len(spec.Phases)-1].Anchor)
+		if spec.EndAnchor != "" && strings.Index(text, spec.EndAnchor) < last {
+			spec.EndAnchor = ""
+		}
+	}
+	adopted = p
+	adopted.SHA256, adopted.EndAnchor = hex.EncodeToString(sum[:]), spec.EndAnchor
 	if len(spec.Phases) == 0 {
-		adopted = p
-		adopted.SHA256 = hex.EncodeToString(sum[:])
 		return adopted, true, nil
 	}
 	if _, err := Build(p.File, doc, spec); err != nil {
 		return p, true, err
 	}
-	adopted = p
-	adopted.SHA256 = hex.EncodeToString(sum[:])
+	adopted.Phases = append(done, spec.Phases...)
 	return adopted, true, nil
+}
+
+// Added returns the phases doc has that p lacks, in document order: headings in the notation and at the
+// level of p's own phase headings (## P3 — Title), with ids p does not have. It is how a phase the human
+// adds to the plan file joins the run. A plan whose phases are not all such headings gets none: its
+// phases were named by the model, and a line that merely looks like a phase is not one.
+func Added(p Plan, doc []byte) []Phase {
+	level := 0
+	have := map[string]bool{}
+	for _, ph := range p.Phases {
+		_, _, l, n := matchPhase(ph.Anchor)
+		if n != notationHeading || level != 0 && l != level {
+			return nil
+		}
+		level, have[ph.ID] = l, true
+	}
+	var out []Phase
+	for _, raw := range strings.Split(string(doc), "\n") {
+		line := strings.TrimSpace(raw)
+		id, title, l, n := matchPhase(line)
+		if id == "" || n != notationHeading || l != level || have[id] {
+			continue
+		}
+		have[id] = true
+		out = append(out, Phase{ID: id, Title: title, Anchor: line})
+	}
+	return out
 }
 
 // SHA reports the hash of the plan document as it is now, or "" if it cannot be read.

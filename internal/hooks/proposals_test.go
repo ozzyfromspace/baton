@@ -297,7 +297,7 @@ func TestToolsAreHeldForAReview(t *testing.T) {
 }
 
 // The review question: Continue marks the phase's decisions reviewed and lets the run go on; Pause baton
-// hands it to the human, who hands it back with /baton resume.
+// hands it to the human, who hands it back with /baton run.
 func TestAReviewEndsWithTheHumansAnswer(t *testing.T) {
 	for _, a := range []string{"Continue", "Pause baton"} {
 		t.Run(a, func(t *testing.T) {

@@ -164,6 +164,7 @@ func Revise(st *State, p plan.Plan) string {
 		}
 	}
 	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, nil, false, false, false
+	st.Run.CompleteNotified = false // a finished plan with phases added runs again, and finishes again
 	st.Run.Progress()
 	next := nextPending(st, p)
 	if next == "" {
@@ -176,6 +177,30 @@ func Revise(st *State, p plan.Plan) string {
 	}
 	st.Current, st.BoundaryOwed = next, true
 	return next
+}
+
+// Extend adds the phases of p the run does not know yet, pending, and returns their ids: phases the
+// human added to the plan file while it ran (plan.Added).
+func Extend(st *State, p plan.Plan) []string {
+	var added []string
+	for _, ph := range p.Phases {
+		if st.Phases[ph.ID] == nil {
+			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
+			added = append(added, ph.ID)
+		}
+	}
+	return added
+}
+
+// Remaining lists the phases of p not done yet, in order.
+func Remaining(st State, p plan.Plan) []string {
+	var ids []string
+	for _, ph := range p.Phases {
+		if ps := st.Phases[ph.ID]; ps == nil || ps.Status != PhaseDone {
+			ids = append(ids, ph.ID)
+		}
+	}
+	return ids
 }
 
 // Detach stops the run: its plan is set aside, and baton does nothing until the next plan is attached.
@@ -336,11 +361,17 @@ func (st State) GrownWhilePaused() int {
 	return st.Run.Context.Used() - st.PauseContext
 }
 
+// Resumable reports a run that Resume would change: one paused, or one stopped for the human (blocked,
+// escalated, or waiting on a review).
+func (st State) Resumable() bool {
+	return st.Mode == ModePaused || st.Blocked != nil || st.Run.Escalation != nil || st.ReviewDue != ""
+}
+
 // Resume gives the session back to baton and clears any block. If the context grew by more than
 // ResumeGrowth while the run was paused, a checkpoint is due before the phase goes on (CheckpointDue),
 // unless a compaction is owed already.
 func Resume(st *State) error {
-	if st.Mode != ModePaused && st.Blocked == nil && st.Run.Escalation == nil && st.ReviewDue == "" {
+	if !st.Resumable() {
 		return fmt.Errorf("nothing to resume (mode: %s)", st.Mode)
 	}
 	if st.Mode == ModePaused {

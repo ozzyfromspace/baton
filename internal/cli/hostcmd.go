@@ -56,10 +56,13 @@ func HostBinary(env func(string) string) string {
 // session: there, a mistyped or retired command name would be taken for a prompt, and another claude
 // would start inside the Bash tool.
 func runHost(args []string, io IO) int {
-	if io.Env("BATON_HOST") != "1" && io.Env("CLAUDE_CODE_SESSION_ID") != "" {
+	if hosted, inSession := io.Env("BATON_HOST") == "1", io.Env("CLAUDE_CODE_SESSION_ID") != ""; hosted || inSession {
 		what := "`baton` starts a new claude session"
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			what = fmt.Sprintf("%q is not a baton command, and `baton <prompt>` starts a new claude session", args[0])
+		}
+		if hosted {
+			return fail(io, "%s; this is already one, hosted by baton. `baton help` lists baton's commands.", what)
 		}
 		return fail(io, "%s; this is already one. To hand it to baton, run /baton start; `baton help` lists baton's commands.", what)
 	}

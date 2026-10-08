@@ -116,7 +116,7 @@ func cmdExit(args []string, io IO) int {
 	s.Event("exit_requested", map[string]any{"paused": paused})
 	msg := "baton: leaving baton. When this turn ends, baton stops claude, and this terminal resumes this same conversation as plain Claude Code. End your turn now."
 	if paused {
-		msg += fmt.Sprintf(" The plan is paused; to pick it up later, start the session with `baton --resume %s`, then /baton resume.", sid)
+		msg += fmt.Sprintf(" The plan is paused; to pick it up later, start the session with `baton --resume %s`, then /baton run.", sid)
 	}
 	fmt.Fprintln(io.Out, msg)
 	return 0

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -64,13 +65,13 @@ func TestResumeAfterTheConversationGrewAsksForACheckpoint(t *testing.T) {
 		t.Fatalf("pause: %s", out)
 	}
 	tokens(60_000)
-	if out := s.must("", "resume"); strings.Contains(out, "checkpoint") || s.state().CheckpointDue {
+	if out := s.must("", "run"); strings.Contains(out, "checkpoint") || s.state().CheckpointDue {
 		t.Fatalf("a small growth asked for a checkpoint: %s", out)
 	}
 
 	s.must("", "pause")
 	tokens(95_000)
-	out := s.must("", "resume")
+	out := s.must("", "run")
 	for _, want := range []string{"grew by 35k tokens while baton was paused", "First record where P0 stands", "baton checkpoint --notes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("resume said:\n%s\nwant %q", out, want)
@@ -92,4 +93,100 @@ func TestResumeAfterTheConversationGrewAsksForACheckpoint(t *testing.T) {
 	if st := s.state(); st.CheckpointDue || !st.CheckpointOwed {
 		t.Fatalf("after the checkpoint: due %v owed %v", st.CheckpointDue, st.CheckpointOwed)
 	}
+}
+
+// baton run decides what running a plan means in this session: the session's own plan carries on, any
+// other is attached, never over a run underway without the human, and a finished plan never runs again
+// by accident.
+func TestRunDecidesWhatRunningMeans(t *testing.T) {
+	s, planFile := newSession(t)
+	says := func(want string, args ...string) {
+		t.Helper()
+		if out := s.must("", append([]string{"run"}, args...)...); !strings.Contains(out, want) {
+			t.Errorf("baton run %v said:\n%s\nwant %q", args, out, want)
+		}
+	}
+	says("no plan is underway in this session, so attach a plan: find its file")
+	says("no plan is underway in this session, so attach other.md: baton attach other.md --suggest", "other.md")
+
+	s.attach(planFile)
+	says("is already running, at P0 (The overlay). Nothing to resume.")
+	says("is already running, at P0 (The overlay).", planFile)
+	says("is running in this session, at P0 (The overlay). Running other.md instead discards that run's progress: ask the human first", "other.md")
+
+	s.must("", "pause")
+	says("is paused in this session, at P0 (The overlay). Running other.md instead", "other.md")
+	if st := s.state(); st.Mode != state.ModePaused {
+		t.Fatalf("a different plan resumed the run: %s", st.Mode)
+	}
+	says("resumed", planFile)
+	if st := s.state(); st.Mode != state.ModeRunning {
+		t.Fatalf("not resumed: %s", st.Mode)
+	}
+
+	// A plan file baton can no longer follow keeps the run paused.
+	s.must("", "pause")
+	doc, _ := os.ReadFile(planFile)
+	os.WriteFile(planFile, []byte(strings.Replace(string(doc), "## P1", "## Q1", 1)), 0o644)
+	if errs := s.fails("run"); !strings.Contains(errs, "not resumed — the plan file changed, and baton can no longer follow it") {
+		t.Errorf("run with a broken plan: %s", errs)
+	}
+	if st := s.state(); st.Mode != state.ModePaused {
+		t.Fatalf("resumed onto a plan baton cannot follow: %s", st.Mode)
+	}
+	os.WriteFile(planFile, doc, 0o644)
+	says("resumed")
+
+	s.set(func(x *state.State) { x.Mode, x.Current = state.ModeComplete, "" })
+	says("is complete: every phase is done, so there is nothing to run. Ask the human which plan to run next.")
+	says("is complete: every phase is done, so there is nothing to run. To run it again from the start, /baton drop it first", planFile)
+	says("this session's last plan, is complete, so attach other.md", "other.md")
+}
+
+// A phase the human adds to the plan file runs: next, if it is added before the last phase ends, and
+// after a compaction when /baton run finds it in a plan that had finished.
+func TestPhasesAddedToThePlanFileRun(t *testing.T) {
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	doc, _ := os.ReadFile(planFile)
+	addPhase := func(id, title string) {
+		cur, _ := os.ReadFile(planFile)
+		os.WriteFile(planFile, []byte(strings.Replace(string(cur), "## Verification", "## "+id+" — "+title+"\nDo it.\n\n## Verification", 1)), 0o644)
+	}
+	for _, id := range []string{"P0", "P1"} {
+		s.must("", "done", id)
+		s.startNext()
+	}
+	addPhase("R2", "The roster shrinks") // while R1, the last phase, is under way
+	if out := s.must("", "done", "R1"); !strings.Contains(out, "Next phase: R2 (The roster shrinks)") {
+		t.Fatalf("done R1 with R2 added:\n%s", out)
+	}
+	if !s.logged("plan_changed", map[string]any{"adopted": true}) {
+		t.Errorf("events: %s", s.events())
+	}
+	s.startNext()
+	if out := s.must("", "done", "R2"); !strings.Contains(out, "the plan is complete") {
+		t.Fatalf("done R2: %s", out)
+	}
+
+	addPhase("R3", "The roster rests") // after the plan finished
+	out := s.must("", "run")
+	for _, want := range []string{"was complete, and its file now adds R3 (The roster rests).", "End your turn now: baton compacts this conversation, then starts R3 (The roster rests)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("run said:\n%s\nwant %q", out, want)
+		}
+	}
+	st := s.state()
+	if st.Mode != state.ModeRunning || st.Current != "R3" || !st.BoundaryOwed || st.Phases["R2"].Status != state.PhaseDone || st.Run.CompleteNotified {
+		t.Fatalf("after run: mode %s current %s boundary %v", st.Mode, st.Current, st.BoundaryOwed)
+	}
+
+	// A phase the file adds that baton cannot follow is reported, not ignored.
+	s.set(func(x *state.State) { x.Mode, x.Current, x.BoundaryOwed = state.ModeComplete, "", false })
+	cur, _ := os.ReadFile(planFile)
+	os.WriteFile(planFile, append(cur, []byte("\n## R4 — Twice\n\n## R4 — Twice\n")...), 0o644)
+	if errs := s.fails("run"); !strings.Contains(errs, "adds phases baton cannot follow") {
+		t.Errorf("run with a broken addition: %s", errs)
+	}
+	os.WriteFile(planFile, doc, 0o644)
 }

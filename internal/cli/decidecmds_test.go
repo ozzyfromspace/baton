@@ -88,13 +88,13 @@ func TestNotesCountTowardAReview(t *testing.T) {
 		t.Errorf("events: %s", s.events())
 	}
 	// The run cannot let itself go on: only the human ends a review.
-	for _, args := range [][]string{{"resume"}, {"done", "P0"}} {
+	for _, args := range [][]string{{"run"}, {"done", "P0"}} {
 		if why := s.fails(args...); !strings.Contains(why, "a review of the decisions P0 made without them") {
 			t.Errorf("%v during a review: %s", args, why)
 		}
 	}
 	s.human()
-	s.must("", "resume")
+	s.must("", "run")
 	if st := s.state(); st.ReviewDue != "" || st.Unattended("P0") != 0 {
 		t.Fatalf("after the human resumed: %q, %d unreviewed", st.ReviewDue, st.Unattended("P0"))
 	}
@@ -244,7 +244,7 @@ func TestBlockedNeedsWhatWasTried(t *testing.T) {
 
 // While the run waits on the human, the model cannot get out of it with a command of its own.
 func TestARunCannotClearItsOwnBlock(t *testing.T) {
-	commands := [][]string{{"resume"}, {"done", "P0"}, {"checkpoint"}, {"waiting", "the build", "--until", "5m"},
+	commands := [][]string{{"run"}, {"done", "P0"}, {"checkpoint"}, {"waiting", "the build", "--until", "5m"},
 		{"blocked", "still stuck", "--tried", "more"}, {"propose", "x", "--because", "y", "--undo", "z"}}
 	halts := map[string]func(s *session){
 		"blocked": func(s *session) { s.must("", "blocked", "need the prod key", "--tried", "the vault") },
@@ -279,7 +279,7 @@ func TestARunCannotClearItsOwnBlock(t *testing.T) {
 
 				// Once the human has taken part, the model may act on what they said.
 				s.human()
-				if args[0] == "resume" && name != "blocked" {
+				if args[0] == "run" && name != "blocked" {
 					return // only a block or a pause is resumed from the CLI
 				}
 				if code, _, errs := s.run("", args...); code != 0 {
@@ -293,7 +293,7 @@ func TestARunCannotClearItsOwnBlock(t *testing.T) {
 	s := attached(t)
 	halts["blocked"](s)
 	delete(s.env, "BATON_HOST")
-	s.must("", "resume")
+	s.must("", "run")
 }
 
 // A proposal goes to the human before anything else moves.
@@ -359,7 +359,7 @@ func TestStatusListsTheDecisionsMadeWithoutYou(t *testing.T) {
 	})
 	out = s.must("", "status")
 	for _, want := range []string{"held for you: proposal d3 waits for you: use the staging database — write in the session to answer it",
-		"review due: P0 has made 2 decisions without you, as many as it may before you go over them (below). Answer baton's question in the session, or /baton resume"} {
+		"review due: P0 has made 2 decisions without you, as many as it may before you go over them (below). Answer baton's question in the session, or /baton run"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}

@@ -173,7 +173,7 @@ func answeredReview(st *state.State, c Context) valveAction {
 	v := valveAction{event: "review_resolved", fields: map[string]any{"phase": phase, "answer": answer, "by": state.ByHuman}}
 	switch answer {
 	case "Pause baton":
-		state.Reviewed(st) // the human has taken over, and will hand back with /baton resume
+		state.Reviewed(st) // the human has taken over, and will hand back with /baton run
 		if state.Pause(st) == nil {
 			v.also = append(v.also, event{"paused", nil})
 		}

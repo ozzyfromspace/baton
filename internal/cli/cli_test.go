@@ -100,6 +100,12 @@ func TestNoClaudeStartsInsideASession(t *testing.T) {
 	if Main([]string{"elevate"}, io); !strings.Contains(errb.String(), `"elevate" is not a baton command`) {
 		t.Errorf("a retired name: %q", errb.String())
 	}
+	// A hosted session says the same, and that it is hosted already.
+	io, _, errb = testIO("", map[string]string{"BATON_HOST": "1", "CLAUDE_CODE_SESSION_ID": "sess-1", "BATON_CLAUDE": "/nonexistent/claude"})
+	if code := Main([]string{"resume"}, io); code == 0 || !strings.Contains(errb.String(), `"resume" is not a baton command`) ||
+		!strings.Contains(errb.String(), "this is already one, hosted by baton. `baton help` lists baton's commands.") {
+		t.Errorf("a retired name in a hosted session: code %d, %q", code, errb.String())
+	}
 }
 
 func TestStartInAHostedSessionDoesNothing(t *testing.T) {

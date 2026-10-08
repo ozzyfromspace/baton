@@ -148,9 +148,9 @@ func TestWithoutGitNothingIsRefusedOrCommitted(t *testing.T) {
 			s, planFile, root := setup(t)
 			s.attach(planFile)
 			var said strings.Builder
-			for _, args := range [][]string{{"checkpoint"}, {"blocked", "need", "a", "key", "--tried", "the vault", "--keep-dirty", "ignored"}, {"resume"}, {"done", "P0"}} {
+			for _, args := range [][]string{{"checkpoint"}, {"blocked", "need", "a", "key", "--tried", "the vault", "--keep-dirty", "ignored"}, {"run"}, {"done", "P0"}} {
 				gittest.Write(t, root, args[0]+".txt", "work\n")
-				if args[0] == "resume" {
+				if args[0] == "run" {
 					s.human() // only the human can clear a block
 				}
 				code, out, errs := s.run("", args...)

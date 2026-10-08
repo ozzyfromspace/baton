@@ -113,15 +113,15 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 		t.Fatalf("status when blocked: %s", st)
 	}
 	// The model cannot clear its own block: only the human, by taking part, lets it act again.
-	for _, args := range [][]string{{"resume"}, {"done", "P1"}, {"checkpoint"}, {"waiting", "x", "--until", "1m"}, {"blocked", "x", "--tried", "y"}} {
+	for _, args := range [][]string{{"run"}, {"done", "P1"}, {"checkpoint"}, {"waiting", "x", "--until", "1m"}, {"blocked", "x", "--tried", "y"}} {
 		s.mustFail("only they can clear that", args...)
 	}
 	s.human()
-	s.must("", "resume")
+	s.must("", "run")
 	s.must("", "checkpoint", "--notes", "half way")
 	s.must("", "pause")
 	s.mustFail("only apply while a plan is running", "checkpoint")
-	s.must("", "resume")
+	s.must("", "run")
 
 	// done refuses the next phase until the boundary compaction has started it.
 	s.mustFail("has not started yet", "done", "P1")

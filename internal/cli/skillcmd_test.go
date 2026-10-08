@@ -25,7 +25,7 @@ func TestSkillInstructionsCoverEverySubcommand(t *testing.T) {
 			t.Errorf("/baton %s is listed but has no section", m[1])
 		}
 	}
-	for _, retired := range []string{"elevate", "`baton stop", "/baton stop", "/baton attach", "$ARGUMENTS"} {
+	for _, retired := range []string{"elevate", "`baton stop", "/baton stop", "/baton attach", "/baton resume", "`baton resume", "$ARGUMENTS"} {
 		if strings.Contains(skill.Text, retired) {
 			t.Errorf("the instructions mention %q", retired)
 		}

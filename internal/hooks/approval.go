@@ -91,6 +91,25 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	return v
 }
 
+// phaseList names phases as the human knows them: "P3 (Polish) and P4 (Docs)".
+func phaseList(pl plan.Plan, ids []string) string {
+	var names []string
+	for _, id := range ids {
+		names = append(names, phaseTitle(pl, id))
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // answeredReplan acts on the human's answer about a plan they approved while the run had one.
 func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) valveAction {
 	r := st.Replan
@@ -185,13 +204,7 @@ func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (sa
 	if pl.File == "" || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
 		return "", nil
 	}
-	var remaining []string
-	for _, ph := range pl.Phases {
-		if ps := st.Phases[ph.ID]; ps == nil || ps.Status != state.PhaseDone {
-			remaining = append(remaining, ph.ID)
-		}
-	}
-	adopted, changed, err := plan.Recheck(pl, remaining)
+	adopted, changed, err := plan.Recheck(pl, state.Remaining(*st, pl))
 	if !changed {
 		return "", nil
 	}
@@ -200,6 +213,10 @@ func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (sa
 			return "", nil
 		}
 		st.PlanDrift = ""
+		if added := state.Extend(st, adopted); len(added) > 0 {
+			return fmt.Sprintf("baton: the plan file changed and adds %s; baton follows the new text, and runs %s in turn", phaseList(adopted, added), plural(len(added), "it", "them")),
+				&event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added}}
+		}
 		return "baton: the plan file changed; every phase still to run is there, so baton follows the new text",
 			&event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true}}
 	}
@@ -217,5 +234,5 @@ func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (sa
 		return "baton: the plan file changed, and baton can no longer follow it: " + first, ev
 	}
 	notice(st, "plan_changed", fmt.Sprintf("%s paused: the plan file changed (%s)", pl.Title, first), now)
-	return fmt.Sprintf("baton: paused — the plan file changed, and baton can no longer follow it: %s. Fix %s, or /baton run it again; then /baton resume", first, filepath.Base(pl.File)), ev
+	return fmt.Sprintf("baton: paused — the plan file changed, and baton can no longer follow it: %s. Fix %s, then /baton run", first, filepath.Base(pl.File)), ev
 }

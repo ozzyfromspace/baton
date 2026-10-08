@@ -182,3 +182,52 @@ func TestRecheckFollowsEditsThatKeepThePhases(t *testing.T) {
 		t.Errorf("file gone: %v %v", changed, err)
 	}
 }
+
+// A phase the human adds to the plan file joins the run, in document order; lines that merely look like
+// phases do not, and neither does anything in a plan whose phases are not headings.
+func TestRecheckAdoptsAddedPhases(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "plan.md")
+	doc := "# T\n\n## P0 — A\nx\n\n## P1 — B\ny\n\n## Verification\nv\n"
+	os.WriteFile(file, []byte(doc), 0o644)
+	p, err := Build(file, []byte(doc), Suggest([]byte(doc)))
+	if err != nil || p.EndAnchor != "## Verification" {
+		t.Fatal(err, p.EndAnchor)
+	}
+	phases := func(p Plan) string {
+		var out []string
+		for _, ph := range p.Phases {
+			out = append(out, ph.ID+" "+ph.Title)
+		}
+		return strings.Join(out, ", ")
+	}
+	for _, tc := range []struct {
+		name, doc, phases, end string
+		remaining              []string
+	}{
+		{"before the end marker", strings.Replace(doc, "## Verification", "## P2 — C\nz\n\n### S1: a spike, not a phase\n\n## Verification", 1),
+			"P0 A, P1 B, P2 C", "## Verification", []string{"P1"}},
+		{"after the end marker", doc + "\n## P2 — C\nz\n", "P0 A, P1 B, P2 C", "", []string{"P1"}},
+		{"to a finished plan", strings.Replace(doc, "## Verification", "## P2 — C\nz\n\n## P3 — D\nw\n\n## Verification", 1),
+			"P0 A, P1 B, P2 C, P3 D", "## Verification", nil},
+		{"between phases still to run", strings.Replace(doc, "## P1 — B", "## P0b — A2\nq\n\n## P1 — B", 1), "P0 A, P0b A2, P1 B", "## Verification", []string{"P0", "P1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			os.WriteFile(file, []byte(tc.doc), 0o644)
+			adopted, changed, err := Recheck(p, tc.remaining)
+			if !changed || err != nil || phases(adopted) != tc.phases || adopted.EndAnchor != tc.end || adopted.SHA256 != adopted.SHA() {
+				t.Fatalf("changed %v err %v: phases %q end %q", changed, err, phases(adopted), adopted.EndAnchor)
+			}
+		})
+	}
+
+	bullets := "# T\n\n- **P0 A:** x\n- **P1 B:** y\n"
+	os.WriteFile(file, []byte(bullets), 0o644)
+	pb, err := Build(file, []byte(bullets), Suggest([]byte(bullets)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added := Added(pb, []byte(bullets+"\n## P2 — C\nz\n")); len(added) != 0 {
+		t.Errorf("a plan of bullets gained %v", added)
+	}
+}

@@ -1,15 +1,15 @@
 baton runs an approved multi-phase plan phase by phase in this session, with no human needed at phase boundaries. Between phases it compacts the context, gives you a brief for the next phase, and wakes you up. It works through a small command-line tool, `baton`, which ships in this plugin's `bin/` directory, so it is on the Bash tool's PATH. Every `baton` command only reads and writes the project's `.baton/` directory.
 
-Act on the first word of the arguments. If there is none, treat it as `help`.
+Act on the first word of the arguments. If there is none, treat it as `help`. If it names no section below, say in one line that baton has no such command, then explain as under `help`.
 
 ## help
 
 Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
-- `/baton run [plan file]`: run a plan that already exists. If this conversation had other turns, baton compacts them away before the first phase.
+- `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
 - `/baton start`: hand this session to baton (same conversation); `/baton plan` and `/baton run` do it when they need to.
 - `/baton status`: where the run stands.
-- `/baton pause` / `/baton resume`: take or give back the wheel.
+- `/baton pause`: take the wheel; `/baton run` gives it back.
 - `/baton drop`: drop the run; its plan is set aside, and baton does nothing more until the next plan.
 - `/baton exit`: leave baton; this conversation goes on as plain Claude Code.
 - `/baton drafts`: drafts baton saved out of the input box (`--last` prints the newest).
@@ -49,28 +49,32 @@ whole run — and saves the text first. Each draft is a file in the run's `draft
 
 ## run [plan file]
 
-1. Find the plan document:
+1. Run `baton run`, adding the plan file if the arguments name one. baton looks at this session's run and says what running means here:
+   - **resumed**: the session's plan was paused or blocked, and goes on. Report it in one line. If baton asks you to record where the phase stands first, do exactly that: run `baton checkpoint --notes "…"`, including anything from the paused conversation the rest of the phase needs, then end your turn. baton compacts, and the phase goes on from your notes.
+   - **adds** phases to a plan that had finished: do what it says. Normally that is to end your turn: baton compacts the conversation, then starts the first new phase with a fresh brief.
+   - **already running**, **complete**, or **not resumed**: tell the user what it says in one line. If it says to ask which plan to run next, list `~/.claude/plans/` newest first, ask the user with `AskUserQuestion`, and attach their choice from step 3.
+   - **another plan is running or paused** in this session: ask the user with `AskUserQuestion` whether to discard that run's progress and run the new plan. Only if they agree, attach it from step 3, adding `--replace` to the attach command.
+   - **attach**: no plan is underway here; go on to step 2.
+2. Find the plan document:
    - the path given in the arguments, or
    - the plan approved in this conversation, or
    - otherwise list `~/.claude/plans/` newest first and ask the user which one with `AskUserQuestion`.
-2. Run `baton attach <file> --suggest`. It prints a JSON spec of the phases it found. Check it against the document:
+3. Run `baton attach <file> --suggest`. It prints a JSON spec of the phases it found. Check it against the document:
    - every phase is present, in order;
    - ids and titles are right;
    - each `anchor` is a verbatim snippet that starts that phase's section and occurs only once in the document;
    - set `rules_anchor` to the standing-rules heading if there is one, and `end_anchor` to the first heading after the last phase (for example `## Verification`).
-3. Attach it with one plain command (no heredocs or pipes, so the allow rule for `baton` covers it):
+4. Attach it with one plain command (no heredocs or pipes, so the allow rule for `baton` covers it):
    - If the suggestion is right as printed: `baton attach <file> --suggested`.
    - Otherwise pass the corrected spec inline, in single quotes: `baton attach <file> --spec '{"title": …, "phases": [ … ]}'`.
 
-   If baton reports a problem with an anchor, fix the spec and try again. If a plan is already running in this session, ask the user before adding `--replace`.
-4. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "The plan is attached. Do what baton says about its first phase."` and end your turn (see **start**).
-5. Otherwise, do what `baton attach` says. In a conversation that had turns before this one, that is to end your turn: baton compacts the conversation, then starts the first phase with a fresh brief. Otherwise, begin the first phase.
+   If baton reports a problem with an anchor, fix the spec and try again.
+5. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "The plan is attached. Do what baton says about its first phase."` and end your turn (see **start**).
+6. Otherwise, do what `baton attach` says. In a conversation that had turns before this one, that is to end your turn: baton compacts the conversation, then starts the first phase with a fresh brief. Otherwise, begin the first phase.
 
-## pause / resume
+## pause
 
-Run `baton pause` or `baton resume` and report the result in one line. Pause hands the session to the human: baton stops compacting, nudging and escalating. Resume gives it back to baton and also clears a "blocked" state.
-
-If the conversation grew by more than 20k tokens while baton was paused, `baton resume` says so and asks you to record where the phase stands first. Do exactly that: run `baton checkpoint --notes "…"`, including anything from the paused conversation the rest of the phase needs, then end your turn. baton compacts, and the phase goes on from your notes.
+Run `baton pause` and report the result in one line. It hands the session to the human: baton stops compacting, nudging and escalating until `/baton run` gives the session back.
 
 ## drop
 

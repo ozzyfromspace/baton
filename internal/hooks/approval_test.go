@@ -229,3 +229,21 @@ func TestThePlanFileIsWatched(t *testing.T) {
 		t.Errorf("%d plan_changed events; each change is reported once", n)
 	}
 }
+
+// A phase the human adds to the plan file while it runs joins the run at the next stop, and is announced.
+func TestAPhaseAddedToThePlanFileJoinsTheRun(t *testing.T) {
+	f := newFixture(t, false)
+	file := f.startRun()
+	doc, _ := os.ReadFile(file)
+	os.WriteFile(file, append(doc, []byte("\n## P3 — Fourth\nDo d.\n")...), 0o644)
+	if msg := say(f.fire("Stop", map[string]any{})); !strings.Contains(msg, "the plan file changed and adds P3 (Fourth); baton follows the new text, and runs it in turn") {
+		t.Fatalf("stop said %q", msg)
+	}
+	pl, _ := f.store.LoadPlan()
+	if st := f.state(); pl.Index("P3") != 3 || st.Phases["P3"] == nil || st.Phases["P3"].Status != state.PhasePending || st.Mode != state.ModeRunning {
+		t.Fatalf("plan %+v, state %+v", pl.Phases, st.Phases)
+	}
+	if !strings.Contains(f.eventLog(), `"added":["P3"]`) {
+		t.Errorf("events: %s", f.eventLog())
+	}
+}
