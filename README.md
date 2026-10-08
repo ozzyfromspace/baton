@@ -21,7 +21,7 @@ baton takes every one of those decisions away from the model. The model does the
 
 - **Hosting.** `baton` starts `claude` inside a pseudo-terminal it owns and passes every byte through. You see and use the normal Claude Code interface.
 - **One run per session.** Each Claude Code session has a run of its own in `.baton/runs/` at the root of your project, which is kept out of git. So every `baton` terminal can run a plan, in the same project or not ([Several sessions](#several-sessions-in-one-project)). A run stays with its conversation through `--resume`, and through a `/clear` in the same terminal. The model reports progress with `baton done`, `waiting` or `checkpoint`, and reaches you with `note`, `propose` or `blocked`.
-- **Plan approval.** When you approve a plan with phase headings (`## P0 — …`), baton attaches it, compacts the planning conversation away, and starts P0 from a brief. If a run is already under way, it asks you whether to continue with the revised plan or start the new one. baton reads the plan from the file Claude Code wrote, and checks it at every stop: an edit that keeps the phases still to run is followed, and one that loses any pauses the run.
+- **Plan approval.** When you approve a plan with phase headings (`## P0 — …`), baton attaches it, compacts the planning conversation away, and starts P0 from a brief. `/baton run` does the same whenever the conversation had turns before it, so a plan never starts in the middle of whatever came before. If a run is already under way, it asks you whether to continue with the revised plan or start the new one. baton reads the plan from the file Claude Code wrote, and checks it at every stop: an edit that keeps the phases still to run is followed, and one that loses any pauses the run.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
 - **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. If nobody answers within 20 minutes, it keeps going. Claude Code's own auto-compaction remains the backstop.
@@ -66,10 +66,10 @@ Inside the session:
 | Command | What it does |
 |---|---|
 | `/baton plan <goal>` | Plan the work in plan mode, in a format baton can run. When you approve the plan, baton runs it. |
-| `/baton run [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. |
+| `/baton run [plan.md]` | Run a plan that already exists. Defaults to the plan you just approved. If the conversation had turns before it, baton compacts them away before P0. |
 | `/baton start` | Hand this session to baton, same conversation (see below). `/baton plan` and `/baton run` do it when they need to. |
 | `/baton status` | Show where the run stands. |
-| `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. |
+| `/baton pause` / `/baton resume` | Take the wheel and give it back. While paused, baton observes but never acts. If the conversation grew by more than 20k tokens meanwhile, the model records where the phase stands and baton compacts before it goes on. |
 | `/baton drop` | Drop the run. Its plan is set aside, and baton does nothing in this session until the next plan. |
 | `/baton exit` | Leave baton: this conversation goes on as plain `claude` in the same terminal. |
 | `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |

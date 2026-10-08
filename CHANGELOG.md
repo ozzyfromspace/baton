@@ -4,6 +4,17 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+- **`/baton run` compacts before the first phase**, as approving a plan in plan mode does, whenever the
+  conversation had turns before it (or was resumed): P0 starts from a brief, not in the middle of
+  whatever came before. That includes a new plan after `/baton drop`. A conversation whose first turn it
+  is starts at once, as before. In a plain session, the compaction happens once baton hosts it.
+- **`/baton resume` compacts first if the conversation grew while paused.** `baton pause` notes the
+  context's size; if it grew by more than 20k tokens by the time you resume, the model must first record
+  where the phase stands (`baton checkpoint --notes`, including anything from the paused conversation
+  the phase needs), and baton compacts before the phase goes on. The hooks hold the model to it: other
+  tools are refused until it does, and if it stops without the notes three times, baton compacts anyway.
+
 ## [0.3.5] - 2026-10-08
 
 ### Fixed
