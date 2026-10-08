@@ -4,6 +4,24 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+- **`/baton run` picks a paused run back up, and `/baton resume` is gone.** "Run" now means "make the
+  plan go", whatever state it is in, and baton decides what that means rather than Claude. With no file,
+  or this session's own plan file, a paused or blocked run is resumed (with v0.3.6's compaction if the
+  conversation grew while paused), and a running one is left alone. Another plan is attached and started
+  as before; over a run that is underway, only once you agree to discard its progress. A finished plan
+  is not run again (only phases added to it run): `/baton drop` it first if you mean to. A paused run whose plan file changed so that
+  baton can no longer follow it stays paused until the file is fixed. `baton resume` is removed too.
+- Inside a hosted session, `baton <not a command>` says so, as it already did in a plain session.
+
+### Fixed
+- **Phases you add to the plan file run.** baton re-reads the plan file whenever it changes (by its hash, at
+  every stop, and now also as each phase ends), but it only checked the phases it already had, so a phase
+  added while the plan ran was never run: the run finished without it, and the phase before it was
+  briefed with its text. A new heading like the plan's own (`## P3 — …`, at the same level, with a new id)
+  now joins the run in document order, and baton says so. On a plan that has finished, `/baton run`
+  starts the first new phase after a compaction; with nothing new, it says the plan is complete.
+
 ## [0.3.6] - 2026-10-08
 
 ### Changed
