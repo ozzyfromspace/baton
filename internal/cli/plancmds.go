@@ -599,6 +599,10 @@ func cmdDone(args []string, io IO) int {
 		if next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"], DespiteRed: red}); err != nil {
 			return err
 		}
+		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying && latest != nil {
+			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: %s verifying — job %s (`%s`) runs on; %s is done once it passes, and reopens if it fails",
+				id, latest.ID, latest.Command, id))
+		}
 		if note != nil {
 			if count = st.Unattended(id); decide.CapReached(count, most) {
 				state.DueReview(st, id, io.Now())

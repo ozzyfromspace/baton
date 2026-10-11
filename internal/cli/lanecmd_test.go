@@ -91,6 +91,27 @@ func TestLaneRunRunsAJob(t *testing.T) {
 	if e := ev["job_finished"]; e == nil || e["status"] != "failed" || e["exit"] != 1.0 || e["lane"] != 1.0 || e["seconds"].(float64) < 1 {
 		t.Errorf("job_finished: %v", e)
 	}
+	if got := st.Run.Announce; len(got) != 1 || got[0] != "baton: job j1 started — `sleep 1; echo gate output; exit 1` (P1)" {
+		t.Errorf("announced %q", got)
+	}
+}
+
+// The job of a phase set aside while it ran: the human is told it ended, since nothing else says so until
+// the phase comes back.
+func TestLaneRunTellsOfAParkedPhasesJob(t *testing.T) {
+	s, env := laneProject(t, "exit 0")
+	s.Update(func(st *state.State) error {
+		st.Mode, st.Current = state.ModeRunning, "P2"
+		st.Phases = map[string]*state.PhaseState{"P1": {Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Job: "j1"}}, "P2": {Status: state.PhaseActive}}
+		return nil
+	})
+	if code, errs := laneRun(env, "sess-1", "j1"); code != 0 {
+		t.Fatalf("lane-run: exit %d: %s", code, errs)
+	}
+	st, _ := s.Load()
+	if got := st.Run.Announce; len(got) != 2 || !strings.HasPrefix(got[1], "baton: job j1 (`exit 0`, P1) passed after ") || !strings.HasSuffix(got[1], " → P1 comes back once P2 is done or set aside") {
+		t.Errorf("announced %q", got)
+	}
 }
 
 func TestLaneRunStopsACancelledJob(t *testing.T) {

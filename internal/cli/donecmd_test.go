@@ -60,6 +60,9 @@ func TestDoneWhileItsGateRuns(t *testing.T) {
 	if !s.logged("phase_verifying", map[string]any{"phase": "P0", "job": "j1", "next": "P1"}) || s.logged("phase_done", map[string]any{"phase": "P0"}) {
 		t.Errorf("events:\n%s", s.events())
 	}
+	if want := "baton: P0 verifying — job j1 (`make test`) runs on; P0 is done once it passes, and reopens if it fails"; len(st.Run.Announce) != 1 || st.Run.Announce[0] != want {
+		t.Errorf("announced %q, want %q", st.Run.Announce, want)
+	}
 }
 
 // A red verification refuses done, with the result the first time; --despite-red finishes the phase, as a

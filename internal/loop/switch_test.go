@@ -178,6 +178,9 @@ func TestUncommittedWorkHoldsASwitch(t *testing.T) {
 	if n := strings.Count(r.events(), `"kind":"switch_held"`); n != 1 || !strings.Contains(r.events(), `"files":1,"instance":"inst","job":"j1","kind":"switch_held","phase":"P0","ts":"`) {
 		t.Errorf("held %d times; events:\n%s", n, r.events())
 	}
+	if got := r.state().Run.Announce; len(got) != 1 || got[0] != "baton: P0's job j1 has run 5m, but P0 has 1 uncommitted file, so baton keeps it in hand rather than set it aside for P1" {
+		t.Errorf("announced %q", got)
+	}
 	gittest.Commit(t, root, "edit", "a.go")
 	r.run(switchRecheck)
 	if !r.switched() {

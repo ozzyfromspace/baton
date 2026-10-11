@@ -85,6 +85,9 @@ func (l *Loop) lost(v host.View, j state.Job, reason string) {
 		x.Status, x.Exit, x.Reason, x.Ended = state.JobInterrupted, -1, reason, v.Now
 		e := *x
 		ended = &e
+		if line := decide.FinishedAside(*st, e); line != "" {
+			st.Run.Announce = append(st.Run.Announce, line)
+		}
 	})
 	if ended == nil {
 		return

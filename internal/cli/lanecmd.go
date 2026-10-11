@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -66,6 +67,7 @@ func cmdLaneRun(args []string, io IO) int {
 			j.Log = s.JobLog(id)
 		}
 		job = *j
+		st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: job %s started — `%s` (%s)", id, j.Command, j.Phase))
 		return nil
 	}); err != nil {
 		fmt.Fprintf(io.Err, "baton: %v\n", err)
@@ -166,6 +168,9 @@ func finishJob(s *state.Store, job state.Job, res lane.Result, now time.Time) st
 				j.Ended = now
 			}
 			ended = *j
+			if line := decide.FinishedAside(*st, ended); line != "" {
+				st.Run.Announce = append(st.Run.Announce, line)
+			}
 			return nil
 		})
 		if err == nil {

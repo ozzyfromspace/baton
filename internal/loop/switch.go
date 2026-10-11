@@ -39,7 +39,8 @@ func (l *Loop) switching(v host.View, st state.State) state.State {
 		l.logf("loop: switching: %v", err)
 		return st
 	}
-	if state.Next(st, pl) == "" {
+	to := state.Next(st, pl)
+	if to == "" {
 		return st
 	}
 	if w := l.Store.PhaseWork(st.Current); !w.Clean() {
@@ -52,6 +53,13 @@ func (l *Loop) switching(v host.View, st state.State) state.State {
 				files = w.Paths // baton cannot tell the phase's own from the rest
 			}
 			l.Store.Event("switch_held", map[string]any{"phase": st.Current, "job": j.ID, "why": "uncommitted work", "files": len(files)})
+			unit := "files"
+			if len(files) == 1 {
+				unit = "file"
+			}
+			line := fmt.Sprintf("baton: %s's job %s has run %s, but %s has %d uncommitted %s, so baton keeps it in hand rather than set it aside for %s",
+				st.Current, j.ID, decide.Span(v.Now.Sub(j.Queued)), st.Current, len(files), unit, to)
+			l.update(func(st *state.State) { st.Run.Announce = append(st.Run.Announce, line) })
 		}
 		return st
 	}

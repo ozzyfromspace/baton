@@ -71,6 +71,38 @@ func TestJobsFinished(t *testing.T) {
 	}
 }
 
+func TestFinishedAside(t *testing.T) {
+	failed := state.Job{ID: "j4", Phase: "P3", Command: "make test", Status: state.JobFailed, Exit: 1, Started: time.Unix(0, 0), Ended: time.Unix(720, 0)}
+	parked := func(reason, job string) *state.PhaseState {
+		return &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: reason, Job: job}}
+	}
+	for _, c := range []struct {
+		name    string
+		current string
+		phase   *state.PhaseState
+		job     func(state.Job) state.Job
+		want    string
+	}{
+		{"set aside while it ran", "P5", parked(state.ParkJob, "j4"), nil, "baton: job j4 (`make test`, P3) failed (exit 1) after 12m → P3 comes back once P5 is done or set aside"},
+		{"set aside at a checkpoint", "P5", parked(state.ParkCheckpoint, "j4"), nil, "baton: job j4 (`make test`, P3) failed (exit 1) after 12m → P3 comes back once P5 is done or set aside"},
+		{"no phase in hand: it comes back now", "", parked(state.ParkJob, "j4"), nil, "baton: job j4 (`make test`, P3) failed (exit 1) after 12m"},
+		{"another job's park", "P5", parked(state.ParkJob, "j2"), nil, ""},
+		{"the phase in hand", "P3", &state.PhaseState{Status: state.PhaseActive}, nil, ""},
+		{"verifying", "P5", &state.PhaseState{Status: state.PhaseVerifying}, nil, ""},
+		{"cancelled", "P5", parked(state.ParkJob, "j4"), func(j state.Job) state.Job { j.Delivered = time.Unix(720, 0); return j }, ""},
+		{"still running", "P5", parked(state.ParkJob, "j4"), func(j state.Job) state.Job { j.Status = state.JobRunning; return j }, ""},
+	} {
+		st := state.State{Mode: state.ModeRunning, Current: c.current, Phases: map[string]*state.PhaseState{"P3": c.phase}}
+		j := failed
+		if c.job != nil {
+			j = c.job(j)
+		}
+		if got := FinishedAside(st, j); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestRedRefusal(t *testing.T) {
 	got := RedRefusal(state.Job{ID: "j4", Phase: "P3", Command: "make test", Commit: "3f2a9c1b04de55aa", Status: state.JobFailed, Exit: 1})
 	for _, w := range []string{"not done — P3's latest verification, job j4 (`make test` on 3f2a9c1b04de), failed (exit 1)", "verify again", "`baton done P3 --despite-red \"<why>\"`"} {

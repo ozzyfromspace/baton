@@ -118,6 +118,22 @@ func RedPhases(red []state.Job, phase string) string {
 		plural(len(names), "it", "them") + "."
 }
 
+// FinishedAside tells the human that job j, as it ended, was the job of a phase set aside while it ran:
+// nothing else says so until the phase comes back, which it does once the phase in hand is done or set
+// aside in turn (state.Next). "" when j is not such a job, or its result needs no telling (it was
+// cancelled, or given already).
+func FinishedAside(st state.State, j state.Job) string {
+	ps := st.Phases[j.Phase]
+	if !j.Finished() || !j.Delivered.IsZero() || ps == nil || ps.Status != state.PhaseParked || ps.Park == nil || ps.Park.Job != j.ID {
+		return ""
+	}
+	line := fmt.Sprintf("baton: job %s (`%s`, %s) %s", j.ID, j.Command, j.Phase, Outcome(j))
+	if st.Mode == state.ModeRunning && st.Current != "" {
+		line += fmt.Sprintf(" → %s comes back once %s is done or set aside", j.Phase, st.Current)
+	}
+	return line
+}
+
 // JobsFinished is the line baton types to wake an idle model when jobs it handed over have finished; the
 // results come with it.
 func JobsFinished(jobs []state.Job) string {

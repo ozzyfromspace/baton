@@ -115,6 +115,10 @@ func TestVerifyQueuesAGateOnHead(t *testing.T) {
 	if !s.logged("job_queued", map[string]any{"job": "j2", "type": "await", "replaced": "j1"}) {
 		t.Errorf("events: %s", s.events())
 	}
+	if want := []string{"baton: job j1 queued for P0 — `make test` on " + head[:12] + ", in a lane",
+		"baton: job j2 queued for P0 — `gh run watch 7 --exit-status`, from the working tree; it replaces j1, which baton stops"}; !slices.Equal(st.Run.Announce, want) {
+		t.Errorf("announced %q, want %q", st.Run.Announce, want)
+	}
 }
 
 // Work already uncommitted when the phase started is not the phase's, so it does not hold a gate up; but

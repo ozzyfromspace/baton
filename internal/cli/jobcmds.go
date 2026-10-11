@@ -81,6 +81,14 @@ func queueJob(args []string, io IO, kind string) int {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
 		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Notes: notes}, io.Now())
+		line := fmt.Sprintf("baton: job %s queued for %s — `%s`, from the working tree", queued.ID, phase, command)
+		if kind == state.JobVerify {
+			line = fmt.Sprintf("baton: job %s queued for %s — `%s` on %s, in a lane", queued.ID, phase, command, shortCommit(commit))
+		}
+		if replaced != nil {
+			line += fmt.Sprintf("; it replaces %s, which baton stops", replaced.ID)
+		}
+		st.Run.Announce = append(st.Run.Announce, line)
 		return nil
 	})
 	if err != nil {

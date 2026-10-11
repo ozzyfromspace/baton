@@ -147,6 +147,26 @@ func TestAJobWhoseRunnerDiedIsInterrupted(t *testing.T) {
 	}
 }
 
+// A phase set aside while its job runs hears nothing until it comes back, so the human is told when the
+// job ends, even when its runner died.
+func TestTheEndOfAParkedPhasesJobIsAnnounced(t *testing.T) {
+	r, f := jobRig(t)
+	r.run(3 * time.Minute)
+	f.dead[42] = true
+	r.set(func(st *state.State) {
+		j := running(0)(r.now)
+		j.Command = "make test"
+		st.Jobs = []state.Job{j}
+		st.Phases["P0"].Status, st.Current, st.BoundaryOwed = state.PhaseActive, "P0", false
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Job: "j1"}}
+	})
+	r.tick(time.Second)
+	want := "baton: job j1 (`make test`, P1) was interrupted after 1h00m: its runner (pid 42) is gone → P1 comes back once P0 is done or set aside"
+	if got := r.state().Run.Announce; len(got) != 1 || got[0] != want {
+		t.Errorf("announced %q, want %q", got, want)
+	}
+}
+
 func running(beat time.Duration) func(now time.Time) state.Job {
 	return func(now time.Time) state.Job {
 		return state.Job{ID: "j1", Phase: "P1", Status: state.JobRunning, PID: 42, PGID: 43, Lane: 1, Started: now.Add(-time.Hour), Heartbeat: now.Add(beat)}
