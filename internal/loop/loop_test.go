@@ -69,13 +69,17 @@ func TestTheResumeNudgeResumesAParkedPhase(t *testing.T) {
 	}
 }
 
+// rig ticks a session's Loop the way the host does: as the lead of a Coordinator with no workers, or as
+// a worker of it (ctl).
 type rig struct {
-	t    *testing.T
-	now  time.Time
-	loop *Loop
-	in   *typed
-	push *pushes
-	view host.View
+	t     *testing.T
+	now   time.Time
+	loop  *Loop
+	coord *Coordinator
+	ctl   host.Controller // a worker's, ticked instead of the coordinator
+	in    *typed
+	push  *pushes
+	view  host.View
 }
 
 func newRig(t *testing.T) *rig {
@@ -89,6 +93,7 @@ func newRig(t *testing.T) *rig {
 		return state.Claim(st, "inst", 1, r.now)
 	})
 	r.loop = &Loop{Store: store, Notify: r.push, Project: "demo", Timing: DefaultTiming}
+	r.coord = &Coordinator{Lead: r.loop}
 	r.view = host.View{Owner: true, LastOutput: r.now.Add(-time.Hour), LastHumanKey: r.now.Add(-time.Hour)}
 	return r
 }
@@ -96,7 +101,11 @@ func newRig(t *testing.T) *rig {
 func (r *rig) tick(advance time.Duration) {
 	r.now = r.now.Add(advance)
 	r.view.Now = r.now
-	r.loop.Tick(r.view, r.in)
+	if r.ctl != nil {
+		r.ctl.Tick(r.view, r.in)
+		return
+	}
+	r.coord.Tick(r.view, r.in)
 }
 
 // run advances d in 10-second ticks. Ticks are continuous in real life; one long gap looks like sleep.

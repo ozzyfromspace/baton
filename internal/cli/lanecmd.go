@@ -26,16 +26,17 @@ var laneTick = lane.DefaultTick
 // was cancelled, or is gone from the record.
 var errNotWanted = errors.New("the job is no longer wanted")
 
-// cmdLaneRun runs one job of a run to its end: `baton lane-run <run> <job>`. The baton host starts it
-// detached (lane.Spawn), with BATON_DIR, BATON_HOME and BATON_INSTANCE set; nobody runs it by hand, so it
-// is left out of help. It takes the job from queued to running, runs it (package lane) while beating
-// into the run's state, and records how it ended. A SIGTERM stops the job and brings its lane down.
+// cmdLaneRun runs one job of a run to its end: `baton lane-run <ref> <job>`, where ref names the run, or a
+// worker's sub-run (<run>/<phase>). The baton host starts it detached (lane.Spawn), with BATON_DIR,
+// BATON_HOME and BATON_INSTANCE set; nobody runs it by hand, so it is left out of help. It takes the job
+// from queued to running, runs it (package lane) while beating into the run's state, and records how it
+// ended. A SIGTERM stops the job and brings its lane down.
 func cmdLaneRun(args []string, io IO) int {
 	if len(args) != 2 {
-		fmt.Fprintln(io.Err, "usage: baton lane-run <run> <job> (the baton host runs this)")
+		fmt.Fprintln(io.Err, "usage: baton lane-run <ref> <job> (the baton host runs this)")
 		return 2
 	}
-	runID, id := args[0], args[1]
+	ref, id := args[0], args[1]
 	dir := io.Env("BATON_DIR")
 	if dir == "" {
 		fmt.Fprintln(io.Err, "baton: lane-run is started by the baton host, which says where the project is (BATON_DIR)")
@@ -46,7 +47,7 @@ func cmdLaneRun(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: %v\n", err)
 		return 1
 	}
-	s, err := p.ExistingRun(runID, io.Env("BATON_INSTANCE"))
+	s, err := p.ExistingRun(ref, io.Env("BATON_INSTANCE"))
 	if err != nil {
 		fmt.Fprintf(io.Err, "baton: %v\n", err)
 		return 1
@@ -57,7 +58,7 @@ func cmdLaneRun(args []string, io IO) int {
 		j := st.Job(id)
 		switch {
 		case j == nil:
-			return fmt.Errorf("run %s has no job %s", runID, id)
+			return fmt.Errorf("run %s has no job %s", ref, id)
 		case j.Status != state.JobQueued:
 			return fmt.Errorf("job %s is %s, not queued", id, j.Status)
 		}

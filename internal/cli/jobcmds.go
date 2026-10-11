@@ -258,7 +258,8 @@ func lanesDown(io IO, root, projectDir, host string) {
 	lane.Pool{Home: batonRoot(io), Root: root}.Down(host, w)
 }
 
-// hostRunners runs a hosted session's jobs (loop.Runners): each in a `baton lane-run` of its own, detached.
+// hostRunners runs the jobs of a host's sessions (loop.Runners), each in a `baton lane-run` of its own,
+// detached, and keeps the lanes they run in (loop.Lanes).
 type hostRunners struct {
 	exe, home, instance string
 	proj                *state.Project
@@ -282,8 +283,8 @@ func newHostRunners(io IO, exe string, proj *state.Project, instance string) hos
 		logf: fileLogger(filepath.Join(proj.Dir, "baton.log"), instance, io.Now)}
 }
 
-func (h hostRunners) Spawn(run, id string) (int, error) {
-	return lane.Spawn([]string{h.exe, "lane-run", run, id}, h.env, h.proj.Root, filepath.Join(h.proj.Dir, "baton.log"))
+func (h hostRunners) Spawn(ref, id string) (int, error) {
+	return lane.Spawn([]string{h.exe, "lane-run", ref, id}, h.env, h.proj.Root, filepath.Join(h.proj.Dir, "baton.log"))
 }
 
 func (h hostRunners) Alive(pid int) bool { return lane.Alive(pid) }

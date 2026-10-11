@@ -6,6 +6,9 @@
 // Nothing here may wait forever. Every state baton waits in has a deadline, and every gate that holds
 // baton back either expires (a screen that never settles, a turn with no sign of life) or is reported
 // to the human with its reason.
+//
+// Each session of a run has a Loop of its own, and a Coordinator ticks them and does what belongs to the
+// run as a whole.
 package loop
 
 import (
@@ -84,8 +87,21 @@ var Reminders = []time.Duration{30 * time.Minute, 2 * time.Hour, 6 * time.Hour}
 // It is only sent when the human has no draft (a gate), so it never erases their text.
 const clearLine = "\x15\x15\x15\x15\x15\x15"
 
+// Role is what a session's Loop may do beyond its own phase.
+type Role int
+
+const (
+	// RoleLead is the session in the human's terminal: it may leave baton, set a phase aside for another,
+	// and restart on a newer baton.
+	RoleLead Role = iota
+	// RoleWorker is a hidden session on one phase of the run, in a worktree of its own. It never leaves,
+	// switches or restarts: the run's coordinator ends it, and it has no other phase to switch to.
+	RoleWorker
+)
+
 // Loop implements host.Controller.
 type Loop struct {
+	Role    Role
 	Store   *state.Store
 	Notify  notify.Notifier
 	Project string
@@ -97,7 +113,7 @@ type Loop struct {
 	// none; upgrade.Watch). A nil Newer never restarts.
 	Version string
 	Newer   func() string
-	// Runners runs the run's jobs (nil: jobs stay queued).
+	// Runners runs the session's jobs (nil: jobs stay queued).
 	Runners Runners
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
@@ -116,8 +132,6 @@ type Loop struct {
 	aloneAt time.Time
 
 	owner      bool      // this session has owned the project
-	swept      bool      // the lanes were swept
-	downed     bool      // the lanes came down, as the plan is complete
 	settled    time.Time // when the run's jobs were last settled
 	switchNext time.Time // when a switch may be tried next
 	switchHeld string    // the job whose switch uncommitted work holds, reported once
@@ -158,7 +172,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
-	if !st.Run.ExitAt.IsZero() {
+	if !st.Run.ExitAt.IsZero() && l.Role == RoleLead {
 		l.leave(v, st, in)
 		return
 	}
@@ -185,7 +199,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.wished = false
 	l.resolve(v, st)
 	l.remind(v, st)
-	st = l.switching(v, st)
+	if l.Role == RoleLead {
+		st = l.switching(v, st)
+	}
 	l.clearDraft(v, st, in)
 
 	comp := st.Run.Compaction
@@ -271,9 +287,9 @@ func (l *Loop) Restart() (to, session string, ok bool) {
 	return l.restart.to, l.restart.session, true
 }
 
-// upgradeDue reports a newer baton to restart on, for a session baton knows the conversation of.
+// upgradeDue reports a newer baton to restart the lead on, for a session baton knows the conversation of.
 func (l *Loop) upgradeDue(v host.View, st state.State) bool {
-	return l.Newer != nil && st.Run.SessionID != "" && l.Newer() != ""
+	return l.Role == RoleLead && l.Newer != nil && st.Run.SessionID != "" && l.Newer() != ""
 }
 
 // restartable reports a safe point to restart the session: the moment is the human's and the model's

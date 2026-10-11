@@ -199,7 +199,7 @@ func TestLaneRunRefuses(t *testing.T) {
 		code int
 		want string
 	}{
-		{env, nil, 2, "usage: baton lane-run <run> <job>"},
+		{env, nil, 2, "usage: baton lane-run <ref> <job>"},
 		{env, []string{"sess-1"}, 2, "usage"},
 		{noDir, []string{"sess-1", "j1"}, 1, "BATON_DIR"},
 		{env, []string{"other", "j1"}, 1, `no run "other" here`},

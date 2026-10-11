@@ -10,41 +10,25 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// Runners starts and watches the runners of a run's jobs. Each job runs in a `baton lane-run` of its own,
-// detached, so it outlives the session's claude and a baton that restarts itself (package lane). Tests
-// fake it.
+// Runners starts and watches the runners of a session's jobs. Each job runs in a `baton lane-run` of its
+// own, detached, so it outlives the session's claude and a baton that restarts itself (package lane).
+// Tests fake it.
 type Runners interface {
-	// Spawn starts the runner of job id of run, and returns its pid.
-	Spawn(run, id string) (pid int, err error)
+	// Spawn starts the runner of job id of the run ref names (a worker's sub-run: <run>/<phase>), and
+	// returns its pid.
+	Spawn(ref, id string) (pid int, err error)
 	// Alive reports whether process pid is running.
 	Alive(pid int) bool
 	// Kill kills process group pgid: whatever a runner that died left running.
 	Kill(pgid int)
-	// Sweep removes the project's lanes that no job holds and no live host brought up.
-	Sweep()
-	// Down brings down the lanes this host brought up that no job holds, and returns them.
-	Down() []int
 }
 
-// jobs runs the run's jobs: it starts a runner for each job queued, and ends a job whose runner died as
-// interrupted, since nothing else ever would. The runners do the rest, and record how each job ended. The
-// first time, it sweeps up the lanes hosts that are gone left behind, and once the plan is complete, it
-// brings down the lanes this host brought up.
+// jobs runs the session's jobs: it starts a runner for each job queued, and ends a job whose runner died
+// as interrupted, since nothing else ever would. The runners do the rest, and record how each job ended.
+// The lanes they run in are the whole run's, and the Coordinator's to sweep and bring down.
 func (l *Loop) jobs(v host.View, st state.State) {
 	if l.Runners == nil {
 		return
-	}
-	if !l.swept {
-		l.swept = true
-		go l.Runners.Sweep()
-	}
-	if st.Mode != state.ModeComplete {
-		l.downed = false
-	} else if !l.downed {
-		// Nothing runs in them until the next plan, and what they hold up (services, containers) would
-		// otherwise stay up until the session ends. A complete plan has no job left running.
-		l.downed = true
-		go l.lanesDown(l.Store)
 	}
 	for _, j := range st.Jobs {
 		switch {
@@ -62,14 +46,6 @@ func (l *Loop) jobs(v host.View, st state.State) {
 				l.lost(v, j, fmt.Sprintf("its runner (pid %d) has not been heard from for %s", j.PID, quiet.Round(time.Second)))
 			}
 		}
-	}
-}
-
-// lanesDown brings down the lanes this host brought up, as the plan is complete.
-func (l *Loop) lanesDown(s *state.Store) {
-	if lanes := l.Runners.Down(); len(lanes) > 0 {
-		l.logf("loop: the plan is complete: brought lanes %v down", lanes)
-		s.Event("lanes_down", map[string]any{"lanes": lanes, "why": "plan complete"})
 	}
 }
 

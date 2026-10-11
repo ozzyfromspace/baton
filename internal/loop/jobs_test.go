@@ -12,7 +12,8 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// runners is a fake Runners: runner pids start at 100, and a pid is alive unless dead says otherwise.
+// runners is a fake Runners, and the project's Lanes: runner pids start at 100, and a pid is alive unless
+// dead says otherwise.
 type runners struct {
 	spawned []string
 	fail    error
@@ -23,11 +24,11 @@ type runners struct {
 	downs   atomic.Int32
 }
 
-func (f *runners) Spawn(run, id string) (int, error) {
+func (f *runners) Spawn(ref, id string) (int, error) {
 	if f.fail != nil {
 		return 0, f.fail
 	}
-	f.spawned = append(f.spawned, run+"/"+id)
+	f.spawned = append(f.spawned, ref+" "+id)
 	return 99 + len(f.spawned), nil
 }
 func (f *runners) Alive(pid int) bool { return !f.dead[pid] }
@@ -49,7 +50,7 @@ func eventually(cond func() bool) bool {
 func jobRig(t *testing.T) (*rig, *runners) {
 	r := newRig(t)
 	f := &runners{dead: map[int]bool{}}
-	r.loop.Runners = f
+	r.loop.Runners, r.coord.Lanes = f, f
 	r.set(func(st *state.State) { st.Run.Compaction = state.Compaction{} })
 	return r, f
 }
@@ -75,7 +76,7 @@ func TestTheHostStartsQueuedJobs(t *testing.T) {
 	})
 	r.tick(time.Second)
 	run := filepath.Base(r.loop.Store.Dir)
-	if len(f.spawned) != 1 || f.spawned[0] != run+"/j1" {
+	if len(f.spawned) != 1 || f.spawned[0] != run+" j1" {
 		t.Fatalf("spawned %v", f.spawned)
 	}
 	if j := r.job("j1"); j.Status != state.JobQueued || j.PID != 100 || !j.Spawned.Equal(r.now) {
@@ -98,7 +99,7 @@ func TestTheHostStartsQueuedJobs(t *testing.T) {
 	r.tick(time.Second)
 	r.set(func(st *state.State) { st.Run.ExitAt = r.now; state.QueueJob(st, state.Job{Phase: "P2"}, r.now) })
 	r.run(time.Minute)
-	if len(f.spawned) != 2 || f.spawned[1] != run+"/j2" {
+	if len(f.spawned) != 2 || f.spawned[1] != run+" j2" {
 		t.Errorf("spawned %v", f.spawned)
 	}
 }

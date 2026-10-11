@@ -37,6 +37,7 @@ func newRigAt(t *testing.T, dir string) *rig {
 		return state.Claim(st, "inst", 1, r.now)
 	})
 	r.loop = &Loop{Store: store, Notify: r.push, Project: "demo", Timing: DefaultTiming}
+	r.coord = &Coordinator{Lead: r.loop}
 	r.view = host.View{Owner: true, LastOutput: r.now.Add(-time.Hour), LastHumanKey: r.now.Add(-time.Hour)}
 	return r
 }
