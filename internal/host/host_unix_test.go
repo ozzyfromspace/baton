@@ -33,9 +33,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// rig runs host.Run against fakeclaude with pipes standing in for the user's terminal.
+// rig runs a Supervisor against fakeclaude with pipes standing in for the user's terminal.
 type rig struct {
 	t        *testing.T
+	sv       *Supervisor
 	out      string // fakeclaude's record directory
 	stdinW   *os.File
 	stdoutR  *os.File // the user's screen: closing it is closing the terminal
@@ -75,10 +76,10 @@ func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {
 	if cfgMod != nil {
 		cfgMod(&cfg)
 	}
-	r.proj = cfg.Project
+	r.proj, r.sv = cfg.Project, NewSupervisor(cfg)
 	go func() {
 		defer close(r.done)
-		r.code, r.err = Run(cfg)
+		r.code, r.err = r.sv.Run()
 		stdoutW.Close()
 	}()
 	r.waitScreen("fake-claude ready")

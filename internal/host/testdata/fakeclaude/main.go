@@ -6,12 +6,17 @@
 // SIGHUP only between writes, as claude does (its handler runs on the thread that writes), so it
 // exits 129 only if someone keeps reading its output; FAKE_HUP=ignore never exits on SIGHUP.
 // FAKE_TERM=ignore ignores SIGTERM too.
+//
+// It exits 0 on a typed /exit line unless FAKE_SLASH=ignore. FAKE_MODES=1 sets terminal modes at startup,
+// FAKE_FLOOD=n writes n numbered lines once it is ready, and FAKE_CHILD=1 starts a child in a process
+// session of its own, as the Bash tool does, and records its pid in $FAKE_OUT/child.pid.
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -36,7 +41,23 @@ func main() {
 	if old, err := term.MakeRaw(0); err == nil {
 		defer term.Restore(0, old)
 	}
+	if os.Getenv("FAKE_MODES") == "1" {
+		fmt.Print("\x1b[?1004h\x1b[?2004;25h\x1b[?2026h\x1b[?25l\x1b[?2026l")
+	}
 	fmt.Print("fake-claude ready\r\n")
+	if n, _ := strconv.Atoi(os.Getenv("FAKE_FLOOD")); n > 0 {
+		for i := 1; i <= n; i++ {
+			fmt.Printf("line %05d\r\n", i)
+		}
+		fmt.Print("flood done\r\n")
+	}
+	if os.Getenv("FAKE_CHILD") == "1" {
+		child := exec.Command("sleep", "300")
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := child.Start(); err == nil {
+			os.WriteFile(filepath.Join(out, "child.pid"), []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+		}
+	}
 	if os.Getenv("FAKE_TERM") == "ignore" {
 		signal.Ignore(syscall.SIGTERM)
 	}
@@ -58,6 +79,7 @@ func main() {
 	}
 	in, _ := os.OpenFile(filepath.Join(out, "input.bin"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	buf := make([]byte, 1024)
+	var line []byte
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
@@ -67,6 +89,20 @@ func main() {
 				code, _ := strconv.Atoi(os.Getenv("FAKE_EXIT"))
 				in.Close()
 				os.Exit(code)
+			}
+			for _, c := range buf[:n] {
+				switch c {
+				case '\r':
+					if string(line) == "/exit" && os.Getenv("FAKE_SLASH") != "ignore" {
+						in.Close()
+						os.Exit(0)
+					}
+					line = line[:0]
+				case 0x03:
+					line = line[:0]
+				default:
+					line = append(line, c)
+				}
 			}
 		}
 		if err != nil {

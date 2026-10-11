@@ -165,11 +165,11 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
 	}
-	code, err := host.Run(host.Config{
+	code, err := host.NewSupervisor(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: controller,
-	})
+	}).Run()
 	if to, session, ok := controller.Restart(); ok && err == nil {
 		host.Release(proj, instance)
 		controller.Flush()
