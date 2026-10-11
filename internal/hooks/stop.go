@@ -28,6 +28,7 @@ func (h *handlers) stop(c Context) (Result, error) {
 		recordStop(st, c)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
+		dropped = append(dropped, relayVanished(st, c.Now)...)
 		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to
 		// follow, and so is restarting on a newer baton.
 		worker := s.Worker() != ""
@@ -235,6 +236,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.WarnOwed = false
 		d.refuse(decide.ContextWarning(decide.Question{Text: st.Run.WarnQuestion, Options: decide.WarnOptions}.Call(), true))
 		d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "context question not asked"})
+	case !w.Worker && (st.RelayDue() != nil || st.RelayUnasked() != nil):
+		// A worker's question for the human, which only the lead can put to them: it goes first.
+		relayStop(st, &d, now, w.Timeout)
 	case len(st.Due()) > 0:
 		// A job of the phase in hand finished: its result is what the model goes on with.
 		st.Run.StopBlocks = 0

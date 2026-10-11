@@ -87,3 +87,22 @@ func TestRelayAnswersForTheWorker(t *testing.T) {
 		t.Errorf("typed %q", got)
 	}
 }
+
+func TestRelayOutcome(t *testing.T) {
+	p := state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1"}
+	b := state.Relay{Phase: "P3", Kind: state.RelayBlocked}
+	for _, c := range []struct {
+		r      state.Relay
+		answer string
+		want   string
+	}{
+		{p, "Go ahead", OutcomeGo}, {p, "Wait for me", OutcomeWait}, {p, "", OutcomeWait}, {p, "Pause baton", OutcomePause},
+		{p, "Continue", OutcomeWords}, {p, "use the staging clock", OutcomeWords},
+		{b, "Continue", OutcomeOn}, {b, "Wait for me", OutcomeWait}, {b, "Pause baton", OutcomePause}, {b, "Go ahead", OutcomeWords},
+		{b, "try the spare key", OutcomeWords},
+	} {
+		if got := RelayOutcome(c.r, c.answer); got != c.want {
+			t.Errorf("%s answered %q: %s, want %s", c.r.Kind, c.answer, got, c.want)
+		}
+	}
+}

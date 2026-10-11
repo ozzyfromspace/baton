@@ -31,6 +31,31 @@ func RelayOptions(r state.Relay) []Option {
 	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, wait}
 }
 
+// What an answer to a worker's question does (RelayOutcome).
+const (
+	OutcomeGo    = "go"    // its proposal goes ahead
+	OutcomeOn    = "on"    // its block or its review is over, and its phase goes on
+	OutcomeWait  = "wait"  // it waits for the human in the worker's own session
+	OutcomePause = "pause" // the run is paused, and it waits for the human in the worker's own session
+	OutcomeWords = "words" // the human answered in their own words, which the worker follows
+)
+
+// RelayOutcome is what answer does to worker question r. No answer (a question that went away
+// unanswered) leaves it for the human, as Wait for me does.
+func RelayOutcome(r state.Relay, answer string) string {
+	switch {
+	case answer == "" || answer == "Wait for me":
+		return OutcomeWait
+	case answer == "Pause baton":
+		return OutcomePause
+	case answer == "Go ahead" && r.Kind == state.RelayProposal:
+		return OutcomeGo
+	case answer == "Continue" && r.Kind != state.RelayProposal:
+		return OutcomeOn
+	}
+	return OutcomeWords
+}
+
 // RelayDefault is the answer baton picks for worker question r when nobody answers.
 func RelayDefault(r state.Relay) string { return RelayOptions(r)[2].Label }
 
@@ -87,6 +112,16 @@ func RelayPassed(phase, answer string, auto bool, cur string) string {
 		next = "Carry on with " + cur + "."
 	}
 	return fmt.Sprintf("[baton] %s. baton gives the answer to the worker itself: nothing about it is yours to do. %s", who, next)
+}
+
+// RelaySettled tells the lead's model that the question of the worker on phase it put to the human was
+// settled already, in the worker's own session or because the worker is gone: the answer changed nothing.
+func RelaySettled(phase, cur string) string {
+	next := "Carry on with what you were doing."
+	if cur != "" {
+		next = "Carry on with " + cur + "."
+	}
+	return fmt.Sprintf("[baton] That question of the worker on %s was settled already, so the answer changed nothing, and nothing about it is yours to do. %s", phase, next)
 }
 
 // RelayPaused tells the lead's model that the human chose Pause baton on a worker's question.

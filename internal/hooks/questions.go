@@ -14,7 +14,7 @@ import (
 // issued is a question baton told the model to put to the human, word for word, and what kind of
 // dialog it makes.
 type issued struct {
-	kind string // "escalation", "review", "proposal", "context_warning" or "replan"
+	kind string // "escalation", "review", "proposal", "context_warning", "replan" or "relay"
 	decide.Question
 }
 
@@ -37,6 +37,9 @@ func issuedQuestions(st *state.State) []issued {
 	}
 	if r := st.Replan; r != nil {
 		out = append(out, issued{"replan", replanQuestion(r)})
+	}
+	if r := st.RelayIssued(); r != nil {
+		out = append(out, issued{"relay", relayQuestion(*r)}) // a worker's, which the lead puts to the human
 	}
 	return out
 }
