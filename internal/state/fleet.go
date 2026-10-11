@@ -46,8 +46,11 @@ type Worker struct {
 	Started  time.Time `json:"started,omitzero"`
 	Ended    time.Time `json:"ended,omitzero"`
 	// Resumes counts the times its session was resumed after it ended unexpectedly.
-	Resumes int    `json:"resumes,omitempty"`
-	Merge   *Merge `json:"merge,omitempty"`
+	Resumes int `json:"resumes,omitempty"`
+	// Unlanded counts the commits on its branch that never landed, once it has failed: its branch is
+	// kept for them.
+	Unlanded int    `json:"unlanded,omitempty"`
+	Merge    *Merge `json:"merge,omitempty"`
 }
 
 // Live reports a worker the run still counts on: one not landed and not failed.

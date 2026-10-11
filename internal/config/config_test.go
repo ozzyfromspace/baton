@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,5 +188,43 @@ func TestEscalationEnvRoundTrip(t *testing.T) {
 	}
 	if got := EscalationFromEnv(func(string) string { return "" }); got != (Escalation{DefaultEscalationTimeout, DefaultMaxAutoDecisions}) {
 		t.Fatalf("defaults: %+v", got)
+	}
+}
+
+func TestWorkerSettings(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name    string
+		file    string
+		env     map[string]string
+		workers int
+		usage   float64
+		err     string
+	}{
+		{"defaults", `{}`, nil, 1, 80, ""},
+		{"file", `{"workers":3,"worker_usage_max":50}`, nil, 3, 50, ""},
+		{"none: one phase at a time, and no check", `{"workers":0,"worker_usage_max":0}`, nil, 0, 0, ""},
+		{"env wins", `{"workers":3,"worker_usage_max":50}`, map[string]string{"BATON_WORKERS": "0", "BATON_WORKER_USAGE_MAX": "95.5"}, 0, 95.5, ""},
+		{"too many", `{"workers":4}`, nil, 1, 80, "workers 4 is not valid: use a number from 0 to 3"},
+		{"fewer than none", `{"workers":-1}`, nil, 1, 80, "workers -1"},
+		{"not a number", `{}`, map[string]string{"BATON_WORKERS": "two"}, 1, 80, `BATON_WORKERS "two"`},
+		{"over 100 percent", `{"worker_usage_max":120}`, nil, 1, 80, "worker_usage_max 120 is not valid"},
+		{"a negative percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "-5"}, 1, 80, "worker_usage_max -5"},
+		{"not a percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "most"}, 1, 80, `BATON_WORKER_USAGE_MAX "most"`},
+	} {
+		os.WriteFile(Path(root), []byte(c.file), 0o644)
+		cfg := Load(root, func(k string) string { return c.env[k] })
+		n, nerr := cfg.WorkerCount()
+		f, ferr := cfg.WorkerUsage()
+		err := errors.Join(nerr, ferr)
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err)):
+			t.Errorf("%s: %v, want an error mentioning %q", c.name, err, c.err)
+		case c.err == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if n != c.workers || f != c.usage {
+			t.Errorf("%s: workers %d, usage max %v; want %d, %v", c.name, n, f, c.workers, c.usage)
+		}
 	}
 }

@@ -367,6 +367,18 @@ func TestDropSetsThePlanAside(t *testing.T) {
 	}
 	s.mustFail("nothing to drop", "drop")
 	s.attach(planFile) // a dropped run takes the next plan without --replace
+
+	// The run's workers go with it: the host ends them, and the roster stays for it to find them.
+	s.set(func(st *state.State) {
+		st.Workers = []state.Worker{{Phase: "P1", Ref: "sess-1/P1", Session: "w", Status: state.WorkerWorking},
+			{Phase: "P2", Ref: "sess-1/P2", Session: "v", Status: state.WorkerFailed}}
+	})
+	if out := s.must("", "drop"); !strings.Contains(out, "baton: baton also ends the workers on P1 (") || strings.Contains(out, "P2 (") {
+		t.Fatalf("drop with a worker: %s", out)
+	}
+	if st := s.state(); len(st.LiveWorkers()) != 1 {
+		t.Errorf("the roster after drop: %+v", st.Workers)
+	}
 }
 
 func TestExitExplainsWhenTheShellCannotResume(t *testing.T) {

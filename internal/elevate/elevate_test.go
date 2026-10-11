@@ -61,6 +61,14 @@ func TestKeepArgs(t *testing.T) {
 	if got := KeepUserArgs(argv); !reflect.DeepEqual(got, []string{"--settings", `{"hooks":{}}`, "--autocompact", "810k", "--model", "haiku"}) {
 		t.Fatalf("KeepUserArgs: %v", got)
 	}
+	// A worker is asked for no more permissions than the session it works beside: it keeps the
+	// session's rules, each flag with every rule after it.
+	argv = []string{"--model", "haiku", "--allowedTools", "Bash(git:*)", "Edit", "--disallowed-tools=WebFetch", "--session-id", "abc",
+		"--allowed-tools", "Bash(make:*)", "--", "--allowedTools", "x"}
+	want = []string{"--model", "haiku", "--allowedTools", "Bash(git:*)", "Edit", "--disallowed-tools=WebFetch", "--allowed-tools", "Bash(make:*)"}
+	if got := KeepWorkerArgs(argv); !reflect.DeepEqual(got, want) {
+		t.Fatalf("KeepWorkerArgs: %q", got)
+	}
 }
 
 func TestInitScripts(t *testing.T) {

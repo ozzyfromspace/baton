@@ -101,3 +101,66 @@ func TestWorktreeWithoutGit(t *testing.T) {
 		}
 	}
 }
+
+// A worker's worktree is on a branch of its own, made from the run's branch; one taken up again after
+// another worker left commits on its branch goes on from them. Its branch is removed once nothing on it
+// is left to land.
+func TestWorkerBranchLifecycle(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	git(t, repo, "checkout", "-q", "-b", "main")
+	base := RevParse(repo, "refs/heads/main")
+	if base == "" || base != git(t, repo, "rev-parse", "HEAD") {
+		t.Fatalf("RevParse(main) = %q", base)
+	}
+	if got := RevParse(repo, "refs/heads/nope"); got != "" {
+		t.Errorf("RevParse of a missing branch = %q", got)
+	}
+	dir := filepath.Join(t.TempDir(), "P1")
+	if fresh, err := AddBranch(ctx, repo, dir, "baton/r/P1", base); err != nil || !fresh {
+		t.Fatalf("AddBranch = %v, %v; want a new branch", fresh, err)
+	}
+	if got := Branch(dir); got != "baton/r/P1" {
+		t.Errorf("the worktree is on %q", got)
+	}
+	if n, err := Ahead(ctx, repo, "main", "baton/r/P1"); err != nil || n != 0 {
+		t.Errorf("Ahead of a new branch = %d, %v", n, err)
+	}
+	write(t, dir, "w.txt", "worker\n")
+	commit(t, dir, "the worker's commit")
+	tip := git(t, dir, "rev-parse", "HEAD")
+	if n, err := Ahead(ctx, repo, "main", "baton/r/P1"); err != nil || n != 1 {
+		t.Errorf("Ahead after a commit = %d, %v", n, err)
+	}
+
+	// The worker went away, its worktree with it: the next one goes on from its commits.
+	os.RemoveAll(dir)
+	if fresh, err := AddBranch(ctx, repo, dir, "baton/r/P1", base); err != nil || fresh {
+		t.Fatalf("AddBranch again = %v, %v; want the branch as it stands", fresh, err)
+	}
+	if got := git(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Errorf("taken up again at %s, want %s", got, tip)
+	}
+	if err := WorktreeRemove(ctx, repo, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveBranch(ctx, repo, "baton/r/P1"); err != nil {
+		t.Fatal(err)
+	}
+	if RevParse(repo, "refs/heads/baton/r/P1") != "" {
+		t.Error("the branch is still there")
+	}
+	if err := RemoveBranch(ctx, repo, "baton/r/P1"); err != nil {
+		t.Errorf("removing a branch that is gone: %v", err)
+	}
+	plain := t.TempDir()
+	if _, err := AddBranch(ctx, plain, dir, "b", "HEAD"); !errors.Is(err, ErrNoGit) {
+		t.Errorf("AddBranch outside a repository = %v", err)
+	}
+	if _, err := Ahead(ctx, plain, "a", "b"); !errors.Is(err, ErrNoGit) {
+		t.Errorf("Ahead outside a repository = %v", err)
+	}
+	if err := RemoveBranch(ctx, plain, "b"); !errors.Is(err, ErrNoGit) {
+		t.Errorf("RemoveBranch outside a repository = %v", err)
+	}
+}

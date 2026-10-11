@@ -1121,8 +1121,12 @@ func cmdDrop(args []string, io IO) int {
 	pl, _ := s.LoadPlan()
 	var stopped []state.Job
 	var logs int
+	var workers []string
 	if _, err := s.Update(func(st *state.State) error {
 		stopped, logs = st.Unfinished(), len(st.Jobs)
+		for _, w := range st.LiveWorkers() {
+			workers = append(workers, w.Phase)
+		}
 		return state.Detach(st)
 	}); err != nil {
 		return refused(io, s, "drop", err)
@@ -1142,6 +1146,9 @@ func cmdDrop(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "baton: it stopped %s, and removed the logs of the run's jobs.\n", jobLabels(stopped))
 	case logs > 0:
 		fmt.Fprintln(io.Out, "baton: it removed the logs of the run's jobs.")
+	}
+	if len(workers) > 0 {
+		fmt.Fprintln(io.Out, "baton: "+decide.DropWorkers(phaseLabels(pl, workers)))
 	}
 	return 0
 }

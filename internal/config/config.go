@@ -58,10 +58,19 @@ type Config struct {
 	// "2m" by default, or "off" to leave it to Claude Code (BATON_FOREGROUND_MAX, which may go down to 1s).
 	// baton passes it to claude as CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, unless that is set already.
 	ForegroundMax string `json:"foreground_max,omitempty"`
+	// Workers is how many hidden worker sessions may work on other phases of a plan beside the visible one,
+	// each in a git worktree of its own: 0 to 3, 1 by default; 0 runs one phase at a time
+	// (BATON_WORKERS).
+	Workers *int `json:"workers,omitempty"`
+	// WorkerUsageMax is how much of the account's five-hour usage allowance, in percent, may be used before
+	// baton starts no new worker: up to 100, 80 by default; 0 turns the check off
+	// (BATON_WORKER_USAGE_MAX).
+	WorkerUsageMax *float64 `json:"worker_usage_max,omitempty"`
 
-	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after and
-	// foreground_max, which are checked against bounds of their own.
+	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after,
+	// foreground_max, workers and worker_usage_max, which are checked against bounds of their own.
 	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter, envForegroundMax string
+	envWorkers, envUsageMax                                                    string
 }
 
 // Defaults.
@@ -76,6 +85,10 @@ const (
 	DefaultVerifyTimeout     = 3 * time.Hour
 	DefaultSwitchAfter       = 5 * time.Minute
 	DefaultForegroundMax     = 2 * time.Minute
+
+	DefaultWorkers        = 1
+	MaxWorkers            = 3
+	DefaultWorkerUsageMax = 80.0
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
@@ -138,6 +151,7 @@ func Load(root string, env func(string) string) Config {
 	c.envTimeout, c.envMaxAuto = env("BATON_ESCALATION_TIMEOUT"), env("BATON_MAX_AUTO_DECISIONS")
 	c.envVerifyTimeout, c.envSwitchAfter = env("BATON_VERIFY_TIMEOUT"), env("BATON_SWITCH_AFTER")
 	c.envForegroundMax = env("BATON_FOREGROUND_MAX")
+	c.envWorkers, c.envUsageMax = env("BATON_WORKERS"), env("BATON_WORKER_USAGE_MAX")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}
@@ -289,6 +303,45 @@ func within(def, min, max time.Duration, example, name, file, env string) (time.
 		d = t
 	}
 	return d, nil
+}
+
+// WorkerCount checks workers (the environment's value wins) and fills in the default. A value out of
+// bounds is an error.
+func (c Config) WorkerCount() (int, error) {
+	n := DefaultWorkers
+	if c.Workers != nil {
+		n = *c.Workers
+	}
+	if v := c.envWorkers; v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			return DefaultWorkers, fmt.Errorf("BATON_WORKERS %q is not valid: use a number from 0 to %d", v, MaxWorkers)
+		}
+	}
+	if n < 0 || n > MaxWorkers {
+		return DefaultWorkers, fmt.Errorf("workers %d is not valid: use a number from 0 to %d", n, MaxWorkers)
+	}
+	return n, nil
+}
+
+// WorkerUsage checks worker_usage_max (the environment's value wins) and fills in the default: the
+// percent of the five-hour allowance above which no new worker starts, or 0 for no check. A value out of
+// bounds is an error.
+func (c Config) WorkerUsage() (float64, error) {
+	f := DefaultWorkerUsageMax
+	if c.WorkerUsageMax != nil {
+		f = *c.WorkerUsageMax
+	}
+	if v := c.envUsageMax; v != "" {
+		var err error
+		if f, err = strconv.ParseFloat(v, 64); err != nil {
+			return DefaultWorkerUsageMax, fmt.Errorf("BATON_WORKER_USAGE_MAX %q is not valid: use a percent up to 100, or 0 for no check", v)
+		}
+	}
+	if math.IsNaN(f) || f < 0 || f > 100 {
+		return DefaultWorkerUsageMax, fmt.Errorf("worker_usage_max %v is not valid: use a percent up to 100, or 0 for no check", f)
+	}
+	return f, nil
 }
 
 // Env is the environment the host gives the session, so the CLI, the hooks and the host agree.

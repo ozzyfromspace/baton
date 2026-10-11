@@ -351,6 +351,18 @@ func (p *Project) Pending(instance string) (*Store, error) {
 	return s, err
 }
 
+// NewSessionID returns a random (version 4) UUID, the form Claude Code's session ids take: baton picks
+// the id of a session it starts (--session-id), so that its run is linked before claude has drawn
+// anything.
+func NewSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)

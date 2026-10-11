@@ -1,6 +1,11 @@
 package gitx
 
-import "context"
+import (
+	"context"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Lanes (package lane) are worktrees of the project's repository, kept outside its working tree, where
 // baton checks a commit out and runs a gate on it while the session works on.
@@ -45,4 +50,70 @@ func WorktreePrune(ctx context.Context, root string) error {
 	}
 	_, err := run(ctx, root, nil, nil, "worktree", "prune")
 	return err
+}
+
+// A worker (package loop) works on its phase in a worktree of its own, on a branch of its own, outside the
+// project's checkout, and its work lands on the run's branch once it is done.
+
+// AddBranch makes dir a new worktree of the repository at root, on branch: a new branch from commit, or
+// the branch as it stands if it exists already (a worker taking up a phase another worker left commits
+// on). It reports whether the branch is new. A worktree git still has on record at dir, or for branch,
+// whose directory is gone, is forgotten first.
+func AddBranch(ctx context.Context, root, dir, branch, commit string) (bool, error) {
+	if !Usable(root) {
+		return false, ErrNoGit
+	}
+	if _, err := run(ctx, root, nil, nil, "worktree", "prune"); err != nil {
+		return false, err
+	}
+	if revParse(ctx, root, "refs/heads/"+branch) != "" {
+		_, err := run(ctx, root, nil, nil, "worktree", "add", "-q", dir, branch)
+		return false, err
+	}
+	_, err := run(ctx, root, nil, nil, "worktree", "add", "-q", "-b", branch, dir, commit)
+	return err == nil, err
+}
+
+// RemoveBranch deletes branch from the repository at root, merged or not. A branch that is not there is
+// not an error.
+func RemoveBranch(ctx context.Context, root, branch string) error {
+	if !Usable(root) {
+		return ErrNoGit
+	}
+	if revParse(ctx, root, "refs/heads/"+branch) == "" {
+		return nil
+	}
+	_, err := run(ctx, root, nil, nil, "branch", "-q", "-D", branch)
+	return err
+}
+
+// RevParse returns the commit rev names in the repository at root, or "" (no git, or no such commit).
+func RevParse(root, rev string) string {
+	if !Usable(root) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return revParse(ctx, root, rev)
+}
+
+func revParse(ctx context.Context, root, rev string) string {
+	out, err := run(ctx, root, nil, nil, "rev-parse", "--verify", "-q", rev+"^{commit}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Ahead counts the commits on branch that into does not have: a worker's commits that never landed on
+// the run's branch.
+func Ahead(ctx context.Context, root, into, branch string) (int, error) {
+	if !Usable(root) {
+		return 0, ErrNoGit
+	}
+	out, err := run(ctx, root, nil, nil, "rev-list", "--count", into+".."+branch)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
 }

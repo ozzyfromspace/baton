@@ -92,3 +92,20 @@ func WorkerDone(phase, job, ran string) string {
 	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it rebases your branch onto it and merges it under the lead session. "+
 		"If anything needs you first (a rebase conflict, a red verification), baton tells you here. End your turn now.", phase)
 }
+
+// WorkerBegin is the prompt a worker's session is started with. Its brief reaches it first, from the
+// SessionStart hook.
+func WorkerBegin(phase string) string {
+	return fmt.Sprintf("[baton] Begin %s — the brief above has your instructions.", phase)
+}
+
+// WorkerResume is the prompt a worker's session is resumed with, in its own worktree: why says why its
+// session ended.
+func WorkerResume(phase, why string) string {
+	return fmt.Sprintf("[baton] baton resumed this session: %s. Carry on with %s where you left off: check git status and your notes first.", why, phase)
+}
+
+// DropWorkers is what `baton drop` says about the workers it ends: phases names them.
+func DropWorkers(phases string) string {
+	return fmt.Sprintf("baton also ends the workers on %s: it saves their uncommitted work and removes their worktrees, and keeps the branch of any that holds commits that never landed.", phases)
+}

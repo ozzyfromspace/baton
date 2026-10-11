@@ -53,7 +53,7 @@ type Pool struct {
 }
 
 // Dir is where the pool's lanes live.
-func (p Pool) Dir() string { return filepath.Join(p.Home, "lanes", key(p.Root)) }
+func (p Pool) Dir() string { return filepath.Join(p.Home, "lanes", Key(p.Root)) }
 
 // LaneDir is lane n's worktree.
 func (p Pool) LaneDir(n int) string { return filepath.Join(p.Dir(), strconv.Itoa(n)) }
@@ -61,8 +61,9 @@ func (p Pool) LaneDir(n int) string { return filepath.Join(p.Dir(), strconv.Itoa
 func (p Pool) lockPath(n int) string { return filepath.Join(p.Dir(), fmt.Sprintf("%d.lock", n)) }
 func (p Pool) upPath(n int) string   { return filepath.Join(p.Dir(), fmt.Sprintf("%d.up", n)) }
 
-// key names a working tree's lanes after its path, resolved, so two spellings of one path agree.
-func key(root string) string {
+// Key names a working tree's lanes after its path, resolved, so two spellings of one path agree. A
+// worker's worktrees are kept under the same name (package loop).
+func Key(root string) string {
 	if abs, err := filepath.Abs(root); err == nil {
 		root = abs
 	}

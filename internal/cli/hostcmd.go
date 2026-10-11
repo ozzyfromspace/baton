@@ -127,6 +127,14 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	workers, err := cfg.WorkerCount()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
+	usageMax, err := cfg.WorkerUsage()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	// Shorter watchdog timings, for tests and impatient humans.
@@ -167,18 +175,44 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		controller.Newer = w.Newer
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners}
-	sv := host.NewSupervisor(host.Config{
+	var sv *host.Supervisor
+	if workers > 0 {
+		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, Home: batonRoot(io), Project: proj,
+			Launch: loop.Launch{Args: elevate.KeepWorkerArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
+				Env: env, BatonEnv: batonEnv, Bin: exe, Version: version.Version},
+			Spawn: func(spec host.Spec) (loop.Hidden, error) {
+				s, err := sv.Spawn(spec)
+				if err != nil {
+					return nil, err
+				}
+				return s, nil
+			}}
+	}
+	sv = host.NewSupervisor(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator, ViewSocket: host.ViewSocket(instance),
 	})
 	code, err := sv.Run()
 	if to, session, ok := controller.Restart(); ok && err == nil {
+		// The workers' jobs go on, as the lead's do: the restarted host watches them, and resumes the workers.
+		for _, w := range coordinator.Ended("baton restarted") {
+			proj.Unbind(w.Instance)
+		}
 		host.Release(proj, instance)
 		controller.Flush()
 		return restartOn(io, to, session, args, logf)
 	}
 	defer host.Release(proj, instance)
+	// The workers ended with the lead: the next host for the run resumes them, and nothing would see
+	// their jobs' results meanwhile.
+	for _, w := range coordinator.Ended("the baton session ended") {
+		if ws, err := proj.ExistingRun(w.Ref, w.Instance); err == nil {
+			endJobs(io, ws, w.Instance)
+		}
+		proj.Unbind(w.Instance)
+	}
 	controller.Ended() // save uncommitted work as the session ends
 	if st, ok := proj.Lookup("", instance); ok {
 		leftBaton(io, st)
@@ -285,7 +319,7 @@ func sessionOf(args []string) (string, []string) {
 		return resumed, args
 	}
 	// Before "--", if there is one: what follows it is the prompt.
-	id := newSessionID()
+	id := state.NewSessionID()
 	at := slices.Index(args, "--")
 	if at < 0 {
 		at = len(args)
@@ -311,16 +345,6 @@ func looksLikeSessionID(s string) bool {
 		}
 	}
 	return true
-}
-
-// newSessionID returns a random (version 4) UUID.
-func newSessionID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
 // cmdStatusline renders the status line of a hosted session. It must always print something and never

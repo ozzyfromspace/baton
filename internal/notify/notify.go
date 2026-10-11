@@ -45,6 +45,7 @@ var headline = map[string]string{
 	"proceeded":         "baton went ahead with a proposal nobody answered",
 	"decision":          "baton is holding a proposal for you",
 	"review":            "baton needs you: review the decisions made without you",
+	"workers":           "baton needs you: its workers could not start",
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a

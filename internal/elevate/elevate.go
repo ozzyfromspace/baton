@@ -134,6 +134,29 @@ func KeepArgs(argv []string) []string { return keepArgs(argv, keepFlags) }
 // session on a newer version of itself.
 func KeepUserArgs(argv []string) []string { return keepArgs(argv, keepFlags, userFlags) }
 
+// ruleFlags are the permission rules given on claude's command line. Each takes every argument after it,
+// up to the next flag.
+var ruleFlags = map[string]bool{"--allowedTools": true, "--allowed-tools": true, "--disallowedTools": true, "--disallowed-tools": true}
+
+// KeepWorkerArgs is KeepUserArgs for a worker baton starts beside the session (package loop): it keeps
+// the session's permission rules too, so that the worker is asked for no more permissions than the
+// session it works beside.
+func KeepWorkerArgs(argv []string) []string {
+	var rules []string
+	for i := 0; i < len(argv) && argv[i] != "--"; i++ {
+		name, _, hasEq := strings.Cut(argv[i], "=")
+		if !ruleFlags[name] {
+			continue
+		}
+		rules = append(rules, argv[i])
+		for !hasEq && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+			i++
+			rules = append(rules, argv[i])
+		}
+	}
+	return append(KeepUserArgs(argv), rules...)
+}
+
 func keepArgs(argv []string, sets ...map[string]bool) []string {
 	var out []string
 	for i := 0; i < len(argv); i++ {

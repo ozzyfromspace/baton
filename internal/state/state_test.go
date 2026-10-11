@@ -321,9 +321,14 @@ func TestDetachSetsThePlanAside(t *testing.T) {
 	}
 	st := Attach(threePhases(), t0, Origin{})
 	st.Owner, st.Run.SessionID, st.Run.Compaction.Epoch = &Owner{Instance: "h"}, "s", 4
+	st.RunBranch, st.Workers = "main", []Worker{{Phase: "P1", Ref: "s/P1", Session: "w", Status: WorkerWorking}}
 	if err := Detach(&st); err != nil || st.Mode != ModeIdle || st.Current != "" || len(st.Phases) != 0 ||
 		st.Owner == nil || st.Run.SessionID != "s" || st.Run.Compaction.Epoch != 4 {
 		t.Fatalf("%v %+v", err, st)
+	}
+	// The host ends the workers still on the roster, and lands nothing more on the run's branch.
+	if len(st.LiveWorkers()) != 1 || st.RunBranch != "main" {
+		t.Errorf("the roster went with the plan: %+v, run branch %q", st.Workers, st.RunBranch)
 	}
 }
 

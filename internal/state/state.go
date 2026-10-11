@@ -243,15 +243,17 @@ func Remaining(st State, p plan.Plan) []string {
 }
 
 // Detach stops the run: its plan is set aside, and baton does nothing until the next plan is attached.
+// The roster of its workers stays: the host ends the workers still on it, and a branch one of them left
+// commits on is named until the next plan.
 func Detach(st *State) error {
 	if st.Mode == ModeIdle {
 		return errors.New("no plan is attached, so there is nothing to drop")
 	}
 	run := st.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
-	owner, seq, prefix := st.Owner, st.JobSeq, st.IDPrefix
+	owner, seq, prefix, workers, branch := st.Owner, st.JobSeq, st.IDPrefix, st.Workers, st.RunBranch
 	*st = New()
-	st.Owner, st.Run, st.JobSeq, st.IDPrefix = owner, run, seq, prefix
+	st.Owner, st.Run, st.JobSeq, st.IDPrefix, st.Workers, st.RunBranch = owner, run, seq, prefix, workers, branch
 	return nil
 }
 
