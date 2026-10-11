@@ -58,7 +58,8 @@ func NewSupervisor(cfg Config) *Supervisor {
 }
 
 // Run starts the lead in the human's terminal and returns its exit code once it has exited. The hidden
-// sessions end then too (End), and Run waits for them.
+// sessions end then too (End), and Run waits for them. From a hang-up or a signal that ends the hidden
+// sessions on, none starts any more (ErrClosed): they end with the host.
 func (sv *Supervisor) Run() (int, error) {
 	cfg := sv.cfg
 	bind(cfg)
@@ -111,10 +112,12 @@ func (sv *Supervisor) Run() (int, error) {
 		},
 		hangup: func() {
 			lead.hangUp("baton got SIGHUP")
+			sv.close()
 			sv.endHidden()
 		},
 		forward: func(sig os.Signal) {
 			lead.cmd.Process.Signal(sig)
+			sv.close()
 			sv.endHidden()
 		},
 	})

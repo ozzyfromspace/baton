@@ -274,8 +274,9 @@ func (s *Session) Quit() error {
 
 // End ends the session as a human would, with /exit and Enter (a draft in the input box is cleared
 // first), then as Quit does if it is still there HangupGrace later. It returns at once; Done closes once
-// the session has ended. Whoever ends a session makes sure no dialog is open in it: /exit would be typed
-// into the dialog.
+// the session has ended. With a dialog open in it (its run records one, or cannot be read), nothing is
+// typed: keys typed into a permission prompt pick one of its options. It gets SIGTERM instead, as from
+// Quit.
 func (s *Session) End() error {
 	s.endOnce.Do(func() {
 		select {
@@ -285,6 +286,11 @@ func (s *Session) End() error {
 		}
 		s.logf("ending %s", s.cfg.Claude)
 		go func() {
+			if s.dialogMayBeOpen() {
+				s.logf("a dialog may be open in it: signalling instead of typing /exit")
+				s.sendSignals(quitSignals, true)
+				return
+			}
 			if s.draft.Load() {
 				s.ClearInput()
 			}
@@ -298,6 +304,17 @@ func (s *Session) End() error {
 		}()
 	})
 	return nil
+}
+
+// dialogMayBeOpen reports a session whose run records a dialog waiting on the human, or whose run cannot
+// be read. A session bound to no run has had no hook run yet, so it has recorded no dialog either.
+func (s *Session) dialogMayBeOpen() bool {
+	st := s.runOf()
+	if st == nil {
+		return false
+	}
+	rs, err := st.Load()
+	return err != nil || rs.Run.Dialogs.AnyOpen()
 }
 
 // hangUp ends a session whose terminal has gone (a closed tab, a killed shell): nobody can see it or

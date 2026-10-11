@@ -177,6 +177,13 @@ func TestSignalsEndEverySession(t *testing.T) {
 			signal.Notify(ch, tc.sig)
 			defer signal.Stop(ch)
 			syscall.Kill(os.Getpid(), tc.sig)
+			for _, h := range workers {
+				h.wait()
+			}
+			// The workers end with the host: none starts in their place, even before the lead has gone.
+			if _, err := r.sv.Spawn(Spec{Name: "P5", Instance: "inst-1-P5"}); !errors.Is(err, ErrClosed) {
+				t.Errorf("a session started after the signal: %v", err)
+			}
 			select {
 			case <-r.done:
 			case <-time.After(5 * time.Second):
@@ -192,6 +199,26 @@ func TestSignalsEndEverySession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Keys typed into a permission prompt pick one of its options, so a session with a dialog open is never
+// ended by typing /exit: it gets SIGTERM.
+func TestEndNeverTypesIntoADialog(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond })
+	sub, err := r.proj.NewWorker("sess-1", "P3", "sess-w", "inst-1", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.Update(func(st *state.State) error {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Since: time.Now()})
+		return nil
+	})
+	h := spawn(t, r.sv, "P3", nil)
+	h.s.End()
+	if code := h.wait(); code != 128+int(syscall.SIGTERM) || strings.Contains(h.input(), "/exit") {
+		t.Errorf("exit %d, input %q; want SIGTERM and nothing typed", code, h.input())
+	}
+	r.quit()
 }
 
 // Every session has its own keys, draft and run: what is typed into one is never another's.
