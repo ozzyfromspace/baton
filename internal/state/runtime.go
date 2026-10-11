@@ -211,13 +211,15 @@ const (
 	CompactActive = "active" // PreCompact fired: Claude Code is summarizing
 	CompactDone   = "done"   // PostCompact fired
 	CompactFailed = "failed" // no acknowledgement or completion in time; escalated
+	// CompactCancelled: a switch called off before its compaction was typed, as the job it was for ended.
+	CompactCancelled = "cancelled"
 )
 
 // Compaction tracks the compaction baton asked for (if any) and the last one that happened.
 type Compaction struct {
 	Epoch    int       `json:"epoch"`
 	Status   string    `json:"status,omitempty"`
-	Reason   string    `json:"reason,omitempty"` // "boundary" or "checkpoint"
+	Reason   string    `json:"reason,omitempty"` // "boundary", "checkpoint" or "switch"
 	Tries    int       `json:"tries,omitempty"`
 	Queued   time.Time `json:"queued,omitzero"`
 	Typed    time.Time `json:"typed,omitzero"`
@@ -235,12 +237,17 @@ type Compaction struct {
 	// over. A failed compaction is retried with backoff, never abandoned while one is owed.
 	FailedAt time.Time `json:"failed_at,omitzero"`
 	Rounds   int       `json:"rounds,omitempty"`
+	// Switch is the switch the host made, for a switch it queued (Switch, Unswitch).
+	Switch *Switched `json:"switch,omitempty"`
 }
 
-// Queue asks the host to compact, for reason ("boundary" or "checkpoint"), as a new epoch.
+// Queue asks the host to compact, for reason ("boundary", "checkpoint" or "switch"), as a new epoch.
 func (c *Compaction) Queue(reason string, now time.Time) {
 	*c = Compaction{Epoch: c.Epoch + 1, Status: CompactQueued, Reason: reason, Queued: now, Rewoken: c.Rewoken}
 }
+
+// StartsPhase reports a compaction after which another phase is taken up: a boundary, or a switch.
+func (c Compaction) StartsPhase() bool { return c.Reason == "boundary" || c.Reason == "switch" }
 
 // InFlight reports whether a baton-requested compaction is queued or underway.
 func (c Compaction) InFlight() bool {

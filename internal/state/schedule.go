@@ -209,21 +209,7 @@ func (st State) Job(id string) *Job {
 // done, else "": every phase left is verifying, parked while its job runs, or waits for one that is. In a
 // run that never parked a phase this is the first phase not done, as phases have always run.
 func Next(st State, p plan.Plan) string {
-	next, since := "", time.Time{}
-	for _, ph := range p.Phases {
-		ps := st.Phases[ph.ID]
-		if ps == nil || ps.Status != PhaseParked || !st.resolved(ps.Park) {
-			continue
-		}
-		var at time.Time
-		if ps.Park != nil {
-			at = ps.Park.Since
-		}
-		if next == "" || at.Before(since) {
-			next, since = ph.ID, at
-		}
-	}
-	if next != "" {
+	if next := oldestParked(st, p, st.resolved); next != "" {
 		return next
 	}
 	for _, ph := range p.Phases {

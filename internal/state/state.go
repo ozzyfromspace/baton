@@ -53,7 +53,7 @@ type PhaseState struct {
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
 type Park struct {
-	Reason  string    `json:"reason"` // ParkJob or ParkRed
+	Reason  string    `json:"reason"` // ParkJob, ParkRed, ParkUnverified or ParkCheckpoint
 	Since   time.Time `json:"since"`
 	Notes   string    `json:"notes,omitempty"` // where the phase stood, in the model's words
 	Job     string    `json:"job,omitempty"`   // the job it waits for
@@ -65,6 +65,7 @@ const (
 	ParkJob        = "job"        // set aside while its job runs, so the session could work on another phase
 	ParkRed        = "red"        // its verification failed after done was claimed
 	ParkUnverified = "unverified" // its verification ended without a verdict after done was claimed
+	ParkCheckpoint = "checkpoint" // set aside at a checkpoint, so a phase whose job had ended could go on
 )
 
 // MaxEdited bounds the files a phase records as edited; past it, it stops recording.

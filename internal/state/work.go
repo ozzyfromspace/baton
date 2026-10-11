@@ -1,6 +1,7 @@
 package state
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
@@ -54,4 +55,68 @@ func Uncommitted(root string) ([]string, error) {
 		}
 	}
 	return work, nil
+}
+
+// Work is the uncommitted work in a checkout, sorted by whether a phase made it.
+type Work struct {
+	Paths []string // every uncommitted path
+	Fresh []string // new or changed since the phase started: the phase's own
+	Kept  []string // already there when the phase started, and unchanged
+	// Others are new or changed since the phase started, while another session works in the same
+	// checkout, and this session's edit tools never wrote them: they may be that session's.
+	Others []string
+	// Why baton could not sort Paths: git status failed (Err), there is no record of what was
+	// uncommitted when the phase started (NoStart), or there are too many paths to check one by one.
+	Err     error
+	NoStart bool
+	TooMany bool
+}
+
+// Clean reports that the phase has left nothing uncommitted, as far as baton can tell.
+func (w Work) Clean() bool { return w.Err == nil && !w.NoStart && !w.TooMany && len(w.Fresh) == 0 }
+
+// PhaseWork sorts the uncommitted work in the checkout by whether phase id made it: what is uncommitted
+// now against what was when the phase started. Without git there is none.
+func (s *Store) PhaseWork(id string) Work {
+	if !gitx.Usable(s.Root) {
+		return Work{}
+	}
+	paths, err := Uncommitted(s.Root)
+	if err != nil {
+		return Work{Err: err}
+	}
+	if len(paths) == 0 {
+		return Work{}
+	}
+	w := Work{Paths: paths}
+	var start *Dirt
+	var edited []string
+	if st, err := s.Load(); err == nil && st.Phases[id] != nil {
+		start, edited = st.Phases[id].StartDirty, st.Phases[id].Edited
+	}
+	switch {
+	case start == nil:
+		w.NoStart = true
+		return w
+	case start.Over || len(paths) > gitx.MaxDirty:
+		w.TooMany = true
+		return w
+	}
+	w.Fresh, w.Kept = gitx.Since(start.Files, gitx.Fingerprint(s.Root, paths))
+	if p, err := OpenProject(filepath.Join(s.Root, DirName), s.Now); err == nil && len(p.Others(filepath.Base(s.Dir))) > 0 {
+		mine := map[string]bool{}
+		for _, e := range edited {
+			mine[e] = true
+		}
+		fresh := w.Fresh
+		w.Fresh = nil
+		for _, f := range fresh {
+			if mine[f] {
+				w.Fresh = append(w.Fresh, f)
+			} else {
+				w.Others = append(w.Others, f)
+			}
+		}
+	}
+	return w
 }
