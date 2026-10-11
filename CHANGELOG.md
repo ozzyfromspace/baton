@@ -4,6 +4,8 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-11
+
 Four real runs, replayed second by second, showed where a long plan's time goes: waiting on gates was 65%
 and 38% of the two big campaigns, and the model worked while a gate ran for 1.5 hours of 26.8. Most of the
 waiting sat inside a phase (run the gates, read the failures, fix, run them again), and most phases of
@@ -462,7 +464,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ozzyfromspace/baton/compare/v0.3.7...v0.4.0
 [0.3.7]: https://github.com/ozzyfromspace/baton/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/ozzyfromspace/baton/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/ozzyfromspace/baton/compare/v0.3.4...v0.3.5
