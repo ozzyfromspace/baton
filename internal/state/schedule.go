@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -79,20 +80,20 @@ func (j Job) Took(now time.Time) time.Duration {
 // MaxJobs is how many jobs a run keeps on record. Past it, the oldest finished jobs are dropped.
 const MaxJobs = 30
 
-// QueueJob queues j as its phase's job, numbered after every job the run has had. A phase has one job at
-// a time: one it already has queued or running is cancelled and replaced by j. It returns the job as
-// queued, the job it replaced (nil for none), and the finished jobs dropped from the record to keep it
-// within MaxJobs.
+// QueueJob queues j as its phase's job, numbered after every job the run has had (under its IDPrefix). A
+// phase has one job at a time: one it already has queued or running is cancelled and replaced by j. It
+// returns the job as queued, the job it replaced (nil for none), and the finished jobs dropped from the
+// record to keep it within MaxJobs.
 func QueueJob(st *State, j Job, now time.Time) (queued Job, replaced *Job, dropped []Job) {
 	n := st.JobSeq
 	for _, o := range st.Jobs {
 		var k int
-		if _, err := fmt.Sscanf(o.ID, "j%d", &k); err == nil && k > n {
+		if _, err := fmt.Sscanf(strings.TrimPrefix(o.ID, st.IDPrefix), "j%d", &k); err == nil && k > n {
 			n = k
 		}
 	}
 	st.JobSeq = n + 1
-	j.ID, j.Status, j.Queued = fmt.Sprintf("j%d", st.JobSeq), JobQueued, now
+	j.ID, j.Status, j.Queued = fmt.Sprintf("%sj%d", st.IDPrefix, st.JobSeq), JobQueued, now
 	if old := CancelJobs(st, func(o Job) bool { return o.Phase == j.Phase }, "replaced by "+j.ID, now); len(old) > 0 {
 		replaced = &old[0]
 	}
@@ -206,8 +207,9 @@ func (st State) Job(id string) *Job {
 
 // Next is the phase the run takes up when nothing is in hand: a parked phase whose job has finished (the
 // one parked longest first), else the first pending phase, in document order, whose dependencies are all
-// done, else "": every phase left is verifying, parked while its job runs, or waits for one that is. In a
-// run that never parked a phase this is the first phase not done, as phases have always run.
+// done, else "": every phase left is verifying, parked while its job runs, a worker's, or waits for one
+// that is. In a run that never parked a phase this is the first phase not done, as phases have always
+// run.
 func Next(st State, p plan.Plan) string {
 	if next := oldestParked(st, p, st.resolved); next != "" {
 		return next
@@ -221,7 +223,8 @@ func Next(st State, p plan.Plan) string {
 }
 
 // ready reports whether every phase that id waits for is done. A verifying phase is not done yet: what
-// builds on it waits for its verification to pass.
+// builds on it waits for its verification to pass. Nor is a working phase: what builds on it waits until
+// its work has landed.
 func ready(st State, p plan.Plan, id string) bool {
 	for _, d := range p.Deps(id) {
 		if ps := st.Phases[d]; ps == nil || ps.Status != PhaseDone {
@@ -382,6 +385,8 @@ func ParkPhase(st *State, p plan.Plan, id string, pk Park) (string, error) {
 		return "", fmt.Errorf("phase %s has not started, so there is nothing to set aside", id)
 	case ps.Status == PhaseDone:
 		return "", fmt.Errorf("phase %s is already done", id)
+	case ps.Status == PhaseWorking:
+		return "", fmt.Errorf("phase %s is a worker's, so it is not this session's to set aside", id)
 	}
 	ps.Status, ps.Park = PhaseParked, &pk
 	st.Run.Progress()

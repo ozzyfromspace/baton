@@ -26,7 +26,7 @@ const (
 
 // Decision is one note or proposal.
 type Decision struct {
-	ID      string `json:"id"` // d1, d2, … in the order they were made
+	ID      string `json:"id"` // d1, d2, … in the order they were made (P3.d1, … in a worker's sub-run)
 	Kind    string `json:"kind"`
 	Phase   string `json:"phase"`
 	What    string `json:"what"`              // what the model did (a note) or will do (a proposal)
@@ -114,7 +114,7 @@ func add(st *State, d Decision, now time.Time) (Decision, error) {
 	if d.Phase == "" {
 		d.Phase = st.Current
 	}
-	d.ID, d.At = fmt.Sprintf("d%d", len(st.Decisions)+1), now
+	d.ID, d.At = fmt.Sprintf("%sd%d", st.IDPrefix, len(st.Decisions)+1), now
 	st.Decisions = append(st.Decisions, d)
 	return d, nil
 }

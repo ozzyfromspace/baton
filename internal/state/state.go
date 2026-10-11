@@ -21,12 +21,15 @@ const (
 
 // Phase statuses. A phase runs pending → active → done. Two more hold a phase that is not done while the
 // run works on others: verifying (done was claimed while its verification job runs) and parked (it was
-// set aside unfinished while its job runs, or its verification failed after done was claimed).
+// set aside unfinished while its job runs, or its verification failed after done was claimed). A phase a
+// worker session took up runs pending → working → done instead: everything in between happens in the
+// worker's own sub-run, and the phase is done once its work has landed (fleet.go).
 const (
 	PhasePending   = "pending"
 	PhaseActive    = "active"
 	PhaseVerifying = "verifying"
 	PhaseParked    = "parked"
+	PhaseWorking   = "working"
 	PhaseDone      = "done"
 )
 
@@ -49,6 +52,9 @@ type PhaseState struct {
 	// while its status says so; once it resumes, Park stays as what it resumed from (Resumed is set), so
 	// a later brief of the phase still has its notes.
 	Park *Park `json:"park,omitempty"`
+	// Worker is the sub-run of the worker the phase was given to (a ref, see Project), from the moment it
+	// is assigned; it stays once the phase has landed.
+	Worker string `json:"worker,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
@@ -130,6 +136,17 @@ type State struct {
 	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
 	// is reported once.
 	PlanDrift string `json:"plan_drift,omitempty"`
+	// RunBranch is the branch checked out when the plan was attached: workers branch off it, and their
+	// work lands on it. Workers, Relay, Landed and Usage are the run's worker sessions and what they need
+	// of the lead (fleet.go).
+	RunBranch string    `json:"run_branch,omitempty"`
+	Workers   []Worker  `json:"workers,omitempty"`
+	Relay     []Relay   `json:"relay,omitempty"`
+	Landed    []Landing `json:"landed,omitempty"`
+	Usage     *Usage    `json:"usage,omitempty"`
+	// IDPrefix numbers a worker sub-run's decisions and jobs under its phase (P3.d1, P3.j2), so that no id
+	// is used twice across the run and its workers.
+	IDPrefix string `json:"id_prefix,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }
@@ -158,7 +175,7 @@ func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 	run := prev.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
 	st := attachKeeping(prev.Owner, &run, p, now, o)
-	st.JobSeq = prev.JobSeq
+	st.JobSeq, st.IDPrefix = prev.JobSeq, prev.IDPrefix
 	return st
 }
 
@@ -173,8 +190,9 @@ func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
 	return st
 }
 
-// Revise moves the run onto a revision of its plan. Phases done, verifying or parked stay so (matched by
-// id), and the jobs of phases the revision leaves out are cancelled. The phase under way carries on if
+// Revise moves the run onto a revision of its plan. Phases done, verifying, parked or working stay so
+// (matched by id), and the jobs of phases the revision leaves out are cancelled; so are their workers, by
+// the host, which finds them on the roster with their phase gone. The phase under way carries on if
 // the revision keeps it and its dependencies are done; otherwise the run takes up the next phase after a
 // compaction, as at a phase boundary. It returns the phase in hand, or "" when there is none: the
 // revision has nothing left to do (ModeComplete), or nothing that can start until a job finishes.
@@ -183,7 +201,7 @@ func Revise(st *State, p plan.Plan, now time.Time) string {
 	st.Phases = map[string]*PhaseState{}
 	for _, ph := range p.Phases {
 		switch ps := old[ph.ID]; {
-		case ps != nil && (ps.Status == PhaseDone || ps.Status == PhaseVerifying || ps.Status == PhaseParked):
+		case ps != nil && (ps.Status == PhaseDone || ps.Status == PhaseVerifying || ps.Status == PhaseParked || ps.Status == PhaseWorking):
 			st.Phases[ph.ID] = ps
 		default:
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
@@ -231,9 +249,9 @@ func Detach(st *State) error {
 	}
 	run := st.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
-	owner, seq := st.Owner, st.JobSeq
+	owner, seq, prefix := st.Owner, st.JobSeq, st.IDPrefix
 	*st = New()
-	st.Owner, st.Run, st.JobSeq = owner, run, seq
+	st.Owner, st.Run, st.JobSeq, st.IDPrefix = owner, run, seq, prefix
 	return nil
 }
 
@@ -289,6 +307,9 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 	}
 	if ps.Status == PhaseDone {
 		return "", fmt.Errorf("phase %s is already done", id)
+	}
+	if ps.Status == PhaseWorking {
+		return "", fmt.Errorf("phase %s is a worker's: baton marks it done once its work lands", id)
 	}
 	if id != st.Current && !o.Force {
 		return "", fmt.Errorf("phase %s is not the current phase (%s); finish %s first, or pass --force", id, st.Current, st.Current)
