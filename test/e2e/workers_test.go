@@ -469,14 +469,16 @@ func TestDropEndsTheWorkers(t *testing.T) {
 		}
 		return i >= 0
 	})
-	if ended == nil || ended["why"] != "the run was dropped" || ended["branch"] != branch || fmt.Sprint(ended["unlanded"]) != "1" {
+	// A dropped run's branch is kept under kept/, so no later worker on P1 starts from its commits.
+	kept := fmt.Sprint(ended["branch"])
+	if ended == nil || ended["why"] != "the run was dropped" || !strings.HasPrefix(kept, strings.TrimSuffix(branch, "P1")+"kept/P1-") || fmt.Sprint(ended["unlanded"]) != "1" {
 		t.Fatalf("worker_ended: %v", ended)
 	}
 	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
 		t.Errorf("the worktree %s is still there: %v", worktree, err)
 	}
-	if log := Git(t, dir, "log", "--format=%s", branch); !strings.Contains(log, "feat: one") {
-		t.Errorf("the branch %s lost its commit: %s", branch, log)
+	if log := Git(t, dir, "log", "--format=%s", kept); !strings.Contains(log, "feat: one") {
+		t.Errorf("the kept branch %s lost its commit: %s", kept, log)
 	}
 	if log := Git(t, dir, "log", "--format=%s"); strings.Contains(log, "feat: one") {
 		t.Errorf("the dropped worker's commit landed: %s", log)

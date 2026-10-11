@@ -189,7 +189,10 @@ Run echo goodbye, then report P2 done.
 func TestARedGateReopensThePhase(t *testing.T) {
 	dir := NewGateProject(t, 30)
 	Attach(t, dir, redPlan)
-	s := Start(t, dir, "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.")
+	// The fix and its commit are allowed outright: auto mode's classifier has turned them down. The prompt
+	// goes first: --allowedTools takes every argument after it.
+	s := Start(t, dir, "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.",
+		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(printf:*)", "Bash(echo:*)", "Write", "Edit")
 	s.Trust()
 	waitSequence(t, s, 10*time.Minute,
 		is("phase_verifying", "phase", "P0"),
