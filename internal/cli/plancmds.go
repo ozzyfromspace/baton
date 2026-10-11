@@ -701,45 +701,17 @@ type workLeft struct {
 
 // checkWork compares the uncommitted work now with what there was when phase started.
 func checkWork(s *state.Store, phase string) workLeft {
-	root := s.Root
-	if !gitx.Usable(root) {
-		return workLeft{}
-	}
-	paths, err := state.Uncommitted(root)
-	if err != nil {
-		return workLeft{warn: fmt.Sprintf("baton: warning — could not read git status (%v). Make sure this phase's work is committed.", err)}
-	}
-	if len(paths) == 0 {
-		return workLeft{}
-	}
-	var start *state.Dirt
-	var edited []string
-	if st, err := s.Load(); err == nil && st.Phases[phase] != nil {
-		start, edited = st.Phases[phase].StartDirty, st.Phases[phase].Edited
-	}
+	w := s.PhaseWork(phase)
+	out := workLeft{fresh: w.Fresh, kept: w.Kept, others: w.Others}
 	switch {
-	case start == nil:
-		return workLeft{warn: fmt.Sprintf("baton: warning — there is uncommitted work, and baton has no record of what was uncommitted when %s started:\n%s\nIf this phase made it, commit it.", phase, fileList(paths))}
-	case start.Over || len(paths) > gitx.MaxDirty:
-		return workLeft{warn: fmt.Sprintf("baton: warning — %d paths are uncommitted, too many for baton to check one by one. Make sure this phase's work is committed.", len(paths))}
+	case w.Err != nil:
+		out.warn = fmt.Sprintf("baton: warning — could not read git status (%v). Make sure this phase's work is committed.", w.Err)
+	case w.NoStart:
+		out.warn = fmt.Sprintf("baton: warning — there is uncommitted work, and baton has no record of what was uncommitted when %s started:\n%s\nIf this phase made it, commit it.", phase, fileList(w.Paths))
+	case w.TooMany:
+		out.warn = fmt.Sprintf("baton: warning — %d paths are uncommitted, too many for baton to check one by one. Make sure this phase's work is committed.", len(w.Paths))
 	}
-	fresh, kept := gitx.Since(start.Files, gitx.Fingerprint(root, paths))
-	w := workLeft{fresh: fresh, kept: kept}
-	if p, err := state.OpenProject(filepath.Join(root, state.DirName), s.Now); err == nil && len(p.Others(filepath.Base(s.Dir))) > 0 {
-		mine := map[string]bool{}
-		for _, e := range edited {
-			mine[e] = true
-		}
-		w.fresh = nil
-		for _, f := range fresh {
-			if mine[f] {
-				w.fresh = append(w.fresh, f)
-			} else {
-				w.others = append(w.others, f)
-			}
-		}
-	}
-	return w
+	return out
 }
 
 // report prints what the gate let through.
@@ -807,29 +779,80 @@ func cmdCheckpoint(args []string, io IO) int {
 	if err != nil || len(p.pos) != 0 {
 		return fail(io, "usage: baton checkpoint [--notes TEXT]%s", errSuffix(err))
 	}
-	s, _, ok := storeAndPlan(io)
+	s, pl, ok := storeAndPlan(io)
 	if !ok {
 		return 1
 	}
-	st, err := s.Update(func(st *state.State) error {
+	notes := p.vals["notes"]
+	cur, err := s.Load()
+	if err != nil {
+		return fail(io, "%v", err)
+	}
+	// A checkpoint is a switch point (state.SwitchAtCheckpoint), but never with the phase's work
+	// uncommitted: it would sit in the checkout while the other phase works there.
+	from := cur.Current
+	work := checkWork(s, from)
+	clean := len(work.fresh) == 0 && work.warn == ""
+	var to, back, why string
+	var epoch int
+	_, err = s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not recorded", true); err != nil {
 			return err
 		}
-		return state.SetCheckpoint(st)
+		if err := state.SetCheckpoint(st); err != nil {
+			return err
+		}
+		back = state.Returning(*st, pl)
+		if back != "" {
+			why = returnReason(*st, back)
+		}
+		if !clean || st.Current != from {
+			return nil
+		}
+		if to = state.SwitchAtCheckpoint(st, pl, notes, io.Now()); to != "" {
+			epoch = st.Run.Compaction.Epoch
+			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: checkpoint → %s set aside; compacting, then %s resumes (%s)", from, to, why))
+		}
+		return nil
 	})
 	if err != nil {
 		return refused(io, s, "checkpoint", err)
 	}
-	s.AppendHandoff(st.Current+" (checkpoint)", p.vals["notes"])
-	s.Event("checkpoint", map[string]any{"phase": st.Current})
-	if work := checkWork(s, st.Current); len(work.fresh) > 0 {
+	s.AppendHandoff(from+" (checkpoint)", notes)
+	s.Event("checkpoint", map[string]any{"phase": from})
+	if to != "" {
+		s.Event("phase_parked", map[string]any{"phase": from, "reason": state.ParkCheckpoint})
+		s.Event("phase_switched", map[string]any{"from": from, "to": to, "by": "checkpoint"})
+		s.Event("compact_queued", map[string]any{"reason": "switch", "epoch": epoch, "next": to, "by": "checkpoint"})
+		fmt.Fprintf(io.Out, "baton: checkpoint recorded. %s can go on now (%s), so baton sets %s aside here and takes %s up again; %s resumes from your notes later. "+
+			"End your turn now: baton compacts the context, then %s resumes with a fresh brief.\n", to, why, from, to, from, to)
+		return 0
+	}
+	if len(work.fresh) > 0 {
 		fmt.Fprintf(io.Out, "baton: note — %d %s changed in %s %s not committed yet:\n%s\nIf they are a finished step, commit them before you end your turn.\n",
-			len(work.fresh), plural(len(work.fresh), "file", "files"), st.Current, plural(len(work.fresh), "is", "are"), fileList(work.fresh))
+			len(work.fresh), plural(len(work.fresh), "file", "files"), from, plural(len(work.fresh), "is", "are"), fileList(work.fresh))
 	} else if work.warn != "" {
 		fmt.Fprintln(io.Out, work.warn)
 	}
-	fmt.Fprintf(io.Out, "baton: checkpoint recorded. End your turn now: baton compacts the context and you continue %s from your notes.\n", st.Current)
+	if back != "" && notes != "" && !clean {
+		fmt.Fprintf(io.Out, "baton: note — %s can go on now (%s), and a checkpoint is where baton takes it up again, but only with %s's work committed. "+
+			"Commit it, then checkpoint again to switch; or end your turn to go on with %s.\n", back, why, from, from)
+	}
+	fmt.Fprintf(io.Out, "baton: checkpoint recorded. End your turn now: baton compacts the context and you continue %s from your notes.\n", from)
 	return 0
+}
+
+// returnReason says why a parked phase can go on again (state.Returning): its job has ended, or its
+// verification did.
+func returnReason(st state.State, id string) string {
+	ps := st.Phases[id]
+	if ps == nil || ps.Park == nil {
+		return "it was set aside"
+	}
+	if j := st.Job(ps.Park.Job); j != nil && j.Finished() {
+		return fmt.Sprintf("its job %s %s", j.ID, decide.Outcome(*j))
+	}
+	return "its verification ended"
 }
 
 func cmdPause(_ []string, io IO) int {

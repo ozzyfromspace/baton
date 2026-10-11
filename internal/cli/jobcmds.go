@@ -101,9 +101,13 @@ func queueJob(args []string, io IO, kind string) int {
 	if replaced != nil {
 		fmt.Fprintf(io.Out, "baton: it replaces %s (`%s`), which baton stops: a phase has one job at a time.\n", replaced.ID, replaced.Command)
 	}
-	timeout, _ := config.Load(batonRoot(io), io.Env).JobTimeout()
+	cfg := config.Load(batonRoot(io), io.Env)
+	timeout, _ := cfg.JobTimeout()
+	after, _ := cfg.SwitchWait()
 	next := fmt.Sprintf("Keep working on what does not depend on its result; baton tells you when it ends, and baton status shows it meanwhile. "+
-		"If it runs past %s, baton stops it and counts it as failed.", timeout)
+		"With nothing left to do until then, commit your work and end your turn: if the job runs past %s (or is known to take that long) and another phase can go on, "+
+		"baton sets %s aside for it, and %s resumes from your notes once the job ends. If the job runs past %s, baton stops it and counts it as failed.",
+		decide.Span(after), phase, phase, decide.Span(timeout))
 	if kind == state.JobVerify {
 		next += " What you commit from now on is not in this check."
 	}

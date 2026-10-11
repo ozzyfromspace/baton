@@ -118,8 +118,12 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if _, err := cfg.JobTimeout(); err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	switchAfter, err := cfg.SwitchWait()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
-	timing.EscalationTimeout = escalation.Timeout
+	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WAIT_GRACE": &timing.WaitGrace, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {

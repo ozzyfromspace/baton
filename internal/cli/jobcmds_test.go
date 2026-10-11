@@ -81,7 +81,8 @@ func TestVerifyQueuesAGateOnHead(t *testing.T) {
 
 	out := s.must("", "verify", "make", "test", "--notes", "the parser is done")
 	for _, want := range []string{"baton: queued j1 — `make test` (P0), on " + head[:12] + ", in a lane of its own. baton starts it within seconds; its output goes to " + s.store().JobLog("j1"),
-		"Keep working on what does not depend on its result", "If it runs past 3h0m0s, baton stops it", "What you commit from now on is not in this check."} {
+		"Keep working on what does not depend on its result", "commit your work and end your turn: if the job runs past 5m (or is known to take that long) and another phase can go on, " +
+			"baton sets P0 aside for it, and P0 resumes from your notes once the job ends", "If the job runs past 3h00m, baton stops it", "What you commit from now on is not in this check."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("verify says:\n%s\nwant %q", out, want)
 		}
@@ -270,11 +271,16 @@ func TestStatusListsTheJobs(t *testing.T) {
 	}
 }
 
-func TestTheHostRefusesAnInvalidVerifyTimeout(t *testing.T) {
-	t.Chdir(t.TempDir())
-	io, _, errb := testIO("", map[string]string{"BATON_HOME": t.TempDir(), "BATON_VERIFY_TIMEOUT": "forever", "BATON_CLAUDE": "/nonexistent/claude"})
-	if code := runHostWith(nil, io, nil); code != 1 || !strings.Contains(errb.String(), `BATON_VERIFY_TIMEOUT "forever" is not valid: use a duration from 1s to 24h`) {
-		t.Errorf("exit %d: %s", code, errb)
+func TestTheHostRefusesAnInvalidJobSetting(t *testing.T) {
+	for name, want := range map[string]string{
+		"BATON_VERIFY_TIMEOUT": `BATON_VERIFY_TIMEOUT "forever" is not valid: use a duration from 1s to 24h`,
+		"BATON_SWITCH_AFTER":   `BATON_SWITCH_AFTER "forever" is not valid: use a duration from 1s to 2h`,
+	} {
+		t.Chdir(t.TempDir())
+		io, _, errb := testIO("", map[string]string{"BATON_HOME": t.TempDir(), name: "forever", "BATON_CLAUDE": "/nonexistent/claude"})
+		if code := runHostWith(nil, io, nil); code != 1 || !strings.Contains(errb.String(), want) {
+			t.Errorf("%s: exit %d: %s", name, code, errb)
+		}
 	}
 }
 
