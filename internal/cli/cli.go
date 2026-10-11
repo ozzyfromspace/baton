@@ -35,6 +35,7 @@ func StdIO() IO {
 type command struct {
 	summary string
 	run     func(args []string, io IO) int
+	hidden  bool // run by baton itself, never by hand: left out of help
 }
 
 // commands is filled in by each subcommand's file via register, so this file stays a router.
@@ -42,6 +43,11 @@ var commands = map[string]command{}
 
 func register(name, summary string, run func([]string, IO) int) {
 	commands[name] = command{summary: summary, run: run}
+}
+
+// registerHidden adds a command baton runs itself, which help leaves out.
+func registerHidden(name string, run func([]string, IO) int) {
+	commands[name] = command{run: run, hidden: true}
 }
 
 func init() {
@@ -76,7 +82,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  (these two are baton's own; for claude's, run claude --help or claude --version)\n\ncommands:")
 	names := make([]string, 0, len(commands))
 	width := 0
-	for n := range commands {
+	for n, c := range commands {
+		if c.hidden {
+			continue
+		}
 		names = append(names, n)
 		width = max(width, len(n))
 	}

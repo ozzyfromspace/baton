@@ -5,6 +5,7 @@
 //	state.json    progress and the host's runtime state machine
 //	events.jsonl  one line per decision baton makes: the audit trail
 //	handoff.md    notes the model leaves for the phases after it
+//	jobs/<id>.log the output of each job (package lane)
 //	lock          held (flock) for the duration of every update
 //
 // Hooks, the host and the model-facing CLI are separate processes that touch the same files, so every
@@ -53,6 +54,9 @@ func (s *Store) PlanPath() string { return s.path("plan.json") }
 
 // HandoffPath is where the model's notes for later phases live.
 func (s *Store) HandoffPath() string { return s.path("handoff.md") }
+
+// JobLog is where job id's output goes.
+func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", id+".log") }
 
 // lockTimeout bounds how long any process waits for another's update; updates take milliseconds.
 const lockTimeout = 5 * time.Second

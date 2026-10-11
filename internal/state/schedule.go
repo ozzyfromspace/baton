@@ -11,12 +11,34 @@ import (
 // set aside. The plan's dependency graph says what can start (plan.Deps); a phase that was parked comes
 // back as soon as what it waited for is over.
 
-// Job is a command baton runs for a phase while the session works on, such as a verification gate.
+// Job is a command baton runs for a phase while the session works on, such as a verification gate. Its
+// runner (`baton lane-run`, package lane) takes it from queued to running and records how it ended.
 type Job struct {
-	ID     string `json:"id"`
-	Phase  string `json:"phase"`
-	Status string `json:"status"`
+	ID      string `json:"id"`
+	Phase   string `json:"phase"`
+	Kind    string `json:"kind,omitempty"` // JobVerify or JobAwait
+	Command string `json:"command,omitempty"`
+	Commit  string `json:"commit,omitempty"` // the commit a verify job checks, in a lane
+	Status  string `json:"status"`
+	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
+	Reason  string `json:"reason,omitempty"` // why, when the job ended without the command's own verdict
+	Lane    int    `json:"lane,omitempty"`   // the lane it ran in
+	Log     string `json:"log,omitempty"`
+	PID     int    `json:"pid,omitempty"`  // the runner's
+	PGID    int    `json:"pgid,omitempty"` // the process group of what the runner runs now (or ran last)
+
+	Queued    time.Time `json:"queued,omitzero"`
+	Started   time.Time `json:"started,omitzero"`
+	Ended     time.Time `json:"ended,omitzero"`
+	Heartbeat time.Time `json:"heartbeat,omitzero"` // the runner's, while the job runs
 }
+
+// Job kinds: a verify job runs a gate on a commit, in a lane; an await job waits on something outside the
+// project (a CI run, say) from the working tree, with no lane.
+const (
+	JobVerify = "verify"
+	JobAwait  = "await"
+)
 
 // Job statuses: queued and running are unfinished; every other status is a result.
 const (

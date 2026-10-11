@@ -89,6 +89,35 @@ func TestEscalationSettings(t *testing.T) {
 }
 
 // The host passes the settings down to the session, where the CLI and the hooks read them back.
+func TestVerifyTimeout(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name string
+		file string
+		env  map[string]string
+		want time.Duration
+		err  string
+	}{
+		{"default", `{}`, nil, 3 * time.Hour, ""},
+		{"file", `{"verify_timeout":"45m"}`, nil, 45 * time.Minute, ""},
+		{"file bounds", `{"verify_timeout":"24h"}`, nil, 24 * time.Hour, ""},
+		{"env wins", `{"verify_timeout":"45m"}`, map[string]string{"BATON_VERIFY_TIMEOUT": "2s"}, 2 * time.Second, ""},
+		{"too short in the file", `{"verify_timeout":"30s"}`, nil, 0, `verify_timeout "30s" is not valid: use a duration from 1m to 24h`},
+		{"too long", `{"verify_timeout":"25h"}`, nil, 0, "from 1m to 24h"},
+		{"not a duration", `{"verify_timeout":"3"}`, nil, 0, `verify_timeout "3"`},
+		{"too short even for tests", `{}`, map[string]string{"BATON_VERIFY_TIMEOUT": "500ms"}, 0, `BATON_VERIFY_TIMEOUT "500ms" is not valid: use a duration from 1s to 24h`},
+	} {
+		os.WriteFile(Path(root), []byte(c.file), 0o644)
+		got, err := Load(root, func(k string) string { return c.env[k] }).JobTimeout()
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err) || got != DefaultVerifyTimeout):
+			t.Errorf("%s: %s %v, want the default and an error mentioning %q", c.name, got, err, c.err)
+		case c.err == "" && (err != nil || got != c.want):
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+}
+
 func TestEscalationEnvRoundTrip(t *testing.T) {
 	e := Escalation{Timeout: 20 * time.Second, MaxAuto: 0}
 	m := map[string]string{}

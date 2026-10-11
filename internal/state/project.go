@@ -16,7 +16,7 @@ import (
 // A Project is a working tree's .baton directory. It keeps one run per Claude Code session, so every
 // baton terminal in the same working tree runs a plan of its own:
 //
-//	.baton/runs/<run>/       one run: plan.json, state.json, events.jsonl, handoff.md, drafts/ (see Store)
+//	.baton/runs/<run>/       one run: plan.json, state.json, events.jsonl, handoff.md, drafts/, jobs/ (see Store)
 //	.baton/sessions/<id>     the run a session belongs to (one line: the run's id)
 //	.baton/hosts/<instance>  the run a baton host drives (one line: the run's id)
 //	.baton/pending           a run attached outside any session, for the next baton session started here
@@ -67,6 +67,14 @@ func (p *Project) Run(id, instance string) (*Store, error) {
 		return nil, fmt.Errorf("no run %q here", id)
 	}
 	return openIn(p.path(runsDir, id), p.Root, instance, p.Now)
+}
+
+// ExistingRun opens the run with this id, writing as instance, if there is one.
+func (p *Project) ExistingRun(id, instance string) (*Store, error) {
+	if !p.runExists(id) {
+		return nil, fmt.Errorf("no run %q here", id)
+	}
+	return p.Run(id, instance)
 }
 
 func (p *Project) runExists(id string) bool {

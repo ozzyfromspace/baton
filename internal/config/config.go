@@ -44,9 +44,14 @@ type Config struct {
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
 	AutoRestart *bool `json:"auto_restart,omitempty"`
+	// VerifyTimeout is how long a job baton runs for the session (a gate in a lane, or a wait) may run
+	// before baton stops it and counts it as failed: a duration from 1m to 24h, "3h" by default
+	// (BATON_VERIFY_TIMEOUT, which may go down to 1s).
+	VerifyTimeout string `json:"verify_timeout,omitempty"`
 
-	// The environment's values for the two above, which Escalation checks against their own bounds.
-	envTimeout, envMaxAuto string
+	// The environment's values for escalation_timeout, max_auto_decisions and verify_timeout, which are
+	// checked against bounds of their own.
+	envTimeout, envMaxAuto, envVerifyTimeout string
 }
 
 // Defaults.
@@ -58,6 +63,7 @@ const (
 
 	DefaultEscalationTimeout = 5 * time.Minute
 	DefaultMaxAutoDecisions  = 5
+	DefaultVerifyTimeout     = 3 * time.Hour
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
@@ -118,6 +124,7 @@ func Load(root string, env func(string) string) Config {
 		}
 	}
 	c.envTimeout, c.envMaxAuto = env("BATON_ESCALATION_TIMEOUT"), env("BATON_MAX_AUTO_DECISIONS")
+	c.envVerifyTimeout = env("BATON_VERIFY_TIMEOUT")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}
@@ -211,6 +218,33 @@ func (c Config) Escalation() (Escalation, error) {
 		e.MaxAuto = n
 	}
 	return e, nil
+}
+
+// Bounds for verify_timeout. Only the environment, for tests, may go below a minute.
+const (
+	MinVerifyTimeout    = time.Minute
+	MaxVerifyTimeout    = 24 * time.Hour
+	MinEnvVerifyTimeout = time.Second
+)
+
+// JobTimeout checks verify_timeout (the environment's value wins) and fills in the default. A value out of
+// bounds is an error.
+func (c Config) JobTimeout() (time.Duration, error) {
+	d := DefaultVerifyTimeout
+	for _, v := range []struct {
+		name, value string
+		min         time.Duration
+	}{{"verify_timeout", c.VerifyTimeout, MinVerifyTimeout}, {"BATON_VERIFY_TIMEOUT", c.envVerifyTimeout, MinEnvVerifyTimeout}} {
+		if v.value == "" {
+			continue
+		}
+		t, err := time.ParseDuration(v.value)
+		if err != nil || t < v.min || t > MaxVerifyTimeout {
+			return DefaultVerifyTimeout, fmt.Errorf("%s %q is not valid: use a duration from %s to %s, such as \"3h\"", v.name, v.value, short(v.min), short(MaxVerifyTimeout))
+		}
+		d = t
+	}
+	return d, nil
 }
 
 // Env is the environment the host gives the session, so the CLI, the hooks and the host agree.
