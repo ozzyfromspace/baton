@@ -74,7 +74,7 @@ func cmdLaneRun(args []string, io IO) int {
 	s.Event("job_started", map[string]any{"job": id, "phase": job.Phase, "type": job.Kind, "command": job.Command, "commit": job.Commit, "pid": job.PID, "log": job.Log})
 
 	res := runJob(s, job, io)
-	ended := finishJob(s, id, res, io.Now())
+	ended := finishJob(s, job, res, io.Now())
 	s.Event("job_finished", map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
 		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds())})
 	return 0
@@ -106,7 +106,7 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 		Beat: func(now time.Time) (time.Time, bool) {
 			st, err := s.Update(func(st *state.State) error {
 				j := st.Job(job.ID)
-				if j == nil || j.Status != state.JobRunning {
+				if !mine(j, job) || j.Status != state.JobRunning {
 					return errNotWanted
 				}
 				j.Heartbeat = now
@@ -122,7 +122,7 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 		},
 		Started: func(n, pgid int) {
 			s.Update(func(st *state.State) error {
-				if j := st.Job(job.ID); j != nil && j.Status == state.JobRunning {
+				if j := st.Job(job.ID); mine(j, job) && j.Status == state.JobRunning {
 					j.Lane, j.PGID = n, pgid
 				}
 				return nil
@@ -132,15 +132,21 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit})
 }
 
+// mine reports whether j, as the run's state has it now, is the job this runner took up: a job dropped
+// from the record, with its plan, is not, nor one that took its id since.
+func mine(j *state.Job, job state.Job) bool {
+	return j != nil && j.PID == job.PID && j.Started.Equal(job.Started)
+}
+
 // finishJob records how the job ended, unless something else ended it first (it was cancelled), and
 // returns the job as recorded. The state may be busy for a moment, so it tries more than once.
-func finishJob(s *state.Store, id string, res lane.Result, now time.Time) state.Job {
+func finishJob(s *state.Store, job state.Job, res lane.Result, now time.Time) state.Job {
 	var ended state.Job
 	for try := 0; try < 3; try++ {
 		_, err := s.Update(func(st *state.State) error {
-			j := st.Job(id)
-			if j == nil {
-				ended = state.Job{ID: id, Status: res.Status, Exit: res.Exit, Lane: res.Lane, Reason: res.Reason}
+			j := st.Job(job.ID)
+			if !mine(j, job) {
+				ended = state.Job{ID: job.ID, Phase: job.Phase, Status: res.Status, Exit: res.Exit, Lane: res.Lane, Reason: res.Reason}
 				return nil
 			}
 			if j.Status == state.JobRunning {

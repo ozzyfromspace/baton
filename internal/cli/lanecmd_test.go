@@ -130,6 +130,41 @@ func TestLaneRunStopsACancelledJob(t *testing.T) {
 	}
 }
 
+// A runner whose job was taken off the record stops, and leaves alone a later job that took its id.
+func TestLaneRunLeavesAJobThatIsNotItsOwn(t *testing.T) {
+	defer func(d time.Duration) { laneTick = d }(laneTick)
+	laneTick = 20 * time.Millisecond
+	s, env := laneProject(t, "sleep 30")
+	done := make(chan int)
+	go func() {
+		code, _ := laneRun(env, "sess-1", "j1")
+		done <- code
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if st, _ := s.Load(); st.Job("j1").PGID != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	later := state.Job{ID: "j1", Phase: "P2", Command: "true", Status: state.JobQueued, Queued: time.Now()}
+	s.Update(func(st *state.State) error { st.Jobs = []state.Job{later}; return nil })
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("lane-run kept running a job taken off the record")
+	}
+	if st, _ := s.Load(); len(st.Jobs) != 1 || st.Jobs[0].Status != state.JobQueued || st.Jobs[0].Phase != "P2" || st.Jobs[0].PID != 0 || !st.Jobs[0].Ended.IsZero() {
+		t.Errorf("the later job: %+v", st.Jobs)
+	}
+	if e := events(t, s)["job_finished"]; e == nil || e["status"] != "interrupted" || e["phase"] != "P1" {
+		t.Errorf("job_finished: %v", e)
+	}
+}
+
 func TestLaneRunRefuses(t *testing.T) {
 	s, env := laneProject(t, "true")
 	s.Update(func(st *state.State) error {

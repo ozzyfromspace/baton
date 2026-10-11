@@ -115,6 +115,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	if _, err := cfg.JobTimeout(); err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout = escalation.Timeout
 	// Shorter watchdog timings, for tests and impatient humans.
@@ -146,7 +149,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		// the one the shell's prompt hook looks for when `baton exit` hands the session back.
 		batonEnv = append(batonEnv, "BATON_TTY="+tty)
 	}
-	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version}
+	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version,
+		Runners: newHostRunners(io, exe, proj, instance)}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
@@ -165,7 +169,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	controller.Ended() // save uncommitted work as the session ends
 	if st, ok := proj.Lookup("", instance); ok {
 		leftBaton(io, st)
+		endJobs(io, st, instance)
 	}
+	lanesDown(io, proj.Root, proj.Dir, instance)
 	if err != nil {
 		return fail(io, "%v", err)
 	}

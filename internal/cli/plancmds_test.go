@@ -390,8 +390,9 @@ func TestExitLeavesARecordForTheShell(t *testing.T) {
 	for k, v := range map[string]string{"BATON_HOME": home, "BATON_SHELL_HOOK": "1", "BATON_TTY": "/dev/ttys042", "CLAUDE_PID": strconv.Itoa(os.Getpid())} {
 		s.env[k] = v
 	}
+	s.set(func(x *state.State) { state.QueueJob(x, state.Job{Phase: "P0", Command: "make test"}, s.now) })
 	out := s.must("", "exit")
-	if !strings.Contains(out, "leaving baton") || !strings.Contains(out, "baton --resume sess-1") {
+	if !strings.Contains(out, "leaving baton") || !strings.Contains(out, "baton --resume sess-1") || !strings.Contains(out, "baton stops job j1 (`make test`, P0) as claude stops: nothing would see its result.") {
 		t.Fatalf("exit: %s", out)
 	}
 	rec, err := elevate.Load(home, "ttys042")

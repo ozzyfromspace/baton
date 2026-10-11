@@ -108,8 +108,9 @@ func cmdExit(args []string, io IO) int {
 		return fail(io, "cannot record the session to resume: %v", err)
 	}
 	paused := false
+	var jobs []state.Job
 	s.Update(func(st *state.State) error {
-		paused = state.Pause(st) == nil
+		paused, jobs = state.Pause(st) == nil, st.Unfinished()
 		st.Run.ExitAt, st.Run.SessionID = io.Now(), sid // the session leaving, whose record the host completes
 		return nil
 	})
@@ -117,6 +118,9 @@ func cmdExit(args []string, io IO) int {
 	msg := "baton: leaving baton. When this turn ends, baton stops claude, and this terminal resumes this same conversation as plain Claude Code. End your turn now."
 	if paused {
 		msg += fmt.Sprintf(" The plan is paused; to pick it up later, start the session with `baton --resume %s`, then /baton run.", sid)
+	}
+	if len(jobs) > 0 {
+		msg += fmt.Sprintf(" baton stops %s as claude stops: nothing would see %s.", jobLabels(jobs), plural(len(jobs), "its result", "their results"))
 	}
 	fmt.Fprintln(io.Out, msg)
 	return 0

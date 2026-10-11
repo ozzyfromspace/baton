@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -239,6 +240,9 @@ func cmdStatus(args []string, io IO) int {
 		if len(snaps) > 0 {
 			out["snapshots"] = snaps
 		}
+		if lanes := (lane.Pool{Home: batonRoot(io), Root: s.Root}).Lanes(); len(lanes) > 0 {
+			out["lanes"] = lanes
+		}
 		b, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Fprintln(io.Out, string(b))
 		return 0
@@ -292,6 +296,7 @@ func cmdStatus(args []string, io IO) int {
 	if st.Waiting != nil {
 		fmt.Fprintf(io.Out, "waiting: %s (until %s)\n", st.Waiting.What, st.Waiting.Until.Local().Format("15:04"))
 	}
+	printJobs(io, s, st)
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
 	}
@@ -921,11 +926,30 @@ func cmdDrop(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	pl, _ := s.LoadPlan()
-	if _, err := s.Update(state.Detach); err != nil {
+	var stopped []state.Job
+	var logs int
+	if _, err := s.Update(func(st *state.State) error {
+		stopped, logs = st.Unfinished(), len(st.Jobs)
+		return state.Detach(st)
+	}); err != nil {
 		return refused(io, s, "drop", err)
 	}
-	s.Event("dropped", map[string]any{"plan": pl.File})
+	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
+	stopRunners(stopped, io.Now())
+	os.RemoveAll(jobsDir(s))
+	lanesDown(io, s.Root, filepath.Join(s.Root, state.DirName), instance(io))
+	dropped := map[string]any{"plan": pl.File}
+	if len(stopped) > 0 {
+		dropped["stopped"] = jobIDs(stopped)
+	}
+	s.Event("dropped", dropped)
 	fmt.Fprintf(io.Out, "baton: dropped %q. Its plan is set aside (its history stays in baton's event log), and baton does nothing in this session until the next plan: /baton plan or /baton run.\n", pl.Title)
+	switch {
+	case len(stopped) > 0:
+		fmt.Fprintf(io.Out, "baton: it stopped %s, and removed the logs of the run's jobs.\n", jobLabels(stopped))
+	case logs > 0:
+		fmt.Fprintln(io.Out, "baton: it removed the logs of the run's jobs.")
+	}
 	return 0
 }
 
