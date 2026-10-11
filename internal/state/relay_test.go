@@ -113,3 +113,30 @@ func btoi(b bool) int {
 	}
 	return 0
 }
+
+// A worker's question waits in its sub-run while its proposal is unresolved, or while its block or its
+// review is still the one it asked about.
+func TestWaits(t *testing.T) {
+	st := AttachWorker(New(), "P3")
+	Start(&st, t0, Origin{})
+	p := Relay{Phase: "P3", Kind: RelayProposal, Decision: "P3.d1"}
+	b := Relay{Phase: "P3", Kind: RelayBlocked, Since: t0}
+	v := Relay{Phase: "P3", Kind: RelayReview, Since: t0}
+	if st.Waits(p) || st.Waits(b) || st.Waits(v) {
+		t.Fatal("nothing asked, yet waiting")
+	}
+	AddProposal(&st, Decision{What: "x", Relayed: true}, t0)
+	SetBlocked(&st, "need a key", t0)
+	DueReview(&st, "P3", t0)
+	if !st.Waits(p) || !st.Waits(b) || !st.Waits(v) {
+		t.Fatal("asked, yet not waiting")
+	}
+	if st.Waits(Relay{Phase: "P3", Kind: RelayBlocked, Since: t0.Add(-time.Hour)}) {
+		t.Error("an earlier block waits")
+	}
+	Resolve(&st, "P3.d1", ByHuman, "Go ahead", t0)
+	Resume(&st)
+	if st.Waits(p) || st.Waits(b) || st.Waits(v) {
+		t.Error("answered, yet waiting")
+	}
+}

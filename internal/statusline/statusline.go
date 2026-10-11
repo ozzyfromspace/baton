@@ -24,7 +24,7 @@ import (
 )
 
 // Segment is baton's part of the status line: the phase in hand, then the jobs baton runs meanwhile, then
-// the context's size.
+// a worker's question waiting for the human, then the context's size.
 func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string {
 	const mark = "◆ baton"
 	if !havePlan || st.Mode == state.ModeIdle {
@@ -59,6 +59,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 	}
 	if j := jobs(st, now); j != "" {
 		s += " · " + j
+	}
+	if r := st.FrontRelay(); r != nil {
+		s += " · ? " + r.Phase // the lead puts it to the human as soon as it can
 	}
 	if c := st.Run.Context; c != nil {
 		if c.Limit > 0 {

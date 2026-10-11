@@ -110,25 +110,10 @@ func (c *Coordinator) unneeded(st state.State, r state.Relay) string {
 	if err != nil {
 		return ""
 	}
-	if !waits(&sst, r) {
+	if !sst.Waits(r) {
 		return "it was settled in the worker's own session"
 	}
 	return ""
-}
-
-// waits reports worker question r still waiting for its answer in the worker's sub-run st: its proposal
-// unresolved, or its block or its review still the one that began when r asked about it.
-func waits(st *state.State, r state.Relay) bool {
-	switch r.Kind {
-	case state.RelayProposal:
-		p := st.PendingProposal()
-		return p != nil && p.ID == r.Decision
-	case state.RelayBlocked:
-		return st.Blocked != nil && st.Blocked.Since.Equal(r.Since)
-	case state.RelayReview:
-		return st.ReviewDue != "" && st.ReviewAt.Equal(r.Since)
-	}
-	return false
 }
 
 // withdraw settles worker question r, which nobody needs answered any more (why).
@@ -169,7 +154,7 @@ func (c *Coordinator) apply(now time.Time, s *state.Store, st state.State, r sta
 // question settled there meanwhile is left as it is. maxAuto caps the decisions the phase may make
 // without the human (max_auto_decisions; 0: no cap).
 func applyRelay(st *state.State, r state.Relay, maxAuto int, now time.Time) string {
-	if !waits(st, r) {
+	if !st.Waits(r) {
 		return "settled in the worker's session already"
 	}
 	a, phase := *r.Answered, r.Phase

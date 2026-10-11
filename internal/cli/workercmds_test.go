@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -177,5 +178,38 @@ func TestAttachRecordsTheRunsBranch(t *testing.T) {
 	s.attach(planFile)
 	if st := s.state(); st.RunBranch != "trunk" || !s.logged("attached", map[string]any{"branch": "trunk"}) {
 		t.Errorf("run branch %q\n%s", st.RunBranch, s.events())
+	}
+}
+
+// baton status lists the workers' questions: those the lead puts to the human, and those left for them in
+// a worker's own session. A worker's own status says the lead puts its proposal to the human.
+func TestStatusListsTheWorkersQuestions(t *testing.T) {
+	w, lead := asWorker(t)
+	w.must("", "blocked", "need the signing key", "--tried", "the keychain")
+	if out := lead.must("", "status"); !strings.Contains(out, "questions from workers (the lead session puts them to you, one at a time):\n  ? P1     blocked: need the signing key — next") {
+		t.Errorf("status:\n%s", out)
+	}
+	lead.set(func(st *state.State) {
+		r := st.FrontRelay()
+		state.IssueRelay(r, "baton: worker P1 is blocked: need the signing key.", lead.now.Add(5*time.Minute), lead.now)
+		r.Asked = true
+	})
+	if out := lead.must("", "status"); !strings.Contains(out, "? P1     blocked: need the signing key — asked; if you do not answer, it waits for you in the worker's own session") {
+		t.Errorf("status:\n%s", out)
+	}
+	lead.set(func(st *state.State) { state.AnswerRelay(st.FrontRelay(), state.ByHuman, "Wait for me", lead.now) })
+	out := lead.must("", "status")
+	if strings.Contains(out, "questions from workers") || !strings.Contains(out, "waiting for you in a worker's own session (baton view <phase>, in another terminal):\n  ! P1     blocked: need the signing key") {
+		t.Errorf("status:\n%s", out)
+	}
+	w.set(func(st *state.State) { state.Resume(st) }) // answered in its session
+	if out := lead.must("", "status"); strings.Contains(out, "waiting for you in a worker's own session") {
+		t.Errorf("status:\n%s", out)
+	}
+
+	w, _ = asWorker(t)
+	w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
+	if out := w.must("", "status"); !strings.Contains(out, "proposal P1.d1: use a fake clock\n  because: the real one drifts\n  the lead session puts it to you, and baton gives this worker your answer") {
+		t.Errorf("the worker's status:\n%s", out)
 	}
 }

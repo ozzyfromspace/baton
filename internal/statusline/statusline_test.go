@@ -75,6 +75,12 @@ func TestSegment(t *testing.T) {
 			s := withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
 			return s
 		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 12m · ctx 41%"},
+		{"a worker's question", func() state.State {
+			s := run
+			state.QueueRelay(&s, state.Relay{Phase: "P3", Kind: state.RelayBlocked, Since: now}, now)
+			state.QueueRelay(&s, state.Relay{Phase: "P4", Kind: state.RelayBlocked, Since: now}, now)
+			return s
+		}, true, "◆ baton · P0 1/2 The overlay · ? P3 · ctx 41%"},
 		{"a wait on something outside", func() state.State {
 			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobQueued, Queued: now.Add(-40 * time.Second)})
 		}, true, "◆ baton · P0 1/2 The overlay · P0 awaiting 40s · ctx 41%"},

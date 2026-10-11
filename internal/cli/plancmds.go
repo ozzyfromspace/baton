@@ -316,6 +316,7 @@ func cmdStatus(args []string, io IO) int {
 		fmt.Fprintln(io.Out, "checkpoint: the conversation grew while baton was paused; Claude records where "+st.Current+" stands, then baton compacts")
 	}
 	printWaitingOnYou(io, &st)
+	printRelay(io, s, st)
 	if cu := st.Run.Context; cu != nil {
 		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
 	}
@@ -468,6 +469,8 @@ func printWaitingOnYou(io IO, st *state.State) {
 	if p := st.PendingProposal(); p != nil {
 		fmt.Fprintf(io.Out, "proposal %s: %s\n  because: %s\n", p.ID, p.What, p.Because)
 		switch {
+		case p.Relayed:
+			fmt.Fprintln(io.Out, "  the lead session puts it to you, and baton gives this worker your answer")
 		case p.Untimed != "":
 			fmt.Fprintf(io.Out, "  waits for you: baton will not let it go ahead without you (%s)\n", p.Untimed)
 		case p.Asked:
@@ -484,6 +487,72 @@ func printWaitingOnYou(io IO, st *state.State) {
 		fmt.Fprintf(io.Out, "review due: %s has made %d decisions without you, as many as it may before you go over them (below). "+
 			"Answer baton's question in the session, or /baton run to let the run go on.\n", st.ReviewDue, st.Unattended(st.ReviewDue))
 	}
+}
+
+// printRelay lists the questions the run's workers have for the human: those the lead session puts to
+// them, one at a time, and those left for them in a worker's own session, which they answer there.
+func printRelay(io IO, s *state.Store, st state.State) {
+	var open, here []string
+	for i, r := range st.Relay {
+		switch {
+		case r.Answered == nil:
+			where := "waits its turn"
+			switch {
+			case r.Asked && r.Timed():
+				where = "asked; it goes ahead at " + r.Deadline.Local().Format("15:04") + " unless you answer"
+			case r.Asked:
+				where = "asked; if you do not answer, it waits for you in the worker's own session"
+			case !r.Issued.IsZero():
+				where = "Claude has yet to put it to you"
+			case st.FrontRelay() == &st.Relay[i]:
+				where = "next"
+			}
+			open = append(open, fmt.Sprintf("  ? %-6s %s — %s", r.Phase, relayWhat(r), where))
+		case r.Answered.By != state.ByWithdrawn && leftHere(s, st, r):
+			here = append(here, fmt.Sprintf("  ! %-6s %s", r.Phase, relayWhat(r)))
+		}
+	}
+	if len(open) > 0 {
+		fmt.Fprintln(io.Out, "questions from workers (the lead session puts them to you, one at a time):")
+		fmt.Fprintln(io.Out, strings.Join(open, "\n"))
+	}
+	if len(here) > 0 {
+		fmt.Fprintln(io.Out, "waiting for you in a worker's own session (baton view <phase>, in another terminal):")
+		fmt.Fprintln(io.Out, strings.Join(here, "\n"))
+	}
+}
+
+// relayWhat says what a worker's question is about.
+func relayWhat(r state.Relay) string {
+	switch r.Kind {
+	case state.RelayProposal:
+		return "proposal " + r.Decision + ": " + r.What
+	case state.RelayReview:
+		return fmt.Sprintf("a review of the %d decisions it made without you", r.Count)
+	}
+	return "blocked: " + r.Because
+}
+
+// leftHere reports worker question r, answered, left for the human in the worker's own session, where it
+// still waits.
+func leftHere(s *state.Store, st state.State, r state.Relay) bool {
+	if o := decide.RelayOutcome(r, r.Answered.Answer); o != decide.OutcomeWait && o != decide.OutcomePause {
+		return false
+	}
+	e := st.WorkerOn(r.Phase)
+	if e == nil {
+		return false
+	}
+	p, err := state.OpenProject(s.Project, s.Now)
+	if err != nil {
+		return false
+	}
+	sub, err := p.ExistingRun(e.Ref, "")
+	if err != nil {
+		return false
+	}
+	sst, err := sub.Load()
+	return err == nil && sst.Waits(r)
 }
 
 // printDecisions lists what the run decided without the human, each with its undo.

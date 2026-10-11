@@ -149,6 +149,21 @@ func AnswerRelay(r *Relay, by, answer string, now time.Time) {
 	r.Answered = &Resolution{By: by, Answer: answer, At: now}
 }
 
+// Waits reports worker question r still waiting for its answer in the worker's sub-run st: its proposal
+// unresolved, or its block or its review still the one that began when r asked about it.
+func (st *State) Waits(r Relay) bool {
+	switch r.Kind {
+	case RelayProposal:
+		p := st.PendingProposal()
+		return p != nil && p.ID == r.Decision
+	case RelayBlocked:
+		return st.Blocked != nil && st.Blocked.Since.Equal(r.Since)
+	case RelayReview:
+		return st.ReviewDue != "" && st.ReviewAt.Equal(r.Since)
+	}
+	return false
+}
+
 // RelayOf finds the queue's item r is, or nil.
 func (st *State) RelayOf(r Relay) *Relay {
 	for i := range st.Relay {
