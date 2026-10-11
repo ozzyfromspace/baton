@@ -94,6 +94,22 @@ func TestSwitchBrief(t *testing.T) {
 	}
 }
 
+// A phase done by its verification says so: the notes it left were written while its gate still ran.
+func TestTheBriefNamesAPhaseVerifiedSince(t *testing.T) {
+	pl, doc, st := setup(t)
+	for _, c := range []struct {
+		status, want string
+	}{
+		{state.JobPassed, "✓ P0 — The overlay (verified: job j1 passed)\n"},
+		{state.JobFailed, "✓ P0 — The overlay\n"}, // done despite it: the red phases say so
+	} {
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: c.status}}
+		if b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st}); !strings.Contains(b, c.want) {
+			t.Errorf("%s: brief lacks %q:\n%s", c.status, c.want, b)
+		}
+	}
+}
+
 // The brief ends with how to report the phase and reach the human, in words that fit the project.
 func TestBriefEndsWithTheWaysToReport(t *testing.T) {
 	pl, doc, st := setup(t)

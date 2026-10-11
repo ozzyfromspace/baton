@@ -77,6 +77,10 @@ func Write(in Input) string {
 			switch ps.Status {
 			case state.PhaseDone:
 				mark = "✓"
+				// Its notes were left while its gate ran, and may well say so: they are out of date.
+				if j := st.Latest(ph.ID); j != nil && j.Status == state.JobPassed {
+					extra = fmt.Sprintf(" (verified: job %s passed)", j.ID)
+				}
 			case state.PhaseVerifying:
 				mark, extra = "⧗", " (verifying)"
 			case state.PhaseParked:
