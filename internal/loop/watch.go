@@ -36,6 +36,16 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
+	if l.deliver(v, st, in) {
+		l.idleNudged = time.Time{}
+		return
+	}
+	if st.Current == "" {
+		// No phase is in hand: every phase left waits for a job, which ends by itself (verify_timeout,
+		// or its runner found dead), and baton takes the next phase up then. Nothing is stalled.
+		l.idleNudged = time.Time{}
+		return
+	}
 	if !l.idleNudged.IsZero() && st.Run.LastActivity.After(l.idleNudged) {
 		l.idleNudged = time.Time{} // the model answered the reminder (IdleNudges still counts it)
 	}

@@ -113,8 +113,11 @@ type Loop struct {
 	alone   state.Dialog // baton's own question, alone on screen since aloneAt
 	aloneAt time.Time
 
-	owner    bool           // this session has owned the project
-	swept    bool           // the lanes were swept
+	owner    bool      // this session has owned the project
+	swept    bool      // the lanes were swept
+	settled  time.Time // when the run's jobs were last settled
+	typedFor string    // the jobs whose results baton last typed a line for, and when
+	typedAt  time.Time
 	quit     bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart  *restart       // the restart claude was ended for
 	halted   bool           // the run is halted, and this halt's snapshot was started
@@ -158,6 +161,15 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		return // claude is on its way out; nothing more may be typed into it
 	}
 	l.jobs(v, st)
+	st = l.settle(v, st)
+	if st.Mode == state.ModeComplete && len(st.Due()) > 0 {
+		// A verification completed the plan while the session was idle: it is told, and sums the run up.
+		l.why, l.wished = l.gate(v, st), false
+		l.clearDraft(v, st, in)
+		l.deliver(v, st, in)
+		l.publishGate(st)
+		return
+	}
 	if st.Mode != state.ModeRunning {
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
 			l.restartOn(v, st, in)
@@ -168,15 +180,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.wished = false
 	l.resolve(v, st)
 	l.remind(v, st)
-
-	// A draft must never be able to hold a run. If one is in the way of something baton needs to type,
-	// save it where `baton drafts` hands it back, clear the box, and carry on.
-	if l.why == gateDraft && l.owed(st) && l.rescueDraft(v, st, in) {
-		// The box is empty as of a moment ago; the host's next view will say so too. Re-gate without
-		// it so the work baton was holding goes out on this tick rather than the next.
-		v.Draft, v.DraftText = false, ""
-		l.why = l.gate(v, st)
-	}
+	l.clearDraft(v, st, in)
 
 	comp := st.Run.Compaction
 	switch comp.Status {
@@ -211,6 +215,17 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		l.heldWhy = ""
 	}
 	l.publishGate(st)
+}
+
+// clearDraft makes sure a draft can never hold a run. If one is in the way of something baton needs to
+// type, it is saved where `baton drafts` hands it back, and the box cleared.
+func (l *Loop) clearDraft(v host.View, st state.State, in host.Injector) {
+	if l.why == gateDraft && l.owed(st) && l.rescueDraft(v, st, in) {
+		// The box is empty as of a moment ago; the host's next view will say so too. Re-gate without
+		// it so the work baton was holding goes out on this tick rather than the next.
+		v.Draft, v.DraftText = false, ""
+		l.why = l.gate(v, st)
+	}
 }
 
 // publishGate records the current gate so the status line can say what a run is waiting for. Written
@@ -300,6 +315,7 @@ func (l *Loop) drive(s *state.Store) {
 	}
 	l.Store = s
 	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	l.settled, l.typedFor, l.typedAt = time.Time{}, "", time.Time{}
 	l.rateNotified, l.errNudged, l.errRetries = false, time.Time{}, 0
 	l.alone, l.aloneAt, l.heldWhy, l.heldSince = state.Dialog{}, time.Time{}, "", time.Time{}
 }
@@ -430,15 +446,15 @@ func busyAgents(st state.State) bool {
 	return false
 }
 
-// owed reports work baton must type to make progress: a compaction at a boundary or a checkpoint. A
-// nudge is deliberately not owed — a reminder arriving late costs nothing, and clearing somebody's input
-// box to send one would be rude.
+// owed reports work baton must type to make progress: a compaction at a boundary or a checkpoint, or the
+// results of jobs the model waits on. A nudge is deliberately not owed — a reminder arriving late costs
+// nothing, and clearing somebody's input box to send one would be rude.
 func (l *Loop) owed(st state.State) bool {
 	switch st.Run.Compaction.Status {
 	case state.CompactQueued, state.CompactFailed:
 		return true
 	}
-	return st.BoundaryOwed || st.CheckpointOwed
+	return st.BoundaryOwed || st.CheckpointOwed || len(st.Due()) > 0
 }
 
 // rescueDraft saves the draft in the input box and clears it, so the gate opens on the next tick. A
