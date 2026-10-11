@@ -31,6 +31,7 @@ type Session struct {
 	screen io.Writer
 	tail   *ring
 	modes  *modeTracker
+	dump   string // a hidden session's tail is added to this file when it ends ("": none)
 	viewMu sync.Mutex
 	viewer *viewer
 	// sizeMu guards rows and cols, the size of its terminal now, and closing the terminal, which a
@@ -62,13 +63,14 @@ type Session struct {
 }
 
 // startSession starts cmd in a pseudo-terminal of rows x cols, and reaps it when it exits. screen takes
-// what it writes; nil makes it a hidden session.
-func startSession(cfg Config, name string, cmd *exec.Cmd, rows, cols uint16, screen io.Writer) (*Session, error) {
+// what it writes; nil makes it a hidden session, whose tail goes into the file dump when it ends ("":
+// nowhere).
+func startSession(cfg Config, name string, cmd *exec.Cmd, rows, cols uint16, screen io.Writer, dump string) (*Session, error) {
 	p, err := pty.Start(cmd, rows, cols)
 	if err != nil {
 		return nil, fmt.Errorf("starting %s: %w", cfg.Claude, err)
 	}
-	s := &Session{Name: name, cfg: cfg, pty: p, cmd: cmd, screen: screen, exited: make(chan struct{}), done: make(chan struct{}),
+	s := &Session{Name: name, cfg: cfg, pty: p, cmd: cmd, screen: screen, dump: dump, exited: make(chan struct{}), done: make(chan struct{}),
 		rows: rows, cols: cols, ownRows: rows, ownCols: cols}
 	if screen == nil {
 		s.tail, s.modes = newRing(TailSize), &modeTracker{}
@@ -105,7 +107,24 @@ func (s *Session) reap() {
 	s.code = exitCode(s.cmd, s.waitErr)
 	s.logf("%s exited with %d", s.cfg.Claude, s.code)
 	s.endViewer()
+	s.dumpScreen()
 	close(s.done)
+}
+
+// dumpScreen adds the latest of a hidden session's screen to its dump file, if it has one, after a line
+// saying which session it was and how it ended. It is for debugging only (BATON_SCREEN_DUMP=1).
+func (s *Session) dumpScreen() {
+	if s.dump == "" || s.tail == nil {
+		return
+	}
+	f, err := os.OpenFile(s.dump, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		s.logf("saving its screen: %v", err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n--- baton: the screen of %s (pid %d), which exited with %d at %s ---\n", s.Name, s.Pid(), s.code, s.cfg.Now().Format(time.RFC3339))
+	f.Write(s.tail.Bytes())
 }
 
 // Done is closed once the session has ended and wound down; ExitCode is then claude's exit code.

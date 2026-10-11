@@ -94,6 +94,36 @@ func TestAHiddenSessionIsDrainedAndKeepsItsTail(t *testing.T) {
 	}
 }
 
+// BATON_SCREEN_DUMP=1: a hidden session's latest screen goes into its dump file as it ends, after the
+// screens of the sessions that ended before it, to diagnose a failure with.
+func TestAHiddenSessionKeepsItsScreenAsItEnds(t *testing.T) {
+	sv := NewSupervisor(Config{Claude: fakeClaude, TypeDelay: time.Millisecond, EnterDelay: 5 * time.Millisecond, HangupGrace: 200 * time.Millisecond})
+	dump := filepath.Join(t.TempDir(), "screen.log")
+	var codes []int
+	for i := 0; i < 2; i++ {
+		h := &hidden{t: t, out: t.TempDir()}
+		s, err := sv.Spawn(Spec{Name: "P3", Dir: h.out, Instance: "inst-1-P3", Dump: dump,
+			Env: append(os.Environ(), "FAKE_OUT="+h.out)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.s = s
+		h.waitTail("fake-claude ready")
+		s.End()
+		codes = append(codes, h.wait())
+	}
+	b, err := os.ReadFile(dump)
+	got := string(b)
+	if err != nil || strings.Count(got, "fake-claude ready") != 2 {
+		t.Fatalf("the screens kept: %v\n%s", err, got)
+	}
+	first, second := strings.Index(got, "the screen of P3 (pid "), strings.LastIndex(got, "the screen of P3 (pid ")
+	if first == second || !strings.Contains(got[first:second], fmt.Sprintf("exited with %d", codes[0])) ||
+		!strings.Contains(got[second:], fmt.Sprintf("exited with %d", codes[1])) {
+		t.Errorf("the screens kept, in order:\n%s", got)
+	}
+}
+
 // End asks claude to exit as a human would, and makes sure it does: SIGTERM, then SIGKILL with the
 // processes it started, which would outlive it otherwise (spike 23).
 func TestEndFallsBackToSignals(t *testing.T) {

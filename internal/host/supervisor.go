@@ -35,6 +35,9 @@ type Spec struct {
 	// Rows and Cols are the size of its terminal (0: 50 x 160).
 	Rows, Cols uint16
 	Controller Controller // ticked with the session's own View; nil: none
+	// Dump is a file the latest of its screen is added to when it ends (BATON_SCREEN_DUMP=1), for
+	// debugging only: "" for none.
+	Dump string
 }
 
 // NewSupervisor makes the supervisor for the session cfg describes, which Run starts.
@@ -84,7 +87,7 @@ func (sv *Supervisor) Run() (int, error) {
 			rows, cols = uint16(r), uint16(c)
 		}
 	}
-	lead, err := startSession(cfg, "", cmd, rows, cols, cfg.Stdout)
+	lead, err := startSession(cfg, "", cmd, rows, cols, cfg.Stdout, "")
 	if err != nil {
 		sv.close()
 		return 1, err
@@ -179,7 +182,7 @@ func (sv *Supervisor) Spawn(spec Spec) (*Session, error) {
 	cmd.Dir, cmd.Env = spec.Dir, spec.Env
 	cfg := sv.cfg
 	cfg.Instance, cfg.Controller, cfg.Session = spec.Instance, spec.Controller, ""
-	s, err := startSession(cfg, spec.Name, cmd, rows, cols, nil)
+	s, err := startSession(cfg, spec.Name, cmd, rows, cols, nil, spec.Dump)
 	if err != nil {
 		return nil, err
 	}

@@ -64,6 +64,9 @@ type Launch struct {
 	BatonEnv    []string // baton's settings for the sessions it hosts: the valves, escalation, BATON_HOME
 	Bin         string   // the baton binary the hooks call
 	Version     string
+	// ScreenDump keeps the latest of each worker session's screen in its sub-run (screen.log) as it ends
+	// (BATON_SCREEN_DUMP=1), for debugging only.
+	ScreenDump bool
 }
 
 // args is claude's command line for a worker's session: started anew under session, or resumed. The
@@ -562,8 +565,12 @@ func (c *Coordinator) subRun(s *state.Store, pl plan.Plan, e state.Worker) (*sta
 func (c *Coordinator) launch(now time.Time, s *state.Store, e state.Worker, sub *state.Store, args []string) (*worker, error) {
 	f := c.Fleet
 	w := c.worker(e.Phase)
-	h, err := f.Spawn(host.Spec{Name: e.Phase, Dir: e.Worktree, Args: args, Env: f.Launch.env(e, s.Ref, f.Project.Dir, s.Checkout),
-		Instance: e.Instance, Controller: w})
+	spec := host.Spec{Name: e.Phase, Dir: e.Worktree, Args: args, Env: f.Launch.env(e, s.Ref, f.Project.Dir, s.Checkout),
+		Instance: e.Instance, Controller: w}
+	if f.Launch.ScreenDump {
+		spec.Dump = filepath.Join(sub.Dir, "screen.log")
+	}
+	h, err := f.Spawn(spec)
 	if err != nil {
 		c.unregister(w)
 		return nil, err

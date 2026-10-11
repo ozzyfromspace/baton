@@ -261,6 +261,24 @@ func TestAWorkerTakesUpAPhaseThatCanStart(t *testing.T) {
 	}
 }
 
+// With BATON_SCREEN_DUMP=1, a worker's session keeps the latest of its screen in its sub-run as it ends,
+// for debugging; otherwise nowhere.
+func TestAWorkersScreenIsKeptOnlyWhenAsked(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		x := newCrew(t, 1)
+		x.c.Fleet.Launch.ScreenDump = keep
+		x.tick(time.Second)
+		spec, _ := x.last()
+		want := ""
+		if keep {
+			want = filepath.Join(x.sub("P1").Dir, "screen.log")
+		}
+		if spec.Dump != want {
+			t.Errorf("ScreenDump %v: the screen goes to %q, want %q", keep, spec.Dump, want)
+		}
+	}
+}
+
 func TestWhenAWorkerStarts(t *testing.T) {
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	pl := plan.Plan{Version: 1, Phases: []plan.Phase{{ID: "P0", After: []string{}}, {ID: "P1", After: []string{}}, {ID: "P2", After: []string{}}, {ID: "P3", After: []string{"P1"}}}}
