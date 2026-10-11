@@ -36,6 +36,10 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
+	if l.why == gateUsage {
+		l.idleNudged = time.Time{} // the account waits on its usage limit, and so does every session of the run
+		return
+	}
 	if l.relayLine(v, st, in) || l.deliver(v, st, in) {
 		l.idleNudged = time.Time{}
 		return

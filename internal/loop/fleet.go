@@ -247,6 +247,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 		return
 	}
 	pl, _ := s.LoadPlan() // none once the run was dropped
+	c.usage(now, s, st)
 	for _, w := range c.launched() {
 		c.watch(now, s, st, pl, w)
 	}

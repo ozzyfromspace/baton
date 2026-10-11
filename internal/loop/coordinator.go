@@ -50,6 +50,8 @@ type Coordinator struct {
 	failedStarts int
 	retryAt      time.Time
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+
+	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 }
 
 // Tick is the lead's tick: its Loop, then the run's duties.
@@ -84,7 +86,7 @@ func (c *Coordinator) Worker(phase string) host.Controller { return c.worker(pha
 func (c *Coordinator) worker(phase string) *worker {
 	lead := c.Lead
 	w := &worker{phase: phase, loop: &Loop{Role: RoleWorker, Notify: lead.Notify, Project: lead.Project, Timing: lead.Timing,
-		Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners,
+		Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
 		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }}}
 	c.mu.Lock()
 	defer c.mu.Unlock()

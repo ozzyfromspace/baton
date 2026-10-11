@@ -116,6 +116,9 @@ type Loop struct {
 	Newer   func() string
 	// Runners runs the session's jobs (nil: jobs stay queued).
 	Runners Runners
+	// RunLimited is until when the run waits on the account's usage limit, for a worker's Loop, whose
+	// sub-run does not record it as the lead's run does (the coordinator's; nil for the lead).
+	RunLimited func() time.Time
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -381,6 +384,7 @@ const (
 	gateDraft  = "the human has a draft in the input box"
 	gateTyping = "the human is typing"
 	gateScreen = "the screen is still updating"
+	gateUsage  = "the account waits on its usage limit"
 )
 
 // gate says why baton must not type right now, or "" if it may. It runs once per tick.
@@ -397,6 +401,8 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		why = gateTurn
 	case st.Run.Dialogs.AnyOpen():
 		why = gateDialog
+	case v.Now.Before(l.limited(st)):
+		why = gateUsage // anything typed would fail on it: Claude Code resumes the session itself as it resets
 	case busyAgents(st) && !l.agentsStale(v, st):
 		why = gateAgents
 	case v.Draft:
@@ -422,6 +428,18 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		}
 	}
 	return ""
+}
+
+// limited is until when the session's run waits on the account's usage limit (zero: it does not).
+func (l *Loop) limited(st state.State) time.Time {
+	var until time.Time
+	if st.Usage != nil {
+		until = st.Usage.Limited
+	}
+	if l.RunLimited != nil {
+		until = latest(until, l.RunLimited())
+	}
+	return until
 }
 
 // turnStale reports an open turn with no hook activity for StaleTurn.

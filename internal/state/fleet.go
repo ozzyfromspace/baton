@@ -84,13 +84,40 @@ type Landing struct {
 }
 
 // Usage is how much of the account's five-hour allowance is used, as a session's status line last
-// reported it (At). Limited is set when a session hit the limit: no worker starts, and no session is
-// nudged, until then.
+// reported it (At). Limited is set when a session hit the limit (By: "lead", or a worker's phase), at Hit:
+// no worker starts, and nothing is typed into the run's sessions, until then.
 type Usage struct {
 	UsedPct float64   `json:"used_pct"`
 	Resets  time.Time `json:"resets_at,omitzero"`
 	At      time.Time `json:"at"`
 	Limited time.Time `json:"limited_until,omitzero"`
+	Hit     time.Time `json:"hit,omitzero"`
+	By      string    `json:"by,omitempty"`
+}
+
+// LimitHit is when the session's last turn ended on the account's usage limit: zero if it did not, or
+// if a turn has started since.
+func (r Runtime) LimitHit() time.Time {
+	if e := r.LastError; e != nil && e.Error == "rate_limit" && !r.TurnStarted.After(e.At) {
+		return e.At
+	}
+	return time.Time{}
+}
+
+// Limit records that a session of the run (by) hit the account's usage limit at at, which holds the run
+// until until. A limit hit no later than the one recorded is that one: Limit reports whether this one was
+// new.
+func Limit(st *State, by string, at, until time.Time) bool {
+	var u Usage
+	if st.Usage != nil {
+		u = *st.Usage
+	}
+	if !at.After(u.Hit) {
+		return false
+	}
+	u.Hit, u.By, u.Limited = at, by, until
+	st.Usage = &u
+	return true
 }
 
 // AttachWorker is the state a worker's sub-run starts from, before its session does: phase is in hand,
