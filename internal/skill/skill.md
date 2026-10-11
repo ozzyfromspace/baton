@@ -12,6 +12,7 @@ Explain briefly:
 - `/baton view`: the run's workers, hidden sessions that work on other phases beside this one; watching one takes another terminal (`baton view P3`).
 - `/baton pause`: take the wheel; `/baton run` gives it back.
 - `/baton drop`: drop the run; its plan is set aside, and baton does nothing more until the next plan.
+- `/baton clean`: end what no live session uses: workers, jobs, lanes, worktrees, leftover files (`--dry-run` only says what it would end).
 - `/baton exit`: leave baton; this conversation goes on as plain Claude Code.
 - `/baton drafts`: drafts baton saved out of the input box (`--last` prints the newest).
 - `/baton version`: which baton this session runs, the one installed, and the latest release.
@@ -88,6 +89,10 @@ Run `baton pause` and report the result in one line. It hands the session to the
 ## drop
 
 Run `baton drop` and report the result in one line. The run's plan is set aside (its history stays in baton's log) and baton does nothing in this session until the next plan. The session stays hosted.
+
+## clean
+
+Run `baton clean` (passing through `--dry-run`) and show its output verbatim. It ends what no live session uses in this project: the workers and jobs of runs no session will come back to, worktrees and lanes nobody holds, what such sessions left running under baton's home, and leftover files. It leaves every live run alone, this session's included (`/baton drop` first to clean that one), and lists what it keeps, with the command to remove each.
 
 ## exit
 
