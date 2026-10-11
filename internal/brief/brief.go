@@ -16,6 +16,7 @@ import (
 // Kind of compaction the brief follows.
 const (
 	Boundary   = "boundary"   // a phase finished; the next one starts now
+	Switch     = "switch"     // the phase in hand was set aside while its job runs; another starts now
 	Resume     = "resume"     // a phase that was set aside unfinished is taken up again
 	Checkpoint = "checkpoint" // the model asked to compact mid-phase
 	Auto       = "auto"       // Claude Code compacted on its own mid-phase
@@ -55,6 +56,12 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "[baton] The plan %q (%s) was attached, and the conversation before it compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
 	case in.Kind == Boundary:
 		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+	case in.Kind == Switch:
+		from := "the phase in hand waits on its job, so baton set it aside"
+		if sw := st.Run.Compaction.Switch; sw != nil {
+			from = fmt.Sprintf("%s waits on its job %s, so baton set %s aside", sw.From, sw.Job, sw.From)
+		}
+		fmt.Fprintf(&b, "[baton] The context was compacted to switch phases: %s and takes it up again once the job ends. You are running the plan %q (%s).\n\n", from, pl.Title, pl.File)
 	case in.Kind == Resume:
 		fmt.Fprintf(&b, "[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
 	case in.Kind == Checkpoint:
@@ -88,7 +95,7 @@ func Write(in Input) string {
 		park = ps.Park
 	}
 	switch {
-	case in.Kind == Boundary:
+	case in.Kind == Boundary || in.Kind == Switch:
 		fmt.Fprintf(&b, "Now: %s. Begin it now.\n\n", title)
 	case in.Kind == Resume && park != nil && park.Reason == state.ParkRed:
 		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification failed: fix what failed, then finish it again.\n\n", title)

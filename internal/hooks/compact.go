@@ -9,7 +9,7 @@ import (
 )
 
 // afterCompaction runs for SessionStart with source "compact": it starts the next phase if this was a
-// boundary or a switch, and injects the brief. Claude Code runs this before PostCompact, so the brief is
+// boundary or a switch, and injects the brief, which says which it was. Claude Code runs this before PostCompact, so the brief is
 // in place before the rewake wakes the model (docs/research/verification-2.md). A phase resumed after its
 // job finished gets the job's result in its brief. ann is what the host left for the human.
 func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Result, error) {
@@ -39,6 +39,9 @@ func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Resul
 		switch {
 		case ours && comp.StartsPhase() && st.BoundaryOwed:
 			kind = brief.Boundary
+			if comp.Reason == "switch" {
+				kind = brief.Switch
+			}
 			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
 				kind = brief.Resume
 				if j := st.Job(parkJob(ps.Park)); j != nil && j.Finished() {
@@ -74,7 +77,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Resul
 	text := brief.Write(in)
 	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
 	switch kind {
-	case brief.Boundary:
+	case brief.Boundary, brief.Switch:
 		msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
 		s.Event("phase_started", map[string]any{"phase": st.Current})
 	case brief.Resume:

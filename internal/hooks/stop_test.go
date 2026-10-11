@@ -441,8 +441,12 @@ func TestSwitchSequenceThroughTheHooks(t *testing.T) {
 		return nil
 	})
 	out := compact()
-	if ctx := additional(out); !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") || !strings.Contains(ctx, "⏸ P0 — First (parked)") {
+	if ctx := additional(out); !strings.Contains(ctx, "[baton] The context was compacted to switch phases: P0 waits on its job j1, so baton set P0 aside and takes it up again once the job ends.") ||
+		!strings.Contains(ctx, "Now: P1 — Second. Begin it now.") || !strings.Contains(ctx, "⏸ P0 — First (parked)") || strings.Contains(ctx, "phase boundary") {
 		t.Fatalf("brief:\n%s", ctx)
+	}
+	if ev := f.eventLog(); !strings.Contains(ev, `"kind":"brief","phase":"P1"`) || !strings.Contains(ev, `"type":"switch"`) || !strings.Contains(ev, `"kind":"phase_started","phase":"P1"`) {
+		t.Errorf("events:\n%s", ev)
 	}
 	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
 		t.Fatalf("rewake: code %d %q", code, msg)

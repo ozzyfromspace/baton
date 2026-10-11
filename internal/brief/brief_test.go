@@ -75,6 +75,25 @@ func TestBoundaryBrief(t *testing.T) {
 	}
 }
 
+// A phase taken up by a switch is told why: the phase in hand was set aside while its job runs, not done.
+func TestSwitchBrief(t *testing.T) {
+	pl, doc, st := setup(t)
+	st.Phases["P0"].Status = state.PhaseParked
+	st.Run.Compaction.Switch = &state.Switched{From: "P0", To: "P1", Job: "j1"}
+	b := Write(Input{Kind: Switch, Plan: pl, Doc: doc, State: st})
+	for _, want := range []string{
+		"[baton] The context was compacted to switch phases: P0 waits on its job j1, so baton set P0 aside and takes it up again once the job ends. You are running the plan \"The widget campaign\" (/work/plan.md).",
+		"⏸ P0 — The overlay (parked)", "▶ P1 — The one-liners", "Now: P1 — The one-liners. Begin it now.",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("brief lacks %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "phase boundary") {
+		t.Errorf("a switch called a phase boundary:\n%s", b)
+	}
+}
+
 // The brief ends with how to report the phase and reach the human, in words that fit the project.
 func TestBriefEndsWithTheWaysToReport(t *testing.T) {
 	pl, doc, st := setup(t)
