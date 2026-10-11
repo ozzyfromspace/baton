@@ -175,6 +175,14 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 		return r.stopped(res, slot)
 	}
 	if by := r.Pool.upBy(slot.N); by == "" || by != r.Host {
+		if by != "" {
+			// Another host brought the lane up (two runs share a checkout's lanes, and a baton that restarts
+			// itself is a new host): what that up started is not this host's, so it comes down first.
+			r.say("lane %d: brought up by host %s; %s down first", slot.N, by, Script)
+			if err := r.Pool.down(slot.N, r.Log); err != nil {
+				r.say("%v", err)
+			}
+		}
 		for try := 1; ; try++ {
 			r.say("lane %d: %s up", slot.N, Script)
 			exit, stop, err := r.proc(ctx, slot.N, slot.Dir, env, []string{s, "up", slot.Dir})

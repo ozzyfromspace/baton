@@ -3,6 +3,7 @@
 package lane
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -49,4 +50,30 @@ func Spawn(argv, env []string, dir, out string) (int, error) {
 		return 0, fmt.Errorf("starting %s: no pid (%q)", argv[0], b)
 	}
 	return pid, nil
+}
+
+// Alive reports whether process pid is running.
+func Alive(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// Terminate asks process pid to stop (SIGTERM). A job's runner stops its command, and brings its lane
+// down, when it gets one.
+func Terminate(pid int) error {
+	if pid <= 1 {
+		return nil
+	}
+	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
+// KillGroup kills process group pgid outright: whatever a job's runner left behind when it died.
+func KillGroup(pgid int) error {
+	if pgid <= 1 {
+		return nil
+	}
+	return syscall.Kill(-pgid, syscall.SIGKILL)
 }

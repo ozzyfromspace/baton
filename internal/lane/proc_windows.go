@@ -42,3 +42,33 @@ func Spawn(argv, env []string, dir, out string) (int, error) {
 	cmd.Process.Release()
 	return pid, nil
 }
+
+// Alive reports whether process pid is running.
+func Alive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	h, err := syscall.OpenProcess(syscall.PROCESS_QUERY_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(h)
+	var code uint32
+	const stillActive = 259
+	return syscall.GetExitCodeProcess(h, &code) == nil && code == stillActive
+}
+
+// Terminate stops process pid. Windows has no SIGTERM: the process is killed.
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Kill()
+}
+
+// KillGroup kills the process a job's runner started; Windows has no process groups.
+func KillGroup(pgid int) error { return Terminate(pgid) }

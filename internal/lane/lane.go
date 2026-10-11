@@ -189,6 +189,9 @@ func (p Pool) upBy(n int) string {
 	return strings.TrimSpace(string(b))
 }
 
+// HasScript reports whether the working tree dir has a lane script.
+func HasScript(dir string) bool { return script(dir) != "" }
+
 // script returns the lane script in dir, or "" when the commit there has none.
 func script(dir string) string {
 	s := filepath.Join(dir, Script)

@@ -30,11 +30,39 @@ func (p Pool) lanes() []int {
 	return ns
 }
 
+// Lane is one lane as it stands, for baton status.
+type Lane struct {
+	N    int
+	Dir  string
+	Busy bool   // a job holds it
+	UpBy string // the host that brought it up; "" when it is not up
+}
+
+// Lanes lists the pool's lanes as they stand.
+func (p Pool) Lanes() []Lane {
+	var out []Lane
+	for _, n := range p.lanes() {
+		l := Lane{N: n, Dir: p.LaneDir(n), UpBy: p.upBy(n)}
+		switch s, err := p.tryLane(n); {
+		case s != nil:
+			s.Release()
+		case err == nil:
+			l.Busy = true
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
 // Sweep removes the lanes nobody owns: no job holds them, and no live host brought them up. Each gets
 // its down (if it is up), and its worktree is removed; then git forgets every worktree that is gone. live
 // reports whether a host is still running (nil: none is). Output goes to w. It returns the lanes it
-// removed.
+// removed. A project that never had lanes is left alone: git's prune would forget the human's own
+// worktrees that are out of reach, such as one on a drive not mounted.
 func (p Pool) Sweep(ctx context.Context, live func(host string) bool, w io.Writer) []int {
+	if _, err := os.Stat(p.Dir()); err != nil {
+		return nil
+	}
 	var swept []int
 	for _, n := range p.lanes() {
 		s, err := p.tryLane(n)

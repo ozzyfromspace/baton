@@ -257,6 +257,23 @@ func TestSweep(t *testing.T) {
 	}
 }
 
+func TestSweepLeavesAProjectWithoutLanesAlone(t *testing.T) {
+	root, _ := project(t, false)
+	other := filepath.Join(t.TempDir(), "on-a-drive-not-mounted")
+	gittest.Git(t, root, "worktree", "add", "-q", "--detach", other)
+	os.RemoveAll(other)
+	p := Pool{Home: t.TempDir(), Root: root}
+	if got := p.Sweep(context.Background(), nil, &strings.Builder{}); got != nil {
+		t.Errorf("swept %v", got)
+	}
+	if !strings.Contains(gittest.Git(t, root, "worktree", "list"), "on-a-drive-not-mounted") {
+		t.Error("the sweep pruned the human's own worktree")
+	}
+	if _, err := os.Stat(p.Dir()); err == nil {
+		t.Error("the sweep made a pool")
+	}
+}
+
 func TestDown(t *testing.T) {
 	root, head := project(t, true)
 	path := calls(t)
@@ -278,6 +295,23 @@ func TestDown(t *testing.T) {
 		if _, err := os.Stat(p.LaneDir(n)); err != nil {
 			t.Errorf("lane %d's worktree went with its down: %v", n, err)
 		}
+	}
+}
+
+func TestLanes(t *testing.T) {
+	root, head := project(t, true)
+	p := Pool{Home: t.TempDir(), Root: root}
+	if got := p.Lanes(); len(got) != 0 {
+		t.Errorf("a pool with no lanes lists %+v", got)
+	}
+	lanes(t, p, head, "h1", "")
+	busy, _ := p.tryLane(2)
+	defer busy.Release()
+	if got, want := p.Lanes(), []Lane{{1, p.LaneDir(1), false, "h1"}, {2, p.LaneDir(2), true, ""}}; !slices.Equal(got, want) {
+		t.Errorf("lanes %+v, want %+v", got, want)
+	}
+	if !HasScript(root) || HasScript(t.TempDir()) {
+		t.Errorf("HasScript: %v for the project, %v for an empty directory", HasScript(root), HasScript(t.TempDir()))
 	}
 }
 

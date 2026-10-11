@@ -143,8 +143,11 @@ func TestTheLaneContract(t *testing.T) {
 	}
 	r.Host = "h2"
 	r.Run(context.Background(), Job{ID: "j3", Command: "true", Commit: head})
-	if want := []string{"slots", "up", "run", "slots", "run", "slots", "up", "run"}; !slices.Equal(readCalls(path), want) {
-		t.Errorf("a new host did not bring the lane up: calls = %v, want %v", readCalls(path), want)
+	if want := []string{"slots", "up", "run", "slots", "run", "slots", "down", "up", "run"}; !slices.Equal(readCalls(path), want) {
+		t.Errorf("a new host did not bring the lane down and up again: calls = %v, want %v", readCalls(path), want)
+	}
+	if by := r.Pool.upBy(1); by != "h2" {
+		t.Errorf("lane 1 is up by %q, want h2", by)
 	}
 }
 
