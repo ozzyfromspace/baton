@@ -423,23 +423,18 @@ After: none
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 `
 
-// Dropping the run while its worker works ends the worker: its session and its job stop, and its
-// worktree is removed, but its branch stays, since it holds a commit that never landed.
-func TestDropEndsTheWorkers(t *testing.T) {
-	dir := listPlanProject(t)
-	Attach(t, dir, dropPlan)
-	s := StartWorkers(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Write")
-	s.AutoApprove()
-
+// workerHolds waits, in a run of dropPlan, until the worker on P1 has committed and waits on hold.sh, and
+// the lead has finished P0 and is quiet. It returns the worker's worktree and branch, and hold.sh's pid.
+func workerHolds(t *testing.T, s *Session, dir string) (worktree, branch string, hold int) {
+	t.Helper()
 	spawned := s.WaitEvent("worker_spawned", 2*time.Minute)
 	if spawned == nil || spawned["phase"] != "P1" {
 		t.Fatalf("no worker on P1: %v", spawned)
 	}
-	worktree, branch := fmt.Sprint(spawned["worktree"]), fmt.Sprint(spawned["branch"])
+	worktree, branch = fmt.Sprint(spawned["worktree"]), fmt.Sprint(spawned["branch"])
 	if !s.Until("the worker's wait to start", 5*time.Minute, func() bool { return first(s.WorkerEvents("P1"), is("job_started")) >= 0 }) {
 		t.Fatal("the worker never handed baton its wait")
 	}
-	var hold int
 	if !s.Until("hold.sh to start", 30*time.Second, func() bool {
 		hold, _ = strconv.Atoi(strings.TrimSpace(readFile(filepath.Join(dir, ".git"), "hold.pid")))
 		return hold > 0
@@ -450,6 +445,18 @@ func TestDropEndsTheWorkers(t *testing.T) {
 		t.Fatal("the lead never finished P0")
 	}
 	s.WaitQuiet(5*time.Second, 2*time.Minute)
+	return worktree, branch, hold
+}
+
+// Dropping the run while its worker works ends the worker: its session and its job stop, and its
+// worktree is removed, but its branch stays, since it holds a commit that never landed.
+func TestDropEndsTheWorkers(t *testing.T) {
+	dir := listPlanProject(t)
+	Attach(t, dir, dropPlan)
+	s := StartWorkers(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Write")
+	s.AutoApprove()
+
+	worktree, branch, hold := workerHolds(t, s, dir)
 	s.Type("Run exactly this one command with the Bash tool: baton drop\nThen reply DONE.")
 	if s.WaitEvent("dropped", 2*time.Minute) == nil {
 		t.Fatal("the run was not dropped")
@@ -478,4 +485,74 @@ func TestDropEndsTheWorkers(t *testing.T) {
 		t.Errorf("the worker's job, hold.sh (pid %d), still runs", hold)
 	}
 	none(t, s, "landed", "controller_panic", "worker_resumed")
+}
+
+// autoPlan is three phases that need nothing from each other, and one that needs them all. The lead's P0
+// waits on hold.sh until the test releases it, so the lead takes no other phase meanwhile.
+const autoPlan = `# Auto plan
+
+## P0 — Wait
+After: none
+
+1. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'nothing to commit; report P0 done once the wait ends'
+2. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
+3. When baton gives you the result, report P0 done: baton done P0 --notes 'waited'
+
+## P1 — Write one
+After: none
+
+Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'. Then report P1 done: baton done P1 --notes 'wrote one'
+
+## P2 — Write two
+After: none
+
+Write the single word two into a new file named two.txt. Commit it: git add two.txt, then git commit -m 'feat: two'. Then report P2 done: baton done P2 --notes 'wrote two'
+
+## P3 — Say three
+After: all
+
+Run echo three, then report P3 done: baton done P3 --notes 'said three'
+`
+
+// With workers: auto, the plan decides how many work at once: P1 and P2 can go ahead beside the lead's P0,
+// so two workers start, a ramp apart, on a machine with room for them. Both land, and P3, which needs
+// every phase, starts after. No worker starts for P3: by then nothing else can go ahead.
+func TestAutoWorkersFollowThePlan(t *testing.T) {
+	const ramp = 20 * time.Second
+	dir := listPlanProject(t)
+	Attach(t, dir, autoPlan)
+	s := StartWorkers(t, dir, []string{"BATON_WORKERS=auto", "BATON_WORKER_RAMP=" + ramp.String(), "BATON_SWITCH_AFTER=10m"},
+		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Write")
+	s.AutoApprove()
+
+	if !s.Until("two workers", 4*time.Minute, func() bool { return len(filter(s.Events(), is("worker_spawned"))) >= 2 }) {
+		t.Fatalf("fewer than two workers started:\n%s", eventLog(s))
+	}
+	release(t, dir)
+	s.Until("the plan to complete", 8*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })
+	ev := s.Events()
+	spawns := filter(ev, is("worker_spawned"))
+	if len(spawns) != 2 || spawns[0]["phase"] != "P1" || spawns[1]["phase"] != "P2" {
+		t.Fatalf("workers started: %v", spawns)
+	}
+	if apart := eventTime(spawns[1]).Sub(eventTime(spawns[0])); apart < ramp-2*time.Second {
+		t.Errorf("the second worker started %s after the first, within the ramp (%s)", apart, ramp)
+	}
+	p3 := first(ev, is("phase_started", "phase", "P3"))
+	for _, phase := range []string{"P1", "P2"} {
+		if l := first(ev, is("landed", "phase", phase)); l < 0 || p3 < l {
+			t.Errorf("%s landed at event %d, P3 started at %d", phase, l, p3)
+		}
+	}
+	if d := first(ev, is("phase_done", "phase", "P0")); d < 0 || p3 < d {
+		t.Errorf("P0 was done at event %d, P3 started at %d", d, p3)
+	}
+	if first(ev, is("plan_complete")) < 0 {
+		t.Fatalf("the plan did not complete:\n%s", eventLog(s))
+	}
+	log := Git(t, dir, "log", "--format=%s")
+	if !strings.Contains(log, "feat: one") || !strings.Contains(log, "feat: two") {
+		t.Errorf("the run's branch: %s", log)
+	}
+	none(t, s, "controller_panic", "land_returned", "workers_off")
 }
