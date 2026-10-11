@@ -1,0 +1,94 @@
+package decide
+
+import (
+	"fmt"
+	"time"
+)
+
+// A worker is a session of its own on one phase of a run, in a git worktree of its own, while the lead
+// session works on other phases in the human's checkout (docs/research/workers.md). Nobody watches a
+// worker: its questions reach the human through the lead, and its work lands on the run's branch under
+// the lead. These are the words it reads about all that. None of them names the project's checkout,
+// which is the lead's.
+
+// WorkerIntro opens the brief a worker starts from: what a worker is, and where it works (tree, on
+// branch, if any).
+func WorkerIntro(title, file, phase, tree, branch string) string {
+	on := ""
+	if branch != "" {
+		on = ", on the branch " + branch
+	}
+	return fmt.Sprintf("You are a worker for the plan %q (%s). baton works on the phases of the plan that can go ahead at the same time, each in a session of its own: "+
+		"this session works on %s alone, in a git worktree of its own (%s%s), while the lead session and any other workers work on other phases elsewhere. "+
+		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, and never merge, rebase or push it yourself: "+
+		"once you report %s done, baton lands it on the run's branch.", title, file, phase, tree, on, phase)
+}
+
+// WorkerHosted opens the primer of a worker's session that resumed: what it is.
+func WorkerHosted(title, phase string) string {
+	return fmt.Sprintf("This session is hosted by baton, as a worker for the attached plan %q: it works on %s alone, in a git worktree of its own, "+
+		"while the lead session and any other workers work on other phases elsewhere. ", title, phase)
+}
+
+// WorkerRole reminds a worker, after a compaction, which phase it works on and where.
+func WorkerRole(title, file, phase, tree string) string {
+	return fmt.Sprintf("You are a worker on %s of the plan %q (%s), in a git worktree of your own (%s): the lead session and any other workers work on the other phases elsewhere.",
+		phase, title, file, tree)
+}
+
+// WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.
+func WorkerRefused(command, phase string) string {
+	return fmt.Sprintf("not run — this session is a worker: it works on %s alone, in a worktree of its own, while the lead session runs the plan in the human's terminal, "+
+		"and baton %s belongs to the lead session. Carry on with %s, and when it is complete and committed, run baton done %s: baton lands your work on the run's branch.",
+		phase, command, phase, phase)
+}
+
+// WorkerEditRefused is why a worker on phase may not edit a file in the project's checkout, which is the
+// lead's; mine is the same file in the worker's own worktree.
+func WorkerEditRefused(phase, mine string) string {
+	return fmt.Sprintf("[baton] Not here: that file is in the lead session's checkout, which a worker never changes. "+
+		"This session is a worker on %s, and works only in its own worktree: edit %s instead.", phase, mine)
+}
+
+// WorkerPlanRefused is why a worker on phase does not plan: its phase is planned already, and only the
+// lead session attaches plans.
+func WorkerPlanRefused(phase string) string {
+	return fmt.Sprintf("[baton] This session is a worker on %s: its phase is planned already, in the run's plan, and only the lead session attaches plans. "+
+		"Carry on with %s as the plan describes it.", phase, phase)
+}
+
+// WorkerProposed acknowledges a worker's proposal id, which the lead session puts to the human. untimed
+// says why it has no deadline ("" for a timed one); a timed one goes ahead timeout after the human is
+// asked.
+func WorkerProposed(id, untimed string, timeout time.Duration) string {
+	how := fmt.Sprintf("If nobody answers within %s of being asked, baton picks Go ahead for them, and you do it.", Spell(timeout))
+	if untimed != "" {
+		how = "It has no deadline: " + untimed + ", so only the human can let it go ahead."
+	}
+	return fmt.Sprintf("proposal %s recorded. Nobody watches this session, so baton puts it to the human through the lead session, and gives you their answer here. %s "+
+		"Until then, do not do what you proposed: keep working on what does not depend on it, or, with nothing else to do, commit your work and end your turn.", id, how)
+}
+
+// WorkerAwaits is why a worker may not move on (done, blocked, another proposal) while its proposal id,
+// to do what, waits for the human's answer.
+func WorkerAwaits(id, what string) string {
+	return fmt.Sprintf("your proposal %s (%s) waits for the human's answer, which baton gets through the lead session and gives you here. "+
+		"Until then, keep working on what does not depend on it, or end your turn.", id, what)
+}
+
+// WorkerBlocked acknowledges a worker's block on phase, which the lead session puts to the human.
+func WorkerBlocked(phase string) string {
+	return fmt.Sprintf("recorded. baton puts it to the human through the lead session; it stops only %s, while the lead session and any other workers carry on. "+
+		"Their answer reaches you here. End your turn now.", phase)
+}
+
+// WorkerDone is what a worker hears once phase is finished: baton lands its work. job is the verification
+// still running ("" for none), which has run for ran.
+func WorkerDone(phase, job, ran string) string {
+	if job != "" {
+		return fmt.Sprintf("%s is finished, and verifying: job %s (%s) is still running. baton lands your work on the run's branch once it passes; "+
+			"if it fails, %s reopens here, and you take it up again from your notes on that job. End your turn now.", phase, job, ran, phase)
+	}
+	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it rebases your branch onto it and merges it under the lead session. "+
+		"If anything needs you first (a rebase conflict, a red verification), baton tells you here. End your turn now.", phase)
+}

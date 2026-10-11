@@ -355,3 +355,42 @@ func TestIDsAreUniqueAcrossSubRuns(t *testing.T) {
 		t.Errorf("a new plan for the sub-run: prefix %q", st.IDPrefix)
 	}
 }
+
+// A worker's question joins the relay queue once, however often its commands and hooks queue it, until
+// it is answered; a new question of the same phase queues after it.
+func TestQueueRelay(t *testing.T) {
+	st := New()
+	answered := &Resolution{By: ByHuman, At: t0}
+	for _, c := range []struct {
+		name   string
+		r      Relay
+		answer bool // answer the queue's last item afterwards
+		queued bool
+	}{
+		{"a proposal", Relay{Phase: "P3", Kind: RelayProposal, Decision: "P3.d1"}, false, true},
+		{"the same proposal again", Relay{Phase: "P3", Kind: RelayProposal, Decision: "P3.d1"}, false, false},
+		{"another worker's block", Relay{Phase: "P4", Kind: RelayBlocked}, false, true},
+		{"the same block again", Relay{Phase: "P4", Kind: RelayBlocked}, true, false},
+		{"a new block, once the first is answered", Relay{Phase: "P4", Kind: RelayBlocked}, false, true},
+		{"a review of the proposing phase", Relay{Phase: "P3", Kind: RelayReview}, false, true},
+		{"the next proposal", Relay{Phase: "P3", Kind: RelayProposal, Decision: "P3.d2", Issued: t0}, false, true},
+	} {
+		n := len(st.Relay)
+		if got := QueueRelay(&st, c.r, t0.Add(time.Minute)); got != c.queued || len(st.Relay) != n+btoi(c.queued) {
+			t.Fatalf("%s: queued %v, %d in the queue; want %v", c.name, got, len(st.Relay), c.queued)
+		}
+		if c.answer {
+			st.Relay[len(st.Relay)-1].Answered = answered
+		}
+	}
+	if last := st.Relay[len(st.Relay)-1]; !last.Queued.Equal(t0.Add(time.Minute)) || !last.Issued.IsZero() {
+		t.Errorf("queued %+v: it waits to be issued", last)
+	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

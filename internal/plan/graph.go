@@ -161,6 +161,29 @@ func (p Plan) Deps(id string) []string {
 	return []string{p.Phases[i-1].ID}
 }
 
+// Ancestors returns every phase phase id waits for, directly or through another, in document order:
+// everything done before it can start, which it may build on.
+func (p Plan) Ancestors(id string) []string {
+	seen := map[string]bool{}
+	var walk func(id string)
+	walk = func(id string) {
+		for _, d := range p.Deps(id) {
+			if !seen[d] {
+				seen[d] = true
+				walk(d)
+			}
+		}
+	}
+	walk(id)
+	var out []string
+	for _, ph := range p.Phases {
+		if seen[ph.ID] {
+			out = append(out, ph.ID)
+		}
+	}
+	return out
+}
+
 // Dependents returns the phases that wait for phase id, in document order.
 func (p Plan) Dependents(id string) []string {
 	var out []string

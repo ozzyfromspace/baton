@@ -213,14 +213,36 @@ func TestOldPlanJSONReadsAsSequential(t *testing.T) {
 	}
 }
 
-func TestLongestChain(t *testing.T) {
-	graph := func(deps ...[]string) Plan {
-		var p Plan
-		for i, d := range deps {
-			p.Phases = append(p.Phases, Phase{ID: "P" + string(rune('0'+i)), After: d})
-		}
-		return p
+// graph is a plan whose phase Pi waits for deps[i] (nil: the phase before it).
+func graph(deps ...[]string) Plan {
+	var p Plan
+	for i, d := range deps {
+		p.Phases = append(p.Phases, Phase{ID: "P" + string(rune('0'+i)), After: d})
 	}
+	return p
+}
+
+func TestAncestors(t *testing.T) {
+	none := []string{}
+	for _, c := range []struct {
+		name string
+		p    Plan
+		id   string
+		want string
+	}{
+		{"a chain", graph(nil, nil, nil, nil), "P3", "P0 P1 P2"},
+		{"a diamond", graph(none, []string{"P0"}, []string{"P0"}, []string{"P1", "P2"}), "P3", "P0 P1 P2"},
+		{"one branch of two", graph(none, none, []string{"P1"}, []string{"P0"}, []string{"P2"}), "P4", "P1 P2"},
+		{"no dependencies", graph(none, none), "P1", ""},
+		{"an unknown phase", graph(none), "P9", ""},
+	} {
+		if got := strings.Join(c.p.Ancestors(c.id), " "); got != c.want {
+			t.Errorf("%s: Ancestors(%s) = %q, want %q", c.name, c.id, got, c.want)
+		}
+	}
+}
+
+func TestLongestChain(t *testing.T) {
 	none := []string{}
 	for _, c := range []struct {
 		name  string

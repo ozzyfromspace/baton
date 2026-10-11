@@ -16,7 +16,7 @@ import (
 
 func init() {
 	register("start", "start baton: in a plain claude session, hand it to baton (same conversation); in a shell, start a session: start [what to do next]", cmdStart)
-	register("exit", "leave baton: once the turn ends, this conversation goes on as plain claude in this terminal", cmdExit)
+	register("exit", "leave baton: once the turn ends, this conversation goes on as plain claude in this terminal", leadOnly("exit", cmdExit))
 	register("init", "print shell setup for your shell config: eval \"$(baton init zsh|bash)\"", cmdInit)
 	// Internal commands, called by the shell hook, the plugin's Stop hook and each other.
 	register("relaunch", "(internal) relaunch a session in this terminal, under baton or as plain claude", cmdRelaunch)

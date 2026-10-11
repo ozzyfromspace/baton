@@ -23,14 +23,14 @@ import (
 // read by the model, so it is short, literal, and says what to do next.
 
 func init() {
-	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", cmdAttach)
+	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", leadOnly("attach", cmdAttach))
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
 	register("done", "mark the current phase finished (verifying while its job runs): done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
 	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
-	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", cmdRun)
-	register("pause", "stop baton from acting until /baton run (the human takes the wheel)", cmdPause)
-	register("drop", "drop the run: its plan is set aside, and baton does nothing until the next plan", cmdDrop)
+	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", leadOnly("run", cmdRun))
+	register("pause", "stop baton from acting until /baton run (the human takes the wheel)", leadOnly("pause", cmdPause))
+	register("drop", "drop the run: its plan is set aside, and baton does nothing until the next plan", leadOnly("drop", cmdDrop))
 }
 
 // project opens the project a command runs in: the one the host named (BATON_DIR) inside a hosted
@@ -165,7 +165,7 @@ func cmdAttach(args []string, io IO) int {
 	if err := state.ExcludeFromGit(root); err != nil {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
-	origin := state.OriginOf(root)
+	origin, branch := state.OriginOf(root), gitx.Branch(root)
 	inSession := io.Env("CLAUDE_CODE_SESSION_ID") != ""
 	var boundary bool
 	if _, err := s.Update(func(st *state.State) error {
@@ -178,12 +178,17 @@ func cmdAttach(args []string, io IO) int {
 		} else {
 			*st = state.Reattach(*st, pl, io.Now(), origin)
 		}
+		st.RunBranch = branch // workers branch off it, and their work lands on it
 		return nil
 	}); err != nil {
 		return fail(io, "%v", err)
 	}
 	chain, _ := pl.LongestChain()
-	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary})
+	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
+	if branch != "" {
+		attached["branch"] = branch
+	}
+	s.Event("attached", attached)
 	first := pl.Phases[0]
 	fmt.Fprintf(io.Out, "baton: attached %q — %d phases (%s). ", pl.Title, len(pl.Phases), pl.Dependencies())
 	switch {
@@ -553,11 +558,14 @@ func cmdDone(args []string, io IO) int {
 	if err := guard(io, &cur, "not done", true); err != nil {
 		return refused(io, s, "done", err)
 	}
-	// The plan file is read again as the phase ends, so a phase the human just added to it comes next.
-	adopted, changed, rerr := plan.Recheck(pl, state.Remaining(cur, pl))
-	followed := changed && rerr == nil && s.WritePlan(adopted) == nil
-	if followed {
-		pl = adopted
+	// The plan file is read again as the phase ends, so a phase the human just added to it comes next. A
+	// worker's plan is the run's narrowed to its phase: the plan file is the lead's to follow.
+	var followed bool
+	if s.Worker() == "" {
+		adopted, changed, rerr := plan.Recheck(pl, state.Remaining(cur, pl))
+		if followed = changed && rerr == nil && s.WritePlan(adopted) == nil; followed {
+			pl = adopted
+		}
 	}
 	work := checkWork(s, id)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
@@ -676,6 +684,15 @@ func cmdDone(args []string, io IO) int {
 			"end your turn now, and baton stops for the human to review them.\n", finished)
 		return 0
 	}
+	if s.Worker() != "" {
+		// A worker's plan is its phase: done, its work is the run's to land.
+		job, ran := "", ""
+		if verifying {
+			job, ran = latest.ID, decide.Ran(*latest)
+		}
+		fmt.Fprintln(io.Out, "baton: "+decide.WorkerDone(id, job, ran))
+		return 0
+	}
 	if st.Mode == state.ModeComplete {
 		fmt.Fprintf(io.Out, "%s That was the last phase — the plan is complete. %s\n", finished, decide.PlanComplete(len(decide.WithoutHuman(st.Decisions))))
 		return 0
@@ -765,6 +782,13 @@ func cmdBlocked(args []string, io IO) int {
 	}
 	s.Event("blocked", blocked)
 	work.report(io, st.Current, keep)
+	if s.Worker() != "" {
+		if err := s.Relay(state.Relay{Kind: state.RelayBlocked}); err != nil {
+			fmt.Fprintf(io.Err, "baton: warning — could not queue it for the lead session yet (%v); baton queues it again when you end your turn.\n", err)
+		}
+		fmt.Fprintln(io.Out, "baton: "+decide.WorkerBlocked(st.Current))
+		return 0
+	}
 	fmt.Fprintln(io.Out, "baton: recorded. End your turn; baton will bring the human in.")
 	return 0
 }
@@ -1137,7 +1161,7 @@ func simpleTransition(io IO, command, kind string, fn func(*state.State) error, 
 
 // words is what the model-facing text depends on in this project.
 func words(io IO, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(io.Env).Timeout}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(io.Env).Timeout, Worker: s.Worker() != ""}
 }
 
 func storeAndPlan(io IO) (*state.Store, plan.Plan, bool) {

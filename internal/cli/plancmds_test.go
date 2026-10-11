@@ -33,12 +33,19 @@ func newSession(t *testing.T) (*session, string) {
 		now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}, planFile
 }
 
-// store is the session's run, as the hooks would have bound it.
+// store is the session's run, as the hooks would have bound it: a worker's, its sub-run.
 func (s *session) store() *state.Store {
 	s.t.Helper()
 	p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
 	if err != nil {
 		s.t.Fatal(err)
+	}
+	if s.env["BATON_ROLE"] == "worker" {
+		sub, ok := p.Lookup(s.env["CLAUDE_CODE_SESSION_ID"], "")
+		if !ok {
+			s.t.Fatal("the worker's session has no sub-run")
+		}
+		return sub
 	}
 	st, err := p.Bind(state.Binding{Session: "sess-1"})
 	if err != nil {

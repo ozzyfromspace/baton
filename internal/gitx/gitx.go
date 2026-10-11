@@ -48,6 +48,21 @@ func Head(root string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// Branch returns the branch checked out at root, or "" (no git, or a detached HEAD). A branch with no
+// commit yet has its name.
+func Branch(root string) string {
+	if !Usable(root) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := run(ctx, root, nil, nil, "symbolic-ref", "-q", "--short", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // MaxDirty is how many uncommitted paths baton keeps track of. Past it the gate on uncommitted work
 // only warns: a tree that dirty is not one baton can reason about path by path.
 const MaxDirty = 2000

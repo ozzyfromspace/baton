@@ -73,9 +73,10 @@ type Relay struct {
 	Phase string `json:"phase"`
 	// Kind is a proposal, the phase's block, or a review of its decisions; Decision is the sub-run's
 	// proposal it asks about.
-	Kind     string    `json:"kind"`
-	Decision string    `json:"decision,omitempty"`
-	Question string    `json:"question"` // exactly as the lead is to ask it
+	Kind     string `json:"kind"`
+	Decision string `json:"decision,omitempty"`
+	// Question is the question exactly as the lead is to ask it, written when the lead is given it.
+	Question string    `json:"question,omitempty"`
 	Queued   time.Time `json:"queued"`
 	// Issued is when the lead was given the question, and Deadline when baton goes ahead with a timed
 	// proposal nobody answered (counted from Issued). Asked: it reached the human's screen.
@@ -91,6 +92,20 @@ const (
 	RelayBlocked  = "blocked"
 	RelayReview   = "review"
 )
+
+// QueueRelay queues r, a question of r.Phase's worker for the human, unless it is queued already and
+// unanswered: the worker's commands and hooks may each queue the same question, and each must be able
+// to retry. It reports whether r joined the queue.
+func QueueRelay(st *State, r Relay, now time.Time) bool {
+	for _, q := range st.Relay {
+		if q.Phase == r.Phase && q.Kind == r.Kind && q.Decision == r.Decision && q.Answered == nil {
+			return false
+		}
+	}
+	r.Queued, r.Issued, r.Deadline, r.Asked, r.Answered = now, time.Time{}, time.Time{}, false, nil
+	st.Relay = append(st.Relay, r)
+	return true
+}
 
 // Landing is a phase's work landed on the run's branch.
 type Landing struct {

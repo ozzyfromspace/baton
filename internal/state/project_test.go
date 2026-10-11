@@ -357,6 +357,13 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 	if _, err := p.NewWorker("nobody", "P1", "s2", "host", w.Root); err == nil {
 		t.Error("a worker for a run that is not there")
 	}
+	up, err := w.ParentRun()
+	if err != nil || up.Dir != lead.Dir || up.Ref != "lead" || up.Root != p.Root || up.Parent != "" || up.Instance != w.Instance {
+		t.Errorf("the worker's parent run: %+v %v", up, err)
+	}
+	if _, err := lead.ParentRun(); err == nil {
+		t.Error("a run of its own has a parent run")
+	}
 }
 
 // A worker's session finds its sub-run and nothing else: it never creates, adopts or claims a run, and

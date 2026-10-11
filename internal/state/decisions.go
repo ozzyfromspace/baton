@@ -41,7 +41,10 @@ type Decision struct {
 	Deadline time.Time `json:"deadline,omitzero"`
 	Untimed  string    `json:"untimed,omitempty"`
 	// Asked: the question reached the human's screen.
-	Asked    bool        `json:"asked,omitempty"`
+	Asked bool `json:"asked,omitempty"`
+	// Relayed: a worker's proposal, which the lead session puts to the human (Relay). The worker never
+	// asks it itself, and its deadline counts from when the lead is given it.
+	Relayed  bool        `json:"relayed,omitempty"`
 	Resolved *Resolution `json:"resolved,omitempty"`
 	// Announced: shown in the session. Told: put in front of the human the next time they typed.
 	// Reviewed: the human went over it at a review stop.
@@ -69,6 +72,15 @@ func (st *State) PendingProposal() *Decision {
 		if d := &st.Decisions[i]; d.Kind == Proposal && d.Resolved == nil {
 			return d
 		}
+	}
+	return nil
+}
+
+// OwnProposal is the pending proposal the session itself must put to the human, or nil: a worker's
+// proposal is put to them by the lead (Relayed), and holds nothing up in the worker meanwhile.
+func (st *State) OwnProposal() *Decision {
+	if p := st.PendingProposal(); p != nil && !p.Relayed {
+		return p
 	}
 	return nil
 }

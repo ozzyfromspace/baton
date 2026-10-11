@@ -59,6 +59,40 @@ func (s *Store) Worker() string {
 	return strings.TrimPrefix(s.Ref, s.Parent+"/")
 }
 
+// ParentRun returns the run a worker's sub-run works for, writing as the same instance.
+func (s *Store) ParentRun() (*Store, error) {
+	if s.Parent == "" {
+		return nil, fmt.Errorf("run %s is not a worker's", s.Ref)
+	}
+	return &Store{Dir: filepath.Join(s.Project, runsDir, s.Parent), Root: s.Checkout, Checkout: s.Checkout, Project: s.Project,
+		Ref: s.Parent, Instance: s.Instance, Now: s.Now}, nil
+}
+
+// Relay queues r, a question of this worker's sub-run for the human, in the run it works for: the lead
+// session puts it to them (QueueRelay). r.Phase is the worker's own phase. It takes the parent run's
+// lock, so it is never called inside an update of the sub-run: no code holds two runs' locks at once.
+// Queueing is idempotent, so the worker's commands and hooks may each queue the same question, and
+// retry it.
+func (s *Store) Relay(r Relay) error {
+	up, err := s.ParentRun()
+	if err != nil {
+		return err
+	}
+	r.Phase = s.Worker()
+	var queued bool
+	if _, err := up.Update(func(st *State) error { queued = QueueRelay(st, r, s.Now()); return nil }); err != nil {
+		return err
+	}
+	if queued {
+		fields := map[string]any{"phase": r.Phase, "type": r.Kind}
+		if r.Decision != "" {
+			fields["decision"] = r.Decision
+		}
+		up.Event("relay_queued", fields)
+	}
+	return nil
+}
+
 func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
 
 // PlanPath is where plan.json lives.

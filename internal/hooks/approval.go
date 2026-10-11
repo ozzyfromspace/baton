@@ -78,14 +78,17 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	}
 	first := pl.Phases[0]
 	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
+	branch := gitx.Branch(s.Root) // workers branch off it, and their work lands on it
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, state.OriginOf(s.Root))
+		st.RunBranch = branch
 		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = []event{{"phase_started", map[string]any{"phase": first.ID}}}
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
+	st.RunBranch = branch
 	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	return v
@@ -94,7 +97,11 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 // attachedFields are the fields of the "attached" event for a plan the human approved.
 func attachedFields(pl plan.Plan, root string) map[string]any {
 	k, _ := pl.LongestChain()
-	return map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": k, "git": gitx.Usable(root), "by": "approval"}
+	f := map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": k, "git": gitx.Usable(root), "by": "approval"}
+	if b := gitx.Branch(root); b != "" {
+		f["branch"] = b
+	}
+	return f
 }
 
 // phaseList names phases as the human knows them: "P3 (Polish) and P4 (Docs)".

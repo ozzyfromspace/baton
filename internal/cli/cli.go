@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
@@ -43,6 +44,25 @@ var commands = map[string]command{}
 
 func register(name, summary string, run func([]string, IO) int) {
 	commands[name] = command{summary: summary, run: run}
+}
+
+// leadOnly is a command for the lead session of a run alone. A worker's session, which works on one phase
+// of the run in a worktree of its own, is refused it, and told to carry on with its phase.
+func leadOnly(name string, run func([]string, IO) int) func([]string, IO) int {
+	return func(args []string, io IO) int {
+		if !worker(io) {
+			return run(args, io)
+		}
+		phase := io.Env("BATON_PHASE")
+		if s, err := store(io); err == nil && s.Worker() != "" {
+			phase = s.Worker()
+			s.Event("refused", map[string]any{"command": name, "why": "worker"})
+		}
+		if phase == "" {
+			phase = "its phase"
+		}
+		return fail(io, "%s", decide.WorkerRefused(name, phase))
+	}
 }
 
 // registerHidden adds a command baton runs itself, which help leaves out.

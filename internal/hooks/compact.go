@@ -72,6 +72,9 @@ func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Resul
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
 	in := brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s)}
+	if s.Worker() != "" {
+		in.Tree, in.Needs = s.Root, builtOn(s, st.Current)
+	}
 	if result != nil {
 		in.Result = jobResult(s, *result, nil)
 	}

@@ -40,6 +40,12 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{}
 		return
 	}
+	if p := st.PendingProposal(); p != nil && p.Relayed {
+		// A worker waits on the human's answer to its proposal, which the lead session puts to them, and
+		// which wakes it: nothing is stalled.
+		l.idleNudged = time.Time{}
+		return
+	}
 	if st.Current == "" {
 		// No phase is in hand: every phase left waits for a job, which ends by itself (verify_timeout,
 		// or its runner found dead), and baton takes the next phase up then. Nothing is stalled.

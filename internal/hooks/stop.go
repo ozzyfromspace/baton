@@ -28,7 +28,14 @@ func (h *handlers) stop(c Context) (Result, error) {
 		recordStop(st, c)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
-		drift, ev := planDrift(st, s, pl, c.Now)
+		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to
+		// follow, and so is restarting on a newer baton.
+		worker := s.Worker() != ""
+		var drift string
+		var ev *event
+		if !worker {
+			drift, ev = planDrift(st, s, pl, c.Now)
+		}
 		if ev != nil {
 			dropped = append(dropped, *ev)
 			pl, _ = s.LoadPlan()
@@ -39,10 +46,12 @@ func (h *handlers) stop(c Context) (Result, error) {
 			msg, _ := d.out()["systemMessage"].(string)
 			d.say(strings.TrimSpace(drift + "\n" + msg))
 		}
-		if newer := newerBaton(st, c); newer != "" {
-			msg, _ := d.out()["systemMessage"].(string)
-			d.say(strings.TrimSpace(msg + "\n" + newer))
-			d.emit("newer_baton", map[string]any{"version": st.Run.NewerNoted})
+		if !worker {
+			if newer := newerBaton(st, c); newer != "" {
+				msg, _ := d.out()["systemMessage"].(string)
+				d.say(strings.TrimSpace(msg + "\n" + newer))
+				d.emit("newer_baton", map[string]any{"version": st.Run.NewerNoted})
+			}
 		}
 		return nil
 	})
@@ -51,6 +60,11 @@ func (h *handlers) stop(c Context) (Result, error) {
 	}
 	for _, e := range d.events {
 		s.Event(e.kind, e.fields)
+	}
+	if d.relay != nil {
+		if err := s.Relay(*d.relay); err != nil {
+			return Result{}, err // the next stop queues it again
+		}
 	}
 	msg, _ := d.out()["systemMessage"].(string)
 	if d.deliver.any() {
@@ -75,7 +89,8 @@ type event struct {
 type decision struct {
 	output  map[string]any
 	events  []event
-	deliver delivery // results the stop is refused with; stop writes the reason from them
+	deliver delivery     // results the stop is refused with; stop writes the reason from them
+	relay   *state.Relay // a worker's question, for the lead session to put to the human
 }
 
 func (d *decision) say(msg string) { d.out()["systemMessage"] = msg }
@@ -107,6 +122,13 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 			d.refuse("")
 			return d
 		}
+		if w.Worker && !st.Run.CompleteNotified {
+			// A worker's plan is its phase: done, it is the run's to land, not a plan complete.
+			st.Run.CompleteNotified = true
+			d.say(fmt.Sprintf("baton: %s done → baton lands its work on the run's branch", cur))
+			d.emit("worker_finished", map[string]any{"phase": st.Current, "decisions": len(decide.WithoutHuman(st.Decisions))})
+			return d
+		}
 		if !st.Run.CompleteNotified {
 			st.Run.CompleteNotified = true
 			done := fmt.Sprintf("all %d phases done", len(pl.Phases))
@@ -123,9 +145,13 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	if st.CheckpointAsked && !st.BoundaryOwed {
 		st.CheckpointAsked, st.CheckpointOwed = false, true // the human asked for it; the model need not remember
 	}
-	switch p := st.PendingProposal(); {
+	switch p := st.OwnProposal(); {
 	case st.Run.Compaction.InFlight():
 		// A compaction is already queued or underway; let the turn end so the host can type it.
+	case st.ReviewDue != "" && w.Worker:
+		// A worker's review is put to the human by the lead session; the phase waits for it.
+		st.Run.StopBlocks = 0
+		relayed(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", state.Relay{Kind: state.RelayReview}, now)
 	case st.ReviewDue != "":
 		// Before the boundary: a phase that ended on its last decision without the human is reviewed
 		// before the next one starts.
@@ -189,6 +215,10 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		// asked already, and pushed; their next message is the answer.
 		st.Run.StopBlocks = 0
 		d.say("baton: waiting on you — " + st.Run.Escalation.Reason)
+	case st.Blocked != nil && w.Worker:
+		// A worker's block stops its phase alone, and is put to the human by the lead session.
+		st.Run.StopBlocks = 0
+		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked}, now)
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
 	case st.Run.WarnOwed && st.Run.WarnQuestion != "":
@@ -202,6 +232,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		d.deliver = take(st, now)
 		d.refuse("")
+	case w.Worker && st.PendingProposal() != nil:
+		// A worker's proposal, which the lead session puts to the human: the stop is the model's to make,
+		// and their answer wakes it. It is queued again, in case its own queueing failed.
+		rp := st.PendingProposal()
+		st.Run.StopBlocks = 0
+		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID}
+		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which the lead session puts to them", cur, rp.ID))
+		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":
 		// Every phase left waits for a job, so there is nothing to work on; baton takes the next phase up
 		// as soon as one can start.

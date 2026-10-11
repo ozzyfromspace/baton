@@ -6,6 +6,7 @@ package brief
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -20,6 +21,7 @@ const (
 	Resume     = "resume"     // a phase that was set aside unfinished is taken up again
 	Checkpoint = "checkpoint" // the model asked to compact mid-phase
 	Auto       = "auto"       // Claude Code compacted on its own mid-phase
+	Worker     = "worker"     // a worker's session starts on its phase (no compaction: it starts afresh)
 )
 
 // Limits keep the brief a brief: sections are quoted in full only up to these sizes.
@@ -39,6 +41,10 @@ type Input struct {
 	Words   decide.Words
 	// Result is the result of the job a resumed phase was set aside for (decide.JobResult), "" for none.
 	Result string
+	// A worker's brief (Words.Worker) names its worktree (Tree) and branch, and quotes only the notes of
+	// the phases its phase builds on (Needs, from the run's plan).
+	Tree, Branch string
+	Needs        []string
 }
 
 // Write returns the brief.
@@ -51,23 +57,29 @@ func Write(in Input) string {
 		title = st.Current + " — " + pl.Phases[cur].Title
 	}
 
+	running := fmt.Sprintf("You are running the plan %q (%s).", pl.Title, pl.File)
+	if in.Words.Worker {
+		running = decide.WorkerRole(pl.Title, pl.File, st.Current, in.Tree)
+	}
 	switch {
+	case in.Kind == Worker:
+		fmt.Fprintf(&b, "[baton] %s\n\n", decide.WorkerIntro(pl.Title, pl.File, st.Current, in.Tree, in.Branch))
 	case in.Kind == Boundary && first(pl, st):
 		fmt.Fprintf(&b, "[baton] The plan %q (%s) was attached, and the conversation before it compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
 	case in.Kind == Boundary:
-		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. %s\n\n", running)
 	case in.Kind == Switch:
 		from := "the phase in hand waits on its job, so baton set it aside"
 		if sw := st.Run.Compaction.Switch; sw != nil {
 			from = fmt.Sprintf("%s waits on its job %s, so baton set %s aside", sw.From, sw.Job, sw.From)
 		}
-		fmt.Fprintf(&b, "[baton] The context was compacted to switch phases: %s and takes it up again once the job ends. You are running the plan %q (%s).\n\n", from, pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] The context was compacted to switch phases: %s and takes it up again once the job ends. %s\n\n", from, running)
 	case in.Kind == Resume:
-		fmt.Fprintf(&b, "[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. %s\n\n", running)
 	case in.Kind == Checkpoint:
-		fmt.Fprintf(&b, "[baton] The context was compacted at your checkpoint, mid-phase. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] The context was compacted at your checkpoint, mid-phase. %s\n\n", running)
 	default:
-		fmt.Fprintf(&b, "[baton] Claude Code compacted the context automatically, mid-phase. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+		fmt.Fprintf(&b, "[baton] Claude Code compacted the context automatically, mid-phase. %s\n\n", running)
 	}
 
 	b.WriteString("Progress:\n")
@@ -99,7 +111,7 @@ func Write(in Input) string {
 		park = ps.Park
 	}
 	switch {
-	case in.Kind == Boundary || in.Kind == Switch:
+	case in.Kind == Boundary || in.Kind == Switch || in.Kind == Worker:
 		fmt.Fprintf(&b, "Now: %s. Begin it now.\n\n", title)
 	case in.Kind == Resume && park != nil && park.Reason == state.ParkRed:
 		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification failed: fix what failed, then finish it again.\n\n", title)
@@ -130,14 +142,26 @@ func Write(in Input) string {
 	if red := decide.RedPhases(st.Red(), st.Current); red != "" {
 		b.WriteString(red + "\n\n")
 	}
-	if notes := strings.TrimSpace(in.Handoff); notes != "" {
+	switch notes := strings.TrimSpace(in.Handoff); {
+	case notes == "":
+	case in.Words.Worker:
+		if notes = notesOf(notes, in.Needs); notes != "" {
+			fmt.Fprintf(&b, "Notes left by the phases %s builds on (most recent last):\n\n%s\n\n", st.Current, tail(notes, maxNotes))
+		}
+	default:
 		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))
 	}
 	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
 		b.WriteString(decide.RecordSection(ds) + "\n")
 	}
 
-	b.WriteString(in.Words.Closing(st.Current))
+	if in.Kind == Worker {
+		// A worker's session starts with this brief alone: it gets the whole of how to report, as the lead
+		// does when its session starts (hooks.Primer).
+		b.WriteString(in.Words.Reporting())
+	} else {
+		b.WriteString(in.Words.Closing(st.Current))
+	}
 	return b.String()
 }
 
@@ -149,6 +173,25 @@ func first(pl plan.Plan, st state.State) bool {
 		}
 	}
 	return len(pl.Phases) > 0 && st.Current == pl.Phases[0].ID
+}
+
+// notesOf picks, from the notes phases left (handoff.md: a "## <phase> — <time>" heading for each), the
+// latest notes of each phase in ids, in the order they were left.
+func notesOf(handoff string, ids []string) string {
+	sections := strings.Split("\n"+strings.TrimSpace(handoff), "\n## ")[1:]
+	latest := map[string]int{}
+	for i, sec := range sections {
+		if id, _, _ := strings.Cut(sec, " "); slices.Contains(ids, id) {
+			latest[id] = i
+		}
+	}
+	var out []string
+	for i, sec := range sections {
+		if id, _, _ := strings.Cut(sec, " "); latest[id] == i && slices.Contains(ids, id) {
+			out = append(out, "## "+strings.TrimSpace(sec))
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func clip(s string, n int) string {

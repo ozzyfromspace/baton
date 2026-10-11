@@ -125,3 +125,18 @@ func TestResumingReviewsTheDecisions(t *testing.T) {
 		t.Error("resumed with nothing to resume")
 	}
 }
+
+// A worker's proposal is put to the human by the lead: the worker owes no question of its own.
+func TestOwnProposalLeavesRelayedOnesToTheLead(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		relayed bool
+		own     bool
+	}{{"the session's own proposal", false, true}, {"a worker's relayed proposal", true, false}} {
+		st := running(t)
+		AddProposal(&st, Decision{What: "use a fake", Relayed: c.relayed}, t0)
+		if p := st.OwnProposal(); (p != nil) != c.own || st.PendingProposal() == nil {
+			t.Errorf("%s: OwnProposal %+v", c.name, p)
+		}
+	}
+}

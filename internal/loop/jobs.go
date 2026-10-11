@@ -171,11 +171,11 @@ func verdictLine(vd state.Verdict) string {
 
 // deliver wakes an idle session whose phase in hand has job results due (state.Due), or whose plan a
 // verification just completed: it types a short line, and the prompt's hook hands the results over. It
-// waits for the typing gates like anything baton types, and never while the human is being asked for
-// something. It reports whether it typed.
+// waits for the typing gates like anything baton types, and never while the session is to ask the human
+// something (a worker's proposal is the lead session's to ask). It reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	due := st.Due()
-	if len(due) == 0 || st.Run.Escalation != nil || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.PendingProposal() != nil {
+	if len(due) == 0 || st.Run.Escalation != nil || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {

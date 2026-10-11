@@ -61,6 +61,28 @@ func TestUsable(t *testing.T) {
 	}
 }
 
+func TestBranch(t *testing.T) {
+	repo := newRepo(t)
+	git(t, repo, "checkout", "-q", "-b", "run/main")
+	wt := filepath.Join(t.TempDir(), "wt")
+	git(t, repo, "worktree", "add", "-q", "-b", "baton/r/P3", wt)
+	fresh := t.TempDir()
+	git(t, fresh, "init", "-q", "-b", "trunk")
+	for _, c := range []struct{ name, dir, want string }{
+		{"the checkout", repo, "run/main"},
+		{"a worktree on a branch of its own", wt, "baton/r/P3"},
+		{"a repository with no commit yet", fresh, "trunk"},
+	} {
+		if got := Branch(c.dir); got != c.want {
+			t.Errorf("%s: Branch = %q, want %q", c.name, got, c.want)
+		}
+	}
+	git(t, repo, "checkout", "-q", "--detach")
+	if got := Branch(repo); got != "" {
+		t.Errorf("a detached HEAD: Branch = %q", got)
+	}
+}
+
 func TestDirty(t *testing.T) {
 	dir := newRepo(t)
 	if got, err := Dirty(dir); err != nil || len(got) != 0 {
@@ -296,8 +318,8 @@ func TestWithoutGitNothingHappens(t *testing.T) {
 		if s, err := Snapshot(dir, time.Now(), "P1", ""); !errors.Is(err, ErrNoGit) || s.Ref != "" {
 			t.Errorf("%s: Snapshot %+v %v", name, s, err)
 		}
-		if Head(dir) != "" || Snapshots(dir) != nil {
-			t.Errorf("%s: Head or Snapshots found something", name)
+		if Head(dir) != "" || Branch(dir) != "" || Snapshots(dir) != nil {
+			t.Errorf("%s: Head, Branch or Snapshots found something", name)
 		}
 	}
 	check("plain folder", plain)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -146,11 +147,17 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var pending []issued
 	var sweep string
 	var others []state.RunInfo
+	var refuseWorker, edited string
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
 		sweep = sweepingGit(str(ti, "command"))
 	}
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		if phase := s.Worker(); phase != "" {
+			if refuseWorker, edited = workerRefusal(c.Input, s, phase); refuseWorker != "" {
+				return nil
+			}
+		}
 		if sweep != "" {
 			if others = sharedCheckout(s); len(others) > 0 {
 				return nil
@@ -172,7 +179,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
 			return nil
 		}
-		p := st.PendingProposal()
+		p := st.OwnProposal()
 		switch {
 		case st.BoundaryOwed && !started(st):
 			hold = endTurn("baton attached the plan, and compacts the conversation so far before " + st.Current + " begins")
@@ -195,6 +202,18 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, ok(err)
+	}
+	if refuseWorker != "" {
+		fields := map[string]any{"tool": str(c.Input, "tool_name"), "why": "plan mode"}
+		say := "baton: kept this worker out of plan mode — its phase is planned already"
+		if edited != "" {
+			fields["why"], fields["path"] = "the lead's checkout", edited
+			say = "baton: refused an edit to " + edited + " in the lead's checkout — a worker edits only its own worktree"
+		}
+		s.Event("worker_refused", fields)
+		res := permission("deny", refuseWorker)
+		res.Output["systemMessage"] = say
+		return res, nil
 	}
 	if len(others) > 0 {
 		var ids []string
@@ -222,6 +241,20 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 	}
 	return permission("deny", hold), nil
+}
+
+// workerRefusal is why a worker on phase may not make a tool call, or "" if it may: it never changes the
+// project's checkout, which is the lead's (edited is the path, relative to the checkout), and it does not
+// plan, since its phase is planned already and only the lead attaches plans. Its subagents are held to
+// the same.
+func workerRefusal(in map[string]any, s *state.Store, phase string) (why, edited string) {
+	if str(in, "tool_name") == "EnterPlanMode" {
+		return decide.WorkerPlanRefused(phase), ""
+	}
+	if rel := editedPath(in, s.Checkout); rel != "" && editedPath(in, s.Root) == "" {
+		return decide.WorkerEditRefused(phase, filepath.Join(s.Root, filepath.FromSlash(rel))), rel
+	}
+	return "", ""
 }
 
 // endTurn is a hold's reason when the turn must end.
@@ -344,6 +377,9 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	if source == "compact" {
 		return h.afterCompaction(c, s, ann)
 	}
+	if s.Worker() != "" && source == "startup" && havePlan {
+		return h.workerStart(c, s, pl, ann)
+	}
 	if !havePlan {
 		return Result{Output: map[string]any{"systemMessage": lines(ann, note+"baton: hosting this session (no plan attached — /baton plan or /baton run)")}}, nil
 	}
@@ -386,7 +422,11 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 // it in context, and the human may ask about it.
 func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
+	if w.Worker {
+		b.WriteString(decide.WorkerHosted(pl.Title, st.Current))
+	} else {
+		fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
+	}
 	switch st.Mode {
 	case state.ModeComplete:
 		b.WriteString("Every phase of the plan is done.")
@@ -470,7 +510,7 @@ func parkedWhy(st state.State, pk *state.Park) string {
 // words is what the model-facing text depends on in this project: whether git is usable there, and how
 // long a proposal waits for the human.
 func words(c Context, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout, Worker: s.Worker() != ""}
 }
 
 func progressLine(pl plan.Plan, st state.State) string {
@@ -503,14 +543,15 @@ func progressLine(pl plan.Plan, st state.State) string {
 
 func (h *handlers) sessionEnd(c Context) (Result, error) {
 	reason := str(c.Input, "reason")
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = &state.Ended{Reason: reason, At: c.Now}
 		st.Run.TurnOpen = false
 		if reason == "clear" && st.Run.PlanFile != "" && planOnScreen(st) {
 			// Approved with "clear context", most likely: the next session's first tool call confirms it.
 			st.Run.ClearedPlan = &state.Approval{File: st.Run.PlanFile, At: c.Now}
 		}
-		if st.Mode == state.ModeRunning && !deliberateEnd[reason] && st.Run.Restart == nil { // a restart resumes it
+		// A restart resumes the session, and the host ends and resumes its workers itself.
+		if st.Mode == state.ModeRunning && !deliberateEnd[reason] && st.Run.Restart == nil && s.Worker() == "" {
 			notice(st, "session_ended", "the session ended mid-plan ("+reason+")", c.Now)
 		}
 		return nil
@@ -728,10 +769,12 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		}
 		if c.Event == "PostToolUse" {
 			w := words(c, s)
-			switch tool {
-			case "ExitPlanMode":
+			switch {
+			case tool == "ExitPlanMode" && s.Worker() != "":
+				v = workerPlan(s.Worker(), approvedFile(c.Input))
+			case tool == "ExitPlanMode":
 				v = approved(st, s, c, approvedFile(c.Input), false, w)
-			case "AskUserQuestion":
+			case tool == "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero()
 				if v = answeredReplan(st, s, c, w); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
@@ -741,12 +784,13 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 					}
 				}
 			}
-			if file, ok := clearedApproval(st, c); ok && v.event == "" {
+			if file, ok := clearedApproval(st, c); ok && v.event == "" && s.Worker() == "" {
 				v = approved(st, s, c, file, true, w)
 			}
 			// No other question while a proposal, a review or an approved plan waits on the human: one at a
-			// time. A job's result waits too: the model must put the question first.
-			if v.event == "" && st.PendingProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
+			// time. A job's result waits too: the model must put the question first. (A worker's proposal
+			// is the lead's to put to the human, and holds up nothing in the worker.)
+			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
 				dl = take(st, c.Now)
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
@@ -855,7 +899,7 @@ type valveAction struct {
 
 // contextValves runs the two mid-phase valves after a main-agent tool call. Past the checkpoint line,
 // the model is asked to checkpoint at its next safe point, and asked again for every further tenth of
-// the limit. Past the warning line, the model is asked to
+// the limit. Past the warning line (never in a worker), the model is asked to
 // put a fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its
 // own. Each fires once, and re-arms only after the context falls a tenth of the window below its line,
 // so a compaction that leaves the context high cannot start a loop. Subagents are never asked: they
@@ -881,7 +925,8 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 	}
 	pct := 100 * float64(used) / float64(lim.Window)
 	switch {
-	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned:
+	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned && !w.Worker:
+		// Nobody watches a worker's session to answer the question: it is nudged to checkpoint instead.
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
 		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
 		q := warnQuestion(used, lim, vs.WarnTimeout)

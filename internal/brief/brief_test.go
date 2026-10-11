@@ -259,3 +259,66 @@ func TestBriefListsTheDecisionsMadeWithoutTheHuman(t *testing.T) {
 		}
 	}
 }
+
+// worker is the state of a worker's sub-run on R1, in the plan narrowed to it, as it starts.
+func worker(t *testing.T) (plan.Plan, []byte, state.State) {
+	t.Helper()
+	pl, doc, run := setup(t)
+	only, err := pl.Only("R1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.AttachWorker(run, "R1")
+	state.Start(&st, time.Date(2026, 10, 4, 12, 5, 0, 0, time.UTC), state.Origin{})
+	return only, doc, st
+}
+
+// handoff holds notes of a plan run before, of a phase R1 does not build on, and of the one it does.
+const handoff = "## P0 — 2026-10-03 09:00\n\nAn older plan's P0.\n\n## P1 — 2026-10-04 11:00\n\nOne-liners shipped.\n\n## P0 — 2026-10-04 12:00\n\nOverlay done in abc123.\n"
+
+// A worker starts from a brief of its own: its phase, where it works, the notes of the phases it builds
+// on, and that baton lands its work. It never names the project's checkout.
+func TestWorkerBrief(t *testing.T) {
+	pl, doc, st := worker(t)
+	b := Write(Input{Kind: Worker, Plan: pl, Doc: doc, State: st, Handoff: handoff, Words: decide.Words{Git: true, Timeout: 5 * time.Minute, Worker: true},
+		Tree: "/home/me/.baton/worktrees/k/R1", Branch: "baton/run/R1", Needs: []string{"P0"}})
+	golden(t, "worker.golden", b)
+	for _, not := range []string{"An older plan's P0", "One-liners shipped", "compacted", "Add people to a household.\n\n## Verification", "/work\n"} {
+		if strings.Contains(b, not) {
+			t.Errorf("the worker's brief has %q", not)
+		}
+	}
+}
+
+// After a compaction a worker is reminded what it is, and how its phase ends.
+func TestAWorkersBriefAfterACompaction(t *testing.T) {
+	pl, doc, st := worker(t)
+	for _, kind := range []string{Checkpoint, Auto, Resume} {
+		b := Write(Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: handoff, Words: decide.Words{Git: true, Worker: true}, Tree: "/wt/R1", Needs: []string{"P0", "P1"}})
+		for _, want := range []string{"You are a worker on R1 of the plan \"The widget campaign\" (/work/plan.md), in a git worktree of your own (/wt/R1)",
+			"Notes left by the phases R1 builds on", "One-liners shipped.\n\n## P0 — 2026-10-04 12:00\n\nOverlay done in abc123.", "baton then lands your work on the run's branch"} {
+			if !strings.Contains(b, want) {
+				t.Errorf("%s: the brief lacks %q:\n%s", kind, want, b)
+			}
+		}
+		if strings.Contains(b, "You are running the plan") || strings.Contains(b, "An older plan's P0") {
+			t.Errorf("%s: the brief reads as the lead's:\n%s", kind, b)
+		}
+	}
+}
+
+func TestNotesOf(t *testing.T) {
+	for _, c := range []struct {
+		ids  []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"P0"}, "## P0 — 2026-10-04 12:00\n\nOverlay done in abc123."},
+		{[]string{"P1", "P0"}, "## P1 — 2026-10-04 11:00\n\nOne-liners shipped.\n\n## P0 — 2026-10-04 12:00\n\nOverlay done in abc123."},
+		{[]string{"R1"}, ""},
+	} {
+		if got := notesOf(handoff, c.ids); got != c.want {
+			t.Errorf("notesOf(%v) = %q, want %q", c.ids, got, c.want)
+		}
+	}
+}
