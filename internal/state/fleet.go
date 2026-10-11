@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -271,19 +272,61 @@ func TakeLandings(st *State) []Landing {
 // Decisions is every decision of run st, kept in s: its own, and those of its workers' sub-runs (numbered
 // under their phases, P3.d1), oldest first. A sub-run's are its own alone.
 func (s *Store) Decisions(st State) []Decision {
-	out := slices.Clone(st.Decisions)
+	out := append(slices.Clone(st.Decisions), s.WorkerDecisions(st)...)
+	slices.SortStableFunc(out, func(a, b Decision) int { return a.At.Compare(b.At) })
+	return out
+}
+
+// WorkerDecisions is the decisions of the sub-runs of run st's workers, kept in s: none for a sub-run.
+// They are read without the sub-runs' locks.
+func (s *Store) WorkerDecisions(st State) []Decision {
 	if s.Parent != "" || len(st.Workers) == 0 {
-		return out
+		return nil
 	}
 	p, err := OpenProject(s.Project, s.Now)
 	if err != nil {
-		return out
+		return nil
 	}
+	var out []Decision
 	for _, w := range p.Workers(s.Ref) {
 		out = append(out, w.State.Decisions...)
 	}
-	slices.SortStableFunc(out, func(a, b Decision) int { return a.At.Compare(b.At) })
 	return out
+}
+
+// ToldWorkers records the workers' decisions ids (P3.d1, …) as handed to the lead's model (Decision.Told),
+// each in its own sub-run, one at a time. Other ids, and a sub-run's store, change nothing.
+func (s *Store) ToldWorkers(ids []string) {
+	if s.Parent != "" {
+		return
+	}
+	byPhase := map[string][]string{}
+	for _, id := range ids {
+		if phase, _, ok := strings.Cut(id, "."); ok {
+			byPhase[phase] = append(byPhase[phase], id)
+		}
+	}
+	if len(byPhase) == 0 {
+		return
+	}
+	p, err := OpenProject(s.Project, s.Now)
+	if err != nil {
+		return
+	}
+	for phase, ids := range byPhase {
+		sub, err := p.ExistingRun(WorkerRef(s.Ref, phase), "")
+		if err != nil {
+			continue
+		}
+		sub.Update(func(st *State) error {
+			for i := range st.Decisions {
+				if slices.Contains(ids, st.Decisions[i].ID) {
+					st.Decisions[i].Told = true
+				}
+			}
+			return nil
+		})
+	}
 }
 
 // LandedCommits lists every commit the run's workers landed.

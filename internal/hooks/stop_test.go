@@ -182,7 +182,7 @@ func TestStopDecisionTable(t *testing.T) {
 			if c.setup != nil {
 				c.setup(&st)
 			}
-			d := decideStop(&st, pl, tStop, decide.Words{Git: true})
+			d := decideStop(&st, pl, tStop, decide.Words{Git: true}, nil)
 			if delivered := d.deliver.any(); delivered != (c.name == "a job's result answers the stop") {
 				t.Errorf("delivered %+v", d.deliver)
 			}
@@ -224,8 +224,8 @@ func TestEscalationIsAskedOnceAndPushedOnce(t *testing.T) {
 	pl := demoPlan()
 	st := running()
 	state.SetBlocked(&st, "need a decision", tStop)
-	first := decideStop(&st, pl, tStop, decide.Words{Git: true})
-	second := decideStop(&st, pl, tStop.Add(time.Minute), decide.Words{Git: true})
+	first := decideStop(&st, pl, tStop, decide.Words{Git: true}, nil)
+	second := decideStop(&st, pl, tStop.Add(time.Minute), decide.Words{Git: true}, nil)
 	if first.output["decision"] != "block" || second.output["decision"] == "block" {
 		t.Fatalf("first %v second %v", first.output, second.output)
 	}
@@ -241,11 +241,11 @@ func TestRefusalsCountThenEscalate(t *testing.T) {
 	pl := demoPlan()
 	st := running()
 	for i := 1; i <= MaxStopBlocks; i++ {
-		if d := decideStop(&st, pl, tStop, decide.Words{Git: true}); d.output["decision"] != "block" || st.Run.StopBlocks != i {
+		if d := decideStop(&st, pl, tStop, decide.Words{Git: true}, nil); d.output["decision"] != "block" || st.Run.StopBlocks != i {
 			t.Fatalf("stop %d: %v (blocks %d)", i, d.output, st.Run.StopBlocks)
 		}
 	}
-	d := decideStop(&st, pl, tStop, decide.Words{Git: true})
+	d := decideStop(&st, pl, tStop, decide.Words{Git: true}, nil)
 	if !strings.Contains(d.output["reason"].(string), "AskUserQuestion") || st.Run.Escalation == nil {
 		t.Fatalf("escalation: %v", d.output)
 	}
@@ -262,7 +262,7 @@ func TestBackgroundWorkIsRefusedOncePerNewTask(t *testing.T) {
 			bg = append(bg, state.Task{ID: id, Type: "shell", Description: "task " + id})
 		}
 		st.Run.SetBackground(bg, tStop)
-		return decideStop(&st, pl, tStop, decide.Words{Git: true})
+		return decideStop(&st, pl, tStop, decide.Words{Git: true}, nil)
 	}
 	for i, c := range []struct {
 		ids   []string

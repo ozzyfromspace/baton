@@ -45,6 +45,8 @@ type Input struct {
 	// the phases its phase builds on (Needs, from the run's plan).
 	Tree, Branch string
 	Needs        []string
+	// Decisions is the run's decisions, its workers' too (Store.Decisions); nil: the state's own.
+	Decisions []state.Decision
 }
 
 // Write returns the brief.
@@ -83,6 +85,7 @@ func Write(in Input) string {
 	}
 
 	b.WriteString("Progress:\n")
+	var working []string
 	for _, ph := range pl.Phases {
 		mark, extra := "·", ""
 		if ps := st.Phases[ph.ID]; ps != nil {
@@ -97,6 +100,9 @@ func Write(in Input) string {
 				mark, extra = "⧗", " (verifying)"
 			case state.PhaseParked:
 				mark, extra = "⏸", " (parked)"
+			case state.PhaseWorking:
+				mark, extra = "⚙", " (a worker's)"
+				working = append(working, ph.ID+" — "+ph.Title)
 			}
 		}
 		if ph.ID == st.Current {
@@ -105,6 +111,9 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "  %s %s — %s%s\n", mark, ph.ID, ph.Title, extra)
 	}
 	b.WriteString("\n")
+	if len(working) > 0 {
+		b.WriteString(decide.WorkingPhases(working) + "\n\n")
+	}
 
 	var park *state.Park
 	if ps := st.Phases[st.Current]; ps != nil {
@@ -151,7 +160,11 @@ func Write(in Input) string {
 	default:
 		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))
 	}
-	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
+	all := in.Decisions
+	if all == nil {
+		all = st.Decisions
+	}
+	if ds := decide.WithoutHuman(all); len(ds) > 0 {
 		b.WriteString(decide.RecordSection(ds) + "\n")
 	}
 

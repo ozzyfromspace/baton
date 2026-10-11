@@ -454,7 +454,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		"systemMessage": lines(ann, note+"baton: hosting · "+progressLine(pl, st)),
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":     "SessionStart",
-			"additionalContext": Primer(pl, st, words(c, s)),
+			"additionalContext": Primer(pl, st, words(c, s), s.Decisions(st)),
 		},
 	}}, nil
 }
@@ -485,9 +485,9 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 }
 
 // Primer tells the model, at the start of a hosted session, how baton expects it to report progress, and
-// what the run has decided without the human so far: after a /clear or a restart the model has none of
-// it in context, and the human may ask about it.
-func Primer(pl plan.Plan, st state.State, w decide.Words) string {
+// what the run (all of the run's decisions: its workers' too) has decided without the human so far: after
+// a /clear or a restart the model has none of it in context, and the human may ask about it.
+func Primer(pl plan.Plan, st state.State, w decide.Words, all []state.Decision) string {
 	var b strings.Builder
 	if w.Worker {
 		b.WriteString(decide.WorkerHosted(pl.Title, st.Current))
@@ -516,16 +516,17 @@ func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 		}
 		b.WriteString(w.Reporting())
 	}
-	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
+	if ds := decide.WithoutHuman(all); len(ds) > 0 {
 		b.WriteString("\n\n" + strings.TrimSpace(decide.RecordSection(ds)))
 	}
 	return b.String()
 }
 
 // phasesAside names, for the Primer, the phases other than the current one that are verifying or set
-// aside, and why. baton takes each up again by itself, so the model leaves them alone. "" for none.
+// aside, and why, and those baton's workers have. baton takes each up again, or lands it, by itself, so
+// the model leaves them alone. "" for none.
 func phasesAside(pl plan.Plan, st state.State) string {
-	var verifying, parked []string
+	var verifying, parked, working []string
 	for _, ph := range pl.Phases {
 		ps := st.Phases[ph.ID]
 		if ps == nil || ph.ID == st.Current {
@@ -540,6 +541,8 @@ func phasesAside(pl plan.Plan, st state.State) string {
 			verifying = append(verifying, name)
 		case state.PhaseParked:
 			parked = append(parked, name+" ("+parkedWhy(st, ps.Park)+")")
+		case state.PhaseWorking:
+			working = append(working, name)
 		}
 	}
 	var out []string
@@ -549,10 +552,13 @@ func phasesAside(pl plan.Plan, st state.State) string {
 	if len(parked) > 0 {
 		out = append(out, "Set aside unfinished: "+strings.Join(parked, "; ")+".")
 	}
-	if len(out) == 0 {
-		return ""
+	if len(out) > 0 {
+		out = append(out, "baton takes these up again by itself: work only on the current phase.")
 	}
-	return strings.Join(out, " ") + " baton takes these up again by itself: work only on the current phase."
+	if len(working) > 0 {
+		out = append(out, decide.WorkingPhases(working))
+	}
+	return strings.Join(out, " ")
 }
 
 // parkedWhy is why a phase was set aside, for the model.
@@ -591,15 +597,19 @@ func progressLine(pl plan.Plan, st state.State) string {
 	if st.Current != "" {
 		line += " · current " + st.Current
 	}
-	for _, status := range []string{state.PhaseVerifying, state.PhaseParked} {
+	for _, status := range []string{state.PhaseVerifying, state.PhaseParked, state.PhaseWorking} {
 		var ids []string
 		for _, ph := range pl.Phases {
 			if ps := st.Phases[ph.ID]; ps != nil && ps.Status == status && ph.ID != st.Current {
 				ids = append(ids, ph.ID)
 			}
 		}
+		label := status
+		if status == state.PhaseWorking {
+			label = "workers on"
+		}
 		if len(ids) > 0 {
-			line += " · " + status + " " + strings.Join(ids, ", ")
+			line += " · " + label + " " + strings.Join(ids, ", ")
 		}
 	}
 	if st.Mode != state.ModeRunning {
@@ -688,7 +698,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 				}
 			}
 			var record string
-			if told, record = tellDecisions(st); record != "" {
+			if told, record = tellDecisions(st, s.WorkerDecisions(*st)); record != "" {
 				tell = strings.TrimSpace(tell + "\n\n" + record)
 			}
 			if r := st.Replan; r != nil {
@@ -722,6 +732,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		return Result{}, ok(err)
 	}
 	s.Event("turn_started", map[string]any{"by": by})
+	s.ToldWorkers(told)
 	var says []string
 	if ann != "" {
 		says = append(says, ann)

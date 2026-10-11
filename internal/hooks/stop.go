@@ -41,7 +41,7 @@ func (h *handlers) stop(c Context) (Result, error) {
 			dropped = append(dropped, *ev)
 			pl, _ = s.LoadPlan()
 		}
-		d = decideStop(st, pl, c.Now, words(c, s))
+		d = decideStop(st, pl, c.Now, words(c, s), s.WorkerDecisions(*st))
 		d.events = append(dropped, d.events...)
 		if drift != "" {
 			msg, _ := d.out()["systemMessage"].(string)
@@ -113,8 +113,9 @@ func (d *decision) refuse(reason string) {
 	d.out()["reason"] = reason
 }
 
-// decideStop is the Stop decision table. Rows are checked in order; the first that applies wins.
-func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) decision {
+// decideStop is the Stop decision table. Rows are checked in order; the first that applies wins. workers
+// is the decisions of the run's workers (Store.WorkerDecisions), which the plan-complete notice counts.
+func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, workers []state.Decision) decision {
 	var d decision
 	cur := phaseTitle(pl, st.Current)
 	switch st.Mode {
@@ -140,11 +141,8 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		}
 		if !st.Run.CompleteNotified {
 			st.Run.CompleteNotified = true
-			done := fmt.Sprintf("all %d phases done", len(pl.Phases))
-			n := len(decide.WithoutHuman(st.Decisions))
-			if n > 0 {
-				done += " · " + decide.Tally(n) + " — /baton status"
-			}
+			n := len(decide.WithoutHuman(st.Decisions)) + len(decide.WithoutHuman(workers))
+			done := decide.PlanDone(len(pl.Phases), n)
 			notice(st, "plan_complete", pl.Title+": "+done, now)
 			d.say("baton: plan complete — " + done)
 			d.emit("plan_complete", map[string]any{"decisions": n})

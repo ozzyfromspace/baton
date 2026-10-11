@@ -2,6 +2,7 @@ package decide
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,14 @@ func WorkerHosted(title, phase string) string {
 func WorkerRole(title, file, phase, tree string) string {
 	return fmt.Sprintf("You are a worker on %s of the plan %q (%s), in a git worktree of your own (%s): the lead session and any other workers work on the other phases elsewhere.",
 		phase, title, file, tree)
+}
+
+// WorkingPhases tells the lead's model about the phases baton's workers have (names, as "P3 — Title"):
+// baton lands their work by itself, and the phases that need them wait until it has, so it leaves them
+// alone.
+func WorkingPhases(names []string) string {
+	return "Worked on by baton's workers meanwhile, each in a worktree and on a branch of its own: " + strings.Join(names, "; ") +
+		". baton lands each one's work on this branch by itself, and tells you when it has; the phases that need them wait until then. Leave these phases alone."
 }
 
 // WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.

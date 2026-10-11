@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -433,5 +434,59 @@ func TestAWorkersHooksFailOpen(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The decisions a worker makes without the human are the run's: the lead's model has them at session
+// start, is handed each once as the human writes to it (marked told in the worker's sub-run), and the
+// plan-complete notice counts them.
+func TestAWorkersDecisionsReachTheLead(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	w.set(func(st *state.State) {
+		state.Start(st, w.now, state.Origin{})
+		if _, err := state.AddNote(st, "used a fake clock", "revert the commit", w.now); err != nil {
+			t.Fatal(err)
+		}
+	})
+	lead.now = lead.now.Add(time.Minute)
+	lead.set(func(st *state.State) {
+		if _, err := state.AddNote(st, "skipped the flaky test", "run it again", lead.now); err != nil {
+			t.Fatal(err)
+		}
+	})
+	ctx := additionalContext(lead.fire("SessionStart", map[string]any{"source": "clear"}))
+	if !strings.Contains(ctx, "- P2.d1 (P2, ") || !strings.Contains(ctx, "noted: used a fake clock. Undo: revert the commit") ||
+		strings.Index(ctx, "P2.d1") > strings.Index(ctx, "- d1 (P1, ") {
+		t.Errorf("the lead's primer:\n%s", ctx)
+	}
+
+	out := lead.fire("UserPromptSubmit", map[string]any{"prompt": "undo the clock thing"})
+	if ctx := additionalContext(out); !strings.Contains(ctx, "P2.d1") || !strings.Contains(ctx, "d1 (P1") {
+		t.Errorf("not handed over:\n%s", ctx)
+	}
+	if msg, _ := out["systemMessage"].(string); !strings.Contains(msg, "decisions made without you since you last wrote: P2.d1, d1") {
+		t.Errorf("said %q", msg)
+	}
+	if d := w.state().Decisions; len(d) != 1 || !d[0].Told {
+		t.Errorf("the worker's decision is not marked told: %+v", d)
+	}
+	if ctx := additionalContext(lead.fire("UserPromptSubmit", map[string]any{"prompt": "thanks"})); strings.Contains(ctx, "P2.d1") {
+		t.Errorf("handed over twice:\n%s", ctx)
+	}
+
+	// The worker's own session is handed its own, and nothing of the lead's.
+	w.set(func(st *state.State) {
+		state.AddNote(st, "pinned the version", "unpin it", w.now)
+	})
+	if ctx := additionalContext(w.fire("UserPromptSubmit", map[string]any{"prompt": "what did you do?"})); !strings.Contains(ctx, "P2.d2") || strings.Contains(ctx, "skipped the flaky test") {
+		t.Errorf("the worker was handed:\n%s", ctx)
+	}
+
+	st := lead.state()
+	st.Mode = state.ModeComplete
+	pl, _ := lead.store.LoadPlan()
+	d := decideStop(&st, pl, lead.now, decide.Words{}, lead.store.WorkerDecisions(st))
+	if msg, _ := d.output["systemMessage"].(string); msg != "baton: plan complete — all 3 phases done · 3 decisions made without you — /baton status" {
+		t.Errorf("said %q", msg)
 	}
 }

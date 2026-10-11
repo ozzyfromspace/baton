@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -205,18 +206,28 @@ func goingAhead(st *state.State) bool {
 
 // tellDecisions hands the model, as the human writes to it, the decisions made without them that it has
 // not been handed at such a moment yet, and marks them told (the S3 mechanism, docs/research/
-// escalation.md). What the human wrote may be a late answer, "undo that", to a decision a compaction
-// or a /clear has taken out of the model's context: its undo is then at hand.
-func tellDecisions(st *state.State) (ids []string, tell string) {
+// escalation.md): the run's own, and its workers' (from their sub-runs, which the caller marks told,
+// Store.ToldWorkers). What the human wrote may be a late answer, "undo that", to a decision a compaction
+// or a /clear has taken out of the model's context, or that a worker made: its undo is then at hand.
+func tellDecisions(st *state.State, workers []state.Decision) (ids []string, tell string) {
 	var untold []state.Decision
 	for i := range st.Decisions {
 		if d := &st.Decisions[i]; d.WithoutHuman() && !d.Told {
 			d.Told = true
-			untold, ids = append(untold, *d), append(ids, d.ID)
+			untold = append(untold, *d)
+		}
+	}
+	for _, d := range workers {
+		if d.WithoutHuman() && !d.Told {
+			untold = append(untold, d)
 		}
 	}
 	if len(untold) == 0 {
 		return nil, ""
+	}
+	slices.SortStableFunc(untold, func(a, b state.Decision) int { return a.At.Compare(b.At) })
+	for _, d := range untold {
+		ids = append(ids, d.ID)
 	}
 	return ids, NudgePrefix + " " + decide.LateAnswer(untold)
 }

@@ -35,6 +35,16 @@ func Tally(n int) string {
 	return fmt.Sprintf("%d decisions made without you", n)
 }
 
+// PlanDone says a plan is complete: how many phases it had, and how many decisions the run (its workers
+// too) made without the human, which baton status lists.
+func PlanDone(phases, decided int) string {
+	s := fmt.Sprintf("all %d phases done", phases)
+	if decided > 0 {
+		s += " · " + Tally(decided) + " — /baton status"
+	}
+	return s
+}
+
 // Happened says what a decision made without the human did: a note, or a proposal baton went ahead with.
 func Happened(d state.Decision) string {
 	if d.Kind == state.Proposal {

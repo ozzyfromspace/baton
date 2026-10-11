@@ -322,3 +322,25 @@ func TestNotesOf(t *testing.T) {
 		}
 	}
 }
+
+// The lead's brief marks the phases baton's workers have, and says baton lands them, so the lead leaves
+// them alone; the decisions it lists are the whole run's, its workers' too.
+func TestTheBriefMarksTheWorkersPhases(t *testing.T) {
+	pl, doc, st := setup(t)
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	st.Phases["R1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "run/R1"}
+	worker := state.Decision{ID: "R1.d1", Kind: state.Note, Phase: "R1", What: "used a fake clock", Undo: "revert the commit", At: now}
+	b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Decisions: []state.Decision{worker}})
+	for _, want := range []string{
+		"  ⚙ R1 — The roster can grow (a worker's)\n\n" + decide.WorkingPhases([]string{"R1 — The roster can grow"}) + "\n\nNow: P1",
+		"- R1.d1 (R1, ",
+		"noted: used a fake clock. Undo: revert the commit",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("no %q in:\n%s", want, b)
+		}
+	}
+	if b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Decisions: []state.Decision{}}); strings.Contains(b, "Decisions made without the human") {
+		t.Errorf("listed decisions the run's record does not have:\n%s", b)
+	}
+}

@@ -179,14 +179,23 @@ func TestPrimerNamesThePhasesAside(t *testing.T) {
 			st.Current, st.BoundaryOwed = "P2", true
 		}, "Set aside unfinished: P1 — Second (set aside at a checkpoint). baton takes these up again by itself: work only on the current phase.",
 			"Demo · 1/5 phases done · current P2 · parked P1"},
+		{"phases baton's workers have", func(st *state.State) {
+			st.Phases["P1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/P1"}
+			st.Phases["P3"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/P3"}
+		}, decide.WorkingPhases([]string{"P1 — Second", "P3 — Fourth"}), "Demo · 0/5 phases done · current P0 · workers on P1, P3"},
+		{"set aside, and a worker's", func(st *state.State) {
+			st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkCheckpoint}}
+			st.Phases["P2"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/P2"}
+		}, "Set aside unfinished: P1 — Second (set aside at a checkpoint). baton takes these up again by itself: work only on the current phase. " +
+			decide.WorkingPhases([]string{"P2 — Third"}), "Demo · 0/5 phases done · current P0 · parked P1 · workers on P2"},
 	} {
 		st := state.Attach(pl, now, state.Origin{})
 		c.set(&st)
 		if got := phasesAside(pl, st); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
-		if c.want != "" && !strings.Contains(Primer(pl, st, decide.Words{}), c.want+" ") {
-			t.Errorf("%s: the primer lacks it:\n%s", c.name, Primer(pl, st, decide.Words{}))
+		if c.want != "" && !strings.Contains(Primer(pl, st, decide.Words{}, st.Decisions), c.want+" ") {
+			t.Errorf("%s: the primer lacks it:\n%s", c.name, Primer(pl, st, decide.Words{}, st.Decisions))
 		}
 		if got := progressLine(pl, st); got != c.wantL {
 			t.Errorf("%s: progress %q, want %q", c.name, got, c.wantL)

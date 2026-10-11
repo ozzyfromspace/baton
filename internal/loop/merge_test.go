@@ -484,14 +484,18 @@ func TestALandingMovesTheRunOn(t *testing.T) {
 		st.Current = ""
 		return nil
 	})
+	x.sub("P1").Update(func(st *state.State) error {
+		_, err := state.AddNote(st, "used a fake clock", "revert it", x.now)
+		return err
+	})
 	x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
 	x.tick(time.Second)
 	st = x.state()
 	if st.Mode != state.ModeComplete || !st.Run.CompleteNotified || !x.has("plan_complete", `"by":"landed"`) ||
-		!strings.Contains(x.announced(), "plan complete — all 4 phases done") {
+		!strings.Contains(x.announced(), "plan complete — all 4 phases done · 1 decision made without you — /baton status") {
 		t.Fatalf("mode %s, notified %v\n%s", st.Mode, st.Run.CompleteNotified, x.events())
 	}
-	if len(st.Run.Notices) == 0 || st.Run.Notices[len(st.Run.Notices)-1].Kind != "plan_complete" {
+	if n := st.Run.Notices; len(n) == 0 || n[len(n)-1].Kind != "plan_complete" || n[len(n)-1].Text != "Demo: all 4 phases done · 1 decision made without you — /baton status" {
 		t.Errorf("notices %+v", st.Run.Notices)
 	}
 }

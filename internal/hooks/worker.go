@@ -36,7 +36,7 @@ func (h *handlers) workerStart(c Context, s *state.Store, pl plan.Plan, ann stri
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
 	in := brief.Input{Kind: brief.Worker, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s),
-		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current)}
+		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current), Decisions: s.Decisions(st)}
 	text := brief.Write(in)
 	if started {
 		s.Event("phase_started", map[string]any{"phase": st.Current})

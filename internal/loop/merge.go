@@ -382,7 +382,9 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 	pl, _ := s.LoadPlan()
 	var next string
 	var complete bool
-	var phases int
+	var done string
+	before, _ := s.Load()
+	workers := s.WorkerDecisions(before) // read before the run's lock is taken: no code holds two
 	_, err := s.Update(func(st *state.State) error {
 		var err error
 		if next, err = state.Landed(st, pl, l, now); err != nil {
@@ -390,8 +392,9 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		}
 		if complete = st.Mode == state.ModeComplete && !st.Run.CompleteNotified; complete {
 			// The lead holds no phase, so no stop of its own reports the plan complete.
-			st.Run.CompleteNotified, phases = true, len(pl.Phases)
-			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "plan_complete", Text: fmt.Sprintf("%s: all %d phases done", pl.Title, phases), At: now})
+			st.Run.CompleteNotified = true
+			done = decide.PlanDone(len(pl.Phases), len(decide.WithoutHuman(st.Decisions))+len(decide.WithoutHuman(workers)))
+			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "plan_complete", Text: pl.Title + ": " + done, At: now})
 		}
 		return nil
 	})
@@ -412,7 +415,7 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		c.announce(s, fmt.Sprintf("baton: %s can start → compacting, then %s starts", next, next))
 	case complete:
 		s.Event("plan_complete", map[string]any{"by": "landed"})
-		c.announce(s, fmt.Sprintf("baton: plan complete — all %d phases done", phases))
+		c.announce(s, "baton: plan complete — "+done)
 	}
 	if w := c.session(e); w != nil {
 		c.end(w, "its work landed")
