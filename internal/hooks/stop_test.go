@@ -42,6 +42,12 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "phase done queues the boundary compaction",
 			setup: func(st *state.State) { state.Done(st, pl, "P0", tStop, state.DoneOpts{}) },
 			say:   "compacting, then P1 (Second) starts", compact: "boundary"},
+		{name: "phase done, and a phase set aside resumes",
+			setup: func(st *state.State) {
+				st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkRed}}
+				state.Done(st, pl, "P0", tStop, state.DoneOpts{})
+			},
+			say: "baton: phase done → compacting, then P1 (Second) resumes", compact: "boundary"},
 		{name: "checkpoint", setup: func(st *state.State) { st.CheckpointOwed = true }, say: "checkpoint → compacting", compact: "checkpoint"},
 		{name: "compaction already in flight",
 			setup: func(st *state.State) {

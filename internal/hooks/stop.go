@@ -146,7 +146,11 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		queueCompaction(st, "boundary", now)
 		st.Run.StopBlocks = 0
 		if started(st) {
-			d.say(fmt.Sprintf("baton: phase done → compacting, then %s starts", cur))
+			verb := "starts"
+			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
+				verb = "resumes"
+			}
+			d.say(fmt.Sprintf("baton: phase done → compacting, then %s %s", cur, verb))
 		} else {
 			d.say(fmt.Sprintf("baton: plan attached → compacting the conversation so far, then %s starts", cur))
 		}
