@@ -66,6 +66,9 @@ func (h *handlers) stop(c Context) (Result, error) {
 			return Result{}, err // the next stop queues it again
 		}
 	}
+	for _, m := range d.mail {
+		s.Event("message_delivered", map[string]any{"message": m.Kind, "via": "stop"})
+	}
 	msg, _ := d.out()["systemMessage"].(string)
 	if d.deliver.any() {
 		d.out()["reason"] = d.deliver.text(s)
@@ -89,8 +92,9 @@ type event struct {
 type decision struct {
 	output  map[string]any
 	events  []event
-	deliver delivery     // results the stop is refused with; stop writes the reason from them
-	relay   *state.Relay // a worker's question, for the lead session to put to the human
+	deliver delivery        // results the stop is refused with; stop writes the reason from them
+	mail    []state.Message // baton's messages the stop is refused with
+	relay   *state.Relay    // a worker's question, for the lead session to put to the human
 }
 
 func (d *decision) say(msg string) { d.out()["systemMessage"] = msg }
@@ -236,6 +240,15 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		d.deliver = take(st, now)
 		d.refuse("")
+	case len(st.Mail()) > 0:
+		// baton has something for the model that no hook could tell it yet: it goes on with that.
+		st.Run.StopBlocks = 0
+		d.mail = state.TakeMail(st)
+		var texts []string
+		for _, m := range d.mail {
+			texts = append(texts, m.Text)
+		}
+		d.refuse(strings.Join(texts, "\n\n"))
 	case w.Worker && st.PendingProposal() != nil:
 		// A worker's proposal, which the lead session puts to the human: the stop is the model's to make,
 		// and their answer wakes it. It is queued again, in case its own queueing failed.

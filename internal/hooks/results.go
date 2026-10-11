@@ -109,3 +109,44 @@ func lines(parts ...string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// news is what else a hook took for the model under the state's lock: baton's messages (state.Message)
+// and, in the lead, the work that landed underneath it (state.Landing).
+type news struct {
+	text     string
+	mail     []state.Message
+	landings []state.Landing
+}
+
+// takeNews takes the messages and landings due (state.TakeMail, state.TakeLandings).
+func takeNews(st *state.State, s *state.Store) news {
+	var n news
+	var parts []string
+	for _, m := range state.TakeMail(st) {
+		n.mail = append(n.mail, m)
+		parts = append(parts, m.Text)
+	}
+	if s.Worker() == "" {
+		if n.landings = state.TakeLandings(st); len(n.landings) > 0 {
+			parts = append(parts, decide.Landed(n.landings, st.RunBranch))
+		}
+	}
+	n.text = strings.Join(parts, "\n\n")
+	return n
+}
+
+func (n news) any() bool { return n.text != "" }
+
+// event logs what the model was told, and how.
+func (n news) event(s *state.Store, via string) {
+	for _, m := range n.mail {
+		s.Event("message_delivered", map[string]any{"message": m.Kind, "via": via})
+	}
+	if len(n.landings) > 0 {
+		var phases []string
+		for _, l := range n.landings {
+			phases = append(phases, l.Phase)
+		}
+		s.Event("landed_told", map[string]any{"phases": phases, "via": via})
+	}
+}

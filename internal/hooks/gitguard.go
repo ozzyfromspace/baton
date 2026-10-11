@@ -1,10 +1,15 @@
 package hooks
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -269,3 +274,125 @@ func editedPath(in map[string]any, root string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
+// A worker's work lands on the run's branch underneath the lead session (the merge queue). Its commits
+// are not the lead's, yet they sit on the branch the lead commits to, and a lead told to amend "the commit
+// it just made" amended a landed one instead (spike 25). While the run has landed work, baton refuses a
+// lead's git command that would rewrite a landed commit: an amend, a reset to before it, or a rebase.
+
+// rewrite is a git command that rewrites the branch checked out. The commits it rewrites or drops are
+// HEAD alone (amend), every commit of HEAD (all), or those of base..HEAD.
+type rewrite struct {
+	shown string // the command, for messages
+	amend bool
+	all   bool
+	base  string // as the command names it
+}
+
+// rewritingGit returns the first git command in line that rewrites the branch checked out, or nil: `git
+// commit --amend`, `git reset <commit>`, and `git rebase` (not one under way, which --continue and the
+// like carry on).
+func rewritingGit(line string) *rewrite {
+	for _, words := range shellCommands(line) {
+		sub, args := gitSubcommand(words)
+		shown := "git " + strings.Join(append([]string{sub}, args...), " ")
+		if len(shown) > 60 {
+			shown = shown[:57] + "…"
+		}
+		switch sub {
+		case "commit":
+			if slices.Contains(args, "--amend") {
+				return &rewrite{shown: shown, amend: true}
+			}
+		case "reset":
+			if pos, paths := positional(args, nil); !paths && len(pos) == 1 {
+				return &rewrite{shown: shown, base: pos[0]}
+			}
+		case "rebase":
+			for _, a := range args {
+				switch a {
+				case "--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch":
+					return nil
+				case "--root":
+					return &rewrite{shown: shown, all: true}
+				}
+			}
+			pos, _ := positional(args, map[string]bool{"--onto": true, "-x": true, "--exec": true, "-s": true, "--strategy": true, "-X": true, "--strategy-option": true})
+			base := "@{upstream}"
+			if len(pos) > 0 {
+				base = pos[0]
+			}
+			return &rewrite{shown: shown, base: base}
+		}
+	}
+	return nil
+}
+
+// positional splits a git command's arguments: those that are not options (nor the values of the options
+// in takesValue), up to a "--", and whether paths follow one.
+func positional(args []string, takesValue map[string]bool) (pos []string, paths bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return pos, true
+		case takesValue[a]:
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			pos = append(pos, a)
+		}
+	}
+	return pos, false
+}
+
+// rewrites lists the commits the command would rewrite or drop in the working tree at root, oldest first.
+// A base git cannot find rewrites nothing: the command fails by itself.
+func (rw *rewrite) rewrites(ctx context.Context, root string) []string {
+	switch {
+	case rw.amend:
+		if head := gitx.Head(root); head != "" {
+			return []string{head}
+		}
+		return nil
+	case rw.all:
+		out, _ := gitx.Commits(ctx, root, "", "HEAD")
+		return out
+	}
+	base := gitx.RevParse(root, rw.base)
+	if base == "" {
+		return nil
+	}
+	out, _ := gitx.Commits(ctx, root, base, "HEAD")
+	return out
+}
+
+// landedRewrite says why the lead may not run rw in the working tree at root, given the run's landings,
+// or "" if it may: it would rewrite a commit one of them landed. It names the landed commits it would
+// rewrite, and their phases.
+func landedRewrite(rw *rewrite, root string, landed []state.Landing) (why string, commits []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), guardTimeout)
+	defer cancel()
+	of := map[string]string{}
+	for _, l := range landed {
+		for _, c := range l.Commits {
+			of[c] = l.Phase
+		}
+	}
+	var phases []string
+	for _, c := range rw.rewrites(ctx, root) {
+		if phase, ok := of[c]; ok {
+			commits = append(commits, c)
+			if !slices.Contains(phases, phase) {
+				phases = append(phases, phase)
+			}
+		}
+	}
+	if len(commits) == 0 {
+		return "", nil
+	}
+	return decide.LandedRewriteRefused(rw.shown, phases, commits), commits
+}
+
+// guardTimeout bounds the git a guarded command waits on.
+const guardTimeout = 5 * time.Second

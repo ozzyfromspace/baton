@@ -148,60 +148,61 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var sweep string
 	var others []state.RunInfo
 	var refuseWorker, edited string
+	var rw *rewrite
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
 		sweep = sweepingGit(str(ti, "command"))
+		rw = rewritingGit(str(ti, "command"))
 	}
+	if rw != nil {
+		if res, refused, err := h.guardLanded(c, rw); refused || err != nil {
+			return res, ok(err)
+		}
+	}
+	var landing bool
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
-		if phase := s.Worker(); phase != "" {
-			if refuseWorker, edited = workerRefusal(c.Input, s, phase); refuseWorker != "" {
-				return nil
-			}
-		}
-		if sweep != "" {
-			if others = sharedCheckout(s); len(others) > 0 {
-				return nil
-			}
-		}
-		own := false
-		if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
-			// A human-started turn may ask the human anything, except a question passed off as baton's:
-			// one that starts "baton:" while baton has a question waiting must be that question, word
-			// for word, or the host will not recognize it and the run waits on an answer nobody gives.
-			if _, own = matchIssued(st, c.Input); !own {
-				pending = issuedQuestions(st)
-				if st.Run.TurnBy != "human" || len(pending) > 0 && claimsBaton(c.Input) {
-					refuseQuestion = questionRefusal(pending, words(c, s))
-					return nil
+		holds := func() {
+			if phase := s.Worker(); phase != "" {
+				if refuseWorker, edited = workerRefusal(c.Input, s, phase); refuseWorker != "" {
+					return
 				}
 			}
+			if sweep != "" {
+				if others = sharedCheckout(s); len(others) > 0 {
+					return
+				}
+			}
+			own := false
+			if st.Mode == state.ModeRunning && str(c.Input, "tool_name") == "AskUserQuestion" {
+				// A human-started turn may ask the human anything, except a question passed off as baton's:
+				// one that starts "baton:" while baton has a question waiting must be that question, word
+				// for word, or the host will not recognize it and the run waits on an answer nobody gives.
+				if _, own = matchIssued(st, c.Input); !own {
+					pending = issuedQuestions(st)
+					if st.Run.TurnBy != "human" || len(pending) > 0 && claimsBaton(c.Input) {
+						refuseQuestion = questionRefusal(pending, words(c, s))
+						return
+					}
+				}
+			}
+			if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
+				return
+			}
+			hold = holdCall(st, own)
 		}
-		if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
-			return nil
-		}
-		p := st.OwnProposal()
-		switch {
-		case st.BoundaryOwed && !started(st):
-			hold = endTurn("baton attached the plan, and compacts the conversation so far before " + st.Current + " begins")
-		case st.BoundaryOwed:
-			hold = endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
-		case st.CheckpointOwed:
-			hold = endTurn("you asked for a checkpoint and baton must compact the context first")
-		case st.CheckpointDue:
-			hold = NudgePrefix + " Not yet. " + decide.CheckpointOnResume(st.Current)
-		case own:
-			// baton's own question gets through the holds below: it is how they end.
-		case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
-			hold = endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
-		case p != nil && !p.Asked:
-			hold = NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
-		case st.Replan != nil:
-			hold = replanHold(st.Replan)
+		if holds(); refuseWorker == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
+			// The call runs, in the lead's checkout: no worker's work lands there until it has ended, and
+			// it waits for any landing under way.
+			st.Run.ToolStarted(state.ToolCall{ID: str(c.Input, "tool_use_id"), Agent: str(c.Input, "agent_id"), Tool: str(c.Input, "tool_name"), Since: c.Now})
+			landing = st.Landing()
 		}
 		return nil
 	})
 	if err != nil {
 		return Result{}, ok(err)
+	}
+	if landing {
+		waitLanding(s)
 	}
 	if refuseWorker != "" {
 		fields := map[string]any{"tool": str(c.Input, "tool_name"), "why": "plan mode"}
@@ -241,6 +242,69 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 	}
 	return permission("deny", hold), nil
+}
+
+// holdCall is why the main agent's call may not run while a plan runs, because something else must
+// happen first (the turn must end, the human must be asked), or "" if it may. own says the call asks the
+// human baton's own question.
+func holdCall(st *state.State, own bool) string {
+	p := st.OwnProposal()
+	switch {
+	case st.BoundaryOwed && !started(st):
+		return endTurn("baton attached the plan, and compacts the conversation so far before " + st.Current + " begins")
+	case st.BoundaryOwed:
+		return endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
+	case st.CheckpointOwed:
+		return endTurn("you asked for a checkpoint and baton must compact the context first")
+	case st.CheckpointDue:
+		return NudgePrefix + " Not yet. " + decide.CheckpointOnResume(st.Current)
+	case own:
+		// baton's own question gets through the holds below: it is how they end.
+	case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
+		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
+	case p != nil && !p.Asked:
+		return NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
+	case st.Replan != nil:
+		return replanHold(st.Replan)
+	}
+	return ""
+}
+
+// landWait bounds how long a tool call waits for a landing under way: one takes a fraction of a second,
+// and a call never waits on a landing that hangs.
+var landWait = 10 * time.Second
+
+// waitLanding holds a tool call of the lead's while a worker's work lands in its checkout, for landWait
+// at most. A wait that gives up lets the call run.
+func waitLanding(s *state.Store) {
+	waited, err := state.WaitLanding(s.Project, landWait)
+	switch {
+	case err != nil:
+		s.Event("land_wait", map[string]any{"ms": waited.Milliseconds(), "gave_up": true, "error": err.Error()})
+	case waited > 100*time.Millisecond:
+		s.Event("land_wait", map[string]any{"ms": waited.Milliseconds()})
+	}
+}
+
+// guardLanded refuses the lead's git command rw if it would rewrite work the run's workers landed. It
+// reports whether it refused.
+func (h *handlers) guardLanded(c Context, rw *rewrite) (Result, bool, error) {
+	s, err := h.d.Open(c)
+	if err != nil || s.Worker() != "" {
+		return Result{}, false, err
+	}
+	st, err := s.Load()
+	if err != nil || len(st.Landed) == 0 || st.Owner != nil && !st.IsOwner(c.Env("BATON_INSTANCE"), c.Now) {
+		return Result{}, false, err
+	}
+	why, commits := landedRewrite(rw, s.Root, st.Landed)
+	if why == "" {
+		return Result{}, false, nil
+	}
+	s.Event("git_refused", map[string]any{"command": rw.shown, "why": "landed", "commits": commits})
+	res := permission("deny", why)
+	res.Output["systemMessage"] = "baton: refused `" + rw.shown + "` — it would rewrite work a worker landed"
+	return res, true, nil
 }
 
 // workerRefusal is why a worker on phase may not make a tool call, or "" if it may: it never changes the
@@ -344,7 +408,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 			st.Run.Restart = nil
 		}
 		if source != "compact" {
-			st.Run.TurnOpen, st.Run.Subagents = false, 0
+			st.Run.TurnOpen, st.Run.Subagents, st.Run.Tools = false, 0, nil
 			st.Run.Dialogs.Clear()
 			events, _ = vanished(st, c.Now, false)
 		}
@@ -598,8 +662,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	var tell, staleSkill, ann string
 	var told []string
 	var dl delivery
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	var news news
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
+		st.Run.ToolsEnded("") // a prompt starts a turn: no call of the last one runs
 		ann = announced(st)
 		staleSkill, st.Run.StaleSkill = st.Run.StaleSkill, ""
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
@@ -627,8 +693,9 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			st.Run.HumanAt = c.Now
 		}
 		// Results due come with the prompt, whoever wrote it: the host types one to hand them over to an
-		// idle session.
+		// idle session. So do baton's messages, and what landed underneath the lead.
 		dl = take(st, c.Now)
+		news = takeNews(st, s)
 		return nil
 	})
 	if err != nil {
@@ -643,6 +710,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
 		says = append(says, dl.says())
 		dl.event(s, "prompt")
+	}
+	if news.any() {
+		tell = strings.TrimSpace(news.text + "\n\n" + tell)
+		news.event(s, "prompt")
 	}
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
@@ -753,7 +824,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var dropped []event
 	var notes, ann string
 	var dl delivery
+	var news news
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		st.Run.ToolEnded(str(c.Input, "tool_use_id"), str(c.Input, "agent_id"), tool)
 		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" {
 			if path := editedPath(c.Input, s.Root); path != "" {
@@ -792,6 +865,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			// is the lead's to put to the human, and holds up nothing in the worker.)
 			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
 				dl = take(st, c.Now)
+				news = takeNews(st, s)
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
 			notes, ann = announceNotes(st), announced(st)
@@ -805,7 +879,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if v.event == "" && notes == "" && ann == "" && !dl.any() {
+	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() {
 		return Result{}, nil
 	}
 	tell := v.tell
@@ -813,7 +887,14 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
 		dl.event(s, "tool")
 	}
-	out := map[string]any{"systemMessage": lines(ann, notes, dl.says(), v.say)}
+	if news.any() {
+		tell = strings.TrimSpace(news.text + "\n\n" + tell)
+		news.event(s, "tool")
+	}
+	out := map[string]any{}
+	if msg := lines(ann, notes, dl.says(), v.say); msg != "" {
+		out["systemMessage"] = msg
+	}
 	if v.event != "" {
 		s.Event(v.event, v.fields)
 		for _, e := range v.also {
@@ -1001,7 +1082,8 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 		if st.Run.Subagents > 0 {
 			st.Run.Subagents--
 		}
-		st.Run.Dialogs.CloseAgent(str(c.Input, "agent_id")) // a subagent that has stopped asks nothing
+		st.Run.Dialogs.CloseAgent(str(c.Input, "agent_id")) // a subagent that has stopped asks nothing, and runs nothing
+		st.Run.ToolsEnded(str(c.Input, "agent_id"))
 		return nil
 	})
 	return Result{}, ok(err)
@@ -1011,6 +1093,7 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 func recordStop(st *state.State, c Context) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
+	st.Run.ToolsEnded("")
 	st.Run.SetBackground(tasks(c.Input["background_tasks"]), c.Now)
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
@@ -1033,6 +1116,7 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents, st.Run.History = false, &e, 0, true
 		st.Run.Dialogs.CloseMain()
+		st.Run.ToolsEnded("")
 		events, _ = vanished(st, c.Now, false)
 		return nil
 	})
