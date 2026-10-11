@@ -101,6 +101,7 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 	}
 	x.lead = lead
 	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}}
+	t.Cleanup(c.snapshotsTaken) // before the test's directories are removed (cleanups run last first)
 	c.Fleet = &Fleet{Max: max, UsageMax: 80, Home: x.home, Project: x.proj, Go: func(fn func()) { fn() },
 		Launch: Launch{Args: []string{"--model", "haiku"}, Autocompact: "810k", Settings: `{"hooks":{}}`, Bin: "/opt/baton", Version: "v0.5.0",
 			Env: []string{"HOME=/home/x", "PWD=/checkout", "BATON_DIR=/stale"}, BatonEnv: []string{"BATON_ESCALATION_TIMEOUT=5m0s", "BATON_TTY=/dev/ttys001"}},
@@ -120,6 +121,20 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 			return f, nil
 		}}
 	return c
+}
+
+// snapshotsTaken waits for the snapshots the lead's and the workers' Loops take off the tick, when a
+// session halts, so that none writes into a test's directories once the test is over.
+func (c *Coordinator) snapshotsTaken() {
+	c.mu.Lock()
+	loops := []*Loop{c.Lead}
+	for _, w := range c.workers {
+		loops = append(loops, w.loop)
+	}
+	c.mu.Unlock()
+	for _, l := range loops {
+		l.saving.Wait()
+	}
 }
 
 // tick advances the clock by d, then ticks the lead and every worker still running, as their sessions
