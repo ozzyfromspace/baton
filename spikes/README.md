@@ -26,6 +26,8 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `24-relay/` | Which hook channel makes a model put a question baton gives it to the human, word for word? (2026-10-11; [write-up](../docs/research/workers.md)) |
 | `25-moving-branch/` | Can finished work be fast-forwarded onto the branch a live session is editing, and what does the session make of it? (2026-10-11; [write-up](../docs/research/workers.md)) |
 | `26-bg-sessions/` | Could Claude Code's background sessions (`claude --bg`, `claude attach`) be baton's workers? (2026-10-11; [write-up](../docs/research/workers.md)) |
+| `27-machine/` | What can a static Go binary read about the machine's size and load on macOS and Linux, inside a container too? How does macOS's free-memory level move while a process holds memory? (2026-10-11; [findings](27-machine/README.md)) |
+| `28-leftovers/` | Which processes does a hosted session leave running when its host is killed or its terminal closes, and can a static Go binary find them again by their baton marker and working directory? (2026-10-11, Claude Code 2.1.296; [findings](28-leftovers/README.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 

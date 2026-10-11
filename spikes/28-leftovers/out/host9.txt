@@ -1,0 +1,16 @@
+host pid 86926
+claude [86928]; tool shells [[87361, 88472, 88777]]
+--- before
+  bg sleep                 pid 88450 sleep ppid 1 pgid 88196 sid 88196 cwd work/proj instance None ps-E False lsof =
+  dev server in worktree   pid 88451 Python ppid 1 pgid 88196 sid 88196 cwd work/home/worktrees/k/r/P1 instance ce4e0864e315 ps-E True lsof =
+  setsid daemon            pid 88452 sleep ppid 1 pgid 88452 sid 88452 cwd / instance None ps-E False lsof =
+  run_in_background task   pid 88738 sleep ppid 88472 pgid 88472 sid 88472 cwd work/proj instance None ps-E False lsof =
+  foreground tool call     pid 89220 sleep ppid 88777 pgid 88777 sid 88777 cwd work/proj instance None ps-E False lsof =
+claude alive after 5s: []
+--- after
+  bg sleep                 pid 88450 sleep ppid 1 pgid 88196 sid 88196 cwd work/proj instance None ps-E False lsof =
+  dev server in worktree   pid 88451 Python ppid 1 pgid 88196 sid 88196 cwd work/home/worktrees/k/r/P1 instance ce4e0864e315 ps-E True lsof =
+  setsid daemon            pid 88452 sleep ppid 1 pgid 88452 sid 88452 cwd / instance None ps-E False lsof =
+  run_in_background task   gone
+  foreground tool call     gone
+stopped: nothing left

@@ -4,7 +4,9 @@ Measured 2026-10-11 against **Claude Code 2.1.296** (macOS, arm64, git 2.50.1), 
 where Haiku set no clear bar. Four spikes: [`spikes/23-worker-start`](../../spikes/23-worker-start),
 [`24-relay`](../../spikes/24-relay), [`25-moving-branch`](../../spikes/25-moving-branch) and
 [`26-bg-sessions`](../../spikes/26-bg-sessions). Each folder's README has the tables, the harness and the exact
-wording tried.
+wording tried. Two more, [`27-machine`](../../spikes/27-machine) and [`28-leftovers`](../../spikes/28-leftovers),
+came for v0.6: sizing the workers by the machine, and `baton clean`
+([Machine readings and leftovers](#machine-readings-and-leftovers-spikes-27-and-28)).
 
 [`parallel.md`](parallel.md) put the next step after v0.4 at two sessions working at once with two lanes: 1.44× on
 the craft campaign and up to 2.24× on the quiet one, with a third session adding about 1%. v0.5 runs the visible
@@ -181,3 +183,78 @@ From the docs and the 2.1.296 bundle:
   those rewrites over landed commits.
 - **Usage:** the status line's five-hour reading gates new workers, and a session waiting on a usage limit holds
   every nudge until the reset.
+
+## Machine readings and leftovers (spikes 27 and 28)
+
+v0.6 lets the number of workers follow the plan, capped by the machine (`workers: auto`), and adds `baton
+clean`, which ends what no live session uses. Two questions came first. What can baton read about the machine
+with no cgo? And what does a session leave running when it ends, and can baton find it again? macOS 26.3 on
+arm64 (14 CPUs, 48 GiB), and Linux arm64 in Docker's VM (14 CPUs, 23.4 GiB).
+
+**Reading the machine** ([spike 27](../../spikes/27-machine)):
+
+- **macOS, through golang.org/x/sys:**
+  - `vm.loadavg` (`SysctlRaw`: three `uint32` fixed-point values, and `fscale` as an `int64` at offset 16);
+  - `hw.memsize`;
+  - `kern.memorystatus_vm_pressure_level` (1 normal, 2 warn, 4 critical);
+  - `kern.memorystatus_level`.
+
+  Each matched what `sysctl` and `memory_pressure` print.
+- **macOS's "free memory" level does not track what a process holds.** It counts every page macOS could still
+  compress or swap out.
+  - A process grew to 12 GiB of incompressible memory, 1 GiB every 4 s. The level fell from 67% to 52% at
+    normal pressure, and pressure turned to warn at 43%.
+  - From there macOS held the level at 36–37% by swapping: swap grew from 8.5 GiB to 14.8 GiB in under a
+    minute.
+  - Pressure never reached critical. Before each test the machine sat at warn with swap steady. So neither
+    the level nor warn tells a machine that is a little tight from one swapping gigabytes; growing swap
+    (`vm.swapusage`) does. A floor of 15% on the level would never trip.
+- **Linux:** `MemAvailable` follows what a process holds (a 4 GiB hog took it from 60% to 46%).
+- **In a container, `/proc` shows the VM, not the container.** `MemTotal` and the load were the VM's even with
+  `--memory=2g --cpus=2`. Instead, `memory.max` and `memory.current` give the container's share, and so does
+  `GOMAXPROCS(0)`, which reads `cpu.max` in Go 1.25 and later. `NumCPU()` follows only `--cpuset-cpus`.
+
+**What a session leaves running** ([spike 28](../../spikes/28-leftovers)):
+
+- **Processes a Bash call starts with `&` outlive the session, however it ends.** They are orphaned to pid 1
+  the moment the call ends, and nothing ends them later: they survived the host being SIGKILLed, the host and
+  claude both being SIGKILLed, and the terminal closing. Claude Code ends its running calls and background
+  tasks when the terminal closes; only a SIGKILLed claude leaves those as well (spike 23).
+- **They carry the session's marker.** That is `BATON_INSTANCE` and `BATON_DIR`; a worker's also carry
+  `BATON_INSTANCE=<instance>-<phase>`, `BATON_ROLE=worker` and `BATON_WORKTREE`.
+- **A static Go binary can read every process of the user:**
+  - on macOS, the environment through `kern.procargs2` and the working directory through `proc_info`;
+  - on Linux, through `/proc`.
+
+  The exception is macOS's own platform binaries (`/bin/sleep`, `/bin/zsh`, `/bin/sh`): their environment
+  comes back empty, with no error, though their working directory reads. A working directory that has been
+  removed still reads as its old path (Linux appends ` (deleted)`).
+- **The project has to match too.** A baton session hosted in another project was live on the same machine,
+  and its browser processes carried its instance. The project's `BATON_DIR` has to match, not just the
+  instance.
+
+**Consequences for v0.6:**
+
+- **What `workers: auto` reads:**
+  - **CPUs:** `min(NumCPU(), GOMAXPROCS(0))`.
+  - **Memory:**
+    - macOS: `hw.memsize`;
+    - Linux: `MemTotal`, capped by `memory.max`.
+  - **Room for another worker:**
+    - `Load1 < CPUs`;
+    - **on macOS,** pressure below critical, and swap that has not grown by more than 256 MiB in the last
+      minute while pressure is warn. The level is shown, never gated on.
+    - **on Linux,** at least 15% available: the smaller of `MemAvailable` and `memory.max − memory.current`.
+  - Anywhere else, the CPU count only, with no live check.
+- **How `baton clean` finds leftover processes.** It uses the reader above: no cgo, `ps` or `lsof`, and on
+  Windows no lookup.
+  - **A candidate** is a process of this user whose `BATON_DIR` is the project's `.baton` and whose
+    `BATON_INSTANCE` no live run owns.
+  - **Stopped,** each pid on its own (SIGTERM, then SIGKILL): candidates whose working directory is under
+    `$BATON_HOME`, which means a worktree or a lane.
+  - **Listed,** with the `kill` line to run: the other candidates, such as the lead's dev server in the
+    checkout.
+  - **Listed as unidentified:** processes with a hidden environment whose working directory is in the
+    project's worktrees or lanes, or whose process group holds a candidate.
+- **Retiring a worker could stop its own leftovers the same way,** by its instance and its worktree. A
+  worker's dev server would then not outlive its worktree.
