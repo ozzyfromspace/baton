@@ -118,6 +118,33 @@ func TestVerifyTimeout(t *testing.T) {
 	}
 }
 
+func TestSwitchAfter(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name string
+		file string
+		env  map[string]string
+		want time.Duration
+		err  string
+	}{
+		{"default", `{}`, nil, 5 * time.Minute, ""},
+		{"file", `{"switch_after":"20m"}`, nil, 20 * time.Minute, ""},
+		{"env wins", `{"switch_after":"20m"}`, map[string]string{"BATON_SWITCH_AFTER": "5s"}, 5 * time.Second, ""},
+		{"too short in the file", `{"switch_after":"10s"}`, nil, 0, `switch_after "10s" is not valid: use a duration from 1m to 2h, such as "5m"`},
+		{"too long", `{"switch_after":"3h"}`, nil, 0, "from 1m to 2h"},
+		{"too short even for tests", `{}`, map[string]string{"BATON_SWITCH_AFTER": "0s"}, 0, `BATON_SWITCH_AFTER "0s" is not valid: use a duration from 1s to 2h`},
+	} {
+		os.WriteFile(Path(root), []byte(c.file), 0o644)
+		got, err := Load(root, func(k string) string { return c.env[k] }).SwitchWait()
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err) || got != DefaultSwitchAfter):
+			t.Errorf("%s: %s %v, want the default and an error mentioning %q", c.name, got, err, c.err)
+		case c.err == "" && (err != nil || got != c.want):
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+}
+
 func TestEscalationEnvRoundTrip(t *testing.T) {
 	e := Escalation{Timeout: 20 * time.Second, MaxAuto: 0}
 	m := map[string]string{}

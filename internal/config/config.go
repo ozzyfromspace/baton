@@ -48,10 +48,15 @@ type Config struct {
 	// before baton stops it and counts it as failed: a duration from 1m to 24h, "3h" by default
 	// (BATON_VERIFY_TIMEOUT, which may go down to 1s).
 	VerifyTimeout string `json:"verify_timeout,omitempty"`
+	// SwitchAfter is how long the phase in hand waits on its job before baton sets it aside for another
+	// phase that can go on, if there is one: a duration from 1m to 2h, "5m" by default
+	// (BATON_SWITCH_AFTER, which may go down to 1s). A command whose earlier runs took longer than that
+	// switches at once.
+	SwitchAfter string `json:"switch_after,omitempty"`
 
-	// The environment's values for escalation_timeout, max_auto_decisions and verify_timeout, which are
-	// checked against bounds of their own.
-	envTimeout, envMaxAuto, envVerifyTimeout string
+	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout and switch_after,
+	// which are checked against bounds of their own.
+	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter string
 }
 
 // Defaults.
@@ -64,6 +69,7 @@ const (
 	DefaultEscalationTimeout = 5 * time.Minute
 	DefaultMaxAutoDecisions  = 5
 	DefaultVerifyTimeout     = 3 * time.Hour
+	DefaultSwitchAfter       = 5 * time.Minute
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
@@ -124,7 +130,7 @@ func Load(root string, env func(string) string) Config {
 		}
 	}
 	c.envTimeout, c.envMaxAuto = env("BATON_ESCALATION_TIMEOUT"), env("BATON_MAX_AUTO_DECISIONS")
-	c.envVerifyTimeout = env("BATON_VERIFY_TIMEOUT")
+	c.envVerifyTimeout, c.envSwitchAfter = env("BATON_VERIFY_TIMEOUT"), env("BATON_SWITCH_AFTER")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}
@@ -220,27 +226,42 @@ func (c Config) Escalation() (Escalation, error) {
 	return e, nil
 }
 
-// Bounds for verify_timeout. Only the environment, for tests, may go below a minute.
+// Bounds for verify_timeout and switch_after. Only the environment, for tests, may go below a minute.
 const (
-	MinVerifyTimeout    = time.Minute
-	MaxVerifyTimeout    = 24 * time.Hour
-	MinEnvVerifyTimeout = time.Second
+	MinVerifyTimeout = time.Minute
+	MaxVerifyTimeout = 24 * time.Hour
+	MinSwitchAfter   = time.Minute
+	MaxSwitchAfter   = 2 * time.Hour
+	MinEnvDuration   = time.Second
 )
 
 // JobTimeout checks verify_timeout (the environment's value wins) and fills in the default. A value out of
 // bounds is an error.
 func (c Config) JobTimeout() (time.Duration, error) {
-	d := DefaultVerifyTimeout
+	return within(DefaultVerifyTimeout, MinVerifyTimeout, MaxVerifyTimeout, "3h", "verify_timeout", c.VerifyTimeout, c.envVerifyTimeout)
+}
+
+// SwitchWait checks switch_after (the environment's value wins) and fills in the default. A value out of
+// bounds is an error.
+func (c Config) SwitchWait() (time.Duration, error) {
+	return within(DefaultSwitchAfter, MinSwitchAfter, MaxSwitchAfter, "5m", "switch_after", c.SwitchAfter, c.envSwitchAfter)
+}
+
+// within reads a duration setting: the file's value (at least min) or the environment's (at least
+// MinEnvDuration), which wins, up to max; def when neither is set. A value out of bounds is an error, and
+// gives def.
+func within(def, min, max time.Duration, example, name, file, env string) (time.Duration, error) {
+	d := def
 	for _, v := range []struct {
 		name, value string
 		min         time.Duration
-	}{{"verify_timeout", c.VerifyTimeout, MinVerifyTimeout}, {"BATON_VERIFY_TIMEOUT", c.envVerifyTimeout, MinEnvVerifyTimeout}} {
+	}{{name, file, min}, {"BATON_" + strings.ToUpper(name), env, MinEnvDuration}} {
 		if v.value == "" {
 			continue
 		}
 		t, err := time.ParseDuration(v.value)
-		if err != nil || t < v.min || t > MaxVerifyTimeout {
-			return DefaultVerifyTimeout, fmt.Errorf("%s %q is not valid: use a duration from %s to %s, such as \"3h\"", v.name, v.value, short(v.min), short(MaxVerifyTimeout))
+		if err != nil || t < v.min || t > max {
+			return def, fmt.Errorf("%s %q is not valid: use a duration from %s to %s, such as \"%s\"", v.name, v.value, short(v.min), short(max), example)
 		}
 		d = t
 	}
