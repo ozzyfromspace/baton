@@ -145,6 +145,36 @@ func TestSwitchAfter(t *testing.T) {
 	}
 }
 
+func TestForegroundMax(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name string
+		file string
+		env  map[string]string
+		want time.Duration
+		err  string
+	}{
+		{"default", `{}`, nil, 2 * time.Minute, ""},
+		{"file", `{"foreground_max":"30s"}`, nil, 30 * time.Second, ""},
+		{"off", `{"foreground_max":"off"}`, nil, 0, ""},
+		{"env wins", `{"foreground_max":"5m"}`, map[string]string{"BATON_FOREGROUND_MAX": "3s"}, 3 * time.Second, ""},
+		{"env off wins", `{"foreground_max":"5m"}`, map[string]string{"BATON_FOREGROUND_MAX": "off"}, 0, ""},
+		{"env on over a file off", `{"foreground_max":"off"}`, map[string]string{"BATON_FOREGROUND_MAX": "1m"}, time.Minute, ""},
+		{"too short in the file", `{"foreground_max":"5s"}`, nil, 0, `foreground_max "5s" is not valid: use a duration from 10s to 10m, such as "2m"`},
+		{"longer than Claude Code goes", `{"foreground_max":"15m"}`, nil, 0, "from 10s to 10m"},
+		{"not a duration", `{"foreground_max":"never"}`, nil, 0, `foreground_max "never"`},
+	} {
+		os.WriteFile(Path(root), []byte(c.file), 0o644)
+		got, err := Load(root, func(k string) string { return c.env[k] }).ForegroundWait()
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err) || got != DefaultForegroundMax):
+			t.Errorf("%s: %s %v, want the default and an error mentioning %q", c.name, got, err, c.err)
+		case c.err == "" && (err != nil || got != c.want):
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+}
+
 func TestEscalationEnvRoundTrip(t *testing.T) {
 	e := Escalation{Timeout: 20 * time.Second, MaxAuto: 0}
 	m := map[string]string{}

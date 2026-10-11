@@ -53,10 +53,15 @@ type Config struct {
 	// (BATON_SWITCH_AFTER, which may go down to 1s). A command whose earlier runs took longer than that
 	// switches at once.
 	SwitchAfter string `json:"switch_after,omitempty"`
+	// ForegroundMax is how long a command may run in the foreground before Claude Code moves it to the
+	// background, where it keeps running and wakes the session when it ends: a duration from 10s to 10m,
+	// "2m" by default, or "off" to leave it to Claude Code (BATON_FOREGROUND_MAX, which may go down to 1s).
+	// baton passes it to claude as CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, unless that is set already.
+	ForegroundMax string `json:"foreground_max,omitempty"`
 
-	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout and switch_after,
-	// which are checked against bounds of their own.
-	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter string
+	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after and
+	// foreground_max, which are checked against bounds of their own.
+	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter, envForegroundMax string
 }
 
 // Defaults.
@@ -70,6 +75,7 @@ const (
 	DefaultMaxAutoDecisions  = 5
 	DefaultVerifyTimeout     = 3 * time.Hour
 	DefaultSwitchAfter       = 5 * time.Minute
+	DefaultForegroundMax     = 2 * time.Minute
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
@@ -131,6 +137,7 @@ func Load(root string, env func(string) string) Config {
 	}
 	c.envTimeout, c.envMaxAuto = env("BATON_ESCALATION_TIMEOUT"), env("BATON_MAX_AUTO_DECISIONS")
 	c.envVerifyTimeout, c.envSwitchAfter = env("BATON_VERIFY_TIMEOUT"), env("BATON_SWITCH_AFTER")
+	c.envForegroundMax = env("BATON_FOREGROUND_MAX")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}
@@ -226,12 +233,15 @@ func (c Config) Escalation() (Escalation, error) {
 	return e, nil
 }
 
-// Bounds for verify_timeout and switch_after. Only the environment, for tests, may go below a minute.
+// Bounds for verify_timeout, switch_after and foreground_max. Only the environment, for tests, may go lower.
+// Claude Code runs a command in the foreground for at most 10 minutes whatever it is asked.
 const (
 	MinVerifyTimeout = time.Minute
 	MaxVerifyTimeout = 24 * time.Hour
 	MinSwitchAfter   = time.Minute
 	MaxSwitchAfter   = 2 * time.Hour
+	MinForegroundMax = 10 * time.Second
+	MaxForegroundMax = 10 * time.Minute
 	MinEnvDuration   = time.Second
 )
 
@@ -245,6 +255,19 @@ func (c Config) JobTimeout() (time.Duration, error) {
 // bounds is an error.
 func (c Config) SwitchWait() (time.Duration, error) {
 	return within(DefaultSwitchAfter, MinSwitchAfter, MaxSwitchAfter, "5m", "switch_after", c.SwitchAfter, c.envSwitchAfter)
+}
+
+// ForegroundWait checks foreground_max (the environment's value wins) and fills in the default. 0 means
+// off: Claude Code keeps its own. A value out of bounds is an error.
+func (c Config) ForegroundWait() (time.Duration, error) {
+	file, env := c.ForegroundMax, c.envForegroundMax
+	if env == "off" || env == "" && file == "off" {
+		return 0, nil
+	}
+	if file == "off" {
+		file = "" // the environment's duration wins
+	}
+	return within(DefaultForegroundMax, MinForegroundMax, MaxForegroundMax, "2m", "foreground_max", file, env)
 }
 
 // within reads a duration setting: the file's value (at least min) or the environment's (at least
