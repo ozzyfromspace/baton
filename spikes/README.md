@@ -18,6 +18,10 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `16-escalation/` | Can baton answer its own question safely (which dialog is on screen, what each key does)? Does a timed ask with a default keep an incident-like run moving, and can a late answer still undo it? Can uncommitted work be saved without the model? ([write-up](../docs/research/escalation.md)) |
 | `17-sessions/` | Which hooks fire when a plan is approved or sent back, and what they carry? What happens to the session id and the plan file on `/clear`, a "clear context" approval, `--resume`, and two sessions in one directory? (2026-10-07, Claude Code 2.1.292; [write-up](../docs/research/sessions.md)) |
 | `18-skill-inject/` | Can a plugin skill load its instructions from a command when it is invoked, which binary does it find, and is `$ARGUMENTS` safe there? (2026-10-07, Claude Code 2.1.293; [findings](18-skill-inject/README.md)) |
+| `19-background-work/` | Does a background Bash job survive `/compact`, and wake the model when it ends? Does it survive the session being ended and resumed? Do a Monitor and a one-shot cron survive `/compact`? (2026-10-10, Claude Code 2.1.296; [findings](19-background-work/README.md)) |
+| `20-tool-steering/` | Can a PreToolUse hook rewrite a Bash call or force it into the background? What does Claude Code do with a long foreground command? What do subagents, worktree isolation and the Workflow tool allow? (2026-10-10; [findings](20-tool-steering/README.md)) |
+| `21-attach/` | Can a worker `claude` run in a PTY nobody watches, and be repainted in full when a human attaches a terminal? Does resizing or not reading its output hurt it? What does a worker cost? (2026-10-10; [findings](21-attach/README.md)) |
+| `22-run-timelines/` | Where did a real run's time go, and how much faster would it have finished with phases run concurrently? (2026-10-10; [write-up](../docs/research/parallel.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 
