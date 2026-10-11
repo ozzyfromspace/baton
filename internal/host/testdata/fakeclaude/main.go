@@ -46,7 +46,7 @@ func main() {
 	if os.Getenv("FAKE_MODES") == "1" {
 		fmt.Print("\x1b[?1004h\x1b[?2004;25h\x1b[?2026h\x1b[?25l\x1b[?2026l")
 	}
-	go repaint()
+	go repaint(watchSize())
 	fmt.Print("fake-claude ready\r\n")
 	if n, _ := strconv.Atoi(os.Getenv("FAKE_FLOOD")); n > 0 {
 		for i := 1; i <= n; i++ {
@@ -114,15 +114,27 @@ func main() {
 	}
 }
 
+// sized is the terminal's size, and its changes from now on.
+type sized struct {
+	last  string
+	winch chan os.Signal
+}
+
+// watchSize starts listening for the terminal's size changes, before the fake says it is ready: a resize
+// that came before would be lost.
+func watchSize() sized {
+	s := sized{winch: make(chan os.Signal, 1)}
+	signal.Notify(s.winch, syscall.SIGWINCH)
+	if c, r, err := term.GetSize(0); err == nil {
+		s.last = fmt.Sprintf("%dx%d", r, c)
+	}
+	return s
+}
+
 // repaint writes the terminal's size each time it changes. A resize to the size it has is ignored, as
 // claude ignores it.
-func repaint() {
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	last := ""
-	if c, r, err := term.GetSize(0); err == nil {
-		last = fmt.Sprintf("%dx%d", r, c)
-	}
+func repaint(s sized) {
+	last, winch := s.last, s.winch
 	for range winch {
 		if c, r, err := term.GetSize(0); err == nil {
 			if size := fmt.Sprintf("%dx%d", r, c); size != last {
