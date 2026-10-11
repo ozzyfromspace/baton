@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -79,19 +80,34 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	first := pl.Phases[0]
 	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
 	branch := gitx.Branch(s.Root) // workers branch off it, and their work lands on it
+	workers := ""
+	if line := workersAttached(c, s.Checkout, pl); line != "" {
+		workers = "\nbaton: " + line
+	}
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, state.OriginOf(s.Root))
 		st.RunBranch = branch
-		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
+		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = []event{{"phase_started", map[string]any{"phase": first.ID}}}
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
 	st.RunBranch = branch
-	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
+	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	return v
+}
+
+// workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
+// and warns when they would stop at permission prompts (decide.WorkersAttached). "" with no workers.
+func workersAttached(c Context, checkout string, pl plan.Plan) string {
+	n, err := config.Load(config.Root(c.Env), c.Env).WorkerCount()
+	if err != nil {
+		return ""
+	}
+	mode, local := config.WorkerMode(c.Env, checkout)
+	return decide.WorkersAttached(n, pl.Width(), mode, local)
 }
 
 // attachedFields are the fields of the "attached" event for a plan the human approved.

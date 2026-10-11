@@ -184,3 +184,41 @@ func TestTheSkillNamesTheThreeTiers(t *testing.T) {
 		}
 	}
 }
+
+// As a plan is attached, the lead hears how many workers will work beside it, and whether a permission
+// prompt would stop them.
+func TestWorkersAttached(t *testing.T) {
+	const warn = "Workers start in the permission mode this session started in"
+	const local = "Workers do not see .claude/settings.local.json"
+	for _, c := range []struct {
+		name         string
+		n, width     int
+		mode         string
+		local        bool
+		want, absent []string
+	}{
+		{"no workers", 0, 4, "", true, nil, nil},
+		{"a chain", 2, 1, "default", true, []string{"no worker runs beside this session: each phase of this plan needs the one before it."}, []string{warn, local}},
+		{"as many as the phases allow", 3, 3, "auto", false, []string{"up to 2 workers work beside this session", "(workers: 3)."}, []string{warn, local}},
+		{"as many as configured", 1, 5, "bypassPermissions", false, []string{"up to 1 worker works beside this session"}, []string{warn}},
+		{"the default mode", 1, 2, "", false, []string{warn + " (default), so a permission prompt stops a worker", "--permission-mode auto"}, []string{local}},
+		{"acceptEdits", 1, 2, "acceptEdits", true, []string{warn + " (acceptEdits)", local}, nil},
+		{"plan mode", 1, 2, "plan", false, []string{warn + " (plan)"}, nil},
+		{"local settings, no prompts", 1, 2, "dontAsk", true, []string{local}, []string{warn}},
+	} {
+		got := WorkersAttached(c.n, c.width, c.mode, c.local)
+		if c.want == nil && got != "" {
+			t.Errorf("%s: %q", c.name, got)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: no %q in %q", c.name, w, got)
+			}
+		}
+		for _, a := range c.absent {
+			if strings.Contains(got, a) {
+				t.Errorf("%s: %q in %q", c.name, a, got)
+			}
+		}
+	}
+}

@@ -45,6 +45,36 @@ func WorkingPhases(names []string) string {
 		". baton lands each one's work on this branch by itself, and tells you when it has; the phases that need them wait until then. Leave these phases alone."
 }
 
+// WorkersAttached says, as a plan is attached, how many workers will work beside the lead session: up to
+// n (workers), and no more than the phases that can be worked on at once allow (width), less the lead's.
+// mode is the permission mode they start in ("" for Claude Code's default): one that asks before tools
+// makes them stop at prompts, which only the human can answer, in the worker's own session. local: the
+// project has a .claude/settings.local.json, which a worktree lacks. It is the human's to read: the
+// caller says so, and who it is from. "" with no workers.
+func WorkersAttached(n, width int, mode string, local bool) string {
+	if n == 0 {
+		return ""
+	}
+	k := min(n, width-1)
+	if k <= 0 {
+		return "no worker runs beside this session: each phase of this plan needs the one before it."
+	}
+	s := fmt.Sprintf("up to %d %s %s beside this session on the phases that can go ahead, each in a worktree of its own, and baton lands their work on this branch (workers: %d).",
+		k, plural(k, "worker", "workers"), plural(k, "works", "work"), n)
+	switch mode {
+	case "", "default", "acceptEdits", "plan":
+		if mode == "" {
+			mode = "default"
+		}
+		s += fmt.Sprintf(" Workers start in the permission mode this session started in (%s), so a permission prompt stops a worker until you answer it in its own session "+
+			"(baton view <phase>, in another terminal); only its phase waits. To keep them going, start baton with --permission-mode auto, or allow what the plan needs in .claude/settings.json.", mode)
+	}
+	if local {
+		s += " Workers do not see .claude/settings.local.json: their worktrees hold only what is committed."
+	}
+	return s
+}
+
 // WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.
 func WorkerRefused(command, phase string) string {
 	return fmt.Sprintf("not run — this session is a worker: it works on %s alone, in a worktree of its own, while the lead session runs the plan in the human's terminal, "+

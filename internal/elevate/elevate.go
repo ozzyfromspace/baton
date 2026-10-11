@@ -138,6 +138,24 @@ func KeepUserArgs(argv []string) []string { return keepArgs(argv, keepFlags, use
 // up to the next flag.
 var ruleFlags = map[string]bool{"--allowedTools": true, "--allowed-tools": true, "--disallowedTools": true, "--disallowed-tools": true}
 
+// PermissionMode is the permission mode claude's arguments start a session in: --permission-mode's value,
+// bypassPermissions for --dangerously-skip-permissions, or "" when they set none.
+func PermissionMode(argv []string) string {
+	mode := ""
+	for i := 0; i < len(argv) && argv[i] != "--"; i++ {
+		switch name, v, hasEq := strings.Cut(argv[i], "="); {
+		case name == "--dangerously-skip-permissions":
+			return "bypassPermissions"
+		case name == "--permission-mode" && hasEq:
+			mode = v
+		case name == "--permission-mode" && i+1 < len(argv):
+			mode = argv[i+1]
+			i++
+		}
+	}
+	return mode
+}
+
 // KeepWorkerArgs is KeepUserArgs for a worker baton starts beside the session (package loop): it keeps
 // the session's permission rules too, so that the worker is asked for no more permissions than the
 // session it works beside.

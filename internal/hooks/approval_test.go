@@ -270,3 +270,43 @@ func TestAPhaseAddedToThePlanFileJoinsTheRun(t *testing.T) {
 		t.Errorf("events: %s", f.eventLog())
 	}
 }
+
+// The approval says how many workers will work beside the session, and warns when a permission prompt
+// would stop them.
+func TestAnApprovalSaysHowManyWorkersRun(t *testing.T) {
+	doc := strings.Replace(approvedDoc, "Then grow it.", "After: none\n\nThen grow it.", 1)
+	for _, c := range []struct {
+		name, mode, want string
+		warned           bool
+	}{
+		{"the default mode", "", "baton: up to 1 worker works beside this session", true},
+		{"auto mode", "auto", "baton: up to 1 worker works beside this session", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, false)
+			f.vars = map[string]string{"HOME": t.TempDir(), "BATON_HOME": t.TempDir(), "BATON_WORKER_MODE": c.mode}
+			out := say(f.approve(f.writePlan("p.md", doc)))
+			if !strings.Contains(out, "then P0 starts\n"+c.want) || strings.Contains(out, "permission mode") != c.warned {
+				t.Errorf("said %q", out)
+			}
+		})
+	}
+	f := newFixture(t, false)
+	f.vars = map[string]string{"HOME": t.TempDir(), "BATON_HOME": t.TempDir(), "BATON_WORKERS": "0"}
+	if out := say(f.approve(f.writePlan("p.md", doc))); strings.Contains(out, "worker") {
+		t.Errorf("no workers, and said %q", out)
+	}
+
+	// Approved with "clear context", the plan starts at once, and says so too.
+	f = newFixture(t, false)
+	f.vars = map[string]string{"HOME": t.TempDir(), "BATON_HOME": t.TempDir()}
+	file := f.writePlan("clear.md", doc)
+	f.fire("PermissionRequest", map[string]any{"tool_name": "ExitPlanMode", "tool_input": map[string]any{"plan": "…", "planFilePath": file}})
+	f.fire("SessionEnd", map[string]any{"reason": "clear"})
+	f.fire("SessionStart", map[string]any{"source": "clear", "session_id": "sess-new"})
+	out := f.fire("PostToolUse", map[string]any{"session_id": "sess-new", "permission_mode": "acceptEdits", "tool_name": "Bash",
+		"tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{}})
+	if !strings.Contains(say(out), "→ P0 starts now\nbaton: up to 1 worker works beside this session") {
+		t.Errorf("said %q", say(out))
+	}
+}

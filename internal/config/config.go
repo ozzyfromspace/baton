@@ -378,3 +378,31 @@ func (c Config) DesktopOn() bool { return c.Desktop == nil || *c.Desktop }
 
 // Restarts reports whether hosted sessions restart on a newer baton by themselves.
 func (c Config) Restarts() bool { return c.AutoRestart == nil || *c.AutoRestart }
+
+// WorkerMode is the permission mode the session's workers start in: the one the lead session started in
+// by its flags, which the host passes on (BATON_WORKER_MODE), or else the default mode of the Claude Code
+// settings a worktree of checkout sees, the project's then the user's ("" for Claude Code's own default).
+// local reports the project's .claude/settings.local.json, which a worktree does not have: it is not
+// committed.
+func WorkerMode(env func(string) string, checkout string) (mode string, local bool) {
+	_, err := os.Stat(filepath.Join(checkout, ".claude", "settings.local.json"))
+	local = err == nil
+	if m := env("BATON_WORKER_MODE"); m != "" {
+		return m, local
+	}
+	home := env("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	for _, f := range []string{filepath.Join(checkout, ".claude", "settings.json"), filepath.Join(home, ".claude", "settings.json")} {
+		var s struct {
+			Permissions struct {
+				DefaultMode string `json:"defaultMode"`
+			} `json:"permissions"`
+		}
+		if b, err := os.ReadFile(f); err == nil && json.Unmarshal(b, &s) == nil && s.Permissions.DefaultMode != "" {
+			return s.Permissions.DefaultMode, local
+		}
+	}
+	return "", local
+}

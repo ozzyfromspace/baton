@@ -271,3 +271,28 @@ func TestLongestChain(t *testing.T) {
 		})
 	}
 }
+
+// Width is the most phases that can be worked on at once: phases none of which waits for another,
+// directly or through others.
+func TestWidth(t *testing.T) {
+	none := []string{}
+	for _, c := range []struct {
+		name string
+		p    Plan
+		want int
+	}{
+		{"no phases", Plan{}, 0},
+		{"a chain", graph(nil, nil, nil, nil), 1},
+		{"four apart", graph(none, none, none, none), 4},
+		{"a diamond", graph(none, []string{"P0"}, []string{"P0"}, []string{"P1", "P2"}), 2},
+		{"two, then one after both", graph(none, none, []string{"P0", "P1"}), 2},
+		{"a chain beside one", graph(none, []string{"P0"}, []string{"P1"}, none), 2},
+		{"two chains", graph(none, none, []string{"P1"}, []string{"P0"}, []string{"P2"}), 2},
+		{"through others", graph(none, []string{"P0"}, none, []string{"P1"}, []string{"P2"}, []string{"P2"}), 3},
+		{"through one phase", graph(none, none, []string{"P0", "P1"}, []string{"P2"}, []string{"P2"}), 2},
+	} {
+		if got := c.p.Width(); got != c.want {
+			t.Errorf("%s: Width() = %d, want %d", c.name, got, c.want)
+		}
+	}
+}

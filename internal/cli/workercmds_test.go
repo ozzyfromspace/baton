@@ -442,3 +442,35 @@ func TestAWorkersNoteIsAnnouncedInTheLead(t *testing.T) {
 		t.Errorf("the lead's own note is announced by its hooks, not here: %q", ann)
 	}
 }
+
+// Attaching a plan says how many workers will work beside the session, and warns when the mode they start
+// in would stop them at permission prompts.
+func TestAttachSaysHowManyWorkersRun(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		env          map[string]string
+		want, absent string
+	}{
+		{"one by default, in the default mode", nil, "baton: tell the human: up to 1 worker works beside this session", ""},
+		{"the default mode stops them at prompts", nil, "Workers start in the permission mode this session started in (default)", ""},
+		{"a mode with no prompts", map[string]string{"BATON_WORKER_MODE": "auto"}, "(workers: 2).", "permission mode"},
+		{"none", map[string]string{"BATON_WORKERS": "0"}, "", "worker"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, planFile := newSession(t)
+			s.env["HOME"], s.env["BATON_HOME"] = t.TempDir(), t.TempDir()
+			for k, v := range c.env {
+				s.env[k] = v
+			}
+			if c.env["BATON_WORKER_MODE"] != "" {
+				s.env["BATON_WORKERS"] = "2"
+			}
+			doc, _ := os.ReadFile(planFile)
+			os.WriteFile(planFile, []byte(strings.Replace(string(doc), "Small fixes.", "After: none\n\nSmall fixes.", 1)), 0o644)
+			out := s.must(s.must("", "attach", planFile, "--suggest"), "attach", planFile, "--spec", "-")
+			if c.want != "" && !strings.Contains(out, c.want) || c.absent != "" && strings.Contains(out, c.absent) {
+				t.Errorf("attach said:\n%s", out)
+			}
+		})
+	}
+}

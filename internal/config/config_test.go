@@ -228,3 +228,43 @@ func TestWorkerSettings(t *testing.T) {
 		}
 	}
 }
+
+// A worker starts in the mode the lead's flags gave it, which the host passes on, or else in the default
+// mode of the settings its worktree sees: the project's committed ones, then the user's. The project's
+// local settings are not in a worktree.
+func TestWorkerMode(t *testing.T) {
+	write := func(path, body string) {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(body), 0o644)
+	}
+	for _, c := range []struct {
+		name               string
+		flag, project, usr string
+		local              bool
+		want               string
+	}{
+		{"nothing set", "", "", "", false, ""},
+		{"the user's", "", "", "auto", false, "auto"},
+		{"the project's first", "", "acceptEdits", "auto", false, "acceptEdits"},
+		{"the lead's flags first", "plan", "acceptEdits", "auto", true, "plan"},
+		{"local settings are named", "", "", "", true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			checkout, home := t.TempDir(), t.TempDir()
+			if c.project != "" {
+				write(filepath.Join(checkout, ".claude", "settings.json"), `{"permissions":{"defaultMode":"`+c.project+`"}}`)
+			}
+			if c.usr != "" {
+				write(filepath.Join(home, ".claude", "settings.json"), `{"permissions":{"defaultMode":"`+c.usr+`","allow":["Bash"]}}`)
+			}
+			if c.local {
+				write(filepath.Join(checkout, ".claude", "settings.local.json"), `{"permissions":{"defaultMode":"bypassPermissions"}}`)
+			}
+			env := map[string]string{"HOME": home, "BATON_WORKER_MODE": c.flag}
+			mode, local := WorkerMode(func(k string) string { return env[k] }, checkout)
+			if mode != c.want || local != c.local {
+				t.Errorf("mode %q, local %v; want %q, %v", mode, local, c.want, c.local)
+			}
+		})
+	}
+}

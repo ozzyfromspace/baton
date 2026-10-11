@@ -94,3 +94,22 @@ func TestShellHookInstalled(t *testing.T) {
 		t.Fatal("not found")
 	}
 }
+
+// PermissionMode reads the mode claude's flags start a session in.
+func TestPermissionMode(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"--model", "opus"}, ""},
+		{[]string{"--permission-mode", "auto", "--model", "opus"}, "auto"},
+		{[]string{"--permission-mode=acceptEdits"}, "acceptEdits"},
+		{[]string{"--dangerously-skip-permissions", "--permission-mode", "plan"}, "bypassPermissions"},
+		{[]string{"--", "--permission-mode", "auto"}, ""},
+	} {
+		if got := PermissionMode(c.args); got != c.want {
+			t.Errorf("PermissionMode(%q) = %q, want %q", c.args, got, c.want)
+		}
+	}
+}

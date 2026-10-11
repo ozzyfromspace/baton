@@ -219,6 +219,48 @@ func (p Plan) LongestChain() (k int, chain []string) {
 	return len(chain), chain
 }
 
+// Width is the most phases of the plan that can be worked on at once: the largest set of phases none of
+// which waits for another, directly or through others. By Dilworth's theorem it is the number of phases
+// less the largest matching of each phase to one that waits for it. A chain has a width of 1.
+func (p Plan) Width() int {
+	n := len(p.Phases)
+	before := make([][]bool, n) // before[i][j]: phase i is done before phase j starts
+	for i := range before {
+		before[i] = make([]bool, n)
+	}
+	for j, ph := range p.Phases {
+		for _, a := range p.Ancestors(ph.ID) {
+			if i := p.Index(a); i >= 0 {
+				before[i][j] = true
+			}
+		}
+	}
+	match := make([]int, n) // the phase matched to each phase that waits for it, or -1
+	for j := range match {
+		match[j] = -1
+	}
+	var augment func(i int, seen []bool) bool
+	augment = func(i int, seen []bool) bool {
+		for j := range n {
+			if before[i][j] && !seen[j] {
+				seen[j] = true
+				if match[j] < 0 || augment(match[j], seen) {
+					match[j] = i
+					return true
+				}
+			}
+		}
+		return false
+	}
+	width := n
+	for i := range n {
+		if augment(i, make([]bool, n)) {
+			width--
+		}
+	}
+	return width
+}
+
 // Sequential reports whether each phase waits for exactly the phase before it, as every plan did before
 // dependencies.
 func (p Plan) Sequential() bool {

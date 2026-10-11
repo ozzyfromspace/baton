@@ -156,6 +156,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
 	// The hooks, the status line and the commands inside the sessions count the workers the host runs.
 	batonEnv = append(batonEnv, "BATON_WORKERS="+strconv.Itoa(workers), "BATON_WORKER_USAGE_MAX="+strconv.FormatFloat(usageMax, 'f', -1, 64))
+	if mode := elevate.PermissionMode(args); mode != "" {
+		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
+	}
 	if home := io.Env("BATON_HOME"); home != "" {
 		// baton's home moved: the CLI inside the session must find the same config and records (a
 		// `baton exit` leaves its record there for the shell to find).

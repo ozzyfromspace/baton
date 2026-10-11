@@ -201,8 +201,21 @@ func cmdAttach(args []string, io IO) int {
 	}
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
+	} else if line := workersAttached(io, s.Checkout, pl); line != "" {
+		fmt.Fprintln(io.Out, "baton: tell the human: "+line) // it is theirs to act on, not the model's
 	}
 	return 0
+}
+
+// workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
+// and warns when they would stop at permission prompts. "" with no workers.
+func workersAttached(io IO, checkout string, pl plan.Plan) string {
+	n, err := config.Load(batonRoot(io), io.Env).WorkerCount()
+	if err != nil {
+		return ""
+	}
+	mode, local := config.WorkerMode(io.Env, checkout)
+	return decide.WorkersAttached(n, pl.Width(), mode, local)
 }
 
 func errSuffix(err error) string {
