@@ -227,8 +227,8 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 			if gitx.Head(x.repo) == rebased || sst.Mode != state.ModeRunning || sst.Current != "P1" || x.worker("P1").Status != state.WorkerWorking || x.worker("P1").Merge != nil {
 				t.Fatalf("after red: sub-run %s on %q; worker %+v", sst.Mode, sst.Current, x.worker("P1"))
 			}
-			if !x.has("land_returned", `"phase":"P1"`) {
-				t.Errorf("events:\n%s", x.events())
+			if !x.has("land_returned", `"phase":"P1"`) || x.state().Conflicts != 0 {
+				t.Errorf("a red verification counted as a conflict (%d)\nevents:\n%s", x.state().Conflicts, x.events())
 			}
 		})
 	}
@@ -256,6 +256,9 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	if !x.has("land_returned", `"paths":["a.txt"]`) || !strings.Contains(x.announced(), "P1's work did not land: its branch conflicts with the run's in a.txt") {
 		t.Errorf("events:\n%s\nannounced %q", x.events(), x.announced())
 	}
+	if n := x.state().Conflicts; n != 1 {
+		t.Errorf("%d landings in a row conflicted, want 1", n)
+	}
 	x.tick(time.Second)
 	if typed := x.typedTo["P1"].text; !slices.Contains(typed, decide.MailTyped([]string{state.MessageLand})) {
 		t.Errorf("typed into the idle worker: %q", typed)
@@ -275,8 +278,8 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 		return err
 	})
 	x.tick(time.Second)
-	if read(t, x.repo, "a.txt") != "both\n" || x.worker("P1").Status != state.WorkerLanded {
-		t.Fatalf("not landed after the worker resolved it\n%s", x.events())
+	if read(t, x.repo, "a.txt") != "both\n" || x.worker("P1").Status != state.WorkerLanded || x.state().Conflicts != 0 {
+		t.Fatalf("not landed after the worker resolved it (%d conflicts on record)\n%s", x.state().Conflicts, x.events())
 	}
 }
 

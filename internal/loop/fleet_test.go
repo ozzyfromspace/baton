@@ -311,7 +311,7 @@ func TestWhenAWorkerStarts(t *testing.T) {
 		st.Phases[phase] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/" + phase}
 		st.Workers = append(st.Workers, state.Worker{Phase: phase, Ref: "r/" + phase, Session: phase, Status: status, Generation: st.Generation})
 	}
-	const busyWhy = "the machine is busy (load 15.0 on 14 CPUs)"
+	const busyWhy, laneWhy = "the machine is busy (load 15.0 on 14 CPUs)", "a gate waits for a lane"
 	for _, c := range []struct {
 		name  string
 		f     Fleet
@@ -376,6 +376,42 @@ func TestWhenAWorkerStarts(t *testing.T) {
 		{"auto: the ramp is over", Fleet{Max: 6, Auto: true}, room{started: now.Add(-time.Minute)}, pl, nil, "P1", "", ""},
 		{"auto: a ramp of its own", Fleet{Max: 6, Auto: true, Ramp: 5 * time.Second}, room{started: now.Add(-5 * time.Second)}, pl, nil, "P1", "", ""},
 		{"no ramp with a number", Fleet{Max: 6}, room{started: now.Add(-time.Second)}, pl, nil, "P1", "", ""},
+
+		// The lanes, and the landings.
+		{"a gate waits for a lane", Fleet{Max: 6, Auto: true}, room{lanes: laneWhy}, pl, nil, "P1", laneWhy, state.HoldLanes},
+		{"the machine before the lanes", Fleet{Max: 6}, room{busy: busyWhy, lanes: laneWhy}, pl, nil, "P1", busyWhy, state.HoldBusy},
+		{"the lanes before the usage", Fleet{Max: 6, UsageMax: 80}, room{lanes: laneWhy}, pl, func(st *state.State) {
+			st.Usage = &state.Usage{UsedPct: 85}
+		}, "P1", laneWhy, state.HoldLanes},
+		{"two landings in a row conflicted", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Conflicts = 2
+		}, "P2", "2 landings in a row conflicted", state.HoldConflicts},
+		{"three", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Conflicts = 3
+		}, "P2", "3 landings in a row conflicted", state.HoldConflicts},
+		{"one conflicted", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Conflicts = 1
+		}, "P2", "", ""},
+		{"conflicts, and no worker left to land", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "r/P1", Status: state.WorkerFailed})
+			st.Conflicts = 2
+		}, "P1", "", ""},
+		{"conflicts, and only a replaced plan's worker left", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Generation++
+			st.Conflicts = 2
+		}, "P2", "", ""},
+		{"the lanes before the conflicts", Fleet{Max: 6}, room{lanes: laneWhy}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Conflicts = 2
+		}, "P2", laneWhy, state.HoldLanes},
+		{"the conflicts before the usage", Fleet{Max: 6, UsageMax: 80}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Conflicts, st.Usage = 2, &state.Usage{UsedPct: 85}
+		}, "P2", "2 landings in a row conflicted", state.HoldConflicts},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := state.Attach(c.pl, now, state.Origin{})

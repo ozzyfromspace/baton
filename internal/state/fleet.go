@@ -122,8 +122,9 @@ type Usage struct {
 }
 
 // Hold is what holds back a phase that waits for a worker, since Since: no room for another session on
-// the machine (HoldBusy) or in the account's five-hour allowance (HoldUsage). Why says so in words. The
-// workers at work go on.
+// the machine (HoldBusy), gates waiting for the project's lanes (HoldLanes), the workers' landings
+// conflicting with the run's branch (HoldConflicts), or no room in the account's five-hour allowance
+// (HoldUsage). Why says so in words. The workers at work go on.
 type Hold struct {
 	Phase string    `json:"phase"`
 	Kind  string    `json:"kind"`
@@ -133,8 +134,10 @@ type Hold struct {
 
 // What holds a phase back from a worker (Hold.Kind).
 const (
-	HoldBusy  = "busy"
-	HoldUsage = "usage"
+	HoldBusy      = "busy"
+	HoldLanes     = "lanes"
+	HoldConflicts = "conflicts"
+	HoldUsage     = "usage"
 )
 
 // LimitHit is when the session's last turn ended on the account's usage limit: zero if it did not, or
@@ -325,7 +328,8 @@ func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time) bo
 }
 
 // Landed records that l.Phase's work landed on the run's branch: the phase is done, its worker has
-// landed, and the phases that need it may start. With the lead holding no phase, the lead takes up the
+// landed, the phases that need it may start, and the landings that conflicted before it no longer count
+// (State.Conflicts). With the lead holding no phase, the lead takes up the
 // next one after a boundary compaction this queues (as Settle does), or the run is complete; Landed
 // returns the phase taken up ("" for none). Recording the same landing again changes nothing.
 func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
@@ -340,6 +344,7 @@ func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 	if w := st.WorkerOn(l.Phase); w != nil {
 		w.Status, w.Since, w.Merge = WorkerLanded, now, nil
 	}
+	st.Conflicts = 0
 	if l.At.IsZero() {
 		l.At = now
 	}
@@ -385,6 +390,23 @@ func (s *Store) WorkerDecisions(st State) []Decision {
 	var out []Decision
 	for _, w := range p.Workers(s.Ref) {
 		out = append(out, w.State.Decisions...)
+	}
+	return out
+}
+
+// WorkerJobs is the jobs of the sub-runs of run st's workers, kept in s: none for a sub-run. They are read
+// without the sub-runs' locks.
+func (s *Store) WorkerJobs(st State) []Job {
+	if s.Parent != "" || len(st.Workers) == 0 {
+		return nil
+	}
+	p, err := OpenProject(s.Project, s.Now)
+	if err != nil {
+		return nil
+	}
+	var out []Job
+	for _, w := range p.Workers(s.Ref) {
+		out = append(out, w.State.Jobs...)
 	}
 	return out
 }

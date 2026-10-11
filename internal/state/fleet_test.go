@@ -136,9 +136,13 @@ func TestLanded(t *testing.T) {
 		t.Fatalf("done P0 while P1 works: next %q err %v state %+v", next, err, st)
 	}
 	t1 := t0.Add(time.Hour)
+	st.Conflicts = 2
 	l := Landing{Phase: "P1", Commits: []string{"c1", "c2"}, Files: []string{"b.go"}, Head: "c2"}
 	if next, err := Landed(&st, p, l, t1); err != nil || next != "P2" || st.Current != "P2" || !st.BoundaryOwed {
 		t.Fatalf("P1 landed: next %q err %v state %+v", next, err, st)
+	}
+	if st.Conflicts != 0 {
+		t.Errorf("the landings that conflicted before still count: %d", st.Conflicts)
 	}
 	if c := st.Run.Compaction; c.Status != CompactQueued || c.Reason != "boundary" || !c.Queued.Equal(t1) {
 		t.Errorf("the boundary compaction: %+v", c)

@@ -138,13 +138,15 @@ type State struct {
 	PlanDrift string `json:"plan_drift,omitempty"`
 	// RunBranch is the branch checked out when the plan was attached: workers branch off it, and their
 	// work lands on it. Workers, Relay, Landed, Usage and Hold are the run's worker sessions and what they
-	// need of the lead (fleet.go).
+	// need of the lead (fleet.go). Conflicts counts the workers' landings in a row that conflicted with the
+	// run's branch since one last landed: while they keep conflicting, no new worker starts.
 	RunBranch string    `json:"run_branch,omitempty"`
 	Workers   []Worker  `json:"workers,omitempty"`
 	Relay     []Relay   `json:"relay,omitempty"`
 	Landed    []Landing `json:"landed,omitempty"`
 	Usage     *Usage    `json:"usage,omitempty"`
 	Hold      *Hold     `json:"hold,omitempty"`
+	Conflicts int       `json:"conflicts,omitempty"`
 	// Generation counts the plans attached to the run (attachKeeping). A worker belongs to the plan it was
 	// assigned under (Worker.Generation): one of an earlier plan is retired, and never counts as the
 	// worker on a phase of the plan attached now, which may use the same ids.

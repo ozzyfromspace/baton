@@ -1,12 +1,14 @@
 package loop
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -208,5 +210,107 @@ func TestAResumeWaitsOnlyForRoom(t *testing.T) {
 	}
 	if h := x.state().Hold; h == nil || h.Kind != state.HoldUsage {
 		t.Errorf("new workers are held by the usage: %+v", h)
+	}
+}
+
+// A gate that has waited for a lane for over a minute, the lead's or a worker's, holds new workers back:
+// another worker's gates would only queue behind it. A shorter wait does not, nor one that is over.
+func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
+	x := newCrewOn(t, 6, wide)
+	waits := func(s *state.Store, id string, since time.Time, status string) {
+		s.Update(func(st *state.State) error {
+			if j := st.Job(id); j != nil {
+				j.LaneWait, j.Status = since, status
+			} else {
+				st.Jobs = append(st.Jobs, state.Job{ID: id, Phase: st.Current, Kind: state.JobVerify, Command: "make test", Commit: "c1", Status: status,
+					Queued: since, Started: since, Heartbeat: since, LaneWait: since})
+			}
+			return nil
+		})
+	}
+	held := func(phase string) {
+		t.Helper()
+		if h := x.state().Hold; h == nil || *h != (state.Hold{Phase: phase, Kind: state.HoldLanes, Why: "a gate waits for a lane", Since: x.now}) {
+			t.Fatalf("hold %+v; workers on %v", h, x.spawned())
+		}
+	}
+
+	waits(x.lead, "j1", x.now.Add(-59*time.Second), state.JobRunning)
+	x.tick(time.Second) // the lead's gate has waited a minute, and no more
+	if got := x.spawned(); len(got) != 1 || got[0] != "P1" || x.state().Hold != nil {
+		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
+	}
+	x.started("P1")
+	x.tick(time.Second)
+	held("P2")
+	waits(x.lead, "j1", time.Time{}, state.JobRunning) // it holds a lane now
+	x.tick(time.Second)
+	if got := x.spawned(); len(got) != 2 || got[1] != "P2" || x.state().Hold != nil {
+		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
+	}
+	x.started("P2")
+
+	waits(x.sub("P1"), "P1.j1", x.now.Add(-2*time.Minute), state.JobRunning) // a worker's gate
+	x.tick(time.Second)
+	held("P3")
+	waits(x.sub("P1"), "P1.j1", x.now.Add(-2*time.Minute), state.JobInterrupted) // stopped as it waited
+	x.tick(time.Second)
+	if got := x.spawned(); len(got) != 3 || got[2] != "P3" || x.state().Hold != nil {
+		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
+	}
+	if ev := x.events(); strings.Count(ev, `"held":"lanes"`) != 2 || !strings.Contains(ev, `"why":"a gate waits for a lane"`) {
+		t.Errorf("events:\n%s", ev)
+	}
+	if ann := x.announced(); strings.Count(ann, decide.WorkerHeld("P2", "a gate waits for a lane")) != 1 {
+		t.Errorf("announced %q", ann)
+	}
+}
+
+// Two of the workers' landings in a row that conflict with the run's branch hold new workers back until
+// one lands: the plan's phases touch the same files, and another worker would only add to it. A
+// verification that turns red on the rebased branch is no conflict.
+func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
+	x := newCrewOn(t, 3, wide)
+	x.c.Fleet.Auto = true // a worker a minute
+	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
+		t.Setenv(k, v)
+	}
+	x.tick(time.Second)
+	x.started("P1")
+	x.tick(time.Second)
+	x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
+	for i, content := range []string{"the worker's\n", "the worker's, again\n"} {
+		x.finish("P1", map[string]string{"a.txt": content}, false)
+		x.tick(time.Second)
+		if n := x.state().Conflicts; n != i+1 || x.worker("P1").Status != state.WorkerWorking {
+			t.Fatalf("after landing %d: %d in a row conflicted; P1's worker %+v\n%s", i+1, n, x.worker("P1"), x.events())
+		}
+	}
+	conflicted := x.now
+	x.tick(time.Minute) // past the ramp: P2 could start
+	if h := x.state().Hold; len(x.spawned()) != 1 || h == nil || *h != (state.Hold{Phase: "P2", Kind: state.HoldConflicts, Why: "2 landings in a row conflicted", Since: conflicted}) {
+		t.Fatalf("workers on %v; hold %+v", x.spawned(), h)
+	}
+	if !x.has("worker_deferred", `"held":"conflicts"`, `"phase":"P2"`) {
+		t.Errorf("events:\n%s", x.events())
+	}
+
+	// The worker resolves it, and lands: the hold is over.
+	w := x.worker("P1")
+	gittest.Git(t, w.Worktree, "reset", "-q", "--soft", "main")
+	gittest.Write(t, w.Worktree, "a.txt", "both\n")
+	gittest.Commit(t, w.Worktree, "P1: both")
+	sub := x.sub("P1")
+	pl, _ := sub.LoadPlan()
+	sub.Update(func(st *state.State) error {
+		state.TakeMail(st)
+		_, err := state.Done(st, pl, "P1", x.now, state.DoneOpts{})
+		st.Run.TurnOpen = false
+		return err
+	})
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if st := x.state(); x.worker("P1").Status != state.WorkerLanded || st.Conflicts != 0 || st.Hold != nil || !slices.Contains(x.spawned(), "P2") {
+		t.Fatalf("after P1 landed: %d conflicts, hold %+v, workers on %v\n%s", st.Conflicts, st.Hold, x.spawned(), x.events())
 	}
 }

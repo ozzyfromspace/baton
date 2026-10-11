@@ -431,9 +431,18 @@ func filesLine(files []string) string {
 }
 
 // returned records that worker e's phase is back with it, for why (paths: what conflicted): it is no
-// longer queued, and joins the queue again once its `baton done` completes it again.
+// longer queued, and joins the queue again once its `baton done` completes it again. A conflict counts
+// toward the landings in a row that conflicted (State.Conflicts), which hold new workers back.
 func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, why string, paths []string) {
-	c.setEntry(s, e, func(x *state.Worker) { x.Status, x.Since, x.Merge = state.WorkerWorking, now, nil })
+	s.Update(func(st *state.State) error {
+		if x := rosterEntry(st, e.Ref, e.Session); x != nil {
+			x.Status, x.Since, x.Merge = state.WorkerWorking, now, nil
+			if len(paths) > 0 {
+				st.Conflicts++
+			}
+		}
+		return nil
+	})
 	fields := map[string]any{"phase": e.Phase, "why": why}
 	if len(paths) > 0 {
 		fields["paths"] = paths

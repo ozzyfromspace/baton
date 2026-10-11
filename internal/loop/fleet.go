@@ -173,9 +173,10 @@ func launchable(st state.State, now time.Time) string {
 
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
 // one does): the run must be running, under Max workers of its plan, with a phase that can go ahead.
-// held names what holds a phase that waits back: no room on the machine (r.busy) or under
-// worker_usage_max (state.HoldBusy, state.HoldUsage); "" for none. With Auto, new workers start a Ramp
-// apart, so that the machine's readings show each one before the next starts: that wait is no hold.
+// held names what holds a phase that waits back: no room on the machine (r.busy), gates waiting for lanes
+// (r.lanes), landings that keep conflicting, or no room under worker_usage_max (state.HoldBusy,
+// HoldLanes, HoldConflicts, HoldUsage); "" for none. With Auto, new workers start a Ramp apart, so that
+// the machine's readings show each one before the next starts: that wait is no hold.
 func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
 		return "", why, ""
@@ -193,6 +194,10 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 	switch {
 	case r.busy != "":
 		return phase, r.busy, state.HoldBusy
+	case r.lanes != "":
+		return phase, r.lanes, state.HoldLanes
+	case conflicted(st) != "":
+		return phase, conflicted(st), state.HoldConflicts
 	case u != nil && f.UsageMax > 0 && u.UsedPct >= f.UsageMax && (u.Resets.IsZero() || now.Before(u.Resets)):
 		return phase, fmt.Sprintf("%.0f%% of the five-hour usage is used (worker_usage_max %.0f%%)", u.UsedPct, f.UsageMax), state.HoldUsage
 	case f.Auto && now.Sub(r.started) < f.ramp():
@@ -343,7 +348,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 	}
 	phase, why, held := "", c.mayLaunch(now, s, st), ""
 	if why == "" {
-		phase, why, held = c.Fleet.next(st, pl, now, room{busy: c.noRoom, started: c.started})
+		phase, why, held = c.Fleet.next(st, pl, now, room{busy: c.noRoom, lanes: lanes(now, s, st), started: c.started})
 	}
 	c.hold(now, s, st, phase, why, held)
 	if phase != "" && why == "" {

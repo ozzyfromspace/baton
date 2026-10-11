@@ -215,6 +215,16 @@ func TestWorkerSegments(t *testing.T) {
 			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldBusy, Why: "memory pressure is critical", Since: now}
 			return st
 		}, 0, head + "W P1 1m · W held: busy · ctx 41%"},
+		{"gates queue for lanes", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Minute))
+			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldLanes, Why: "a gate waits for a lane", Since: now}
+			return st
+		}, 0, head + "W P1 1m · W held: lanes · ctx 41%"},
+		{"landings keep conflicting", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Minute))
+			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldConflicts, Why: "2 landings in a row conflicted", Since: now}
+			return st
+		}, 0, head + "W P1 1m · W held: conflicts · ctx 41%"},
 		{"held by the usage, which shows already", func() state.State {
 			st := with(worker("P1", state.WorkerWorking, time.Minute))
 			st.Usage = &state.Usage{UsedPct: 90, Resets: now.Add(time.Hour)}

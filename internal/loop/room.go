@@ -13,9 +13,12 @@ import (
 // the plan's to say (the phases that can go ahead) and the machine's (a ceiling the host works out from
 // its CPUs and memory, config.AutoWorkers); whatever the setting, a worker starts or resumes only while
 // the machine has room for one, as it reads at the step (busy), and new workers start one Ramp apart, so
-// that each one's load shows before the next starts. What holds back a phase that could go ahead is told
-// once (hold). The workers at work are never stopped. The readings and the limits come from spike 27
-// (docs/research/workers.md, "Machine readings and leftovers").
+// that each one's load shows before the next starts. Nor does a new worker start while the project's
+// lanes fall behind, a gate of the run's waiting for one (lanes), or while the workers' landings keep
+// conflicting with the run's branch (conflicted): another worker would only add to either. What holds
+// back a phase that could go ahead is told once (hold). The workers at work are never stopped. The
+// machine's readings and limits come from spike 27 (docs/research/workers.md, "Machine readings and
+// leftovers").
 
 // DefaultRamp is how long after a worker's session started the next new one may, with workers: auto.
 const DefaultRamp = time.Minute
@@ -47,6 +50,35 @@ func busy(m machine.Reading, grew uint64) string {
 		return fmt.Sprintf("memory is low (%d%% free)", m.MemAvailablePct)
 	}
 	return ""
+}
+
+// laneBacklog is how long a gate may wait for a lane, every lane being in use, before new workers wait.
+const laneBacklog = time.Minute
+
+// maxConflicts is how many of the workers' landings in a row may conflict with the run's branch before
+// new workers wait for one to land.
+const maxConflicts = 2
+
+// lanes says why the project's lanes leave no room for another worker's gates ("" if they do): a verify
+// job of run st, kept in s, or of one of its workers, has waited for a lane for longer than laneBacklog.
+// The workers' jobs are read without their sub-runs' locks.
+func lanes(now time.Time, s *state.Store, st state.State) string {
+	for _, j := range append(st.Unfinished(), s.WorkerJobs(st)...) {
+		if !j.Finished() && !j.LaneWait.IsZero() && now.Sub(j.LaneWait) > laneBacklog {
+			return "a gate waits for a lane"
+		}
+	}
+	return ""
+}
+
+// conflicted says why the workers' landings leave no room for another worker ("" if they do): the last
+// maxConflicts or more of them conflicted with the run's branch, and a worker of the plan still at work
+// may land to end it. With none left to, a worker starts: the lead has no landing of its own to end it.
+func conflicted(st state.State) string {
+	if st.Conflicts < maxConflicts || planWorkers(st) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d landings in a row conflicted", st.Conflicts)
 }
 
 // bytesShown is a size in GiB to a tenth, or under a GiB in MiB.
@@ -90,10 +122,11 @@ func (c *Coordinator) look(now time.Time) {
 	}
 }
 
-// room is what a step knows of the room for another worker: why the machine has none ("" if it has), and
-// when this host last started a worker's session.
+// room is what a step knows of the room for another worker: why the machine has none ("" if it has), why
+// the lanes have none (lanes), and when this host last started a worker's session.
 type room struct {
 	busy    string
+	lanes   string
 	started time.Time
 }
 
