@@ -84,6 +84,9 @@ type Runner struct {
 	Beat func(now time.Time) (host time.Time, wanted bool)
 	// Started is told the lane and the process group of each process the job starts.
 	Started func(lane, pgid int)
+	// LaneWait is told when the job starts to wait for a lane, every lane being in use (since: when it
+	// started to), and when it stops waiting, with a lane or without (the zero time).
+	LaneWait func(since time.Time)
 
 	ran, stale time.Duration
 	prev, host time.Time
@@ -151,11 +154,14 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 	slot, err := r.Pool.TryAcquire(n)
 	if slot == nil && err == nil {
 		r.say("every lane is in use (%d); waiting for one", n)
+		r.laneWait(r.Now())
 		var stop *Result
-		if err, stop = r.supervise(ctx, func(c context.Context) error {
+		err, stop = r.supervise(ctx, func(c context.Context) error {
 			slot, err = r.Pool.Acquire(c, n)
 			return err
-		}); stop != nil {
+		})
+		r.laneWait(time.Time{})
+		if stop != nil {
 			if slot != nil {
 				slot.Release()
 			}
@@ -212,6 +218,13 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 	}
 	res := r.command(ctx, slot.N, slot.Dir, env, []string{s, "run", slot.Dir, j.Command})
 	return r.stopped(res, slot)
+}
+
+// laneWait tells LaneWait, if set, that the job waits for a lane since since (zero: no longer).
+func (r *Runner) laneWait(since time.Time) {
+	if r.LaneWait != nil {
+		r.LaneWait(since)
+	}
 }
 
 // stopped brings the lane down after a job was stopped, so whatever its up started does not outlive the

@@ -218,9 +218,13 @@ func TestSlotContention(t *testing.T) {
 	}
 	c.Release()
 
-	// A job waits for a lane, and takes the one that comes free.
+	// A job waits for a lane, says so, and takes the one that comes free.
 	r := testRunner(t, root)
 	r.Pool = p
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	r.Now = func() time.Time { return at }
+	var waits []time.Time
+	r.LaneWait = func(since time.Time) { waits = append(waits, since) }
 	held, _ := p.TryAcquire(1)
 	time.AfterFunc(300*time.Millisecond, func() { held.Release() })
 	got := r.Run(context.Background(), Job{ID: "j1", Command: "true", Commit: head})
@@ -229,6 +233,15 @@ func TestSlotContention(t *testing.T) {
 	}
 	if log := logOf(t, r); !strings.Contains(log, "every lane is in use (1); waiting for one") {
 		t.Errorf("the log does not say the job waited:\n%s", log)
+	}
+	if !slices.Equal(waits, []time.Time{at, {}}) {
+		t.Errorf("told of the wait %v, want from %s, then over", waits, at)
+	}
+
+	// A job that finds a lane free waits for none.
+	waits = nil
+	if got := r.Run(context.Background(), Job{ID: "j2", Command: "true", Commit: head}); got.Status != Passed || len(waits) != 0 {
+		t.Errorf("%+v; told of a wait %v", got, waits)
 	}
 	b.Release()
 }

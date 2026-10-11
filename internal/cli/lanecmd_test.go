@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -148,6 +149,51 @@ func TestLaneRunStopsACancelledJob(t *testing.T) {
 	}
 	if e := events(t, s)["job_finished"]; e == nil || e["status"] != "interrupted" || !strings.Contains(e["reason"].(string), "cancelled") {
 		t.Errorf("job_finished: %v", e)
+	}
+}
+
+// A job that waits for a lane, every lane being in use, records since when, for the host, which holds new
+// workers back while gates queue for lanes; the record goes once the job holds a lane.
+func TestLaneRunRecordsItsWaitForALane(t *testing.T) {
+	defer func(d time.Duration) { laneTick = d }(laneTick)
+	laneTick = 20 * time.Millisecond
+	s, env := laneProject(t, "exit 0")
+	held, err := lane.Pool{Home: env["BATON_HOME"], Root: s.Checkout}.TryAcquire(1)
+	if err != nil || held == nil {
+		t.Fatalf("holding the only lane: %+v, %v", held, err)
+	}
+	done := make(chan int)
+	go func() {
+		code, _ := laneRun(env, "sess-1", "j1")
+		done <- code
+	}()
+	before := time.Now()
+	deadline := before.Add(10 * time.Second)
+	for {
+		st, _ := s.Load()
+		if j := st.Job("j1"); !j.LaneWait.IsZero() {
+			if j.Status != state.JobRunning || j.LaneWait.Before(j.Started) || j.LaneWait.After(time.Now()) {
+				t.Errorf("job: %+v", *j)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job never said it waits for a lane")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	held.Release()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("lane-run: exit %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("lane-run never took the lane that came free")
+	}
+	st, _ := s.Load()
+	if j := st.Job("j1"); j.Status != state.JobPassed || j.Lane != 1 || !j.LaneWait.IsZero() {
+		t.Errorf("job: %+v", *j)
 	}
 }
 

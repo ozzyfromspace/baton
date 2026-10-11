@@ -35,6 +35,9 @@ type Job struct {
 	Started   time.Time `json:"started,omitzero"`
 	Ended     time.Time `json:"ended,omitzero"`
 	Heartbeat time.Time `json:"heartbeat,omitzero"` // the runner's, while the job runs
+	// LaneWait is since when the job's runner has waited for a lane, every lane being in use; zero once it
+	// holds one, or while it waits for none.
+	LaneWait time.Time `json:"lane_wait,omitzero"`
 	// Delivered is when the model was given the job's result, or found to need none: the job was
 	// cancelled, its phase was finished with it in hand, or its verification passed for a phase the run
 	// had moved on from. Each result is given once.

@@ -132,6 +132,14 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 				return nil
 			})
 		},
+		LaneWait: func(since time.Time) {
+			s.Update(func(st *state.State) error {
+				if j := st.Job(job.ID); mine(j, job) && j.Status == state.JobRunning {
+					j.LaneWait = since
+				}
+				return nil
+			})
+		},
 	}
 	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit})
 }
