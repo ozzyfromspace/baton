@@ -395,6 +395,10 @@ func (x *cleanRig) fingerprint() string {
 				return fs.SkipDir
 			}
 			fi, _ := d.Info()
+			if d.IsDir() && runtime.GOOS == "windows" { // NTFS updates a directory's time in its listing lazily
+				fmt.Fprintf(&b, "%s/\n", path)
+				return nil
+			}
 			fmt.Fprintf(&b, "%s %v %d %d\n", path, fi.Mode(), fi.Size(), fi.ModTime().UnixNano())
 			return nil
 		})
@@ -424,7 +428,11 @@ func TestCleanDryRun(t *testing.T) {
 			t.Errorf("no %q in the dry run's report:\n%s", want, out)
 		}
 	}
-	if len(dry.actions) < 10 {
+	want := 10
+	if x.deadSock == "" { // no view sockets on Windows
+		want = 9
+	}
+	if len(dry.actions) < want {
 		t.Fatalf("a dry run planned %d actions:\n%s", len(dry.actions), out)
 	}
 	_, done := x.clean(false)

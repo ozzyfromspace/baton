@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -232,7 +233,8 @@ func TestBatonName(t *testing.T) {
 			t.Errorf("%q: %v, want %v", comm, got, want)
 		}
 	}
-	if batonRunning(os.Getpid()) {
+	// Windows has no ps, so there a process that is alive counts as a baton.
+	if batonRunning(os.Getpid()) != (runtime.GOOS == "windows") {
 		t.Error("the test binary is taken for a baton")
 	}
 	if batonRunning(0) || batonRunning(-1) {

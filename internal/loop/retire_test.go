@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -83,7 +84,8 @@ func TestRetireWorker(t *testing.T) {
 			if !isDir(w.Worktree) || got.Kept == "" || after.WorktreeKept != got.Kept || !strings.Contains(got.Kept, "disk full") || got.Branch != w.Branch || !x.branch(w.Branch) {
 				t.Errorf("retired %+v; entry %+v; worktree there %v", got, after, isDir(w.Worktree))
 			}
-			if ev := x.events(); !strings.Contains(ev, `"worktree_kept":"its uncommitted work could not be saved: disk full"`) || !strings.Contains(ev, `"worktree":"`+w.Worktree+`"`) {
+			tree, _ := json.Marshal(w.Worktree) // a Windows path's backslashes are escaped
+			if ev := x.events(); !strings.Contains(ev, `"worktree_kept":"its uncommitted work could not be saved: disk full"`) || !strings.Contains(ev, `"worktree":`+string(tree)) {
 				t.Errorf("events:\n%s", ev)
 			}
 		}},

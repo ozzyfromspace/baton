@@ -130,7 +130,7 @@ func TestPruneUnder(t *testing.T) {
 			if err := PruneUnder(ctx, repo, c.under); err != nil {
 				t.Fatal(err)
 			}
-			listed := strings.Contains(worktrees(t, repo), string(filepath.Separator)+filepath.Base(c.dir)+"\n")
+			listed := strings.Contains(worktrees(t, repo), "/"+filepath.Base(c.dir)+"\n") // git prints / on Windows too
 			if listed == c.forget {
 				t.Errorf("forgotten %v, want %v:\n%s", !listed, c.forget, worktrees(t, repo))
 			}
