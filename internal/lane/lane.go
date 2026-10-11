@@ -177,7 +177,7 @@ func (p Pool) checkout(ctx context.Context, s *Slot, commit string) error {
 	gitx.WorktreeRemove(ctx, p.Root, s.Dir)
 	os.RemoveAll(s.Dir)
 	os.Remove(p.upPath(s.N))
-	gitx.WorktreePrune(ctx, p.Root)
+	gitx.PruneUnder(ctx, p.Root, p.Dir())
 	return gitx.WorktreeAdd(ctx, p.Root, s.Dir, commit)
 }
 

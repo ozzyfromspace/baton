@@ -55,10 +55,10 @@ func (p Pool) Lanes() []Lane {
 }
 
 // Sweep removes the lanes nobody owns: no job holds them, and no live host brought them up. Each gets
-// its down (if it is up), and its worktree is removed; then git forgets every worktree that is gone. live
+// its down (if it is up), and its worktree is removed; then git forgets the lanes' worktrees that are
+// gone, and only theirs (gitx.PruneUnder): never the human's, such as one on a drive not mounted. live
 // reports whether a host is still running (nil: none is). Output goes to w. It returns the lanes it
-// removed. A project that never had lanes is left alone: git's prune would forget the human's own
-// worktrees that are out of reach, such as one on a drive not mounted.
+// removed.
 func (p Pool) Sweep(ctx context.Context, live func(host string) bool, w io.Writer) []int {
 	if _, err := os.Stat(p.Dir()); err != nil {
 		return nil
@@ -83,7 +83,7 @@ func (p Pool) Sweep(ctx context.Context, live func(host string) bool, w io.Write
 		}
 		s.Release() // the lock file stays: removing it would let two jobs lock two different files
 	}
-	gitx.WorktreePrune(ctx, p.Root)
+	gitx.PruneUnder(ctx, p.Root, p.Dir())
 	return swept
 }
 

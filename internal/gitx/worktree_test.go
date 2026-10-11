@@ -79,11 +79,93 @@ func TestWorktreeWhoseDirectoryIsGone(t *testing.T) {
 		t.Fatalf("adding over a worktree whose directory is gone: %v", err)
 	}
 	os.RemoveAll(dir)
-	if err := WorktreePrune(ctx, repo); err != nil {
+	if err := PruneUnder(ctx, repo, filepath.Dir(dir)); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(worktrees(t, repo), "lane") {
 		t.Errorf("prune kept a worktree whose directory is gone:\n%s", worktrees(t, repo))
+	}
+}
+
+// PruneUnder forgets a worktree whose directory is gone only when it was under one of the directories it
+// is given, and never a locked one, nor one whose directory is there.
+func TestPruneUnder(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	head := git(t, repo, "rev-parse", "HEAD")
+	baton := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link") // baton's directory, named through a symbolic link
+	if err := os.Symlink(baton, link); err != nil {
+		t.Fatal(err)
+	}
+	human := t.TempDir()
+	for _, c := range []struct {
+		name   string
+		dir    string
+		gone   bool
+		lock   bool
+		under  string
+		forget bool
+	}{
+		{"gone, under baton's", filepath.Join(baton, "key", "run", "w-gone"), true, false, baton, true},
+		{"gone, named through a link", filepath.Join(baton, "key", "run", "w-link"), true, false, link, true},
+		{"gone, but locked", filepath.Join(baton, "key", "run", "w-locked"), true, true, baton, false},
+		{"there", filepath.Join(baton, "key", "run", "w-there"), false, false, baton, false},
+		{"gone, the human's elsewhere", filepath.Join(human, "drive", "w-human"), true, false, baton, false},
+		{"gone, baton's directory itself", filepath.Join(baton, "w-self"), true, false, filepath.Join(baton, "w-self"), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := WorktreeAdd(ctx, repo, c.dir, head); err != nil {
+				t.Fatal(err)
+			}
+			defer WorktreeRemove(ctx, repo, c.dir)
+			if c.lock {
+				git(t, repo, "worktree", "lock", c.dir)
+				defer git(t, repo, "worktree", "unlock", c.dir)
+			}
+			if c.gone {
+				os.RemoveAll(c.dir)
+			}
+			if err := PruneUnder(ctx, repo, c.under); err != nil {
+				t.Fatal(err)
+			}
+			listed := strings.Contains(worktrees(t, repo), string(filepath.Separator)+filepath.Base(c.dir)+"\n")
+			if listed == c.forget {
+				t.Errorf("forgotten %v, want %v:\n%s", !listed, c.forget, worktrees(t, repo))
+			}
+			if c.gone && !c.lock {
+				git(t, repo, "worktree", "prune")
+			}
+		})
+	}
+}
+
+// A worktree git records by a path relative to its own directory (worktree.useRelativePaths) is found
+// the same.
+func TestPruneUnderRelativePaths(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	head := git(t, repo, "rev-parse", "HEAD")
+	baton := t.TempDir()
+	dir := filepath.Join(baton, "key", "run", "P1")
+	if err := WorktreeAdd(ctx, repo, dir, head); err != nil {
+		t.Fatal(err)
+	}
+	gitdir := filepath.Join(repo, ".git", "worktrees", "P1", "gitdir")
+	rel, err := filepath.Rel(filepath.Dir(gitdir), filepath.Join(resolve(dir), ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gitdir, []byte(rel+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(dir)
+	there := func() bool { _, err := os.Stat(filepath.Dir(gitdir)); return err == nil }
+	if err := PruneUnder(ctx, repo, t.TempDir()); err != nil || !there() {
+		t.Fatalf("forgotten under another directory (%v)", err)
+	}
+	if err := PruneUnder(ctx, repo, baton); err != nil || there() {
+		t.Errorf("not forgotten under its own (%v)", err)
 	}
 }
 
@@ -94,7 +176,7 @@ func TestWorktreeWithoutGit(t *testing.T) {
 		"WorktreeAdd":    WorktreeAdd(ctx, plain, filepath.Join(plain, "x"), "HEAD"),
 		"CheckoutDetach": CheckoutDetach(ctx, plain, "HEAD"),
 		"WorktreeRemove": WorktreeRemove(ctx, plain, filepath.Join(plain, "x")),
-		"WorktreePrune":  WorktreePrune(ctx, plain),
+		"PruneUnder":     PruneUnder(ctx, plain, plain),
 	} {
 		if !errors.Is(err, ErrNoGit) {
 			t.Errorf("%s outside a repository = %v, want ErrNoGit", name, err)
