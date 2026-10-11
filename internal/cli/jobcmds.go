@@ -242,6 +242,12 @@ type nopCloser struct{ goio.Writer }
 
 func (nopCloser) Close() error { return nil }
 
+// lanePool is the lanes of s's project: those of its checkout, which a worker in a worktree of its own
+// shares with every other session of the project.
+func lanePool(io IO, s *state.Store) lane.Pool {
+	return lane.Pool{Home: batonRoot(io), Root: s.Checkout}
+}
+
 // lanesDown brings down the lanes host brought up that no job holds: its run is over.
 func lanesDown(io IO, root, projectDir, host string) {
 	if host == "" {
@@ -330,7 +336,7 @@ func printJobs(io IO, s *state.Store, st state.State) {
 		}
 		fmt.Fprintf(io.Out, "  %-4s %-8s %-6s %s  %s\n       log: %s\n", j.ID, j.Phase, j.Kind, jobProgress(j, io.Now()), what, log)
 	}
-	pool := lane.Pool{Home: batonRoot(io), Root: s.Root}
+	pool := lanePool(io, s)
 	if lanes := pool.Lanes(); len(lanes) > 0 {
 		fmt.Fprintf(io.Out, "lanes (%s):\n", pool.Dir())
 		for _, l := range lanes {

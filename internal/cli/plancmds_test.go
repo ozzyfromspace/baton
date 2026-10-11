@@ -408,3 +408,28 @@ func TestExitLeavesARecordForTheShell(t *testing.T) {
 		t.Fatalf("after claude stopped: %+v", rec)
 	}
 }
+
+// Inside a worker's session, baton's commands find the worker's sub-run by its session id.
+func TestAWorkersCommandsFindItsSubRun(t *testing.T) {
+	s, _ := newSession(t)
+	lead := s.store()
+	p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := p.NewWorker(lead.Ref, "P1", "wsess", "inst", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.env["CLAUDE_CODE_SESSION_ID"], s.env["BATON_INSTANCE"], s.env["BATON_ROLE"] = "wsess", state.WorkerInstance("inst", "P1"), "worker"
+	var got map[string]any
+	if err := json.Unmarshal([]byte(s.must("", "status", "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["run"] != "sess-1/P1" || got["baton_dir"] != w.Dir {
+		t.Errorf("status in the worker: run %v dir %v, want %s %s", got["run"], got["baton_dir"], w.Ref, w.Dir)
+	}
+	if runs, _ := os.ReadDir(filepath.Join(s.env["BATON_DIR"], "runs")); len(runs) != 1 {
+		t.Errorf("a worker's command made a run: %v", runs)
+	}
+}

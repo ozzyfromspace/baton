@@ -225,3 +225,56 @@ func TestLaneRunIsNotInHelp(t *testing.T) {
 		t.Errorf("help lists lane-run:\n%s", out)
 	}
 }
+
+// A worker's jobs are found by its ref. An await runs in the worker's own worktree, and a verification
+// in one of the project's lanes, which every session of the project shares.
+func TestLaneRunRunsAWorkersJobs(t *testing.T) {
+	lead, env := laneProject(t, "true")
+	tree := filepath.Join(t.TempDir(), "P1")
+	gittest.Git(t, lead.Checkout, "worktree", "add", "-q", "-b", "baton/sess-1/P1", tree)
+	tree, _ = filepath.EvalSymlinks(tree)
+	p, err := state.OpenProject(env["BATON_DIR"], time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := p.NewWorker(lead.Ref, "P1", "wsess", "inst", tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := gittest.Git(t, tree, "rev-parse", "HEAD")
+	w.Update(func(st *state.State) error {
+		now := time.Now()
+		st.Jobs = []state.Job{
+			{ID: "j1", Phase: "P1", Kind: state.JobAwait, Command: "pwd -P > where.txt", Status: state.JobQueued, Queued: now},
+			{ID: "j2", Phase: "P1", Kind: state.JobVerify, Command: "true", Commit: head, Status: state.JobQueued, Queued: now},
+		}
+		return nil
+	})
+	for _, id := range []string{"j1", "j2"} {
+		if code, errs := laneRun(env, w.Ref, id); code != 0 {
+			t.Fatalf("lane-run %s %s: exit %d: %s", w.Ref, id, code, errs)
+		}
+	}
+	st, _ := w.Load()
+	if j := st.Job("j1"); j.Status != state.JobPassed || j.Lane != 0 || j.Log != w.JobLog("j1") {
+		t.Errorf("await: %+v", *j)
+	}
+	if b, _ := os.ReadFile(filepath.Join(tree, "where.txt")); strings.TrimSpace(string(b)) != tree {
+		t.Errorf("the await ran in %q, not the worker's worktree %s", b, tree)
+	}
+	if j := st.Job("j2"); j.Status != state.JobPassed || j.Lane != 1 {
+		t.Errorf("verify: %+v", *j)
+	}
+	io, _, _ := testIO("", env)
+	if pool := lanePool(io, w); pool != lanePool(io, lead) || !strings.HasPrefix(pool.LaneDir(1), env["BATON_HOME"]) {
+		t.Errorf("the worker's lanes %+v are not the project's %+v", pool, lanePool(io, lead))
+	} else if _, err := os.Stat(pool.LaneDir(1)); err != nil {
+		t.Errorf("no lane 1 in the project's pool: %v", err)
+	}
+	if e := events(t, w)["job_finished"]; e["worker"] != "P1" || e["session"] != "wsess" {
+		t.Errorf("job_finished: %v", e)
+	}
+	if _, err := os.Stat(filepath.Join(lead.Dir, "jobs")); err == nil {
+		t.Error("a worker's job wrote into the lead's run")
+	}
+}

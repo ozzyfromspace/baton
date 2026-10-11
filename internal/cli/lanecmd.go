@@ -99,7 +99,8 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 
 	var host time.Time // the host's latest heartbeat
 	r := &lane.Runner{
-		Pool:    lane.Pool{Home: config.Root(io.Env), Root: s.Root},
+		Pool:    lane.Pool{Home: config.Root(io.Env), Root: s.Checkout},
+		WorkDir: s.Root,
 		Host:    io.Env("BATON_INSTANCE"),
 		Log:     log,
 		Now:     io.Now,

@@ -4,7 +4,7 @@
 //	plan.json     the attached plan (see package plan)
 //	state.json    progress and the host's runtime state machine
 //	events.jsonl  one line per decision baton makes: the audit trail
-//	handoff.md    notes the model leaves for the phases after it
+//	handoff.md    notes the model leaves for the phases after it (a worker's go to its parent run's)
 //	jobs/<id>.log the output of each job (package lane)
 //	lock          held (flock) for the duration of every update
 //
@@ -28,8 +28,15 @@ import (
 
 // Store is a handle on one run's directory.
 type Store struct {
-	Dir      string
-	Root     string // the working tree the run works in
+	Dir string
+	// Root is the working tree the run works in: the project's checkout, or a worker's own worktree.
+	// Everything about the phase's work in git reads it.
+	Root     string
+	Checkout string // the project's checkout, where its lanes and its .baton directory belong
+	Project  string // the project's .baton directory
+	Ref      string // the run's ref (see Project)
+	Parent   string // a worker's sub-run: the ref of the run it works for ("" otherwise)
+	Session  string // a worker's sub-run: its session's id, recorded on events
 	Instance string // BATON_INSTANCE of the writer, recorded on events
 	Now      func() time.Time
 }
@@ -37,14 +44,19 @@ type Store struct {
 // Open returns a store for dir, creating it if needed. Its working tree is dir's parent: the shape of a
 // project's .baton directory before runs were kept per session (see Project for where runs live now).
 func Open(dir, instance string, now func() time.Time) (*Store, error) {
-	return openIn(dir, filepath.Dir(dir), instance, now)
-}
-
-func openIn(dir, root, instance string, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{Dir: dir, Root: root, Instance: instance, Now: now}, nil
+	root := filepath.Dir(dir)
+	return &Store{Dir: dir, Root: root, Checkout: root, Project: filepath.Join(root, DirName), Ref: filepath.Base(dir), Instance: instance, Now: now}, nil
+}
+
+// Worker returns the phase a worker's sub-run works on, or "" for a run of its own.
+func (s *Store) Worker() string {
+	if s.Parent == "" {
+		return ""
+	}
+	return strings.TrimPrefix(s.Ref, s.Parent+"/")
 }
 
 func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
@@ -52,8 +64,14 @@ func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
 // PlanPath is where plan.json lives.
 func (s *Store) PlanPath() string { return s.path("plan.json") }
 
-// HandoffPath is where the model's notes for later phases live.
-func (s *Store) HandoffPath() string { return s.path("handoff.md") }
+// HandoffPath is where the model's notes for later phases live. A worker's notes are its run's: the
+// phases after its own read them there.
+func (s *Store) HandoffPath() string {
+	if s.Parent != "" {
+		return filepath.Join(s.Project, runsDir, s.Parent, "handoff.md")
+	}
+	return s.path("handoff.md")
+}
 
 // JobLog is where job id's output goes.
 func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", id+".log") }
@@ -141,6 +159,12 @@ func (s *Store) Event(kind string, fields map[string]any) error {
 	rec["ts"], rec["kind"] = s.Now().UTC().Format(time.RFC3339Nano), kind
 	if s.Instance != "" {
 		rec["instance"] = s.Instance
+	}
+	if w := s.Worker(); w != "" {
+		rec["worker"] = w
+		if s.Session != "" {
+			rec["session"] = s.Session
+		}
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {

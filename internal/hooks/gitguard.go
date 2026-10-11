@@ -196,13 +196,17 @@ func sweeps(sub string, args []string) bool {
 	return false
 }
 
-// sharedCheckout returns the other runs a host drives in s's working tree right now.
+// sharedCheckout returns the other runs a host drives in s's working tree right now. A worker has its
+// worktree to itself.
 func sharedCheckout(s *state.Store) []state.RunInfo {
-	p, err := state.OpenProject(filepath.Join(s.Root, state.DirName), s.Now)
+	if s.Worker() != "" {
+		return nil
+	}
+	p, err := state.OpenProject(s.Project, s.Now)
 	if err != nil {
 		return nil
 	}
-	return p.Others(filepath.Base(s.Dir))
+	return p.Others(s.Ref)
 }
 
 // gitRefusal is why a sweeping git command is refused while others work in the same checkout.

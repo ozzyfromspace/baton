@@ -290,3 +290,21 @@ func TestAJobWithNoCommitRunsInTheWorkingTree(t *testing.T) {
 		t.Error("a job with no commit made a lane")
 	}
 }
+
+// A worker's await runs in the worker's own worktree, while BATON_ROOT still names the project's checkout.
+func TestAJobWithNoCommitRunsInItsWorkDir(t *testing.T) {
+	root, _ := project(t, false)
+	tree := t.TempDir()
+	r := testRunner(t, root)
+	r.WorkDir = tree
+	got := r.Run(context.Background(), Job{ID: "j1", Command: `echo "$BATON_ROOT" > here.txt`})
+	if got.Status != Passed || got.Lane != 0 {
+		t.Fatalf("%+v", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(tree, "here.txt")); strings.TrimSpace(string(b)) != root {
+		t.Errorf("here.txt = %q, want %q", b, root)
+	}
+	if _, err := os.Stat(filepath.Join(root, "here.txt")); err == nil {
+		t.Error("the job ran in the checkout")
+	}
+}

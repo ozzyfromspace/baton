@@ -1004,3 +1004,63 @@ func TestTheHumanTakesPartByTyping(t *testing.T) {
 		t.Fatalf("human at %v, want %v", h, f.now)
 	}
 }
+
+// A worker's session is linked to its sub-run before it starts: every hook of it acts there, as the
+// worker's own instance, and never on the lead's run or the lead's links. An unlinked worker session
+// binds nothing at all.
+func TestAWorkersHooksStayInItsSubRun(t *testing.T) {
+	f := newFixture(t, true)
+	p, err := state.OpenProject(f.dir, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := p.NewWorker(f.store.Ref, "P1", "wsess", f.inst, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(path string) string { b, _ := os.ReadFile(path); return string(b) }
+	leadFiles := []string{
+		filepath.Join(f.store.Dir, "state.json"), filepath.Join(f.store.Dir, "events.jsonl"),
+		filepath.Join(f.dir, "hosts", f.inst), filepath.Join(f.dir, "sessions", f.sid),
+	}
+	var before []string
+	for _, path := range leadFiles {
+		before = append(before, read(path))
+	}
+	runs, _ := os.ReadDir(filepath.Join(f.dir, "runs"))
+
+	f.vars = map[string]string{"BATON_ROLE": "worker"}
+	inst := state.WorkerInstance(f.inst, "P1")
+	for _, h := range []struct {
+		event string
+		input map[string]any
+	}{
+		{"SessionStart", map[string]any{"source": "startup"}},
+		{"UserPromptSubmit", map[string]any{"prompt": "[baton] Begin P1"}},
+		{"PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}},
+		{"PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}},
+		{"Stop", map[string]any{"stop_hook_active": false}},
+		{"SessionEnd", map[string]any{"reason": "other"}},
+	} {
+		h.input["session_id"] = "wsess"
+		h.input["permission_mode"] = "acceptEdits"
+		f.fireAs(inst, h.event, h.input)
+	}
+	for i, path := range leadFiles {
+		if got := read(path); got != before[i] {
+			t.Errorf("a worker's hook changed %s:\n%s\nwas:\n%s", path, got, before[i])
+		}
+	}
+	if st, _ := w.Load(); st.Run.SessionID != "wsess" || st.Run.PermissionMode != "acceptEdits" {
+		t.Errorf("the worker's hooks did not act in its sub-run: %+v", st.Run)
+	}
+
+	raw, _ := json.Marshal(map[string]any{"hook_event_name": "SessionStart", "session_id": "stray", "source": "startup"})
+	var out, errb bytes.Buffer
+	if code := Dispatch("SessionStart", bytes.NewReader(raw), &out, &errb, f.env(inst), f.clock, Handlers(Deps{Open: OpenRun(f.clock)})); code != 0 {
+		t.Fatalf("an unlinked worker session's hook exited %d", code)
+	}
+	if after, _ := os.ReadDir(filepath.Join(f.dir, "runs")); len(after) != len(runs) || read(filepath.Join(f.dir, "sessions", "stray")) != "" {
+		t.Errorf("an unlinked worker session bound a run: %v", after)
+	}
+}

@@ -2,7 +2,6 @@ package loop
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,7 +75,7 @@ func (l *Loop) lanesDown(s *state.Store) {
 
 // spawn starts a queued job's runner, which takes the job from there.
 func (l *Loop) spawn(v host.View, j state.Job) {
-	pid, err := l.Runners.Spawn(filepath.Base(l.Store.Dir), j.ID)
+	pid, err := l.Runners.Spawn(l.Store.Ref, j.ID)
 	if err != nil {
 		l.lost(v, j, fmt.Sprintf("baton could not start its runner: %v", err))
 		return

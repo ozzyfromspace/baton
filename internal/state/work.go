@@ -1,7 +1,6 @@
 package state
 
 import (
-	"path/filepath"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
@@ -75,8 +74,8 @@ type Work struct {
 // Clean reports that the phase has left nothing uncommitted, as far as baton can tell.
 func (w Work) Clean() bool { return w.Err == nil && !w.NoStart && !w.TooMany && len(w.Fresh) == 0 }
 
-// PhaseWork sorts the uncommitted work in the checkout by whether phase id made it: what is uncommitted
-// now against what was when the phase started. Without git there is none.
+// PhaseWork sorts the uncommitted work in the run's working tree by whether phase id made it: what is
+// uncommitted now against what was when the phase started. Without git there is none.
 func (s *Store) PhaseWork(id string) Work {
 	if !gitx.Usable(s.Root) {
 		return Work{}
@@ -103,7 +102,10 @@ func (s *Store) PhaseWork(id string) Work {
 		return w
 	}
 	w.Fresh, w.Kept = gitx.Since(start.Files, gitx.Fingerprint(s.Root, paths))
-	if p, err := OpenProject(filepath.Join(s.Root, DirName), s.Now); err == nil && len(p.Others(filepath.Base(s.Dir))) > 0 {
+	if s.Worker() != "" {
+		return w // a worker has its worktree to itself
+	}
+	if p, err := OpenProject(s.Project, s.Now); err == nil && len(p.Others(s.Ref)) > 0 {
 		mine := map[string]bool{}
 		for _, e := range edited {
 			mine[e] = true

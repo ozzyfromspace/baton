@@ -63,9 +63,12 @@ const (
 // wanted, or when ctx ends (a SIGTERM). A stopped job's lane is brought down.
 type Runner struct {
 	Pool Pool
-	Host string    // the baton host the job runs for: a lane is brought up once per host
-	Log  io.Writer // where every process's output goes, and the runner's own account; safe for concurrent use
-	Now  func() time.Time
+	// WorkDir is where a job with no commit (await) runs: the working tree of the session it runs for,
+	// which is a worker's own worktree for a worker. "" is Pool.Root.
+	WorkDir string
+	Host    string    // the baton host the job runs for: a lane is brought up once per host
+	Log     io.Writer // where every process's output goes, and the runner's own account; safe for concurrent use
+	Now     func() time.Time
 
 	Timeout   time.Duration
 	Tick      time.Duration
@@ -111,8 +114,12 @@ func (r *Runner) Run(ctx context.Context, j Job) Result {
 	r.begin()
 	var res Result
 	if j.Commit == "" {
-		r.say("job %s: %s, in %s", j.ID, j.Command, r.Pool.Root)
-		res = r.command(ctx, 0, r.Pool.Root, r.Pool.env(0, "", ""), shell(j.Command))
+		dir := r.WorkDir
+		if dir == "" {
+			dir = r.Pool.Root
+		}
+		r.say("job %s: %s, in %s", j.ID, j.Command, dir)
+		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
 	} else {
 		res = r.inLane(ctx, j)
 	}

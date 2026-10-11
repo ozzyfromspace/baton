@@ -65,7 +65,7 @@ func store(io IO) (*state.Store, error) {
 	}
 	switch {
 	case inst != "" && sid != "":
-		return p.Bind(state.Binding{Session: sid, Instance: inst}) // hosted, before any hook bound it
+		return p.Bind(state.Binding{Session: sid, Instance: inst, Worker: worker(io)}) // hosted, before any hook bound it
 	case sid != "" || inst != "":
 		return nil, state.ErrNoPlan
 	}
@@ -81,7 +81,7 @@ func attachTo(io IO) (*state.Store, error) {
 	}
 	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
 	if sid != "" || inst != "" {
-		return p.Bind(state.Binding{Session: sid, Instance: inst})
+		return p.Bind(state.Binding{Session: sid, Instance: inst, Worker: worker(io)})
 	}
 	return p.Pending("")
 }
@@ -92,6 +92,9 @@ func fail(io IO, format string, a ...any) int {
 }
 
 func hosted(io IO) bool { return io.Env("BATON_HOST") == "1" }
+
+// worker reports whether a command runs in a worker's session, which works on one phase of its run.
+func worker(io IO) bool { return hosted(io) && io.Env("BATON_ROLE") == "worker" }
 
 func cmdAttach(args []string, io IO) int {
 	p, err := parseArgs(args, []string{"spec"}, []string{"suggest", "suggested", "replace"})
@@ -232,14 +235,14 @@ func cmdStatus(args []string, io IO) int {
 	pl, perr := s.LoadPlan()
 	snaps := gitx.Snapshots(s.Root)
 	if p.bools["json"] {
-		out := map[string]any{"state": st, "baton_dir": s.Dir, "run": filepath.Base(s.Dir), "hosted": hosted(io)}
+		out := map[string]any{"state": st, "baton_dir": s.Dir, "run": s.Ref, "hosted": hosted(io)}
 		if perr == nil {
 			out["plan"] = pl
 		}
 		if len(snaps) > 0 {
 			out["snapshots"] = snaps
 		}
-		if lanes := (lane.Pool{Home: batonRoot(io), Root: s.Root}).Lanes(); len(lanes) > 0 {
+		if lanes := lanePool(io, s).Lanes(); len(lanes) > 0 {
 			out["lanes"] = lanes
 		}
 		b, _ := json.MarshalIndent(out, "", "  ")
@@ -412,13 +415,17 @@ func printRuns(io IO, runs []state.RunInfo, asJSON bool) {
 	fmt.Fprintln(io.Out, "Run /baton status inside a session for its run in full.")
 }
 
-// printOthers names the other sessions working in the same working tree right now.
+// printOthers names the other sessions working in the same working tree right now. A worker has its
+// worktree to itself.
 func printOthers(io IO, s *state.Store) {
-	p, err := state.OpenProject(filepath.Join(s.Root, state.DirName), io.Now)
+	if s.Worker() != "" {
+		return
+	}
+	p, err := state.OpenProject(s.Project, io.Now)
 	if err != nil {
 		return
 	}
-	others := p.Others(filepath.Base(s.Dir))
+	others := p.Others(s.Ref)
 	if len(others) == 0 {
 		return
 	}
@@ -1099,7 +1106,7 @@ func cmdDrop(args []string, io IO) int {
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
 	stopRunners(stopped, io.Now())
 	os.RemoveAll(jobsDir(s))
-	lanesDown(io, s.Root, filepath.Join(s.Root, state.DirName), instance(io))
+	lanesDown(io, s.Checkout, s.Project, instance(io))
 	dropped := map[string]any{"plan": pl.File}
 	if len(stopped) > 0 {
 		dropped["stopped"] = jobIDs(stopped)

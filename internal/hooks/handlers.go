@@ -44,6 +44,7 @@ func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 			Session:  str(c.Input, "session_id"),
 			Instance: c.Env("BATON_INSTANCE"),
 			Carry:    c.Event == "SessionStart" && str(c.Input, "source") == "clear",
+			Worker:   c.Env("BATON_ROLE") == "worker",
 		})
 	}
 }

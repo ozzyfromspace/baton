@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -358,7 +357,7 @@ func (h *session) runOf() (s *state.Store, fresh bool) {
 		h.run = nil
 		return nil, false
 	}
-	if h.run != nil && filepath.Base(h.run.Dir) == id {
+	if h.run != nil && h.run.Ref == id {
 		return h.run, false
 	}
 	s, err := h.cfg.Project.Run(id, h.cfg.Instance)
@@ -393,7 +392,7 @@ func (h *session) heartbeat(stop <-chan struct{}) {
 			if st, lerr := s.Load(); lerr == nil && !st.IsOwner(h.cfg.Instance, now) {
 				// Another terminal took the run over while this one's claim had lapsed (the machine
 				// slept): it drives the run now, and this host lets go.
-				h.cfg.Logf("host: run %s is now driven by %s; letting go", filepath.Base(s.Dir), st.Owner.Instance)
+				h.cfg.Logf("host: run %s is now driven by %s; letting go", s.Ref, st.Owner.Instance)
 				h.cfg.Project.Unbind(h.cfg.Instance)
 			}
 		}
@@ -412,7 +411,7 @@ func (h *session) loop(stop <-chan struct{}) {
 		s, fresh := h.runOf()
 		if fresh {
 			s.Event("host_started", map[string]any{"pid": os.Getpid(), "version": h.cfg.Version, "git": gitx.Usable(s.Root)})
-			h.cfg.Logf("host: driving run %s", filepath.Base(s.Dir))
+			h.cfg.Logf("host: driving run %s", s.Ref)
 		}
 		if h.cfg.Controller == nil {
 			continue
@@ -459,7 +458,7 @@ func bind(cfg Config) {
 	if st, err := s.Load(); err == nil && !st.IsOwner(cfg.Instance, cfg.Now()) && st.Owner != nil {
 		fmt.Fprintf(cfg.Stdout, "baton: another baton terminal (pid %d, since %s) is running this conversation's plan; this one leaves it alone until that one exits.\r\n",
 			st.Owner.PID, st.Owner.Started.Local().Format("15:04"))
-		cfg.Logf("host: run %s is driven by %s", filepath.Base(s.Dir), st.Owner.Instance)
+		cfg.Logf("host: run %s is driven by %s", s.Ref, st.Owner.Instance)
 	}
 }
 
