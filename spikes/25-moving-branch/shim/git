@@ -1,0 +1,4 @@
+#!/bin/sh
+# logging shim: records every git that Claude Code (or a Bash tool call) runs, then execs the real git
+[ -n "$GITSHIM_LOG" ] && printf '%s ppid=%s pcmd=%s cwd=%s | git %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$PPID" "$(ps -o comm= -p $PPID 2>/dev/null)" "$PWD" "$*" >> "$GITSHIM_LOG"
+exec /usr/bin/git "$@"

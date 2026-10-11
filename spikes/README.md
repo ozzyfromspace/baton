@@ -22,6 +22,10 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `20-tool-steering/` | Can a PreToolUse hook rewrite a Bash call or force it into the background? What does Claude Code do with a long foreground command? What do subagents, worktree isolation and the Workflow tool allow? (2026-10-10; [findings](20-tool-steering/README.md)) |
 | `21-attach/` | Can a worker `claude` run in a PTY nobody watches, and be repainted in full when a human attaches a terminal? Does resizing or not reading its output hurt it? What does a worker cost? (2026-10-10; [findings](21-attach/README.md)) |
 | `22-run-timelines/` | Where did a real run's time go, and how much faster would it have finished with phases run concurrently? (2026-10-10; [write-up](../docs/research/parallel.md)) |
+| `23-worker-start/` | How does a host start a hidden worker `claude` in its own worktree with no keystrokes (initial prompt, session id, trust), and how does it end and resume one? (2026-10-11, Claude Code 2.1.296; [write-up](../docs/research/workers.md)) |
+| `24-relay/` | Which hook channel makes a model put a question baton gives it to the human, word for word? (2026-10-11; [write-up](../docs/research/workers.md)) |
+| `25-moving-branch/` | Can finished work be fast-forwarded onto the branch a live session is editing, and what does the session make of it? (2026-10-11; [write-up](../docs/research/workers.md)) |
+| `26-bg-sessions/` | Could Claude Code's background sessions (`claude --bg`, `claude attach`) be baton's workers? (2026-10-11; [write-up](../docs/research/workers.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 
