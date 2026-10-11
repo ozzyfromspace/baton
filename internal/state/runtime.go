@@ -72,7 +72,10 @@ type Runtime struct {
 	ContextNudgedAt int  `json:"context_nudged_at,omitempty"`
 	ContextWarned   bool `json:"context_warned,omitempty"`
 	// WarnQuestion is the context question baton last issued, exactly as issued, until it is answered.
+	// WarnOwed is set while it has not been put on screen: a stop is refused once over it, and a
+	// compaction makes it moot.
 	WarnQuestion string      `json:"warn_question,omitempty"`
+	WarnOwed     bool        `json:"warn_owed,omitempty"`
 	Escalation   *Escalation `json:"escalation,omitempty"`
 	LastError    *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.

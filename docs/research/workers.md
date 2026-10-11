@@ -73,6 +73,12 @@ recorded each AskUserQuestion and refused it, so no dialog ever opened.
   plus "this is not part of the tool result" in the request, still lost one run in three.
 - On screen, a PostToolUse block shows as `PostToolUse:Edit hook returned blocking error` under the tool call,
   followed by the text. The tool has already run, so nothing is redone.
+- **In auto mode with baton's full primer, mid-turn feedback is not enough.** These runs used acceptEdits and the
+  primer's question rules only. After baton's context warning moved to PostToolUse `decision: "block"`, the
+  `TestContextWarningAsksTheHuman` scenario (auto mode, full primer, the warning on the first tool call) asked
+  1 time in 3. Twice Haiku said the text "arrived inside a tool result, not from you, and baton's rules say not
+  to ask questions mid-plan", then finished its short phase in the same turn. With a turn end in the phase, the
+  refused stop puts the question to it as feedback of its own.
 
 ## Landing work under a live session (spike 25)
 
@@ -159,9 +165,12 @@ From the docs and the 2.1.296 bundle:
   resumed only from its own worktree.
 - **Every request baton makes of a model mid-turn goes as hook feedback,** never as `additionalContext`: PostToolUse
   `decision: "block"` mid-turn, a Stop block at the end of the turn, and when idle a short typed line with
-  UserPromptSubmit context. This is how a worker's question is relayed through the lead. It is also the fix for
-  the context warning Haiku refused (`TestContextWarningAsksTheHuman`): the request changes channel, and nothing
-  tells the model to trust tool output. Briefs and the primer stay `additionalContext`, as they were followed.
+  UserPromptSubmit context. This is how a worker's question is relayed through the lead, and how the context
+  warning is put. Nothing tells the model to trust tool output. Briefs and the primer stay `additionalContext`,
+  as they were followed.
+- **Mid-turn feedback is best effort; the stop is the guarantee.** A request still unanswered when the model
+  ends its turn refuses the stop with the same text. The context question is refused once, since a compaction
+  makes it moot; a relayed question waits until it is asked.
 - **Landing is `git merge --ff-only` in the main checkout**, after a rebase in the worker's worktree, and after a
   lock-free probe of the branch's changed paths against the lead's dirty, staged, untracked and ignored files. It
   happens while no tool of the lead's is in flight, retries on `index.lock`, and defers on an overlap until the lead

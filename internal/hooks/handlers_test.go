@@ -369,6 +369,15 @@ func additionalContext(out map[string]any) string {
 	return s
 }
 
+// feedback is what a hook's blocking feedback tells the model: how baton's requests reach it mid-turn.
+func feedback(out map[string]any) string {
+	if out["decision"] != "block" {
+		return ""
+	}
+	s, _ := out["reason"].(string)
+	return s
+}
+
 // With the default 810k cap on a 1M model: checkpoint at 486k, warning at 729k, re-arm 81k below each.
 var defaultCap = map[string]string{"BATON_COMPACT_CAP": "810000"}
 
@@ -383,7 +392,7 @@ func TestContextNudgeOncePerCompaction(t *testing.T) {
 	if out["systemMessage"] != "baton: context at 500k of 810k → checkpoint at the next safe point" {
 		t.Fatalf("not announced: %v", out["systemMessage"])
 	}
-	ctx := additionalContext(out)
+	ctx := feedback(out)
 	if !strings.Contains(ctx, "Checkpoint due: the context holds 500k tokens, 62% of its 810k limit") || !strings.Contains(ctx, "baton checkpoint --notes") {
 		t.Fatalf("nudge: %q", ctx)
 	}
@@ -392,7 +401,7 @@ func TestContextNudgeOncePerCompaction(t *testing.T) {
 	}
 	// Another tenth of the limit later, the request is repeated.
 	f.setContext(590_000)
-	if !strings.Contains(additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "the context holds 590k tokens") {
+	if !strings.Contains(feedback(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "the context holds 590k tokens") {
 		t.Fatal("the nudge was not repeated as the context grew")
 	}
 	f.setContext(500_000)
@@ -424,7 +433,7 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	if out["systemMessage"] != "baton: context at 730k of 810k → asking you whether to checkpoint" {
 		t.Fatalf("not announced: %v", out["systemMessage"])
 	}
-	ctx := additionalContext(out)
+	ctx := feedback(out)
 	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
 		"Checkpoint now? If nobody answers within 20 minutes, baton picks Keep going.", "exactly 3 options, in this order",
 		`"Checkpoint now" (description: "Finish the current step`, `"Pause baton" (description:`, `"Keep going" (description:`,
@@ -445,8 +454,61 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	f.setContext(600_000)
 	f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
 	f.setContext(740_000)
-	if !strings.Contains(additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "AskUserQuestion") {
+	if !strings.Contains(feedback(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "AskUserQuestion") {
 		t.Fatal("the re-armed warning did not fire")
+	}
+}
+
+// A context question the model did not put to the human holds its stop once, with the same call. Once
+// it has been on screen, or a compaction has made it moot, the stop goes on as it would have.
+func TestAnUnaskedContextQuestionHoldsTheStopOnce(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		then    func(f *fixture, q string)
+		refused bool
+	}{
+		{"never asked", func(*fixture, string) {}, true},
+		{"asked and answered", func(f *fixture, q string) {
+			call := ask(q, warnLabels...)
+			f.fire("PermissionRequest", call)
+			f.fire("PostToolUse", answer(call, "Keep going"))
+		}, false},
+		{"asked, and the dialog went away", func(f *fixture, q string) {
+			call := ask(q, warnLabels...)
+			f.fire("PermissionRequest", call)
+			f.fire("PostToolUseFailure", call)
+		}, false},
+		{"compacted since", func(f *fixture, _ string) {
+			f.fire("SessionStart", map[string]any{"source": "compact"})
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			q := f.warned()
+			c.then(f, q)
+			reason := feedback(f.fire("Stop", map[string]any{}))
+			held := strings.Contains(reason, "You stopped, but put baton's context question to the human first")
+			if held != c.refused {
+				t.Fatalf("held %v, want %v: %q", held, c.refused, reason)
+			}
+			if !c.refused {
+				return
+			}
+			for _, want := range []string{q, "exactly 3 options, in this order", `"Keep going" (description:`, "baton acts on the answer itself"} {
+				if !strings.Contains(reason, want) {
+					t.Errorf("reason lacks %q: %q", want, reason)
+				}
+			}
+			if !f.logged("stop_refused", map[string]any{"phase": "P0", "why": "context question not asked"}) {
+				t.Errorf("no stop_refused: %v", f.events())
+			}
+			if again := feedback(f.fire("Stop", map[string]any{})); strings.Contains(again, "context question") {
+				t.Fatalf("held twice: %q", again)
+			}
+			if st := f.state(); st.Run.WarnQuestion != q {
+				t.Fatalf("the question was forgotten: %q", st.Run.WarnQuestion)
+			}
+		})
 	}
 }
 
@@ -455,7 +517,7 @@ func TestContextWarningSaysWhenBatonAnswers(t *testing.T) {
 	f := newFixture(t, true)
 	f.vars = map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_WARN_TIMEOUT": "45s"}
 	f.setContext(730_000)
-	if ctx := additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})); !strings.Contains(ctx, "If nobody answers within 45s, baton picks Keep going") {
+	if ctx := feedback(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})); !strings.Contains(ctx, "If nobody answers within 45s, baton picks Keep going") {
 		t.Fatalf("warning: %q", ctx)
 	}
 }
@@ -542,7 +604,7 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	if q != "baton: blocked on P0: need a key" {
 		t.Fatalf("question %q", q)
 	}
-	if out := reply(f, q, escalationLabels, "Continue"); !strings.Contains(additionalContext(out), "baton has resumed") {
+	if out := reply(f, q, escalationLabels, "Continue"); !strings.Contains(feedback(out), "baton has resumed") {
 		t.Fatalf("continue: %v", out)
 	}
 	if st := f.state(); st.Blocked != nil || st.Run.Escalation != nil || st.Mode != state.ModeRunning {

@@ -191,6 +191,12 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		d.say("baton: waiting on you — " + st.Run.Escalation.Reason)
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
+	case st.Run.WarnOwed && st.Run.WarnQuestion != "":
+		// The model was asked to put the context question to the human and stopped without doing so.
+		// Refused once: the context warning is advice, so a second stop goes on as it would have.
+		st.Run.WarnOwed = false
+		d.refuse(decide.ContextWarning(decide.Question{Text: st.Run.WarnQuestion, Options: decide.WarnOptions}.Call(), true))
+		d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "context question not asked"})
 	case len(st.Due()) > 0:
 		// A job of the phase in hand finished: its result is what the model goes on with.
 		st.Run.StopBlocks = 0

@@ -26,6 +26,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Resul
 	kind := ""
 	var result *state.Job // the job a resumed phase was set aside for, now finished
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		st.Run.WarnOwed = false // the context the question was about is gone
 		if st.Mode != state.ModeRunning {
 			return nil
 		}

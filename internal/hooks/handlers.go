@@ -651,6 +651,9 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 		}
 		st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: agent, Key: dialogKey(c.Input), Since: c.Now, Kind: kind})
 		open = len(st.Run.Dialogs)
+		if kind == "context_warning" {
+			st.Run.WarnOwed = false
+		}
 		if kind == "proposal" {
 			proposal, isProposal = asked(st, c.Now)
 		}
@@ -773,7 +776,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		}
 	}
 	if tell != "" {
-		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": tell}
+		// Hook feedback, not context: a model weighs text beside a tool result as possible injection and
+		// may ignore it, but follows a blocking hook's reason (docs/research/workers.md). The tool has
+		// already run, so nothing is redone.
+		out["decision"], out["reason"] = "block", tell
 	}
 	return Result{Output: out}, nil
 }
@@ -791,7 +797,7 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 			continue
 		}
 		if iq.kind == "context_warning" {
-			st.Run.WarnQuestion = "" // answered: asking it again would need a new warning
+			st.Run.WarnQuestion, st.Run.WarnOwed = "", false // answered: asking it again would need a new warning
 		}
 		// Events are named as if the CLI had done it (resumed, paused), so the record reads the same.
 		var event, say, tell string
@@ -878,12 +884,12 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
 		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
 		q := warnQuestion(used, lim, vs.WarnTimeout)
-		st.Run.WarnQuestion = q.Text
+		st.Run.WarnQuestion, st.Run.WarnOwed = q.Text, true
 		return valveAction{
 			event:  "context_warning",
 			fields: map[string]any{"tokens": used, "warn": lim.Warn, "limit": lim.Window, "auto_compact": lim.AutoAt},
 			say:    fmt.Sprintf("baton: context at %s of %s → asking you whether to checkpoint", valve.Tokens(used), valve.Tokens(lim.Window)),
-			tell:   NudgePrefix + " Context warning. Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you.",
+			tell:   decide.ContextWarning(q.Call(), false),
 		}
 	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
 		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):

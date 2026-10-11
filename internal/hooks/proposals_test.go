@@ -127,8 +127,8 @@ func TestAProposalIsPutToTheHumanAndActedOn(t *testing.T) {
 				t.Errorf("no proposal_resolved: %v", f.events())
 			}
 			for _, want := range c.tell {
-				if !strings.Contains(additionalContext(out), want) {
-					t.Errorf("the model was not told %q:\n%s", want, additionalContext(out))
+				if !strings.Contains(feedback(out), want) {
+					t.Errorf("the model was not told %q:\n%s", want, feedback(out))
 				}
 			}
 			if say, _ := out["systemMessage"].(string); say == "" {
@@ -327,8 +327,8 @@ func TestAReviewEndsWithTheHumansAnswer(t *testing.T) {
 				t.Fatalf("human at %v, events %v", st.Run.HumanAt, f.events())
 			}
 			want := map[string]string{"Continue": state.ModeRunning, "Pause baton": state.ModePaused}[a]
-			if st.Mode != want || additionalContext(out) == "" {
-				t.Fatalf("mode %s, told %q", st.Mode, additionalContext(out))
+			if st.Mode != want || feedback(out) == "" {
+				t.Fatalf("mode %s, told %q", st.Mode, feedback(out))
 			}
 			if a == "Continue" && st.Run.Escalation != nil {
 				t.Fatalf("escalation left: %+v", st.Run.Escalation)
@@ -350,8 +350,8 @@ func TestAGoAheadAtTheCapIsDoneThenReviewed(t *testing.T) {
 	if st := f.state(); st.ReviewDue != "P0" || !f.logged("review_due", map[string]any{"phase": "P0"}) {
 		t.Fatalf("review due %q", st.ReviewDue)
 	}
-	if !strings.Contains(additionalContext(out), "once it is done, end your turn") {
-		t.Fatalf("told %q", additionalContext(out))
+	if !strings.Contains(feedback(out), "once it is done, end your turn") {
+		t.Fatalf("told %q", feedback(out))
 	}
 	if r := denyReason(f.fire("PreToolUse", bash("git commit --no-gpg-sign -m P0"))); r != "" {
 		t.Fatalf("the go-ahead itself was held: %s", r)
@@ -371,7 +371,7 @@ func TestNoContextQuestionWhileAProposalWaits(t *testing.T) {
 	f.vars = defaultCap
 	f.propose(false)
 	f.setContext(750_000)
-	if out := f.fire("PostToolUse", bash("ls")); additionalContext(out) != "" {
+	if out := f.fire("PostToolUse", bash("ls")); feedback(out) != "" {
 		t.Fatalf("asked while a proposal waits: %v", out)
 	}
 	if f.state().Run.WarnQuestion != "" {

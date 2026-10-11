@@ -70,6 +70,16 @@ func AskFirst(id, question string) string {
 	return fmt.Sprintf("put your proposal %s to the human first: %s", id, Question{question, ProposalOptions}.Call())
 }
 
+// ContextWarning asks the model to put the context question to the human; call is its exact call.
+// stopped says the model ended its turn without having asked it.
+func ContextWarning(call string, stopped bool) string {
+	lead := "[baton] Context warning. Before anything else, "
+	if stopped {
+		lead = "[baton] You stopped, but put baton's context question to the human first: "
+	}
+	return lead + call + ". baton acts on the answer itself; then follow what it tells you."
+}
+
 // ReviewQuestion is the question that stops the run for the human to review the decisions phase made
 // without them.
 func ReviewQuestion(phase string, n int) Question {

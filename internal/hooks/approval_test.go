@@ -34,7 +34,7 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 	if !strings.Contains(say(out), `attached "The next campaign" (2 phases; dependencies: each phase follows the one before it) → compacting the planning conversation, then P0 starts`) {
 		t.Fatalf("announced %q", say(out))
 	}
-	if tell := additionalContext(out); !strings.Contains(tell, "Do not start P0 in this turn: end your turn now") {
+	if tell := feedback(out); !strings.Contains(tell, "Do not start P0 in this turn: end your turn now") {
 		t.Fatalf("told %q", tell)
 	}
 	st := f.state()
@@ -70,7 +70,7 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 func TestAPlanWithoutPhasesIsLeftAlone(t *testing.T) {
 	f := newFixture(t, false)
 	out := f.approve(f.writePlan("quick-fix.md", "# Fix the login bug\n\nChange the check in auth.go.\n"))
-	if !strings.Contains(say(out), "not attached, as it has no phase headings") || additionalContext(out) != "" {
+	if !strings.Contains(say(out), "not attached, as it has no phase headings") || feedback(out) != "" {
 		t.Fatalf("said %v", out)
 	}
 	if st := f.state(); st.Mode != state.ModeIdle {
@@ -107,7 +107,7 @@ func TestARevisedPlanApprovedMidRunIsPutToTheHuman(t *testing.T) {
 	os.WriteFile(file, []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b, better.\n\n## P2 — Third\nDo c.\n\n## P3 — Fourth\nDo d.\n"), 0o644)
 	out := f.approve(file)
 	q := "baton: you approved a revised plan while 'Demo' is running (at P1). Carry on with the revision, or start it over from P0?"
-	if !strings.Contains(additionalContext(out), q) || !strings.Contains(say(out), "asking you what to do with it") {
+	if !strings.Contains(feedback(out), q) || !strings.Contains(say(out), "asking you what to do with it") {
 		t.Fatalf("asked %v", out)
 	}
 	if d := denyReason(f.fire("PreToolUse", bash("make"))); !strings.Contains(d, "put baton's question about the plan the human approved to them first") {
@@ -152,8 +152,8 @@ func TestARevisionThatMustWaitForAJob(t *testing.T) {
 	if st := f.state(); st.Mode != state.ModeRunning || st.Current != "" || st.Phases["P1"].Status != state.PhaseVerifying {
 		t.Fatalf("after revising: %+v", st)
 	}
-	if !strings.Contains(say(out), "no phase of the revision can start until a job finishes") || !strings.Contains(additionalContext(out), "waits for a job to finish") {
-		t.Fatalf("said %q, told %q", say(out), additionalContext(out))
+	if !strings.Contains(say(out), "no phase of the revision can start until a job finishes") || !strings.Contains(feedback(out), "waits for a job to finish") {
+		t.Fatalf("said %q, told %q", say(out), feedback(out))
 	}
 }
 
@@ -164,8 +164,8 @@ func TestANewPlanApprovedMidRunCanStartOver(t *testing.T) {
 	file := f.writePlan("after-clear.md", approvedDoc)
 	out := f.approve(file)
 	q := "baton: you approved a new plan while 'Demo' is running (at P1). Start the new plan from P0, or keep the current run?"
-	if !strings.Contains(additionalContext(out), q) {
-		t.Fatalf("asked %q", additionalContext(out))
+	if !strings.Contains(feedback(out), q) {
+		t.Fatalf("asked %q", feedback(out))
 	}
 	question := ask(q, "Start the new plan from P0", "Keep the current run")
 	f.fire("PermissionRequest", question)
@@ -208,7 +208,7 @@ func TestAPlanApprovedWithClearContextStartsAtOnce(t *testing.T) {
 	f.fire("SessionStart", map[string]any{"source": "clear", "session_id": "sess-new"})
 	out := f.fire("PostToolUse", map[string]any{"session_id": "sess-new", "permission_mode": "acceptEdits", "tool_name": "Bash",
 		"tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{}})
-	if !strings.Contains(say(out), "→ P0 starts now") || !strings.Contains(additionalContext(out), "Work on P0 (Instruments) only.") {
+	if !strings.Contains(say(out), "→ P0 starts now") || !strings.Contains(feedback(out), "Work on P0 (Instruments) only.") {
 		t.Fatalf("attached? %v", out)
 	}
 	st := f.state()

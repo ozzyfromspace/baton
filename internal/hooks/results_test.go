@@ -51,11 +51,11 @@ func TestAResultReachesTheModelMidTurn(t *testing.T) {
 		}
 		return f.fire("PostToolUse", in)
 	}
-	if out := bash("sub-1"); additional(out) != "" {
+	if out := bash("sub-1"); feedback(out) != "" {
 		t.Fatalf("a subagent was given the result: %v", out)
 	}
 	out := bash("")
-	ctx := additional(out)
+	ctx := feedback(out)
 	for _, want := range []string{resultHead, "--- FAIL: TestRanking\nFAIL", "Fix what failed, commit, and verify again"} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("result lacks %q:\n%s", want, ctx)
@@ -81,7 +81,7 @@ func TestAResultWaitsForAQuestionOwed(t *testing.T) {
 		return err
 	})
 	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{}})
-	if additional(out) != "" || len(f.state().Due()) != 1 {
+	if feedback(out) != "" || len(f.state().Due()) != 1 {
 		t.Fatalf("given ahead of the question: %v", out)
 	}
 }
