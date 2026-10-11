@@ -177,5 +177,11 @@ Found on the way:
   `"monitor"` (`internal/loop/loop.go`) never matches, and `BusyBackground` counts monitors as waitable work.
   Fixed in v0.4: baton records each Monitor's `taskId` from PostToolUse and tells them apart by id.
 - **Haiku now has auto mode.** Haiku 5.5 runs in auto mode, contrary to the note in `CLAUDE.md`.
-- **Idle compaction is untested.** Claude Code has an `idleCompaction` setting (on by default); it may interact
-  with baton's own compaction control.
+- **Idle compaction compacts a session unasked.** From the 2.1.296 bundle: an interactive session whose prompt
+  cache has a one-hour TTL is compacted when it has been idle for 90% of that hour (about 54 minutes), provided
+  its context holds at least 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, at least 100k), auto-compact is
+  on, no turn is running and the usage limit is not near. A server flag gates it; on 2026-10-10 it was on (`compact`)
+  on the machine these runs came from. It needs no prompt; the transcript gets "Compacted while idle, before the prompt
+  cache expired". A session that idles while its gate runs elsewhere would lose the phase's context without
+  baton deciding it, so baton's session settings set `"idleCompaction": false` (the setting can only turn it
+  off). A separate "sleep" compactor exists only for headless hosts started with `CLAUDE_CODE_SLEEP_COMPACT`.

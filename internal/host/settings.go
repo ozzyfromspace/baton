@@ -23,6 +23,10 @@ var rewakeHooks = []struct{ event, matcher, name string }{
 // Settings is the JSON baton passes to claude with --settings. It only exists for this session: no
 // settings file is edited. It adds baton's hooks, a status line that wraps the user's own, and an allow
 // rule for baton's own CLI so auto mode does not block the model from reporting progress.
+//
+// It also turns off idle compaction: Claude Code compacts a long conversation (200k tokens or more) on
+// its own when the session has been idle for most of the prompt cache's hour. baton decides when a
+// hosted session compacts, and a session may idle on purpose mid-phase (docs/research/parallel.md).
 func Settings(batonBin string) map[string]any {
 	hooks := map[string]any{}
 	for _, ev := range hookEvents {
@@ -39,9 +43,10 @@ func Settings(batonBin string) map[string]any {
 		hooks[r.event] = append(hooks[r.event].([]any), entry)
 	}
 	return map[string]any{
-		"hooks":       hooks,
-		"statusLine":  map[string]any{"type": "command", "command": shellQuote(batonBin) + " statusline", "padding": 0},
-		"permissions": map[string]any{"allow": []any{"Bash(baton:*)"}},
+		"hooks":          hooks,
+		"statusLine":     map[string]any{"type": "command", "command": shellQuote(batonBin) + " statusline", "padding": 0},
+		"permissions":    map[string]any{"allow": []any{"Bash(baton:*)"}},
+		"idleCompaction": false,
 	}
 }
 

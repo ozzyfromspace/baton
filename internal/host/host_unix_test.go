@@ -152,7 +152,7 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 		}
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	if len(hooks) < 10 || settings["statusLine"] == nil || !strings.Contains(args[1]+args[3], "Bash(baton:*)") {
+	if len(hooks) < 10 || settings["statusLine"] == nil || !strings.Contains(args[1]+args[3], "Bash(baton:*)") || settings["idleCompaction"] != false {
 		t.Fatalf("settings: %v", settings)
 	}
 	for k, want := range map[string]string{"BATON_HOST": "1", "BATON_INSTANCE": "inst-1", "BATON_BIN": "/opt/baton/bin/baton", "BATON_VERSION": "test"} {
