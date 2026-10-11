@@ -201,6 +201,13 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 			msg = "baton: no phase can start until " + waitingOn(jobs) + " finishes; baton takes the next one up then"
 		}
 		d.say(msg)
+	case st.CurrentJob() != nil:
+		// The phase in hand waits on its job, and nothing else is owed: the session idles in place. The
+		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.
+		st.Run.StopBlocks = 0
+		j := st.CurrentJob()
+		d.say(fmt.Sprintf("baton: %s waits on job %s (`%s`); Claude is given its result when it ends", cur, j.ID, j.Command))
+		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
 	case st.Waiting != nil && now.Before(st.Waiting.Until):
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))

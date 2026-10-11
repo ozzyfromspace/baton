@@ -8,8 +8,8 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// afterCompaction runs for SessionStart with source "compact": it starts the next phase if this was the
-// boundary compaction, and injects the brief. Claude Code runs this before PostCompact, so the brief is
+// afterCompaction runs for SessionStart with source "compact": it starts the next phase if this was a
+// boundary or a switch, and injects the brief. Claude Code runs this before PostCompact, so the brief is
 // in place before the rewake wakes the model (docs/research/verification-2.md). A phase resumed after its
 // job finished gets the job's result in its brief. ann is what the host left for the human.
 func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Result, error) {
@@ -37,7 +37,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Resul
 			comp.Trigger, ours = "auto", true
 		}
 		switch {
-		case ours && comp.Reason == "boundary" && st.BoundaryOwed:
+		case ours && comp.StartsPhase() && st.BoundaryOwed:
 			kind = brief.Boundary
 			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
 				kind = brief.Resume
@@ -117,7 +117,7 @@ func (h *handlers) postCompactRewake(c Context) (Result, error) {
 			return nil // (Failed: PostCompact, running alongside, is promoting a late finish to Done)
 		}
 		comp.Rewoken, epoch = comp.Epoch, comp.Epoch
-		if comp.Reason == "boundary" {
+		if comp.StartsPhase() {
 			verb := "Begin"
 			if st.Resumed() {
 				verb = "Resume"

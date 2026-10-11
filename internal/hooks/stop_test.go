@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,6 +107,34 @@ func TestStopDecisionTable(t *testing.T) {
 				st.Phases["P0"].Status, st.Current = state.PhaseVerifying, ""
 				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
 			}},
+		{name: "the phase's job running: the session idles in place", say: "P0 (First) waits on job j1 (`make test`); Claude is given its result when it ends",
+			setup: func(st *state.State) {
+				st.Run.StopBlocks = 2
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+			}},
+		{name: "a queued job too", say: "P0 (First) waits on job j1",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobQueued}}
+			}},
+		{name: "another phase's job is no reason to idle", block: true, reason: "baton done P0",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Command: "make test", Status: state.JobRunning}}
+			}},
+		{name: "a proposal comes before idling on a job", block: true, reason: "put your proposal d1 to the human first",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+				state.AddProposal(st, state.Decision{What: "skip it", Question: "baton: x."}, tStop)
+			}},
+		{name: "a checkpoint comes before idling on a job", say: "checkpoint → compacting", compact: "checkpoint",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+				st.CheckpointOwed = true
+			}},
+		{name: "a switch queued lets the turn end",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning, Queued: tStop}}
+				st.Run.Compaction.Queue("switch", tStop)
+			}},
 		{name: "expired wait is no status", block: true, reason: "not reported done",
 			setup: func(st *state.State) { state.SetWaiting(st, "x", time.Minute, tStop.Add(-time.Hour)) }},
 		{name: "fourth silent stop escalates", block: true, reason: "AskUserQuestion", notice: "stalled",
@@ -157,7 +186,7 @@ func TestStopDecisionTable(t *testing.T) {
 				if st.Run.Compaction.Status != state.CompactQueued || st.Run.Compaction.Reason != c.compact {
 					t.Errorf("compaction = %+v, want queued %s", st.Run.Compaction, c.compact)
 				}
-			} else if c.name != "compaction already in flight" && st.Run.Compaction.Status == state.CompactQueued {
+			} else if c.name != "compaction already in flight" && c.name != "a switch queued lets the turn end" && st.Run.Compaction.Status == state.CompactQueued {
 				t.Errorf("unexpected compaction queued")
 			}
 			if c.notice != "" && (len(st.Run.Notices) != 1 || st.Run.Notices[0].Kind != c.notice) {
@@ -167,6 +196,9 @@ func TestStopDecisionTable(t *testing.T) {
 			}
 			if c.notice == "" && len(st.Run.Notices) != 0 {
 				t.Errorf("unexpected notices %+v", st.Run.Notices)
+			}
+			if !blocked && st.Run.StopBlocks != 0 {
+				t.Errorf("an allowed stop left the count of stops without status at %d", st.Run.StopBlocks)
 			}
 		})
 	}
@@ -328,5 +360,62 @@ func TestAutoCompactionGetsAContinueBriefAndNoRewake(t *testing.T) {
 	}
 	if code, _ := f.fireCode("PostCompactRewake", map[string]any{"trigger": "auto"}); code != 0 {
 		t.Fatal("rewoke after an auto-compaction, which continues by itself")
+	}
+}
+
+// A switch goes through the hooks like a boundary: the phase taken up begins with a fresh brief, and the
+// phase set aside comes back later as a resume, with its job's notes and result.
+func TestSwitchSequenceThroughTheHooks(t *testing.T) {
+	f := newFixture(t, false)
+	doc := []byte("# Demo\n\n## P0 — First\nAfter: none\n\nDo a.\n\n## P1 — Second\nAfter: none\n\nDo b.\n")
+	docPath := filepath.Join(filepath.Dir(f.dir), "plan.md")
+	os.WriteFile(docPath, doc, 0o644)
+	pl, err := plan.Build(docPath, doc, plan.Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store.SavePlan(pl)
+	compact := func() map[string]any {
+		f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
+		f.fire("PreCompact", map[string]any{"trigger": "manual"})
+		out := f.fire("SessionStart", map[string]any{"source": "compact"})
+		f.fire("PostCompact", map[string]any{"trigger": "manual"})
+		return out
+	}
+	f.store.Update(func(st *state.State) error {
+		*st = state.Reattach(*st, pl, f.now, state.Origin{})
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning, Notes: "a.go done; make test checks it", Queued: f.now}}
+		if _, ok := state.Switch(st, pl, f.now); !ok {
+			t.Fatal("no switch")
+		}
+		return nil
+	})
+	out := compact()
+	if ctx := additional(out); !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") || !strings.Contains(ctx, "⏸ P0 — First (parked)") {
+		t.Fatalf("brief:\n%s", ctx)
+	}
+	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
+		t.Fatalf("rewake: code %d %q", code, msg)
+	}
+
+	// P0's gate passes while P1 is under way; once P1 is done, P0 comes back first.
+	f.finished("P0", state.JobPassed)
+	f.store.Update(func(st *state.State) error {
+		st.Jobs = st.Jobs[1:] // the job, as it ended
+		_, err := state.Done(st, pl, "P1", f.now, state.DoneOpts{})
+		return err
+	})
+	if out := f.fire("Stop", map[string]any{}); !strings.Contains(said(out), "compacting, then P0 (First)") {
+		t.Fatalf("stop: %v", out)
+	}
+	out = compact()
+	ctx := additional(out)
+	for _, want := range []string{"Now: resume P0 — First from where it stood", "a.go done; make test checks it", "The result of the job P0 was set aside for:\n\n[baton] Job j1 (P0) passed"} {
+		if !strings.Contains(ctx, want) {
+			t.Errorf("brief lacks %q:\n%s", want, ctx)
+		}
+	}
+	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "Resume P0 (First) now") {
+		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 }
