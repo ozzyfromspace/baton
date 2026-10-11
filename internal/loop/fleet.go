@@ -109,6 +109,7 @@ func (l Launch) env(e state.Worker, run, dir, checkout string) []string {
 type Fleet struct {
 	Max      int     // workers at once (workers)
 	UsageMax float64 // no new worker above this percent of the five-hour allowance (worker_usage_max; 0: no check)
+	MaxAuto  int     // the decisions a phase may make without the human before they review them (max_auto_decisions; 0: no cap)
 	Home     string  // baton's home: the worktrees live under it
 	Project  *state.Project
 	Launch   Launch
@@ -237,8 +238,9 @@ func (c *Coordinator) fleet(v host.View, s *state.Store) {
 	})
 }
 
-// step looks over the run's workers once: the sessions this host runs, then the merge queue, then the
-// roster's workers no session runs, then whether a new one can start.
+// step looks over the run's workers once: the sessions this host runs, then the merge queue and the
+// answers to their questions, then the roster's workers no session runs, then whether a new one can
+// start.
 func (c *Coordinator) step(now time.Time, s *state.Store) {
 	st, err := s.Load()
 	if err != nil {
@@ -249,6 +251,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 		c.watch(now, s, st, pl, w)
 	}
 	c.merge(now, s)
+	c.relay(now, s)
 	if st, err = s.Load(); err != nil {
 		return
 	}

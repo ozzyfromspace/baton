@@ -138,6 +138,9 @@ type Loop struct {
 	switchHeld string    // the job whose switch uncommitted work holds, reported once
 	typedFor   string    // the jobs whose results baton last typed a line for, and when
 	typedAt    time.Time
+	relayFor   string // the worker's question baton last typed a line for, how often, and when
+	relayLines int
+	relayAt    time.Time
 	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart    *restart       // the restart claude was ended for
 	halted     bool           // the run is halted, and this halt's snapshot was started

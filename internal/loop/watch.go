@@ -36,7 +36,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
-	if l.deliver(v, st, in) {
+	if l.relayLine(v, st, in) || l.deliver(v, st, in) {
 		l.idleNudged = time.Time{}
 		return
 	}
@@ -122,6 +122,9 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 			return // the human was told when it was asked, and baton answers it at the deadline
 		}
 	}
+	if _, alone := st.Run.Dialogs.Only(); alone && d.Kind == "relay" && relayOnScreen(st, d.Key) != nil {
+		return // a worker's question: baton answers it if nobody does, and the lead goes on
+	}
 	due := []time.Duration{l.Timing.DialogNotify}
 	for _, r := range Reminders {
 		due = append(due, l.Timing.DialogNotify+r)
@@ -183,6 +186,22 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		// the wake (the minute alone does that).
 		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
 		fields["id"] = p.ID
+	case "relay":
+		// A worker's question has an answer for nobody answering, whatever it is (decide.RelayOptions): a
+		// timed proposal goes ahead at the time its question names, and anything else waits for the human
+		// in the worker's own session, so that the lead never waits on it. Timed like a proposal.
+		r := relayOnScreen(st, d.Key)
+		if r == nil || r.Deadline.IsZero() {
+			return
+		}
+		if !l.alone.Same(d) {
+			l.alone, l.aloneAt = d, v.Now
+		}
+		due = latest(r.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
+		fields["phase"], fields["type"] = r.Phase, r.Kind
+		if r.Decision != "" {
+			fields["id"] = r.Decision
+		}
 	default:
 		return
 	}

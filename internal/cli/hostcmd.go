@@ -178,7 +178,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	var sv *host.Supervisor
 	if workers > 0 {
 		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
-		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, Home: batonRoot(io), Project: proj,
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Home: batonRoot(io), Project: proj,
 			Launch: loop.Launch{Args: elevate.KeepWorkerArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
 				Env: env, BatonEnv: batonEnv, Bin: exe, Version: version.Version},
 			Spawn: func(spec host.Spec) (loop.Hidden, error) {

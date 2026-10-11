@@ -68,7 +68,7 @@ func TestRelayDue(t *testing.T) {
 	} {
 		st := running()
 		c.set(&st)
-		if got := st.RelayDue() != nil; got != c.due {
+		if got := st.RelayDue() != nil; got != c.due || (st.RelayToAsk() != nil) != c.due {
 			t.Errorf("%s: due %v, want %v", c.name, got, c.due)
 		}
 	}
@@ -79,7 +79,7 @@ func TestRelayDue(t *testing.T) {
 		t.Fatalf("front %+v; issued %v", r, st.RelayIssued())
 	}
 	IssueRelay(r, "baton: worker P3: q", t0.Add(5*time.Minute), t0)
-	if st.RelayDue() != nil || st.RelayIssued() != r || st.RelayUnasked() != r {
+	if st.RelayDue() != nil || st.RelayIssued() != r || st.RelayUnasked() != r || st.RelayToAsk() != r {
 		t.Fatal("given: it is the one asked, and nothing else is due")
 	}
 	st.Run.Escalation = &Escalation{Kind: "stalled", Since: t0}
@@ -88,7 +88,7 @@ func TestRelayDue(t *testing.T) {
 	}
 	st.Run.Escalation = nil
 	r.Asked = true
-	if st.RelayUnasked() != nil || st.RelayIssued() != r {
+	if st.RelayUnasked() != nil || st.RelayToAsk() != nil || st.RelayIssued() != r {
 		t.Fatal("asked")
 	}
 	AnswerRelay(r, ByHuman, "Go ahead", t0.Add(time.Minute))

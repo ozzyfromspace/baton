@@ -106,14 +106,28 @@ func (st *State) RelayUnasked() *Relay {
 }
 
 // RelayDue is the worker's question the lead's model is to be given now, or nil: the front one, not given
-// yet, while the plan runs, with no compaction owed or underway (it would be lost in it), and with
-// nothing of the lead's own waiting on the human, which goes first.
+// yet, while the lead may ask (relayAskable).
 func (st *State) RelayDue() *Relay {
-	r := st.FrontRelay()
-	if r == nil || !r.Issued.IsZero() || st.Mode != ModeRunning || st.compacting() || st.OwnQuestion() {
-		return nil
+	if r := st.FrontRelay(); r != nil && r.Issued.IsZero() && st.relayAskable() {
+		return r
 	}
-	return r
+	return nil
+}
+
+// RelayToAsk is the worker's question the lead is to put to the human now, given to its model already or
+// not, or nil: the front one, not asked yet, while the lead may ask (relayAskable).
+func (st *State) RelayToAsk() *Relay {
+	if r := st.FrontRelay(); r != nil && !r.Asked && st.relayAskable() {
+		return r
+	}
+	return nil
+}
+
+// relayAskable reports a lead that may put a worker's question to the human: the plan runs, no
+// compaction is owed or underway (the question would be lost in it), and nothing of the lead's own
+// waits on the human, which goes first.
+func (st *State) relayAskable() bool {
+	return st.Mode == ModeRunning && !st.compacting() && !st.OwnQuestion()
 }
 
 // OwnQuestion reports something of the lead session's own that the human is asked, or is to be asked:
