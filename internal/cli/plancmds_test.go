@@ -11,13 +11,15 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/elevate"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 type session struct {
-	t   *testing.T
-	env map[string]string
-	now time.Time
+	t       *testing.T
+	env     map[string]string
+	now     time.Time
+	machine *machine.Reading // what the machine reads (nil: roomy)
 }
 
 func newSession(t *testing.T) (*session, string) {
@@ -57,6 +59,9 @@ func (s *session) store() *state.Store {
 func (s *session) run(stdin string, args ...string) (int, string, string) {
 	io, out, errb := testIO(stdin, s.env)
 	io.Now = func() time.Time { return s.now }
+	if m := s.machine; m != nil {
+		io.Machine = func() machine.Reading { return *m }
+	}
 	code := Main(args, io)
 	return code, out.String(), errb.String()
 }

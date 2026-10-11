@@ -210,6 +210,17 @@ func TestWorkerSegments(t *testing.T) {
 			st.Usage = &state.Usage{UsedPct: 95, Resets: now.Add(time.Hour)}
 			return st
 		}, 0, head + "ctx 41%"},
+		{"no room on the machine for another", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Minute))
+			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldBusy, Why: "memory pressure is critical", Since: now}
+			return st
+		}, 0, head + "W P1 1m · W held: busy · ctx 41%"},
+		{"held by the usage, which shows already", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Minute))
+			st.Usage = &state.Usage{UsedPct: 90, Resets: now.Add(time.Hour)}
+			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldUsage, Why: "90% of the five-hour usage is used (worker_usage_max 80%)", Since: now}
+			return st
+		}, 80, head + "5h 90% · W P1 1m · ctx 41%"},
 	} {
 		if got := Segment(c.st(), pl, true, now, c.usageMax); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)

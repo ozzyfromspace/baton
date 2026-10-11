@@ -323,6 +323,7 @@ func cmdStatus(args []string, io IO) int {
 		}
 	}
 	printJobs(io, s, st)
+	printMachine(io, s, st)
 	printWorkers(io, s, st)
 	printMergeQueue(io, st)
 	printBackground(io, st)

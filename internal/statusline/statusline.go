@@ -25,7 +25,7 @@ import (
 )
 
 // Segment is baton's part of the status line: the phase in hand, then a usage limit the run waits on, the
-// run's workers, the jobs baton runs meanwhile, a worker's question waiting for the human, and the
+// run's workers and what holds another back, the jobs baton runs meanwhile, a worker's question waiting for the human, and the
 // context's size. With workers, usageMax is the share of the five-hour usage above which no new worker
 // starts (worker_usage_max): a reading above it is shown, as it holds workers back (0: none shown).
 func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time, usageMax float64) string {
@@ -67,6 +67,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time, usageMa
 	for _, w := range st.LiveWorkers() {
 		s += " · " + worker(st, w, now)
 		asked[w.Phase] = true
+	}
+	if h := st.Hold; h != nil && h.Kind != state.HoldUsage { // the usage it waits on is shown already
+		s += " · W held: " + h.Kind
 	}
 	if j := jobs(st, now); j != "" {
 		s += " · " + j

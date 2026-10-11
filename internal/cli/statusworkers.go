@@ -63,6 +63,41 @@ func printWorkers(io IO, s *state.Store, st state.State) {
 	}
 }
 
+// printMachine says, for a run with workers on, how many may run at once, and how the machine reads now,
+// which holds new ones back while it has no room for another session; then what holds back a phase that
+// waits for a worker, if anything does. A worker's own run has none of its own.
+func printMachine(io IO, s *state.Store, st state.State) {
+	n, auto, err := config.Load(batonRoot(io), io.Env).WorkerCount()
+	if s.Parent != "" || err != nil || n == 0 && !auto {
+		return
+	}
+	m := io.reading()
+	line := fmt.Sprintf("workers: up to %d", n)
+	if auto {
+		size := fmt.Sprintf("%d CPUs, %d GiB", m.CPUs, m.MemGiB())
+		if m.MemTotal == 0 {
+			size = fmt.Sprintf("%d CPUs, memory unknown", m.CPUs)
+		}
+		if n = config.AutoWorkers(m); n == 0 {
+			line = fmt.Sprintf("workers: auto, none on this machine (%s)", size)
+		} else {
+			line = fmt.Sprintf("workers: auto, up to %d on this machine (%s)", n, size)
+		}
+	}
+	if m.Known {
+		line += fmt.Sprintf(" · load %.1f", m.Load1)
+		if m.Pressure != 0 {
+			line += fmt.Sprintf(" · memory pressure %s (%d%% free)", m.Pressure, m.MemAvailablePct)
+		} else {
+			line += fmt.Sprintf(" · %d%% memory free", m.MemAvailablePct)
+		}
+	}
+	fmt.Fprintln(io.Out, line)
+	if h := st.Hold; h != nil {
+		fmt.Fprintf(io.Out, "  held: %s waits for a worker since %s: %s\n", h.Phase, h.Since.Local().Format("15:04"), h.Why)
+	}
+}
+
 // printMergeQueue lists the workers' finished work waiting to land on the run's branch, first finished
 // first, and what each waits on.
 func printMergeQueue(io IO, st state.State) {

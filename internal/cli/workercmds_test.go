@@ -10,6 +10,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -431,6 +432,50 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 	lead.env["BATON_WORKERS"] = "0"
 	if out := lead.must("", "status"); strings.Contains(out, "usage: ") {
 		t.Errorf("usage shown with no workers:\n%s", out)
+	}
+}
+
+// baton status says how many workers may run at once, what the machine reads now, and what holds back a
+// phase that waits for a worker.
+func TestBatonStatusShowsTheMachine(t *testing.T) {
+	linux := machine.Reading{CPUs: 8, MemTotal: 16 << 30, MemAvailablePct: 40, Load1: 2.54, Known: true}
+	small := machine.Reading{CPUs: 4, MemTotal: 4 << 30, MemAvailablePct: 30, Load1: 1, Known: true}
+	unknown := machine.Reading{CPUs: 8}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		m    *machine.Reading
+		hold bool
+		want string // the lines, or "" for none
+	}{
+		{"auto, on a Mac", nil, nil, false, "workers: auto, up to 6 on this machine (14 CPUs, 48 GiB) · load 3.1 · memory pressure normal (45% free)"},
+		{"auto, on Linux", nil, &linux, false, "workers: auto, up to 3 on this machine (8 CPUs, 16 GiB) · load 2.5 · 40% memory free"},
+		{"auto, on a machine too small for one", nil, &small, false, "workers: auto, none on this machine (4 CPUs, 4 GiB) · load 1.0 · 30% memory free"},
+		{"auto, with no live readings", nil, &unknown, false, "workers: auto, none on this machine (8 CPUs, memory unknown)"},
+		{"a number", map[string]string{"BATON_WORKERS": "2"}, nil, false, "workers: up to 2 · load 3.1 · memory pressure normal (45% free)"},
+		{"held back", nil, nil, true, "workers: auto, up to 6 on this machine (14 CPUs, 48 GiB) · load 3.1 · memory pressure normal (45% free)\n" +
+			"  held: P1 waits for a worker since {since}: the machine is busy (load 15.0 on 14 CPUs)"},
+		{"workers off", map[string]string{"BATON_WORKERS": "0"}, nil, false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := attached(t)
+			s.env["HOME"], s.env["BATON_HOME"] = t.TempDir(), t.TempDir()
+			for k, v := range c.env {
+				s.env[k] = v
+			}
+			s.machine = c.m
+			if c.hold {
+				s.set(func(x *state.State) {
+					x.Hold = &state.Hold{Phase: "P1", Kind: state.HoldBusy, Why: "the machine is busy (load 15.0 on 14 CPUs)", Since: s.now.Add(-3 * time.Minute)}
+				})
+			}
+			out := s.must("", "status")
+			want := strings.ReplaceAll(c.want, "{since}", s.now.Add(-3*time.Minute).Local().Format("15:04"))
+			first, _, _ := strings.Cut(want, "\n")
+			if got := section(out, first); want != "" && got != want || want == "" && strings.Contains(out, "workers:") {
+				t.Errorf("got:\n%s\nwant:\n%s\nin:\n%s", got, want, out)
+			}
+		})
 	}
 }
 
