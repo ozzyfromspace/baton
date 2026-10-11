@@ -330,6 +330,15 @@ func TestDetachSetsThePlanAside(t *testing.T) {
 	if len(st.LiveWorkers()) != 1 || st.RunBranch != "main" {
 		t.Errorf("the roster went with the plan: %+v, run branch %q", st.Workers, st.RunBranch)
 	}
+	// The next plan counts on from the dropped one's generation: a worker still on the roster is the
+	// dropped plan's, never the next plan's on a phase of the same id.
+	if st.Generation != 1 {
+		t.Fatalf("generation %d after the drop, want 1", st.Generation)
+	}
+	st.Workers[0].Generation = 1
+	if next := Reattach(st, threePhases(), t0, Origin{}); next.Generation != 2 || next.WorkerOn("P1") != nil {
+		t.Errorf("the next plan is generation %d; its worker on P1: %+v", next.Generation, next.WorkerOn("P1"))
+	}
 }
 
 // A run resumed after the conversation grew by more than ResumeGrowth while it was paused owes a
