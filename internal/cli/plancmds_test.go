@@ -301,7 +301,7 @@ func TestDoneWhenEveryPhaseLeftWaitsForAJob(t *testing.T) {
 		return err
 	})
 	status := s.must("", "status")
-	for _, want := range []string{"⏸ P0       Research  — needs no other phase  (parked)\n", "→ P1       The schema  — needs no other phase  (next, after compaction)\n"} {
+	for _, want := range []string{"⏸ P0       Research  — needs no other phase  (parked while its job runs — job j1 running 0s)\n             notes: read it all\n", "→ P1       The schema  — needs no other phase  (next, after compaction)\n"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status lacks %q:\n%s", want, status)
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -269,6 +270,115 @@ func TestStatusListsTheJobs(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status:\n%s\nwant %q", out, want)
 		}
+	}
+}
+
+// baton status says where each phase not done stands: for how long it has been active, why it is
+// verifying or set aside, and the job it waits on; a phase set aside shows the notes it resumes from.
+func TestStatusSaysWhereEachPhaseStands(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	running := state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Command: "make test", Status: state.JobRunning, Lane: 1, Started: now.Add(-3 * time.Minute)}
+	failed := state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Command: "make test", Status: state.JobFailed, Exit: 1, Lane: 1, Started: now.Add(-20 * time.Minute), Ended: now.Add(-6 * time.Minute)}
+	for _, c := range []struct {
+		name string
+		set  func(x *state.State)
+		want string
+	}{
+		{"active", func(x *state.State) { x.Phases["P0"].StartedAt = now.Add(-12 * time.Minute) },
+			"  ▶ P0       The overlay  (active 12m)"},
+		{"active, with its gate running", func(x *state.State) {
+			x.Phases["P0"].StartedAt = now.Add(-75 * time.Minute)
+			x.Jobs = []state.Job{running}
+		}, "  ▶ P0       The overlay  (active 1h15m — job j1 running 3m, lane 1)"},
+		{"verifying", func(x *state.State) {
+			x.Jobs = []state.Job{running}
+			x.Phases["P0"].Status, x.Current = state.PhaseVerifying, "P1"
+		}, "  ⧗ P0       The overlay  (verifying — job j1 running 3m, lane 1)"},
+		{"parked while its job runs", func(x *state.State) {
+			x.Jobs = []state.Job{running}
+			x.Phases["P0"].Status, x.Current = state.PhaseParked, "P1"
+			x.Phases["P0"].Park = &state.Park{Reason: state.ParkJob, Since: now, Job: "j1", Notes: "The modal closes;\nthe overlay test is the slow one."}
+		}, "  ⏸ P0       The overlay  (parked while its job runs — job j1 running 3m, lane 1)\n" +
+			"             notes: The modal closes; the overlay test is the slow one."},
+		{"parked, its verification red", func(x *state.State) {
+			x.Jobs = []state.Job{failed}
+			x.Phases["P0"].Status, x.Current = state.PhaseParked, "P1"
+			x.Phases["P0"].Park = &state.Park{Reason: state.ParkRed, Since: now, Job: "j1", Notes: strings.Repeat("all of it ", 20)}
+		}, "  ⏸ P0       The overlay  (parked: its verification failed — job j1 failed (exit 1) after 14m, lane 1)\n" +
+			"             notes: " + strings.Repeat("all of it ", 9) + "all of it…"},
+		{"parked, its verification without a verdict", func(x *state.State) {
+			x.Jobs = []state.Job{{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobLaneError, Reason: "up failed twice"}}
+			x.Phases["P0"].Status, x.Current = state.PhaseParked, "P1"
+			x.Phases["P0"].Park = &state.Park{Reason: state.ParkUnverified, Since: now, Job: "j1"}
+		}, "  ⏸ P0       The overlay  (parked: its verification had no verdict — job j1 could not run: up failed twice)"},
+		{"parked at a checkpoint", func(x *state.State) {
+			x.Phases["P0"].Status, x.Current = state.PhaseParked, "P1"
+			x.Phases["P0"].Park = &state.Park{Reason: state.ParkCheckpoint, Since: now, Notes: "halfway"}
+		}, "  ⏸ P0       The overlay  (parked at a checkpoint)\n             notes: halfway"},
+		{"to resume after the compaction", func(x *state.State) {
+			x.Phases["P0"].Status, x.BoundaryOwed = state.PhaseParked, true
+			x.Phases["P0"].Park = &state.Park{Reason: state.ParkRed, Since: now, Notes: "halfway"}
+		}, "  → P0       The overlay  (resumes next, after compaction)\n             notes: halfway"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := gitSession(t)
+			s.now = now
+			s.set(c.set)
+			if got := phaseLines(s.must("", "status"), "P0"); got != c.want {
+				t.Errorf("got\n%s\nwant\n%s", got, c.want)
+			}
+		})
+	}
+}
+
+// phaseLines is a phase's line in baton status, with the notes line under it if there is one.
+func phaseLines(status, id string) string {
+	lines := strings.Split(status, "\n")
+	for i, l := range lines {
+		if f := strings.Fields(l); strings.HasPrefix(l, "  ") && len(f) > 1 && f[1] == id {
+			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "             notes: ") {
+				return l + "\n" + lines[i+1]
+			}
+			return l
+		}
+	}
+	return ""
+}
+
+// baton status names the job that holds each busy lane, and the model's own background work, apart from
+// the Monitors it armed (watchers, not work).
+func TestStatusShowsLanesAndBackgroundWork(t *testing.T) {
+	s, root := gitSession(t)
+	pool := lane.Pool{Home: s.env["BATON_HOME"], Root: s.store().Root}
+	held, err := pool.TryAcquire(2)
+	if err != nil || held == nil {
+		t.Fatalf("lane: %v", err)
+	}
+	defer held.Release()
+	if free, _ := pool.TryAcquire(2); free != nil {
+		free.Release()
+	}
+	head := gittest.Git(t, root, "rev-parse", "HEAD")
+	s.set(func(x *state.State) {
+		x.Jobs = []state.Job{{ID: "j3", Phase: "P0", Kind: state.JobVerify, Command: "make test", Commit: head, Status: state.JobRunning, Lane: 1, Started: s.now.Add(-time.Minute)}}
+		x.Run.Background = []state.Task{
+			{ID: "b1", Type: "shell", Description: "npm test", Since: s.now.Add(-12 * time.Minute)},
+			{ID: "m1", Type: "shell", Description: "watch the log"},
+			{ID: "a1", Type: "subagent"},
+		}
+		x.Run.Monitors = []string{"m1"}
+	})
+	out := s.must("", "status")
+	for _, want := range []string{
+		"  lane 1  busy (j3)\n  lane 2  idle\n",
+		"background work of Claude's own (each wakes Claude when it ends):\n  shell    npm test  (seen 12m ago)\n  subagent a1\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status:\n%s\nwant %q", out, want)
+		}
+	}
+	if strings.Contains(out, "watch the log") {
+		t.Errorf("a Monitor is listed as work:\n%s", out)
 	}
 }
 

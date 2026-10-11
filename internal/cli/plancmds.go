@@ -260,25 +260,32 @@ func cmdStatus(args []string, io IO) int {
 		if !seq {
 			deps = "  — " + pl.DepsLabel(ph.ID)
 		}
-		if ps := st.Phases[ph.ID]; ps != nil {
+		ps := st.Phases[ph.ID]
+		if ps != nil {
 			switch ps.Status {
 			case state.PhaseDone:
 				mark = "✓"
 			case state.PhaseActive:
-				mark, extra = "▶", fmt.Sprintf("  (active %s)", io.Now().Sub(ps.StartedAt).Round(time.Minute))
+				mark = "▶"
 			case state.PhaseVerifying:
-				mark, extra = "⧗", "  (verifying)"
+				mark = "⧗"
 			case state.PhaseParked:
-				mark, extra = "⏸", "  (parked)"
+				mark = "⏸"
+			}
+			if note := phaseNote(st, ph.ID, io.Now()); note != "" {
+				extra = "  (" + note + ")"
 			}
 		}
 		if ph.ID == st.Current && st.BoundaryOwed {
 			mark, extra = "→", "  (next, after compaction)"
-			if ps := st.Phases[ph.ID]; ps != nil && ps.Status == state.PhaseParked {
+			if ps != nil && ps.Status == state.PhaseParked {
 				extra = "  (resumes next, after compaction)"
 			}
 		}
 		fmt.Fprintf(io.Out, "  %s %-8s %s%s%s\n", mark, ph.ID, ph.Title, deps, extra)
+		if ps != nil && ps.Status == state.PhaseParked && ps.Park != nil && ps.Park.Notes != "" {
+			fmt.Fprintf(io.Out, "%13snotes: %s\n", "", clipLine(ps.Park.Notes, 100))
+		}
 	}
 	if seq {
 		fmt.Fprintln(io.Out, "dependencies: each phase follows the one before it")
@@ -293,6 +300,7 @@ func cmdStatus(args []string, io IO) int {
 		}
 	}
 	printJobs(io, s, st)
+	printBackground(io, st)
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
 	}
@@ -307,6 +315,77 @@ func cmdStatus(args []string, io IO) int {
 	printSnapshots(io, snaps)
 	printOthers(io, s)
 	return 0
+}
+
+// phaseNote says where a phase not done stands, for baton status: how long it has been active, or why it
+// is verifying or set aside, then the job it waits on and how that stands. "" for a phase done or not
+// started.
+func phaseNote(st state.State, id string, now time.Time) string {
+	ps := st.Phases[id]
+	var note, job string
+	switch ps.Status {
+	case state.PhaseActive:
+		note = "active"
+		if !ps.StartedAt.IsZero() {
+			note += " " + decide.Span(now.Sub(ps.StartedAt))
+		}
+		if j := st.CurrentJob(); j != nil && id == st.Current {
+			job = j.ID
+		}
+	case state.PhaseVerifying:
+		note = "verifying"
+		if j := st.Latest(id); j != nil {
+			job = j.ID
+		}
+	case state.PhaseParked:
+		note = "parked"
+		if pk := ps.Park; pk != nil {
+			note, job = note+parkWhy[pk.Reason], pk.Job
+		}
+	default:
+		return ""
+	}
+	if j := st.Job(job); j != nil {
+		note += " — job " + j.ID + " " + jobProgress(*j, now)
+	}
+	return note
+}
+
+// parkWhy is why a phase was set aside, as baton status says it.
+var parkWhy = map[string]string{
+	state.ParkJob:        " while its job runs",
+	state.ParkRed:        ": its verification failed",
+	state.ParkUnverified: ": its verification had no verdict",
+	state.ParkCheckpoint: " at a checkpoint",
+}
+
+// clipLine is s on one line, cut to n characters.
+func clipLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
+
+// printBackground lists the model's own background work: what Claude Code reported at the last stop.
+func printBackground(io IO, st state.State) {
+	bg := st.Run.BusyBackground()
+	if len(bg) == 0 {
+		return
+	}
+	fmt.Fprintln(io.Out, "background work of Claude's own (each wakes Claude when it ends):")
+	for _, t := range bg {
+		what := t.Description
+		if what == "" {
+			what = t.ID
+		}
+		seen := ""
+		if !t.Since.IsZero() {
+			seen = "  (seen " + decide.Span(io.Now().Sub(t.Since)) + " ago)"
+		}
+		fmt.Fprintf(io.Out, "  %-8s %s%s\n", t.Type, clipLine(what, 80), seen)
+	}
 }
 
 // printRuns lists a project's runs, for `baton status` from a shell when there is more than one.

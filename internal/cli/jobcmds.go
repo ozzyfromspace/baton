@@ -322,6 +322,11 @@ func printJobs(io IO, s *state.Store, st state.State) {
 			how := "idle"
 			if l.Busy {
 				how = "busy"
+				for _, j := range st.Jobs {
+					if j.Status == state.JobRunning && j.Lane == l.N {
+						how += " (" + j.ID + ")"
+					}
+				}
 			}
 			if l.UpBy != "" {
 				how += ", up"
