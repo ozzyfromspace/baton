@@ -355,7 +355,7 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "0123456789abcdef", Branch: "baton/sess-1/R1", Status: state.WorkerFailed,
 				Why: "its session ended unexpectedly (exit code 1), 3 times", Unlanded: 2},
 			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "fedcba9876543210", Branch: "baton/sess-1/R1", Worktree: "/wt/R1", Status: state.WorkerLanding,
-				Assigned: now.Add(-time.Hour), Resumes: 1,
+				Assigned: now.Add(-time.Hour), Resumes: 1, Generation: x.Generation,
 				Merge: &state.Merge{Queued: now.Add(-5 * time.Minute), Deferred: "the lead changed a.txt too", DeferredAt: now.Add(-2 * time.Minute)}})
 		x.Phases["R1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "sess-1/R1"}
 		x.Usage = &state.Usage{UsedPct: 62, Resets: now.Add(2 * time.Hour), At: now.Add(-time.Minute)}

@@ -355,3 +355,131 @@ func TestIDsAreUniqueAcrossSubRuns(t *testing.T) {
 		t.Errorf("a new plan for the sub-run: prefix %q", st.IDPrefix)
 	}
 }
+
+// Each plan attached to a run is a generation of it. A new plan keeps the workers the run still counts
+// on, as the replaced plan's, and drops the rest; a worker belongs to the generation it was assigned
+// under, and is never the worker on a phase of a later plan, which may reuse its phase's id.
+func TestPlanGenerations(t *testing.T) {
+	p := graph("P0:", "P1:", "P2:", "P3:")
+	st := Attach(p, t0, Origin{})
+	if st.Generation != 1 {
+		t.Fatalf("a first plan is generation %d", st.Generation)
+	}
+	for _, id := range []string{"P1", "P2", "P3"} {
+		if err := Assign(&st, p, worker(id, "s-"+id), t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := st.WorkerOn("P1"); w == nil || w.Generation != 1 {
+		t.Fatalf("P1's worker: %+v", w)
+	}
+	if _, err := Landed(&st, p, Landing{Phase: "P2", Commits: []string{"c2"}}, t0); err != nil {
+		t.Fatal(err)
+	}
+	Unassign(&st, p, "P3", "it failed", t0)
+
+	next := Reattach(st, p, t0.Add(time.Hour), Origin{})
+	if next.Generation != 2 || len(next.Workers) != 1 || next.Workers[0].Phase != "P1" || next.Workers[0].Status != WorkerStarting {
+		t.Fatalf("generation %d, roster %+v: want P1's worker alone kept", next.Generation, next.Workers)
+	}
+	if AttachAtBoundary(st, p, t0).Generation != 2 {
+		t.Error("a plan attached at a boundary is not a generation")
+	}
+	if w := next.WorkerOn("P1"); w != nil {
+		t.Errorf("the replaced plan's worker counts as P1's: %+v", w)
+	}
+	if ps := next.Phases["P1"]; ps.Status != PhasePending {
+		t.Errorf("the new plan's P1: %+v", ps)
+	}
+	// Until the host has retired it, no worker of the new plan takes up P1: it would share its sub-run,
+	// its worktree and its branch. The lead may.
+	if got := NextWorker(next, p); got != "P2" {
+		t.Errorf("NextWorker = %q, want P2", got)
+	}
+	if err := Assign(&next, p, worker("P1", "s-new"), t0); err == nil || !strings.Contains(err.Error(), "not retired yet") {
+		t.Errorf("assigned P1 beside the replaced plan's worker: %v", err)
+	}
+	ReleaseWorker(&next, "r1/P1", "s-P1", "the run's plan was replaced", t0)
+	if err := Assign(&next, p, worker("P1", "s-new"), t0); err != nil {
+		t.Fatal(err)
+	}
+	if w := next.WorkerOn("P1"); w == nil || w.Session != "s-new" || w.Generation != 2 {
+		t.Errorf("P1's worker: %+v", w)
+	}
+}
+
+// ReleaseWorker frees a worker's phase for a process that is not the run's host: the worker has failed,
+// its phase is pending, and nothing else of the run changes, not the phase in hand nor a compaction,
+// which the run's next host sees to.
+func TestReleaseWorker(t *testing.T) {
+	p := graph("P0:", "P1:", "P2:P1")
+	t1 := t0.Add(time.Hour)
+	for _, c := range []struct {
+		name    string
+		lead    string
+		before  func(*State)
+		ref     string
+		session string
+		ok      bool
+		phase   string // P1's status after
+	}{
+		{"the lead busy", "P0", nil, "r1/P1", "s-P1", true, PhasePending},
+		{"the lead idle: it takes nothing up", "", func(st *State) { st.Phases["P0"].Status = PhaseDone }, "r1/P1", "s-P1", true, PhasePending},
+		{"another session's worker", "P0", nil, "r1/P1", "s-other", false, PhaseWorking},
+		{"a failed worker", "P0", func(st *State) { st.Workers[0].Status = WorkerFailed }, "r1/P1", "s-P1", false, PhaseWorking},
+		{"a replaced plan's worker", "P0", func(st *State) { st.Generation++ }, "r1/P1", "s-P1", true, PhaseWorking},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := assigned(t, p, c.lead, nil, "P1")
+			if c.before != nil {
+				c.before(&st)
+			}
+			compaction, current := st.Run.Compaction, st.Current
+			if got := ReleaseWorker(&st, c.ref, c.session, "a new run started in this project", t1); got != c.ok {
+				t.Errorf("ReleaseWorker = %v, want %v", got, c.ok)
+			}
+			if st.Phases["P1"].Status != c.phase || st.Current != current || st.BoundaryOwed || !reflect.DeepEqual(st.Run.Compaction, compaction) {
+				t.Errorf("P1 %+v, current %q (was %q), boundary owed %v, compaction %+v", st.Phases["P1"], st.Current, current, st.BoundaryOwed, st.Run.Compaction)
+			}
+			if w := st.Workers[0]; c.ok && (w.Status != WorkerFailed || w.Why != "a new run started in this project" || !w.Since.Equal(t1)) {
+				t.Errorf("the worker: %+v", w)
+			}
+		})
+	}
+}
+
+// A run is abandoned once nothing drives it: no fresh heartbeat, no baton process left of its owner, and
+// no sign of life from it or its worker for AbandonAfter.
+func TestAbandoned(t *testing.T) {
+	now := t0.Add(time.Hour)
+	stale := &Owner{Instance: "i1", PID: 4242, Heartbeat: now.Add(-time.Hour)}
+	for _, c := range []struct {
+		name    string
+		owner   *Owner
+		updated time.Time
+		e       *Worker
+		baton   bool // the owner's pid is a running baton
+		want    bool
+	}{
+		{"a live heartbeat", &Owner{Instance: "i1", PID: 4242, Heartbeat: now.Add(-10 * time.Second)}, now.Add(-time.Hour), nil, false, false},
+		{"a stale heartbeat, quiet for long", stale, now.Add(-time.Hour), nil, false, true},
+		{"its owner's baton still runs (the machine slept)", stale, now.Add(-time.Hour), nil, true, false},
+		{"no owner on record", nil, now.Add(-AbandonAfter), nil, false, true},
+		{"its state changed a minute ago (a restart)", stale, now.Add(-time.Minute), nil, false, false},
+		{"its worker ended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Minute)}, false, false},
+		{"its worker was suspended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Minute)}, false, false},
+		{"its worker quiet for long", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Hour)}, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := RunInfo{ID: "r1", State: State{Owner: c.owner}, Updated: c.updated}
+			var asked int
+			baton := func(pid int) bool { asked = pid; return c.baton }
+			if got := Abandoned(r, c.e, baton, now); got != c.want {
+				t.Errorf("Abandoned = %v, want %v", got, c.want)
+			}
+			if c.owner != nil && !c.owner.Live(now) && asked != c.owner.PID {
+				t.Errorf("the owner's pid was not looked up (%d)", asked)
+			}
+		})
+	}
+}

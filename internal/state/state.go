@@ -144,6 +144,10 @@ type State struct {
 	Relay     []Relay   `json:"relay,omitempty"`
 	Landed    []Landing `json:"landed,omitempty"`
 	Usage     *Usage    `json:"usage,omitempty"`
+	// Generation counts the plans attached to the run (attachKeeping). A worker belongs to the plan it was
+	// assigned under (Worker.Generation): one of an earlier plan is retired, and never counts as the
+	// worker on a phase of the plan attached now, which may use the same ids.
+	Generation int `json:"generation,omitempty"`
 	// IDPrefix numbers a worker sub-run's decisions and jobs under its phase (P3.d1, P3.j2), so that no id
 	// is used twice across the run and its workers.
 	IDPrefix string `json:"id_prefix,omitempty"`
@@ -169,14 +173,15 @@ func New() State {
 
 // Attach starts a fresh run of p: the first phase becomes active.
 func Attach(p plan.Plan, now time.Time, o Origin) State {
-	return attachKeeping(nil, nil, p, now, o)
+	return attachKeeping(New(), nil, p, now, o)
 }
 
-// Reattach is Attach for a project that may already have an owner: ownership survives a new plan.
+// Reattach is Attach for a project that may already have an owner: ownership survives a new plan, and so
+// do the workers still on the roster, which the host retires as the replaced plan's.
 func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 	run := prev.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
-	st := attachKeeping(prev.Owner, &run, p, now, o)
+	st := attachKeeping(prev, &run, p, now, o)
 	st.JobSeq, st.IDPrefix = prev.JobSeq, prev.IDPrefix
 	return st
 }
@@ -259,11 +264,13 @@ func Detach(st *State) error {
 	return nil
 }
 
-func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Origin) State {
+// attachKeeping is the state of a run of p attached over prev, with run as its runtime (nil: a new one).
+// It keeps prev's owner and the workers prev still counts on (Worker.Live), and counts a generation more.
+func attachKeeping(prev State, run *Runtime, p plan.Plan, now time.Time, o Origin) State {
 	st := New()
-	st.Owner = owner
-	if prev != nil {
-		st.Run = *prev
+	st.Owner, st.Generation, st.Workers = prev.Owner, prev.Generation+1, prev.LiveWorkers()
+	if run != nil {
+		st.Run = *run
 	}
 	st.Mode = ModeRunning
 	for _, ph := range p.Phases {

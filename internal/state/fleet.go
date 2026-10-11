@@ -16,7 +16,8 @@ import (
 // go only from working to done: everything in between belongs to the sub-run, and the phase is done once
 // its work has landed on the run's branch (Landed), so the phases that need it wait until then. The
 // host's coordinator writes the fields below and keeps them in step with the sessions it runs
-// (docs/research/workers.md).
+// (docs/research/workers.md). Another baton process writes them only to retire a worker no live session
+// hosts (loop.RetireWorker), and only once it has marked it as retiring (Worker.Retiring).
 
 // Worker statuses. A worker goes starting → working → landing → landed. Two statuses are off that path:
 // suspended is a worker whose session ended with its host (exit, a hang-up), which the next host for the
@@ -49,10 +50,20 @@ type Worker struct {
 	Ended    time.Time `json:"ended,omitzero"`
 	// Resumes counts the times its session was resumed after it ended unexpectedly.
 	Resumes int `json:"resumes,omitempty"`
+	// Generation is the run's generation it was assigned under (State.Generation).
+	Generation int `json:"generation,omitempty"`
+	// Retiring is when Retirer (a host's instance, or a command) began to retire it (loop.RetireWorker).
+	// Nothing resumes a worker while it is retiring, and nobody else retires it, until the mark is
+	// RetireStale.
+	Retiring time.Time `json:"retiring,omitzero"`
+	Retirer  string    `json:"retirer,omitempty"`
 	// Unlanded counts the commits on its branch that never landed, once it has failed: its branch is
 	// kept for them.
-	Unlanded int    `json:"unlanded,omitempty"`
-	Merge    *Merge `json:"merge,omitempty"`
+	Unlanded int `json:"unlanded,omitempty"`
+	// WorktreeKept says why its worktree was left in place when it was retired (its uncommitted work could
+	// not be saved), or "" when it was removed.
+	WorktreeKept string `json:"worktree_kept,omitempty"`
+	Merge        *Merge `json:"merge,omitempty"`
 	// Needs says what in its own session waits on the human (a permission prompt, an escalation, its
 	// question they chose to answer there), since NeedsSince. Nobody watches a worker's session: the lead's
 	// says so.
@@ -62,6 +73,15 @@ type Worker struct {
 
 // Live reports a worker the run still counts on: one not landed and not failed.
 func (w Worker) Live() bool { return w.Status != WorkerLanded && w.Status != WorkerFailed }
+
+// RetireStale is how long a mark that a worker is retiring holds: a retirer that died midway leaves its
+// mark, which another may take over after this.
+const RetireStale = 10 * time.Minute
+
+// RetiringBy reports a worker being retired by someone other than by, as of now.
+func (w Worker) RetiringBy(by string, now time.Time) bool {
+	return !w.Retiring.IsZero() && w.Retirer != by && now.Sub(w.Retiring) < RetireStale
+}
 
 // Merge is where a worker's work stands in the merge queue.
 type Merge struct {
@@ -141,28 +161,36 @@ func AttachWorker(prev State, phase string) State {
 // NextWorker is the phase a new worker would take up: the first pending phase, in document order, whose
 // dependencies are all done, other than the lead's. The lead's is the phase in hand or, when it holds
 // none, the one it takes up next (Next). A parked phase is never a worker's: it was started in the
-// lead's checkout. "" when there is none.
+// lead's checkout. Nor is one whose id a worker of a replaced plan still holds (retired). "" when there
+// is none.
 func NextWorker(st State, p plan.Plan) string {
 	lead := st.Current
 	if lead == "" {
 		lead = Next(st, p)
 	}
 	for _, ph := range p.Phases {
-		if ps := st.Phases[ph.ID]; ph.ID != lead && (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) {
+		if ps := st.Phases[ph.ID]; ph.ID != lead && (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.retiring(ph.ID) {
 			return ph.ID
 		}
 	}
 	return ""
 }
 
-// WorkerOn is the roster entry of the live worker on phase, or nil when it has none.
+// WorkerOn is the roster entry of the live worker on phase, or nil when it has none. A worker of an
+// earlier plan is on none of the plan attached now.
 func (st *State) WorkerOn(phase string) *Worker {
 	for i := len(st.Workers) - 1; i >= 0; i-- {
-		if w := &st.Workers[i]; w.Phase == phase && w.Live() {
+		if w := &st.Workers[i]; w.Phase == phase && w.Live() && w.Generation == st.Generation {
 			return w
 		}
 	}
 	return nil
+}
+
+// retiring reports a live worker of an earlier plan on phase: the host retires it first, and until then a
+// worker of this plan on a phase of that id would share its sub-run, its worktree and its branch.
+func (st State) retiring(phase string) bool {
+	return slices.ContainsFunc(st.Workers, func(w Worker) bool { return w.Phase == phase && w.Live() && w.Generation < st.Generation })
 }
 
 // LiveWorkers lists the workers the run still counts on (Worker.Live), in the order they were assigned.
@@ -195,6 +223,8 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 		return errors.New("a worker needs its sub-run and its session")
 	case st.WorkerOn(id) != nil:
 		return fmt.Errorf("phase %s has a worker already", id)
+	case st.retiring(id):
+		return fmt.Errorf("the worker of the replaced plan on %s is not retired yet", id)
 	case id == st.Current:
 		return fmt.Errorf("phase %s is the lead's", id)
 	case ps != nil && ps.Status != PhasePending:
@@ -202,7 +232,7 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 	case !ready(*st, p, id):
 		return fmt.Errorf("phase %s waits for phases not done yet", id)
 	}
-	w.Status, w.Assigned, w.Since, w.Why = WorkerStarting, now, now, ""
+	w.Status, w.Assigned, w.Since, w.Why, w.Generation = WorkerStarting, now, now, "", st.Generation
 	st.Phases[id] = &PhaseState{Status: PhaseWorking, StartedAt: now, Worker: w.Ref}
 	st.Workers = append(st.Workers, w)
 	return nil
@@ -227,6 +257,55 @@ func Unassign(st *State, p plan.Plan, phase, why string, now time.Time) (string,
 	}
 	st.Phases[phase] = &PhaseState{Status: PhasePending}
 	return takeUp(st, p, now), nil
+}
+
+// ReleaseWorker takes the phase back from the worker on the roster as ref and session, which cannot go
+// on (why), for a process other than the run's own host: the worker has failed, and its phase, if it
+// is still the worker's, is pending again. Unlike Unassign, nothing else of the run changes (the phase
+// in hand, a compaction): the run's next host takes the phase up. It reports whether the worker was on
+// the roster, live.
+func ReleaseWorker(st *State, ref, session, why string, now time.Time) bool {
+	var w *Worker
+	for i := len(st.Workers) - 1; i >= 0 && w == nil; i-- {
+		if e := &st.Workers[i]; e.Ref == ref && e.Session == session {
+			w = e
+		}
+	}
+	if w == nil || !w.Live() {
+		return false
+	}
+	if ps := st.Phases[w.Phase]; ps != nil && ps.Status == PhaseWorking && ps.Worker == ref && w.Generation == st.Generation {
+		st.Phases[w.Phase] = &PhaseState{Status: PhasePending}
+	}
+	w.Status, w.Since, w.Why, w.Merge = WorkerFailed, now, why, nil
+	w.Needs, w.NeedsSince = "", time.Time{}
+	return true
+}
+
+// AbandonAfter is how long a run must have shown no sign of life before Abandoned says so: a host that
+// restarts on a newer baton lets go of its run for a few seconds.
+const AbandonAfter = 2 * time.Minute
+
+// Abandoned reports a run no session will come back to on its own: no host's heartbeat is fresh, its
+// owner's process (if one is on record) is not a baton that is still running (a machine that slept
+// leaves a live host's heartbeat stale), and nothing of it, nor of its worker e (nil for none), has
+// changed for AbandonAfter. baton reports whether a pid is a running baton process.
+func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time) bool {
+	if r.Live(now) {
+		return false
+	}
+	if o := r.State.Owner; o != nil && o.PID > 0 && baton != nil && baton(o.PID) {
+		return false
+	}
+	last := r.Updated
+	if e != nil {
+		for _, t := range []time.Time{e.Ended, e.Since} {
+			if t.After(last) {
+				last = t
+			}
+		}
+	}
+	return now.Sub(last) >= AbandonAfter
 }
 
 // Landed records that l.Phase's work landed on the run's branch: the phase is done, its worker has
