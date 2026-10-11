@@ -19,7 +19,7 @@ Explain briefly:
 - `/baton setup`: check this machine and say what is left to set up.
 - `/baton update`: update baton to the latest release (`--check` only looks).
 
-Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start workers: hidden sessions, each on another phase that can go ahead, in a git worktree of its own. baton lands their work on this session's branch when they finish.
+Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start workers: hidden sessions, each on another phase that can go ahead, in a git worktree of its own, as many as the plan and the machine have room for. baton lands their work on this session's branch when they finish.
 
 ## status
 
@@ -47,6 +47,7 @@ whole run — and saves the text first. Each draft is a file in the run's `draft
    - Give each phase its own heading in this exact form: `## P0 — <title>`, `## P1 — <title>`, and so on, in order.
    - Right under each heading, on a line of its own, say which earlier phases it needs done first: `After: P1, P3`, `After: none`, or `After: all` (every phase before it). A phase without the line follows the phase before it. baton uses this to tell which phases can go ahead while another waits, and which its workers can take at the same time.
      - Mark a phase independent of another only when it needs nothing that phase produces: no code, schema, file, result or decision of it.
+     - baton works on the phases that can go ahead at the same time, each in a session and a worktree of its own, as many as the machine has room for, so a wider plan finishes sooner. Where the work allows, split it into phases that don't touch the same files, and mark those that need nothing from each other `After: none`. Phases that would edit the same files go one after the other (`After:` the earlier one): their work would collide when it lands.
      - Integration phases, phases that verify everything, and release phases use `After: all`.
    - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed (in a git repository; otherwise saved).
    - Size each phase to finish comfortably in one context window. Between phases, context is compacted and only the plan, the brief and your notes carry over, so each phase must be understandable from the plan document alone.

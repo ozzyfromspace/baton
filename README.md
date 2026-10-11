@@ -24,7 +24,7 @@ baton takes every one of those decisions away from the model. The model does the
 - **Plan approval.** When you approve a plan with phase headings (`## P0 — …`), baton attaches it, compacts the planning conversation away, and starts P0 from a brief. `/baton run` does the same whenever the conversation had turns before it, so a plan never starts in the middle of whatever came before. If a run is already under way, it asks you whether to continue with the revised plan or start the new one. baton reads the plan from the file Claude Code wrote, and checks it at every stop: an edit that keeps the phases still to run is followed, a phase you add (a heading like the plan's own, `## P3 — …`) joins the run, and an edit that loses a phase still to run pauses the run. `/baton run` picks up phases added to a plan that has finished.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
 - **Which phase needs which.** A plan can say what each phase waits for (`After: P1, P3`). Without it, each phase follows the one before, as in any plan. Your session works on one phase at a time, and picks the next one that can start ([Never waiting on a gate](#never-waiting-on-a-gate)).
-- **Workers.** Another phase that can start goes to a hidden worker session, in a git worktree of its own outside your checkout. When it's done, baton lands its work on your branch with a fast-forward merge, between your session's tool calls, and tells your session what moved. A worker's questions are put to you in your terminal, by your session; `baton view P3`, in another terminal, shows a worker live ([Working on phases at once](#working-on-phases-at-once)).
+- **Workers.** Another phase that can start goes to a hidden worker session, in a git worktree of its own outside your checkout. baton starts as many as the plan has phases ready for, the machine has room for, and the lanes keep up with; you don't pick a number. When it's done, baton lands its work on your branch with a fast-forward merge, between your session's tool calls, and tells your session what moved. A worker's questions are put to you in your terminal, by your session; `baton view P3`, in another terminal, shows a worker live ([Working on phases at once](#working-on-phases-at-once)).
 - **Gates off the critical path.** The model hands a gate that takes more than a couple of minutes to baton (`baton verify`), which runs it on the committed code in a lane outside your checkout while the model keeps working. A phase that is finished is reported done while its gate runs, and is marked done when the gate passes, or reopened if it fails. A phase that can't go on without the result is set aside for another phase that can start, and comes back when the result is in.
 - **Long commands.** A command that runs for more than 2 minutes moves to the background by itself and wakes the session when it ends.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
@@ -65,6 +65,7 @@ baton              # instead of `claude`; it takes the same arguments
 baton --version    # or -v: which baton this is, which one hosts the session, which is installed (claude --version for Claude Code's)
 baton --help       # or -h: every command
 baton view P3      # in another terminal: watch P3's worker and type into it (Ctrl-] leaves)
+baton clean        # end what no live session uses: workers, jobs, lanes, worktrees, leftover files
 ```
 
 Inside the session:
@@ -77,6 +78,8 @@ Inside the session:
 | `/baton status` | Show where the run stands. |
 | `/baton pause` | Take the wheel; `/baton run` gives it back. While paused, baton observes but never acts. If the conversation grew by more than 20k tokens meanwhile, the model records where the phase stands and baton compacts before it goes on. |
 | `/baton drop` | Drop the run. Its plan is set aside, and baton does nothing in this session until the next plan. |
+| `/baton view` | List the run's [workers](#working-on-phases-at-once); watching one takes another terminal (`baton view P3`). |
+| `/baton clean` | End what no live session uses: the workers and jobs of runs nobody will come back to, worktrees and lanes nobody holds, leftover files ([Cleaning up](#cleaning-up-baton-clean)). `--dry-run` only says what it would end. |
 | `/baton exit` | Leave baton: this conversation goes on as plain `claude` in the same terminal. |
 | `/baton drafts` | List drafts baton saved out of the input box; `--last` prints the newest. |
 | `/baton version` | Which baton this session runs, the one installed, and the latest release. |
@@ -189,14 +192,20 @@ The session in your terminal, the **lead**, works on the plan in your checkout a
 
 ### When a worker starts
 
-A worker takes the first phase in document order that can start, other than the one the lead has or takes next, when:
+You don't size the fleet. The plan says how wide it can go, baton reads how much room the machine has, and a worker starts whenever a phase can go ahead and nothing below holds it back. A worker takes the first phase in document order that can start, other than the one the lead has or takes next, when:
 
 - the run is running: not paused, blocked, or waiting on a review of its decisions;
-- a worker slot is free: `workers` is 1 by default, up to 3. `0` turns workers off, and baton then runs exactly as v0.4 did;
-- the account's five-hour usage, as Claude Code's status line reports it, is under `worker_usage_max` (80%), and no session waits on a usage limit;
+- **a slot is free.** With `workers: auto`, the default, the most workers at once is one for each 2 CPUs or 4 GiB of memory, whichever allows fewer, less one for the lead, and never more than 8: 6 on a 14-CPU Mac with 48 GiB, 1 on an 8-core laptop with 8 GB, none on a machine with fewer than 4 CPUs or 8 GiB (baton then runs without workers, and says so when a plan is attached). In a container, the CPUs and memory it may use count. A number from 1 to 8 sets the most yourself, whatever the machine; `0` turns workers off, and baton then runs exactly as v0.4 did;
+- **the machine has room:** its load is under its number of CPUs; on macOS, memory pressure is below critical, and while it is at warn, swap grew by no more than 256 MiB in the last minute; on Linux, at least 15% of memory is available (within a container's limit);
+- **a minute has passed** since the last worker started (with `auto`), so each one's load shows before the next starts;
+- **the lanes keep up:** no gate of the run or its workers has waited more than a minute for a free [lane](#lanes), since another worker's gates would only queue behind it;
+- **landings aren't colliding:** fewer than 2 of the workers' landings in a row went back for a rebase conflict. A landing resets the count, and once no worker of the plan is left at work to land, a new one starts anyway;
+- no session waits on a usage limit, and, if you set `worker_usage_max`, the account's five-hour usage is under it ([Usage limits](#usage-limits));
 - no newer baton is waiting to restart the session.
 
-A plan with no `After:` lines is a chain, so no worker ever starts on it. When a plan is attached, baton says how many workers will work beside the lead.
+These checks are made by baton, not the model, and only hold back new workers: a worker at work is never stopped. The machine's room also holds back resuming a worker. When a phase that could go ahead is held back, baton tells the lead once (*"baton: no worker on P3 for now: the machine is busy (load 11.2 on 8 CPUs). One starts once there is room; the workers at work carry on"*), and the status line and `baton status` say why until a worker starts.
+
+The model's part is the plan. A plan with no `After:` lines is a chain, so no worker ever starts on it; `/baton plan` marks a phase `After: none` when it needs nothing from the others, and splits the work so that phases running at once don't touch the same files. When a plan is attached, baton says how many workers will work beside the lead: *"up to 3 workers work beside this session on the phases that can go ahead, … (the plan's widest step is 4 phases; this machine allows 6)"*.
 
 A worker starts with the flags you gave `baton` (the same model and permission mode), baton's hooks, and a prompt to begin its phase. Its brief holds the phase's section of the plan, the standing rules, and the notes of the phases it depends on. Inside its phase it does everything the lead does: `verify` and `await`, `done` while a gate runs, notes and proposals, checkpoints and compactions. It works only in its worktree: an edit in your checkout is refused, and so are the commands that belong to the lead (`attach`, `run`, `pause`, `drop`, `exit`, and plan mode).
 
@@ -248,26 +257,51 @@ Workers start in the permission mode the lead started in. In `auto` or `bypassPe
 
 ### Usage limits
 
-Every session's status line reports the account's five-hour usage to baton (Claude Code reports it on Pro and Max plans). No new worker starts above `worker_usage_max`. When a session's turn ends on a usage limit, no worker starts and baton types nothing into any of the run's sessions until the limit resets (15 minutes when baton can't tell when); Claude Code resumes each session by itself.
+Every session's status line reports the account's five-hour usage to baton (Claude Code reports it on Pro and Max plans). baton holds nothing back for it by default: a run that finishes sooner uses the five-hour allowance faster, rather than leave part of it unused when the window resets. To keep a reserve, set `worker_usage_max` (say `80`): no new worker starts while the usage is at or above it. When a session's turn ends on a usage limit, no worker starts and baton types nothing into any of the run's sessions until the limit resets (15 minutes when baton can't tell when); Claude Code resumes each session by itself.
 
 ### Pausing, dropping, leaving
 
 - **`/baton pause`** stops baton starting workers and landing their work. Workers already at work carry on, and their work waits to land until `/baton run`.
-- **`/baton drop`** saves each worker's uncommitted work into a snapshot ref, ends it, and removes its worktree. A worker's branch is kept if it holds commits that never landed, and `baton status` names it.
+- **`/baton drop`** saves each worker's uncommitted work into a snapshot ref, ends it, and removes its worktree. A worker's branch is kept if it holds commits that never landed, renamed to `baton/<run>/kept/<phase>-<YYYYMMDD-HHMM>` so that no later worker on a phase of the same name starts from it, and `baton status` names it.
+- **A new plan over the run** (approving another plan and starting it, or `/baton run` with another plan) ends the workers of the plan it replaces the same way, kept branches under `kept/` included. Plans number their phases alike, so the new plan's P3 worker starts on a fresh branch.
 - **`/baton exit`**, closing the terminal, or the lead session ending suspends the workers. The next baton session of the run (`baton --continue`) resumes each one in its worktree.
+- **A run nobody comes back to** doesn't hold its workers forever. Once it has been quiet for 2 minutes with no baton of its own running, the next session that starts a plan in the project ends them, as `/baton drop` would, and says so: *"baton: ended 2 workers left by an earlier run (P3, P4); its branch baton/<run>/P3 keeps 1 commit that never landed"*. Their phases go back to that run, for whenever it is continued. `baton clean` does the same at once ([Cleaning up](#cleaning-up-baton-clean)).
+- **Continuing a run with workers off** (`workers: 0`, or a machine with room for none) ends the run's suspended workers, and the lead takes their phases.
 - **An update restart** waits until every worker is idle (its turn over, nothing of its own running, no dialog open), and the restarted baton resumes them.
 
 ### Seeing the workers
 
-- **The status line** shows each worker after the lead's phase: `W P3 14m` while it works, `P3 landing` (`P3 waits to land` while landing waits for your changes), `? P3` while the lead has its question for you, and `! P3 needs you` while something in its session waits on you. In front of them, `5h 85%` once the usage reading reaches `worker_usage_max`, and `usage limit until 15:40` while a limit holds the run.
-- **`baton status`** marks a worker's phase `⚙` with how it stands, and lists the workers (branch, session, worktree, and `baton view P3` when one needs you), the merge queue with any deferral and why, the questions from workers, and the usage reading.
+- **The status line** shows each worker after the lead's phase: `W P3 14m` while it works, `P3 landing` (`P3 waits to land` while landing waits for your changes), `? P3` while the lead has its question for you, and `! P3 needs you` while something in its session waits on you. After them, `W held: busy` (or `lanes`, `conflicts`) while a phase that could go ahead is held back. In front of them, `usage limit until 15:40` while a limit holds the run, and, if you set `worker_usage_max`, `5h 85%` once the usage reading reaches it.
+- **`baton status`** says how many workers may run and what the machine reads now (`workers: auto, up to 6 on this machine (14 CPUs, 48 GiB) · load 3.1 · memory pressure normal (45% free)`), and what holds a phase back, since when. It marks a worker's phase `⚙` with how it stands, and lists the workers (branch, session, worktree, and `baton view P3` when one needs you), the merge queue with any deferral and why, the questions from workers, and the usage reading.
 - **Every step** is announced in the lead and logged to the run's `events.jsonl`; each worker also has its own log, in `.baton/runs/<session>/workers/<phase>/`.
 
 ### What workers write
 
-- **Worktrees** under `~/.baton/worktrees/`, outside your checkout, one per worker (`git worktree list` shows them), removed once its work lands or the run is dropped.
-- **Branches** named `baton/<run>/<phase>` in your repository, from your branch, removed once landed. A branch with commits that never landed is kept.
+- **Worktrees** under `~/.baton/worktrees/`, outside your checkout, one per worker (`git worktree list` shows them), removed once its work lands or the worker ends. If its uncommitted work can't be saved first, the worktree stays, and baton names it.
+- **Branches** named `baton/<run>/<phase>` in your repository, from your branch, removed once landed. A branch with commits that never landed is kept: under its own name while its plan still stands, so the phase's next worker carries on from it, and as `baton/<run>/kept/<phase>-<YYYYMMDD-HHMM>` once the plan is replaced or the run dropped. `git branch --list 'baton/*'` lists them; `baton clean` names each with the command to delete it.
 - **Your branch** moves forward by fast-forward merges in your checkout, as each worker's work lands. Nothing else of yours is changed.
+
+## Cleaning up: `baton clean`
+
+baton tidies up after itself as it goes: a worker's worktree goes when its work lands, lanes come down when the session ends, and a new run ends the workers earlier runs left. When something has gone wrong anyway (a machine that crashed, a host killed with `kill -9`), `baton clean`, in the project, gets back to a known state in one command:
+
+```sh
+baton clean --dry-run   # say what it would do, and change nothing
+baton clean
+```
+
+It ends what no live session uses in the project of the working directory:
+
+1. the **workers** of runs nobody will come back to, as `/baton drop` would: their uncommitted work saved into a snapshot ref, their worktrees removed, their branches kept when they hold commits that never landed, and their phases given back to their runs;
+2. **worktrees** under `~/.baton/worktrees/` that such runs left with no worker on them, or that no run names, with their work saved first while git still knows them;
+3. the unfinished **jobs** of those runs, and their gates, while the process on record is still baton's;
+4. **lanes** nobody holds;
+5. **processes** those sessions left running: a process of yours that a session of this project started, from a session no live run owns, is stopped if it runs under `~/.baton` (a worker's or a lane's), and otherwise only listed, with the `kill` to run (a dev server the lead started in your checkout is yours to stop). A process baton can't identify is never stopped. Windows has no process table baton reads, so there it says it can't look;
+6. **leftover files:** records of sessions and runs that are gone, temporary files from writes that were interrupted, `baton view` sockets that nothing answers, and old records of sessions handed to baton.
+
+A run is left alone, and named, while it is live, or while it has been quiet for less than 2 minutes, or while a baton of its own is still running (a machine that slept): an update restart releases a run for a few seconds, and a session may just be starting. In a session, `/baton clean` leaves the session's own run alone; `/baton drop` first to clean that one.
+
+`baton clean` never deletes your work. It lists what it keeps, with the command to remove each: branches with commits that never landed (`kept/` ones included), worktrees kept because their work couldn't be saved, snapshot refs, drafts, and the runs' histories. It ends with `baton: clean`, or `baton: nothing to clean`, which is what a second run right after the first says.
 
 ## When something goes wrong
 
@@ -338,8 +372,8 @@ Optional settings live in `~/.baton/config.json`. Environment variables override
 | `switch_after` | `BATON_SWITCH_AFTER` | `5m` | How long a phase that can't go on waits on its gate before baton switches the session to another phase that can start: 1m to 2h. A command whose earlier runs took at least that long switches at once. See [Switching](#long-gates-go-to-baton). |
 | `verify_timeout` | `BATON_VERIFY_TIMEOUT` | `3h` | How long a job handed to baton (`verify` or `await`) may run before baton stops it and counts it as failed: 1m to 24h. |
 | `foreground_max` | `BATON_FOREGROUND_MAX` | `2m` | How long a command runs in the foreground before Claude Code moves it to the background: 10s to 10m, or `off` to leave it to Claude Code. baton passes it as `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS`, unless that is already set. |
-| `workers` | `BATON_WORKERS` | `1` | How many hidden worker sessions may work on other phases beside your session: 0 to 3. `0` turns workers off. See [Working on phases at once](#working-on-phases-at-once). |
-| `worker_usage_max` | `BATON_WORKER_USAGE_MAX` | `80` | The share of the account's five-hour usage (%) above which no new worker starts. `0` turns the check off. |
+| `workers` | `BATON_WORKERS` | `auto` | How many hidden worker sessions may work on other phases beside your session. `auto` sizes it to the machine (one per 2 CPUs or 4 GiB, whichever allows fewer, less one for the lead, at most 8), and starts them as the plan, the machine and the lanes have room. A number from 1 to 8 is the most at once, whatever the machine; `0` turns workers off. See [When a worker starts](#when-a-worker-starts). |
+| `worker_usage_max` | `BATON_WORKER_USAGE_MAX` | `0` | The share of the account's five-hour usage (%) at or above which no new worker starts, to keep a reserve. `0`, the default, holds nothing back. |
 
 With the defaults on a 1M-token model, baton asks for a checkpoint at 486k tokens and asks you at 729k, and Claude Code compacts on its own at about 777k. `/baton setup` prints the numbers for your settings.
 
@@ -348,8 +382,9 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 ## Privacy and safety
 
 - **Typing.** baton types into the terminals it hosts, yours and its workers': `/compact` at boundaries, short `[baton] …` reminders when a session stalls, and `/exit` to end a worker. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text among the run's drafts and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to the run's `events.jsonl`.
-- **Git.** baton never commits or stages your files. All it writes to a repository is its snapshot refs under `refs/baton/`, a line in `.git/info/exclude` that keeps `.baton/` out of git, and, once the model runs `baton verify`, the worktrees of its lanes under `~/.baton/lanes/` (`git worktree list` shows them). With workers, it also makes their worktrees under `~/.baton/worktrees/` and their branches (`baton/<run>/<phase>`), rebases those branches in their worktrees, and lands them on your branch with `git merge --ff-only`, which changes only the files the worker changed and only when none of them holds changes of yours. When it tidies worktrees away it runs `git worktree prune`, which also makes git forget any worktree of yours whose directory is gone, such as one on a drive that isn't mounted. The only git commands it ever refuses are the ones above, while another baton session works in the same checkout, and an amend, reset or rebase over commits that landed from a worker.
+- **Git.** baton never commits or stages your files. All it writes to a repository is its snapshot refs under `refs/baton/`, a line in `.git/info/exclude` that keeps `.baton/` out of git, and, once the model runs `baton verify`, the worktrees of its lanes under `~/.baton/lanes/` (`git worktree list` shows them). With workers, it also makes their worktrees under `~/.baton/worktrees/` and their branches (`baton/<run>/<phase>`), rebases those branches in their worktrees, and lands them on your branch with `git merge --ff-only`, which changes only the files the worker changed and only when none of them holds changes of yours. When it tidies worktrees away, it makes git forget only the ones it made under `~/.baton` whose directory is gone; a worktree of yours on a drive that isn't mounted is never forgotten. The only git commands it ever refuses are the ones above, while another baton session works in the same checkout, and an amend, reset or rebase over commits that landed from a worker.
 - **Running your code.** A gate handed to baton runs the command the model gave it, in a lane, through your `.baton-lane` if you committed one; baton itself runs only that script's `up`, `down` and `slots`.
+- **Processes.** baton stops a process only when it is its own (a gate's runner, a worker's session), or when `baton clean` finds it left by a session of the project that is gone and running under `~/.baton`. It signals each process on its own (never a process group read from a file), and checks first that a pid on record still belongs to baton. Anything else it finds is listed, never stopped.
 - **Settings.** baton never edits your Claude Code settings. Its hooks, status line, an allow rule for its own CLI, and `"idleCompaction": false` (baton decides when a hosted session compacts) are passed to each hosted session, workers included, with `claude --settings`. claude also gets `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` (see `foreground_max`), unless you set it yourself.
 - **Notifications.** Pushes go to the ntfy topic you configure and say only that you're needed, unless you turn on `details`.
 - **Downloads.** The binary download is verified against checksums committed to this repository. Set `BATON_BIN` to use a binary you built yourself.
@@ -357,6 +392,8 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 See [SECURITY.md](SECURITY.md).
 
 ## Uninstall
+
+In each project you ran baton in, once no baton session runs there, `baton clean` ends whatever baton left behind. Then:
 
 ```sh
 claude plugin uninstall baton@baton

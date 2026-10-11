@@ -4,6 +4,74 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+v0.5 ran workers beside the lead, but you picked how many, and what a run left behind waited for that same
+run to come back. Now the plan and the machine size the fleet: a worker starts whenever a phase can go
+ahead and the machine, the lanes and the landings have room for it, and baton finishes a run sooner by
+using the five-hour allowance faster rather than keeping a reserve. Nothing baton creates outlives its
+use: a new run ends the workers earlier runs abandoned, a replaced plan ends its own, and `baton clean`
+gets back to a known state in one command. The readings and the process lookup behind it are in
+[docs/research/workers.md](docs/research/workers.md) ("Machine readings and leftovers").
+
+A session hosted by v0.5 stays on its version after you update (before 1.0, a minor release counts as a
+major one) and says so once: exit and run `baton --continue` to move it to v0.6.
+
+### Added
+- **`workers: auto`, the default.** The most workers at once is one for each 2 CPUs or 4 GiB of memory,
+  whichever allows fewer, less one for the lead, at most 8: 6 on a 14-CPU, 48 GiB Mac, 1 on an 8 GB
+  laptop, none under 4 CPUs or 8 GiB, where baton runs without workers and says so. CPUs and memory are
+  read without cgo (sysctl on macOS, `/proc` and the cgroup's limits on Linux; a container counts what it
+  may use). A number from 1 to 8 sets the most yourself, whatever the machine; `0` still turns workers
+  off. `BATON_WORKERS` takes `auto` or the number.
+- **What holds a new worker back,** checked by baton at every step and never stopping a worker at work:
+  the machine's load at or over its CPUs, memory pressure at critical or swap growing by more than
+  256 MiB a minute at warn (macOS), less than 15% of memory available (Linux); a minute since the last
+  worker started (with `auto`); a gate that has waited more than a minute for a lane; 2 landings in a row
+  handed back for a rebase conflict, while a worker of the plan is left to land; and the five-hour usage,
+  if you set `worker_usage_max`. Resuming a worker waits for the machine only. A hold is told once
+  (`worker_deferred` with `held`), shown on the status line (`W held: busy`, `lanes` or `conflicts`) and by
+  `baton status`, which also says how many workers this machine allows and what it reads now (`workers:
+  auto, up to 6 on this machine (14 CPUs, 48 GiB) · load 3.1 · memory pressure normal (45% free)`).
+  Attaching a plan names the plan's widest step beside what the machine allows.
+- **`baton clean`** (and `/baton clean`) ends what no live session uses in the project: the workers of
+  runs nobody will come back to (their work saved, worktrees removed, branches with unlanded commits
+  kept), worktrees under `~/.baton/worktrees/` no worker is on, those runs' unfinished jobs, lanes nobody
+  holds, processes such sessions left running under `~/.baton` (others are listed with the `kill` to run,
+  never stopped), records of runs and sessions that are gone, temporary files from interrupted writes,
+  dead `baton view` sockets and old records of sessions handed over. Live runs, and runs quiet for under
+  2 minutes or whose baton still runs, are named and left alone. It lists what it keeps with the command
+  to remove each, `--dry-run` reports the same actions and changes nothing, and a second run says
+  `baton: nothing to clean`. Each run it changed logs `cleaned`.
+- **A new run ends the workers earlier runs abandoned.** When a plan is attached, the project's other runs
+  that have been quiet for 2 minutes, with no baton of their own running, have their workers ended as
+  `/baton drop` would; their phases go back to those runs. The new run logs `workers_retired` and says
+  so in one line.
+
+### Changed
+- **`worker_usage_max` is off by default** (it was 80%). Set it to keep a reserve of the five-hour
+  allowance; the status line's `5h` reading shows only when it is set.
+- **A plan replaced over a run ends the old plan's workers**, including suspended ones, which used to be
+  orphaned with their worktrees and branches. Plans number their phases alike, so a worker belongs to the
+  plan it was started for, and the new plan's worker on a phase of the same id starts on a fresh branch.
+- **A branch with commits that never landed** is renamed to `baton/<run>/kept/<phase>-<YYYYMMDD-HHMM>`
+  once its plan is replaced or its run dropped, so no later worker carries on from it. While the plan
+  stands, it keeps its name, and the phase's next worker carries on from it.
+- **A session continued with workers off** (`workers: 0`, or a machine with room for none) ends the run's
+  suspended workers, and the lead takes their phases; a phase a suspended worker held used to stay in
+  progress forever.
+- **Workers can be ended by any baton process, one at a time.** A worker being ended is marked on its
+  run, so it is never resumed and ended at once, and nothing ends a worker whose session is live. If its
+  uncommitted work can't be saved, its worktree stays and is named. Its gates are stopped only while the
+  pid on record is still baton's runner.
+- **baton forgets only the worktrees it made.** Where it ran `git worktree prune`, which also forgot a
+  worktree of yours on a drive that isn't mounted, it now forgets only missing worktrees under its own
+  directories, and never a locked one.
+
+### Fixed
+- **`baton view P3`** picks the running worker when a run that ended has a worker on the same phase,
+  instead of refusing as ambiguous; it asks for a ref only when several are running.
+- **A run's owner records its host's pid**, not that of the hook that first claimed it, which had long
+  exited.
+
 ## [0.5.0] - 2026-10-11
 
 v0.4 kept a run from waiting on its gates, but still worked on one phase at a time. The replays behind it
