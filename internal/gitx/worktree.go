@@ -207,3 +207,18 @@ func Ahead(ctx context.Context, root, into, branch string) (int, error) {
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
+
+// Branches lists the branches of the repository at root whose names start with prefix (such as
+// "baton/"), sorted; none without git.
+func Branches(root, prefix string) []string {
+	if !Usable(root) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := run(ctx, root, nil, nil, "for-each-ref", "--format=%(refname:short)", "refs/heads/"+prefix)
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(out))
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -214,6 +215,11 @@ func TestWorkerBranchLifecycle(t *testing.T) {
 	if n, err := Ahead(ctx, repo, "main", "baton/r/P1"); err != nil || n != 1 {
 		t.Errorf("Ahead after a commit = %d, %v", n, err)
 	}
+	git(t, repo, "branch", "baton/r/kept/P0-20261011-1200", "main")
+	git(t, repo, "branch", "batonx", "main")
+	if got := Branches(repo, "baton/"); !slices.Equal(got, []string{"baton/r/P1", "baton/r/kept/P0-20261011-1200"}) {
+		t.Errorf("Branches = %q", got)
+	}
 
 	// The worker went away, its worktree with it: the next one goes on from its commits.
 	os.RemoveAll(dir)
@@ -244,5 +250,8 @@ func TestWorkerBranchLifecycle(t *testing.T) {
 	}
 	if err := RemoveBranch(ctx, plain, "b"); !errors.Is(err, ErrNoGit) {
 		t.Errorf("RemoveBranch outside a repository = %v", err)
+	}
+	if got := Branches(plain, "baton/"); got != nil {
+		t.Errorf("Branches outside a repository = %q", got)
 	}
 }
