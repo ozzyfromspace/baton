@@ -4,6 +4,8 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-11
+
 v0.4 kept a run from waiting on its gates, but still worked on one phase at a time. The replays behind it
 put the next step at two sessions working at once: 58 hours to 40 on one long campaign, and 31 to 14 on
 another, while a third session added about 1%. baton now works on phases that don't need each other at
@@ -541,7 +543,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ozzyfromspace/baton/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ozzyfromspace/baton/compare/v0.3.7...v0.4.0
 [0.3.7]: https://github.com/ozzyfromspace/baton/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/ozzyfromspace/baton/compare/v0.3.5...v0.3.6
