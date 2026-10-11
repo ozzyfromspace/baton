@@ -147,6 +147,8 @@ type State struct {
 	// IDPrefix numbers a worker sub-run's decisions and jobs under its phase (P3.d1, P3.j2), so that no id
 	// is used twice across the run and its workers.
 	IDPrefix string `json:"id_prefix,omitempty"`
+	// Inbox holds what baton has for the session's model that no hook could tell it yet (Message).
+	Inbox []Message `json:"inbox,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }

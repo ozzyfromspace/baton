@@ -49,6 +49,9 @@ type Runtime struct {
 	Monitors []string `json:"monitors,omitempty"`
 	// Crons are session-scoped wakeups (CronCreate, ScheduleWakeup, /loop) reported at the last Stop.
 	Crons int `json:"crons"`
+	// Tools are the tool calls whose results have not come back yet, oldest first: each may be changing
+	// files right now, so no worker's work lands in the checkout while one is (ToolCall).
+	Tools []ToolCall `json:"tools,omitempty"`
 
 	// StopBlocks counts consecutive Stops baton refused because the model reported no status.
 	StopBlocks int `json:"stop_blocks"`
@@ -409,4 +412,64 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 	r.Monitors = slices.DeleteFunc(r.Monitors, func(id string) bool {
 		return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id })
 	})
+}
+
+// ToolCall is a tool the session called whose result has not come back. A call ends with its result
+// (PostToolUse, PostToolUseFailure, PermissionDenied); a call the human refused at its permission prompt
+// ends with nothing, so every call of the main agent ends with its turn, and a subagent's with the
+// subagent. A call older than ToolStale is not trusted to be running.
+type ToolCall struct {
+	ID    string    `json:"id,omitempty"`    // its tool_use_id
+	Agent string    `json:"agent,omitempty"` // the subagent that made it ("" for the main agent)
+	Tool  string    `json:"tool"`
+	Since time.Time `json:"since"`
+}
+
+// ToolStale is how long a tool call is taken to be running at most: by then a command has long moved to
+// the background (foreground_max), and a call still on record most likely ended with no hook.
+const ToolStale = 10 * time.Minute
+
+// maxTools bounds the calls on record: calls that end with no hook must not pile up.
+const maxTools = 32
+
+// ToolStarted records call c as running.
+func (r *Runtime) ToolStarted(c ToolCall) {
+	if c.ID != "" && slices.ContainsFunc(r.Tools, func(o ToolCall) bool { return o.ID == c.ID }) {
+		return
+	}
+	r.Tools = append(r.Tools, c)
+	if n := len(r.Tools) - maxTools; n > 0 {
+		r.Tools = slices.Delete(r.Tools, 0, n)
+	}
+}
+
+// ToolEnded records that a call of agent's ended: the call id, or, without one, agent's oldest call of
+// tool.
+func (r *Runtime) ToolEnded(id, agent, tool string) {
+	i := slices.IndexFunc(r.Tools, func(c ToolCall) bool {
+		if id != "" {
+			return c.ID == id
+		}
+		return c.Agent == agent && c.Tool == tool
+	})
+	if i >= 0 {
+		r.Tools = slices.Delete(r.Tools, i, i+1)
+	}
+}
+
+// ToolsEnded records that every call of agent ended ("" for the main agent): its turn, or the subagent,
+// is over.
+func (r *Runtime) ToolsEnded(agent string) {
+	r.Tools = slices.DeleteFunc(r.Tools, func(c ToolCall) bool { return c.Agent == agent })
+}
+
+// InFlight lists the tool calls running at now: those on record, short of ToolStale.
+func (r Runtime) InFlight(now time.Time) []ToolCall {
+	var out []ToolCall
+	for _, c := range r.Tools {
+		if now.Sub(c.Since) < ToolStale {
+			out = append(out, c)
+		}
+	}
+	return out
 }

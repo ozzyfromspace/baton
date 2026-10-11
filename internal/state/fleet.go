@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -67,6 +68,9 @@ type Merge struct {
 	// files), since DeferredAt.
 	Deferred   string    `json:"deferred,omitempty"`
 	DeferredAt time.Time `json:"deferred_at,omitzero"`
+	// Reverify is the sub-run's job verifying the rebased branch again, since the run's branch moved on
+	// from the commit its verification passed on.
+	Reverify string `json:"reverify,omitempty"`
 }
 
 // Relay is a question a worker's phase has for the human. A worker never puts a question to the human
@@ -257,6 +261,36 @@ func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 	return takeUp(st, p, now), nil
 }
 
+// TakeLandings returns the landings the lead has not been told about, and records them as told. None is
+// told while a compaction is owed or underway: the lead hears of them after it.
+func TakeLandings(st *State) []Landing {
+	if st.compacting() {
+		return nil
+	}
+	var out []Landing
+	for i := range st.Landed {
+		if l := &st.Landed[i]; !l.Told {
+			l.Told = true
+			out = append(out, *l)
+		}
+	}
+	return out
+}
+
+// LandedCommits lists every commit the run's workers landed.
+func (st State) LandedCommits() []string {
+	var out []string
+	for _, l := range st.Landed {
+		out = append(out, l.Commits...)
+	}
+	return out
+}
+
+// Landing reports a worker whose work waits in the merge queue.
+func (st State) Landing() bool {
+	return slices.ContainsFunc(st.Workers, func(w Worker) bool { return w.Status == WorkerLanding })
+}
+
 func (st State) landed(phase string) bool {
 	for _, l := range st.Landed {
 		if l.Phase == phase {
@@ -278,4 +312,48 @@ func takeUp(st *State, p plan.Plan, now time.Time) string {
 		st.Run.Compaction.Queue("boundary", now)
 	}
 	return next
+}
+
+// The merge queue lands a worker's phase from its sub-run, which its `baton done` completed. Two things
+// send the phase back there: the run's branch moved on since its verification passed, so it is verified
+// again on its rebased branch (Reverify), or its work cannot land as it is and the worker must act
+// (Reopen).
+
+// Reverify verifies a worker's finished phase again, in its sub-run st, with j: the verification that
+// passed, run on the commit its branch was rebased to. The phase is verifying, as after `baton done`
+// with a verification running, so the sub-run completes again once j passes (without a word to the
+// worker, which was told its phase is done), or takes the phase up again, red, as after any
+// verification that fails. It returns j as queued.
+func Reverify(st *State, j Job, now time.Time) (Job, error) {
+	ps := st.Phases[j.Phase]
+	if st.Mode != ModeComplete || ps == nil || ps.Status != PhaseDone {
+		return Job{}, fmt.Errorf("phase %s is not a finished worker's", j.Phase)
+	}
+	j.Kind = JobVerify
+	q, _, _ := QueueJob(st, j, now)
+	ps.Status, ps.DoneAt = PhaseVerifying, time.Time{}
+	st.Mode, st.Current = ModeRunning, ""
+	st.Run.CompleteNotified = true
+	return q, nil
+}
+
+// Reopen takes a worker's finished phase up again in its sub-run st: its work could not land, for the
+// reason m gives the worker's model. The phase is in hand and active, as it was before `baton done`, and
+// m waits for the worker's next hook (Tell). Reopening a phase already reopened only leaves m.
+func Reopen(st *State, phase string, m Message, now time.Time) error {
+	ps := st.Phases[phase]
+	switch {
+	case ps == nil:
+		return fmt.Errorf("unknown phase %q", phase)
+	case st.Mode == ModeRunning && st.Current == phase && ps.Status == PhaseActive:
+	case st.Mode != ModeComplete || ps.Status != PhaseDone:
+		return fmt.Errorf("phase %s is not a finished worker's", phase)
+	default:
+		ps.Status, ps.DoneAt = PhaseActive, time.Time{}
+		st.Mode, st.Current, st.BoundaryOwed = ModeRunning, phase, false
+		st.Run.CompleteNotified = false
+		st.Run.Progress()
+	}
+	Tell(st, m, now)
+	return nil
 }

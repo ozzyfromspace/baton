@@ -164,7 +164,7 @@ func (st State) Red() []Job {
 // it. None is due while a compaction is owed or underway: the result comes after it.
 func (st State) Due() []Job {
 	switch {
-	case st.BoundaryOwed || st.CheckpointOwed || st.CheckpointDue || st.Run.Compaction.InFlight():
+	case st.compacting():
 		return nil
 	case st.Mode == ModeComplete:
 		if st.Run.CompleteNotified {
@@ -349,6 +349,7 @@ func Settle(st *State, p plan.Plan, now time.Time) Settled {
 				pk.Job, pk.Notes = j.ID, j.Notes
 			}
 			ps.Status, ps.Park = PhaseParked, &pk
+			st.Run.CompleteNotified = false // a worker's phase verified again after it was done: it is not done
 		}
 		out.Verdicts = append(out.Verdicts, v)
 	}
