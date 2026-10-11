@@ -134,17 +134,21 @@ func TestWords(t *testing.T) {
 		"playbook": {"commit it, degraded if need be (e.g. --no-gpg-sign)", "never discard, stash, reset or unstage work", "baton note", "baton propose",
 			"a deadline of 5 minutes", "baton blocked \"<why>\" --tried", "Waiting, doing nothing or stopping is not a proposal"},
 		"reporting": {"complete and committed", "baton note", "baton propose", "baton blocked \"<why>\" --tried", "a deadline of 5 minutes",
-			"waiting, doing nothing or stopping is not a proposal", "One proposal covers the case in front of you", "`baton note` it each time", "(work committed)"},
-		"no status":        {"(the phase is finished and committed)", "baton propose", "--tried", "baton waiting", "`baton note` it and carry on"},
+			"waiting, doing nothing or stopping is not a proposal", "One proposal covers the case in front of you", "`baton note` it each time", "(work committed)",
+			"`baton verify \"<command>\" --notes", "run `baton done` even while its gate still runs"},
+		"no status":        {"(the phase is finished and committed, even while a job you handed to baton still runs)", "baton propose", "--tried", "baton waiting", "`baton note` it and carry on"},
 		"question refused": {"baton note", "baton propose", "a deadline of 5 minutes", "--tried"},
 		"finish step":      {"and commit it"},
-		"closing":          {"When P4 is complete and committed", "baton note", "baton propose", "baton blocked --tried"},
+		"closing":          {"When P4 is complete and committed", "baton note", "baton propose", "baton blocked --tried", "`baton verify \"<command>\"", "Quick checks run in place"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(git[name], want) {
 				t.Errorf("%s lacks %q:\n%s", name, want, git[name])
 			}
 		}
+	}
+	if plain := (Words{Timeout: time.Minute}).Closing("P4"); !strings.Contains(plain, "`baton await \"<command>\"") || strings.Contains(plain, "verify") {
+		t.Errorf("closing without git:\n%s", plain)
 	}
 	if plain := (Words{Timeout: time.Minute}).Playbook(); !strings.Contains(plain, "a deadline of 1 minute") {
 		t.Errorf("playbook without git:\n%s", plain)

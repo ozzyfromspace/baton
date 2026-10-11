@@ -121,7 +121,12 @@ func resumed(t *testing.T) (plan.Plan, []byte, state.State) {
 	st.Phases["P2"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkRed, Since: now, Job: "j2",
 		Notes: "Index and query done in 4f2a9c1; the ranking test is the slow one."}}
 	st.Phases["P3"].Status = state.PhaseVerifying
-	st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Status: state.JobRunning}, {ID: "j2", Phase: "P2", Status: state.JobFailed}, {ID: "j3", Phase: "P3", Status: state.JobRunning}}
+	st.Jobs = []state.Job{
+		{ID: "j0", Phase: "P0", Kind: state.JobVerify, Command: "make lint", Commit: "1a2b3c4d5e6f7a8b", Status: state.JobFailed, Exit: 2, Started: now, Ended: now.Add(3 * time.Minute)}, // done despite it
+		{ID: "j1", Phase: "P1", Status: state.JobRunning},
+		{ID: "j2", Phase: "P2", Kind: state.JobVerify, Command: "make test", Commit: "4f2a9c1d2e3f4a5b", Status: state.JobFailed, Exit: 1, Started: now, Ended: now.Add(14 * time.Minute)},
+		{ID: "j3", Phase: "P3", Status: state.JobRunning},
+	}
 	st.Current, st.BoundaryOwed = "P2", true
 	state.Start(&st, now, state.Origin{})
 	return pl, doc, st
@@ -129,8 +134,19 @@ func resumed(t *testing.T) (plan.Plan, []byte, state.State) {
 
 func TestResumeBrief(t *testing.T) {
 	pl, doc, st := resumed(t)
-	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st, Handoff: "## P0 — 2026-10-04 11:00\n\nTables in 1a2b3c4.\n", Words: decide.Words{Git: true}})
+	result := decide.JobResult(*st.Job("j2"), "/work/.baton/runs/r1/jobs/j2.log", "--- FAIL: TestRanking (0.02s)\nFAIL", nil)
+	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st, Handoff: "## P0 — 2026-10-04 11:00\n\nTables in 1a2b3c4.\n", Words: decide.Words{Git: true}, Result: result})
 	golden(t, "resume.golden", b)
+}
+
+// A phase whose verification ended without a verdict is checked again, not fixed.
+func TestUnverifiedResumeBrief(t *testing.T) {
+	pl, doc, st := resumed(t)
+	st.Phases["P2"].Park.Reason = state.ParkUnverified
+	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st})
+	if !strings.Contains(b, "Now: resume P2 — Search. It was finished, but its verification ended without a verdict") || strings.Contains(b, "verification failed") {
+		t.Errorf("resume brief:\n%s", b)
+	}
 }
 
 // A phase set aside while its job ran picks up from its park notes, and they stay in every later brief

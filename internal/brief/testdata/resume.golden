@@ -27,10 +27,22 @@ This phase's park notes (where P2 stood when it was set aside):
 
 Index and query done in 4f2a9c1; the ranking test is the slow one.
 
+The result of the job P2 was set aside for:
+
+[baton] Job j2 (P2) failed (exit 1) after 14m: `make test` on 4f2a9c1d2e3f.
+The end of its log (/work/.baton/runs/r1/jobs/j2.log):
+
+--- FAIL: TestRanking (0.02s)
+FAIL
+
+Fix what failed, commit, and verify again (`baton verify`), or run a quick gate in place. `baton done P2` is refused while its latest verification is red.
+
+Red now: P0 (job j0, `make lint` on 1a2b3c4d5e6f failed (exit 2) after 3m). Failures in their area are theirs, not this phase's: leave them to it.
+
 Notes left by earlier phases (most recent last):
 
 ## P0 — 2026-10-04 11:00
 
 Tables in 1a2b3c4.
 
-When P2 is complete and committed, run `baton done P2 --notes "<what later phases need to know>"` and end your turn. If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), `baton propose` (a reversible way around a problem; the human may veto it by a deadline), `baton blocked --tried` (only if every way forward is irreversible). Waiting on something outside you: `baton waiting "<what>" --until <duration>`. Never type /compact yourself.
+When P2 is complete and committed, run `baton done P2 --notes "<what later phases need to know>"` and end your turn. Gates that take more than about 2 minutes, or need state of their own, go to baton: `baton verify "<command>" --notes "<where the phase stands>"` runs it on HEAD (commit first) in a lane of its own while you keep working on what does not depend on it, and baton gives you the result when it ends; `baton await` does the same for something outside the project, such as a CI run. Quick checks run in place. Once the phase is complete and committed, run `baton done` even while its gate still runs: the phase is done when the gate passes, and reopens if it fails. If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), `baton propose` (a reversible way around a problem; the human may veto it by a deadline), `baton blocked --tried` (only if every way forward is irreversible). Waiting on something outside you: `baton waiting "<what>" --until <duration>`. Never type /compact yourself.

@@ -64,12 +64,24 @@ func (w Words) Reporting() string {
 		"A proposal is an action that makes progress; waiting, doing nothing or stopping is not a proposal. " +
 		"One proposal covers the case in front of you: when the same thing happens again, `baton note` it each time. " +
 		"Only if every way forward is irreversible or needs a secret only the human holds: `baton blocked \"<why>\" --tried \"<what you tried>\"`, and end your turn. " +
+		"Hand a gate that takes more than about 2 minutes, or needs state of its own (a database, a server), to baton: " + w.verifyHow() + " " +
 		"If you must wait for something outside you (a build, a deploy, background work), run `baton waiting \"<what>\" --until <duration>` (at most 2h): background work alone is not a status. " +
 		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
 		"The plan runs unattended, so do not ask the human questions (AskUserQuestion) yourself: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. " +
 		"In a long phase, at a safe point (" + safePoint + "), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
 		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
 		"(If the human wants to talk instead of running the plan, they can run /baton pause.)"
+}
+
+// verifyHow is how a long gate goes to baton, and what becomes of the phase meanwhile.
+func (w Words) verifyHow() string {
+	if !w.Git {
+		return "`baton await \"<command>\" --notes \"<where the phase stands>\"` runs it from the working tree while you keep working on what does not depend on it, " +
+			"and baton gives you the result when it ends. Quick checks run in place."
+	}
+	return "`baton verify \"<command>\" --notes \"<where the phase stands>\"` runs it on HEAD (commit first) in a lane of its own while you keep working on what does not depend on it, " +
+		"and baton gives you the result when it ends; `baton await` does the same for something outside the project, such as a CI run. Quick checks run in place. " +
+		"Once the phase is complete and committed, run `baton done` even while its gate still runs: the phase is done when the gate passes, and reopens if it fails."
 }
 
 // NoStatus is why baton refuses a stop that reported nothing, and the statuses to report with.
@@ -81,7 +93,7 @@ func (w Words) NoStatus(id, title string) string {
 	return fmt.Sprintf("[baton] You stopped, but phase %s is not reported done. If the human asked you something this turn, answer it first. "+
 		"If there is more to do on the phase, keep working on it (if you took a reversible step the human should know about, `baton note` it and carry on). "+
 		"Otherwise report with exactly one of these, then end your turn: "+
-		"`baton done %s --notes \"<what later phases need to know>\"` (the phase is %s), "+
+		"`baton done %s --notes \"<what later phases need to know>\"` (the phase is %s, even while a job you handed to baton still runs), "+
 		"`baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"` "+
 		"(something is in the way and you have a reversible way around it: baton puts it to the human with %s, then you do it), "+
 		"`baton blocked \"<why>\" --tried \"<what you tried>\"` (only if every way forward is irreversible or needs a secret only the human holds), or "+
@@ -113,8 +125,9 @@ func (w Words) FinishStep() string {
 // Closing ends the brief after a compaction: how to report phase id.
 func (w Words) Closing(id string) string {
 	return fmt.Sprintf("When %s is %s, run `baton done %s --notes \"<what later phases need to know>\"` and end your turn. "+
+		"Gates that take more than about 2 minutes, or need state of their own, go to baton: %s "+
 		"If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), "+
 		"`baton propose` (a reversible way around a problem; the human may veto it by a deadline), "+
 		"`baton blocked --tried` (only if every way forward is irreversible). "+
-		"Waiting on something outside you: `baton waiting \"<what>\" --until <duration>`. Never type /compact yourself.", id, w.complete(), id)
+		"Waiting on something outside you: `baton waiting \"<what>\" --until <duration>`. Never type /compact yourself.", id, w.complete(), id, w.verifyHow())
 }

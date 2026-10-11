@@ -36,6 +36,8 @@ type Input struct {
 	State   state.State
 	Handoff string // .baton/handoff.md
 	Words   decide.Words
+	// Result is the result of the job a resumed phase was set aside for (decide.JobResult), "" for none.
+	Result string
 }
 
 // Write returns the brief.
@@ -90,6 +92,8 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "Now: %s. Begin it now.\n\n", title)
 	case in.Kind == Resume && park != nil && park.Reason == state.ParkRed:
 		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification failed: fix what failed, then finish it again.\n\n", title)
+	case in.Kind == Resume && park != nil && park.Reason == state.ParkUnverified:
+		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification ended without a verdict: check it again (in place if the lane cannot run it), then finish it again.\n\n", title)
 	case in.Kind == Resume:
 		fmt.Fprintf(&b, "Now: resume %s from where it stood. Other phases may have changed the repository since: check its state before you go on.\n\n", title)
 	default:
@@ -108,6 +112,12 @@ func Write(in Input) string {
 	}
 	if park != nil && strings.TrimSpace(park.Notes) != "" {
 		fmt.Fprintf(&b, "This phase's park notes (where %s stood when it was set aside):\n\n%s\n\n", st.Current, clip(strings.TrimSpace(park.Notes), maxNotes))
+	}
+	if r := strings.TrimSpace(in.Result); r != "" {
+		fmt.Fprintf(&b, "The result of the job %s was set aside for:\n\n%s\n\n", st.Current, r)
+	}
+	if red := decide.RedPhases(st.Red(), st.Current); red != "" {
+		b.WriteString(red + "\n\n")
 	}
 	if notes := strings.TrimSpace(in.Handoff); notes != "" {
 		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))
