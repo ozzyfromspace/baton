@@ -1,0 +1,120 @@
+package procs
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io/fs"
+	"strconv"
+	"strings"
+)
+
+// What the kernels give, decoded here rather than in the files for each system, so that recorded bytes
+// and /proc fixtures are tested on every platform.
+
+// procargsEnv reads macOS's kern.procargs2: argc as an int32, the executable's path, NUL padding, argc
+// arguments, then the environment, each NUL-terminated, up to an empty string. macOS runs only on
+// little-endian CPUs.
+func procargsEnv(b []byte) ([]string, error) {
+	if len(b) < 4 {
+		return nil, fmt.Errorf("kern.procargs2: %d bytes", len(b))
+	}
+	argc := int(binary.LittleEndian.Uint32(b))
+	b = b[4:]
+	i := bytes.IndexByte(b, 0) // the end of the executable's path
+	if i < 0 {
+		return nil, errors.New("kern.procargs2: no executable path")
+	}
+	b = b[i:]
+	for len(b) > 0 && b[0] == 0 {
+		b = b[1:]
+	}
+	var env []string
+	for n := 0; len(b) > 0; n++ {
+		i := bytes.IndexByte(b, 0)
+		if i == 0 && n >= argc {
+			break // the empty string after the environment (an argument may be empty)
+		}
+		if i < 0 {
+			i = len(b)
+		}
+		if n >= argc {
+			env = append(env, string(b[:i]))
+		}
+		b = b[min(i+1, len(b)):]
+	}
+	return env, nil
+}
+
+// fromProc reads the processes of user uid from fsys, rooted at / (Linux's /proc), other than self and
+// zombies.
+func fromProc(fsys fs.FS, uid, self int) ([]Proc, error) {
+	entries, err := fs.ReadDir(fsys, "proc")
+	if err != nil {
+		return nil, err
+	}
+	var out []Proc
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		dir := "proc/" + e.Name()
+		if owner, err := statusUID(fsys, dir); err != nil || owner != uid {
+			continue
+		}
+		b, err := fs.ReadFile(fsys, dir+"/stat")
+		if err != nil {
+			continue // it ended meanwhile
+		}
+		p, state, err := parseStat(b)
+		if err != nil || state == 'Z' || state == 'X' {
+			continue
+		}
+		p.PID = pid
+		if b, err := fs.ReadFile(fsys, dir+"/environ"); err == nil {
+			p.Env = batonEnv(strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"))
+		}
+		if cwd, err := fs.ReadLink(fsys, dir+"/cwd"); err == nil {
+			p.Cwd = strings.TrimSuffix(cwd, " (deleted)")
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// parseStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp session …". The command name may hold
+// spaces and parentheses, so the fields after it are found from the last ')'.
+func parseStat(b []byte) (Proc, byte, error) {
+	open, end := bytes.IndexByte(b, '('), bytes.LastIndexByte(b, ')')
+	if open < 0 || end < open {
+		return Proc{}, 0, errors.New("stat: no command name")
+	}
+	f := strings.Fields(string(b[end+1:]))
+	if len(f) < 3 || len(f[0]) != 1 {
+		return Proc{}, 0, errors.New("stat: too short")
+	}
+	ppid, err1 := strconv.Atoi(f[1])
+	pgid, err2 := strconv.Atoi(f[2])
+	if err := errors.Join(err1, err2); err != nil {
+		return Proc{}, 0, fmt.Errorf("stat: %w", err)
+	}
+	return Proc{PPID: ppid, PGID: pgid, Comm: string(b[open+1 : end])}, f[0][0], nil
+}
+
+// statusUID reads the effective uid from /proc/<pid>/status ("Uid: real effective saved fs").
+func statusUID(fsys fs.FS, dir string) (int, error) {
+	b, err := fs.ReadFile(fsys, dir+"/status")
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.Lines(string(b)) {
+		if rest, ok := strings.CutPrefix(line, "Uid:"); ok {
+			if f := strings.Fields(rest); len(f) >= 2 {
+				return strconv.Atoi(f[1])
+			}
+		}
+	}
+	return 0, errors.New("status: no Uid")
+}
