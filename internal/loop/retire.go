@@ -98,8 +98,7 @@ func RetireWorker(r Retirement) Retired {
 
 type retirement struct {
 	Retirement
-	entry    state.Worker // as the mark found it
-	gone     bool         // it was not on the roster any more (the run's own host only)
+	entry    state.Worker // as the mark found it (as the caller read it, when it is off the roster)
 	replaced bool         // the run's plan was replaced since it was assigned
 	dropped  bool         // the run was dropped
 	into     string       // the run's branch
@@ -124,7 +123,7 @@ func (x *retirement) mark() string {
 		cur := rosterEntry(st, e.Ref, e.Session)
 		switch {
 		case cur == nil && x.Host:
-			x.entry, x.gone = e, true
+			x.entry = e
 			return errKept
 		case cur == nil:
 			why = "it is no longer on its run's roster"
