@@ -24,6 +24,9 @@ type signalHandlers struct {
 // forwardSignals is a no-op until the ConPTY host lands.
 func forwardSignals(signalHandlers) func() { return func() {} }
 
+// OnResize is a no-op until the ConPTY host lands.
+func OnResize(func()) func() { return func() {} }
+
 func killTree(p *os.Process) { p.Kill() }
 
 func signalExitCode(*exec.ExitError) int { return 1 }

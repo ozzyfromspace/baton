@@ -26,10 +26,20 @@ type Session struct {
 	pty  pty.PTY
 	cmd  *exec.Cmd
 
-	// screen takes the lead's output: the human's terminal. A hidden session's goes to tail and modes.
+	// screen takes the lead's output: the human's terminal. A hidden session's goes to tail and modes,
+	// and to its viewer while one is attached (baton view).
 	screen io.Writer
 	tail   *ring
 	modes  *modeTracker
+	viewMu sync.Mutex
+	viewer *viewer
+	// sizeMu guards rows and cols, the size of its terminal now, and closing the terminal, which a
+	// resize must not race; a hidden session's own size, which it has with no viewer, is ownRows x
+	// ownCols.
+	sizeMu           sync.Mutex
+	rows, cols       uint16
+	ptyClosed        bool
+	ownRows, ownCols uint16
 
 	exited     chan struct{} // closed once claude has exited
 	done       chan struct{} // closed once the session has wound down (Done)
@@ -58,7 +68,8 @@ func startSession(cfg Config, name string, cmd *exec.Cmd, rows, cols uint16, scr
 	if err != nil {
 		return nil, fmt.Errorf("starting %s: %w", cfg.Claude, err)
 	}
-	s := &Session{Name: name, cfg: cfg, pty: p, cmd: cmd, screen: screen, exited: make(chan struct{}), done: make(chan struct{})}
+	s := &Session{Name: name, cfg: cfg, pty: p, cmd: cmd, screen: screen, exited: make(chan struct{}), done: make(chan struct{}),
+		rows: rows, cols: cols, ownRows: rows, ownCols: cols}
 	if screen == nil {
 		s.tail, s.modes = newRing(TailSize), &modeTracker{}
 	}
@@ -87,9 +98,13 @@ func (s *Session) reap() {
 	case <-outDone:
 	case <-time.After(time.Second):
 	}
+	s.sizeMu.Lock()
 	s.pty.Close()
+	s.ptyClosed = true
+	s.sizeMu.Unlock()
 	s.code = exitCode(s.cmd, s.waitErr)
 	s.logf("%s exited with %d", s.cfg.Claude, s.code)
+	s.endViewer()
 	close(s.done)
 }
 
@@ -133,7 +148,25 @@ func (s *Session) Modes() []byte {
 }
 
 // Resize sets the size of the session's terminal.
-func (s *Session) Resize(rows, cols uint16) error { return s.pty.Resize(rows, cols) }
+func (s *Session) Resize(rows, cols uint16) error {
+	s.sizeMu.Lock()
+	defer s.sizeMu.Unlock()
+	if s.ptyClosed {
+		return os.ErrClosed
+	}
+	if err := s.pty.Resize(rows, cols); err != nil {
+		return err
+	}
+	s.rows, s.cols = rows, cols
+	return nil
+}
+
+// size is the size of the session's terminal.
+func (s *Session) size() (rows, cols uint16) {
+	s.sizeMu.Lock()
+	defer s.sizeMu.Unlock()
+	return s.rows, s.cols
+}
 
 func (s *Session) logf(format string, a ...any) {
 	if s.Name != "" {
@@ -145,7 +178,7 @@ func (s *Session) logf(format string, a ...any) {
 // pumpOutput reads everything claude writes. The lead's goes to the human's terminal. If that terminal is
 // gone it keeps reading and discards: claude blocks on output nobody reads (a write, or a tcsetattr that
 // waits for the output to drain), and a claude blocked there never gets to the hangup it is sent. A
-// hidden session's output is kept in its tail, so it never blocks either.
+// hidden session's output is kept in its tail and queued for its viewer, so it never blocks either.
 func (s *Session) pumpOutput() {
 	buf := make([]byte, 32*1024)
 	out := s.screen
@@ -154,8 +187,11 @@ func (s *Session) pumpOutput() {
 		if n > 0 {
 			s.lastOutput.Store(s.cfg.Now().UnixNano())
 			if out == nil {
+				s.viewMu.Lock()
 				s.tail.Write(buf[:n])
 				s.modes.feed(buf[:n])
+				s.toViewer(buf[:n])
+				s.viewMu.Unlock()
 			} else if _, werr := out.Write(buf[:n]); werr != nil && out != io.Discard {
 				out = io.Discard
 				s.hangUp(fmt.Sprintf("writing to it failed: %v", werr))

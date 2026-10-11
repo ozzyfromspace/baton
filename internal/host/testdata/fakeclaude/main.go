@@ -10,6 +10,8 @@
 // It exits 0 on a typed /exit line unless FAKE_SLASH=ignore. FAKE_MODES=1 sets terminal modes at startup,
 // FAKE_FLOOD=n writes n numbered lines once it is ready, and FAKE_CHILD=1 starts a child in a process
 // session of its own, as the Bash tool does, and records its pid in $FAKE_OUT/child.pid.
+//
+// Like claude, it repaints its screen when its terminal changes size: it writes "repaint ROWSxCOLS".
 package main
 
 import (
@@ -44,6 +46,7 @@ func main() {
 	if os.Getenv("FAKE_MODES") == "1" {
 		fmt.Print("\x1b[?1004h\x1b[?2004;25h\x1b[?2026h\x1b[?25l\x1b[?2026l")
 	}
+	go repaint()
 	fmt.Print("fake-claude ready\r\n")
 	if n, _ := strconv.Atoi(os.Getenv("FAKE_FLOOD")); n > 0 {
 		for i := 1; i <= n; i++ {
@@ -107,6 +110,25 @@ func main() {
 		}
 		if err != nil {
 			return
+		}
+	}
+}
+
+// repaint writes the terminal's size each time it changes. A resize to the size it has is ignored, as
+// claude ignores it.
+func repaint() {
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	last := ""
+	if c, r, err := term.GetSize(0); err == nil {
+		last = fmt.Sprintf("%dx%d", r, c)
+	}
+	for range winch {
+		if c, r, err := term.GetSize(0); err == nil {
+			if size := fmt.Sprintf("%dx%d", r, c); size != last {
+				last = size
+				fmt.Printf("repaint %s\r\n", size)
+			}
 		}
 	}
 }

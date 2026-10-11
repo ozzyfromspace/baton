@@ -57,6 +57,25 @@ func forwardSignals(h signalHandlers) func() {
 	return func() { signal.Stop(ch); close(done) }
 }
 
+// OnResize calls fn each time the terminal baton runs in is resized, until the function it returns is
+// called: baton view keeps the session it shows at its terminal's size.
+func OnResize(fn func()) func() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGWINCH)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ch:
+				fn()
+			}
+		}
+	}()
+	return func() { signal.Stop(ch); close(done) }
+}
+
 // killTree kills p and every process descended from it. They are stopped first, while their tree is
 // listed, so none can start another or be orphaned (and so lost) before it is killed.
 func killTree(p *os.Process) {

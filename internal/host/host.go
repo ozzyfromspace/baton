@@ -45,6 +45,8 @@ type Config struct {
 	TypeDelay, EnterDelay time.Duration
 	// HangupGrace is how long claude gets to exit after each step of ending it (5s).
 	HangupGrace time.Duration
+	// ViewSocket is where viewers attach to the hidden sessions (baton view, ViewSocket); "" takes none.
+	ViewSocket string
 }
 
 // View is what a session's controller knows about it on each tick.

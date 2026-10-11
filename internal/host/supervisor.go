@@ -3,6 +3,7 @@ package host
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -21,6 +22,7 @@ type Supervisor struct {
 	mu     sync.Mutex
 	hidden map[string]*Session // by name, the latest session of each
 	closed bool                // the lead has ended: no session starts any more
+	views  net.Listener        // takes viewers (baton view), once a hidden session has started
 }
 
 // Spec describes a hidden session. Its command line and environment are used as given.
@@ -125,6 +127,7 @@ func (sv *Supervisor) Run() (int, error) {
 	for _, s := range sv.Hidden() {
 		<-s.Done()
 	}
+	sv.closeViews()
 	return lead.code, nil
 }
 
@@ -151,8 +154,8 @@ func (sv *Supervisor) pumpInput(lead *Session, interactive bool) {
 // ErrClosed means the supervisor's lead has ended, so no session starts any more.
 var ErrClosed = errors.New("the lead session has ended")
 
-// Spawn starts a hidden session. Its output is drained into its tail, it has no terminal of the human's,
-// and it ends with the lead.
+// Spawn starts a hidden session. Its output is drained into its tail, it has no terminal of the human's
+// unless a viewer attaches to it, and it ends with the lead.
 func (sv *Supervisor) Spawn(spec Spec) (*Session, error) {
 	if spec.Name == "" || spec.Instance == "" {
 		return nil, errors.New("a hidden session needs a name and an instance")
@@ -178,6 +181,7 @@ func (sv *Supervisor) Spawn(spec Spec) (*Session, error) {
 		return nil, err
 	}
 	sv.hidden[spec.Name] = s
+	sv.listenViews()
 	return s, nil
 }
 
