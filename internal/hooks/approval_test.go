@@ -134,6 +134,29 @@ func TestARevisedPlanApprovedMidRunIsPutToTheHuman(t *testing.T) {
 	}
 }
 
+// A revision whose phases left all wait for a verification still running: nothing starts, and the model is
+// told so rather than that the plan is done.
+func TestARevisionThatMustWaitForAJob(t *testing.T) {
+	f := newFixture(t, false)
+	file := f.startRun()
+	f.store.Update(func(st *state.State) error {
+		st.Phases["P1"].Status, st.Current = state.PhaseVerifying, ""
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Status: state.JobRunning}}
+		return nil
+	})
+	os.WriteFile(file, []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b.\n\n## P2 — Third\nDo c, better.\n"), 0o644)
+	f.approve(file)
+	question := ask(f.state().Replan.Question, "Continue with the revised plan", "Start the new plan from P0")
+	f.fire("PermissionRequest", question)
+	out := f.fire("PostToolUse", answer(question, "Continue with the revised plan"))
+	if st := f.state(); st.Mode != state.ModeRunning || st.Current != "" || st.Phases["P1"].Status != state.PhaseVerifying {
+		t.Fatalf("after revising: %+v", st)
+	}
+	if !strings.Contains(say(out), "no phase of the revision can start until a job finishes") || !strings.Contains(additionalContext(out), "waits for a job to finish") {
+		t.Fatalf("said %q, told %q", say(out), additionalContext(out))
+	}
+}
+
 func TestANewPlanApprovedMidRunCanStartOver(t *testing.T) {
 	f := newFixture(t, false)
 	f.startRun()

@@ -155,6 +155,9 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 		next := state.Revise(st, pl)
 		v.also = []event{{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}}}
 		switch {
+		case next == "" && st.Mode == state.ModeRunning:
+			v.say = "baton: revised — no phase of the revision can start until a job finishes"
+			v.tell = NudgePrefix + " The human chose to continue with the revised plan. Every phase of it still to run waits for a job to finish: end your turn, and baton wakes you when there is something to do."
 		case next == "":
 			v.say = "baton: revised — every phase of the revision is already done"
 			v.tell = NudgePrefix + " The human chose to continue with the revised plan, and every phase in it is already done. Summarize for the human and end your turn."

@@ -284,6 +284,42 @@ func TestAttachShowsTheDependencyGraph(t *testing.T) {
 	}
 }
 
+// A phase parked while its job runs: the run goes on with what does not need it, status marks it, and
+// once every phase left waits for the job, done says so instead of naming a next phase.
+func TestDoneWhenEveryPhaseLeftWaitsForAJob(t *testing.T) {
+	s, planFile := newSession(t)
+	doc, err := os.ReadFile(filepath.Join("..", "plan", "testdata", "after.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(planFile, doc, 0o644)
+	spec := s.must("", "attach", planFile, "--suggest")
+	s.must(spec, "attach", planFile, "--spec", "-")
+	pl, _ := s.store().LoadPlan()
+	s.store().Update(func(st *state.State) error {
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Status: state.JobRunning}}
+		_, err := state.ParkPhase(st, pl, "P0", state.Park{Reason: state.ParkJob, Since: s.now, Job: "j1", Notes: "read it all"})
+		return err
+	})
+	status := s.must("", "status")
+	for _, want := range []string{"⏸ P0       Research  — needs no other phase  (parked)\n", "→ P1       The schema  — needs no other phase  (next, after compaction)\n"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("status lacks %q:\n%s", want, status)
+		}
+	}
+	s.startNext()
+	if out := s.must("", "done", "P1"); !strings.Contains(out, "Next phase: P2 (The API)") {
+		t.Fatalf("done P1: %s", out)
+	}
+	s.startNext()
+	if out := s.must("", "done", "P2"); !strings.Contains(out, "baton: P2 done. No other phase can start until a job finishes") {
+		t.Fatalf("done P2: %s", out)
+	}
+	if st, _ := s.store().Load(); st.Mode != state.ModeRunning || st.Current != "" {
+		t.Fatalf("after P2: mode %s, current %q", st.Mode, st.Current)
+	}
+}
+
 // Two sessions in one working tree each run a plan of their own. From a shell, status lists both; in a
 // session, it shows that session's run and names the other one.
 func TestTwoSessionsRunTwoPlans(t *testing.T) {

@@ -16,14 +16,18 @@ const (
 	ModeIdle     = "idle"     // no plan attached
 	ModeRunning  = "running"  // baton drives the plan
 	ModePaused   = "paused"   // the human took the wheel: baton observes but never acts
-	ModeComplete = "complete" // every phase is done
+	ModeComplete = "complete" // every phase is done, and no job is left to run
 )
 
-// Phase statuses.
+// Phase statuses. A phase runs pending → active → done. Two more hold a phase that is not done while the
+// run works on others: verifying (done was claimed while its verification job runs) and parked (it was
+// set aside unfinished while its job runs, or its verification failed after done was claimed).
 const (
-	PhasePending = "pending"
-	PhaseActive  = "active"
-	PhaseDone    = "done"
+	PhasePending   = "pending"
+	PhaseActive    = "active"
+	PhaseVerifying = "verifying"
+	PhaseParked    = "parked"
+	PhaseDone      = "done"
 )
 
 // PhaseState is the progress of one phase.
@@ -41,7 +45,26 @@ type PhaseState struct {
 	// them). When another session works in the same checkout, they are the only uncommitted work the
 	// phase can be held to: the rest may be the other session's.
 	Edited []string `json:"edited,omitempty"`
+	// Park is the phase's latest park: why it was set aside and where it stood. The phase is parked
+	// while its status says so; once it resumes, Park stays as what it resumed from (Resumed is set), so
+	// a later brief of the phase still has its notes.
+	Park *Park `json:"park,omitempty"`
 }
+
+// Park is why a phase was set aside unfinished, and what it resumes from.
+type Park struct {
+	Reason  string    `json:"reason"` // ParkJob or ParkRed
+	Since   time.Time `json:"since"`
+	Notes   string    `json:"notes,omitempty"` // where the phase stood, in the model's words
+	Job     string    `json:"job,omitempty"`   // the job it waits for
+	Resumed time.Time `json:"resumed,omitzero"`
+}
+
+// Why a phase is parked.
+const (
+	ParkJob = "job" // set aside while its job runs, so the session could work on another phase
+	ParkRed = "red" // its verification failed after done was claimed
+)
 
 // MaxEdited bounds the files a phase records as edited; past it, it stops recording.
 const MaxEdited = 2000
@@ -83,6 +106,8 @@ type State struct {
 	Phases  map[string]*PhaseState `json:"phases"`
 	Blocked *Block                 `json:"blocked,omitempty"`
 	Waiting *Wait                  `json:"waiting,omitempty"`
+	// Jobs are the commands baton runs for the run's phases while the session works on, oldest first.
+	Jobs []Job `json:"jobs,omitempty"`
 	// BoundaryOwed: a phase finished and a compaction is owed before the next phase starts.
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
@@ -149,34 +174,30 @@ func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
 	return st
 }
 
-// Revise moves the run onto a revision of its plan. Phases already done stay done (matched by id); the
-// run goes on from the first phase of the revision that is not done. If that is the phase under way, it
-// carries on; otherwise it starts after a compaction, as at a phase boundary. It returns that phase, or
-// "" when the revision has nothing left to do.
+// Revise moves the run onto a revision of its plan. Phases done, verifying or parked stay so (matched by
+// id). The phase under way carries on if the revision keeps it and its dependencies are done; otherwise
+// the run takes up the next phase after a compaction, as at a phase boundary. It returns the phase in
+// hand, or "" when there is none: the revision has nothing left to do (ModeComplete), or nothing that
+// can start until a job finishes.
 func Revise(st *State, p plan.Plan) string {
-	old := st.Phases
+	old, cur := st.Phases, st.Current
 	st.Phases = map[string]*PhaseState{}
 	for _, ph := range p.Phases {
-		if ps := old[ph.ID]; ps != nil && ps.Status == PhaseDone {
+		switch ps := old[ph.ID]; {
+		case ps != nil && (ps.Status == PhaseDone || ps.Status == PhaseVerifying || ps.Status == PhaseParked):
 			st.Phases[ph.ID] = ps
-		} else {
+		default:
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 		}
 	}
 	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, nil, false, false, false
 	st.Run.CompleteNotified = false // a finished plan with phases added runs again, and finishes again
 	st.Run.Progress()
-	next := nextPending(st, p)
-	if next == "" {
-		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
-		return ""
+	if ps := old[cur]; ps != nil && ps.Status == PhaseActive && !st.BoundaryOwed && p.Index(cur) >= 0 && ready(*st, p, cur) {
+		st.Phases[cur] = ps
+		return cur
 	}
-	if ps := old[next]; ps != nil && ps.Status == PhaseActive && next == st.Current && !st.BoundaryOwed {
-		st.Phases[next] = ps
-		return next
-	}
-	st.Current, st.BoundaryOwed = next, true
-	return next
+	return advance(st, p)
 }
 
 // Extend adds the phases of p the run does not know yet, pending, and returns their ids: phases the
@@ -226,7 +247,7 @@ func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Or
 	for _, ph := range p.Phases {
 		st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 	}
-	st.Current = p.Phases[0].ID
+	st.Current = Next(st, p)
 	st.Phases[st.Current] = &PhaseState{Status: PhaseActive, StartedAt: now, StartHead: o.Head, StartDirty: o.Dirty}
 	return st
 }
@@ -234,8 +255,10 @@ func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Or
 // ErrNoPlan is returned by transitions that need an attached plan.
 var ErrNoPlan = errors.New("no plan is attached (run /baton plan or /baton run first)")
 
-// Done marks phase id finished. Unless force is set, id must be the current phase. It returns the id of
-// the next phase ("" when the plan is complete).
+// Done marks phase id finished. Unless force is set, id must be the current phase. It returns the phase
+// in hand afterwards: the next one, which starts after a compaction, or the one under way when id was
+// finished out of order; "" when the plan is complete (ModeComplete) or nothing can start until a job
+// finishes.
 func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next string, err error) {
 	if st.Mode == ModeIdle {
 		return "", ErrNoPlan
@@ -262,20 +285,15 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 	st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointDue = nil, nil, false, false
 	st.Run.Progress()
 	st.Run.Escalation = nil
-	next = nextPending(st, p)
-	if next == "" {
-		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
-		return "", nil
+	if cs := st.Phases[st.Current]; id != st.Current && cs != nil && cs.Status == PhaseActive {
+		return st.Current, nil // a phase finished out of order (--force); the one under way carries on
 	}
-	if ns := st.Phases[next]; ns != nil && ns.Status == PhaseActive {
-		st.Current = next // a phase finished out of order (--force); the one already underway carries on
-		return next, nil
-	}
-	st.Current, st.BoundaryOwed = next, true
-	return next, nil
+	return advance(st, p), nil
 }
 
 // Start marks the current phase active; called when its brief is delivered after the boundary compaction.
+// A parked phase resumes: what it is held to starts again from the repository as it is now (o), which
+// other phases changed meanwhile.
 func Start(st *State, now time.Time, o Origin) {
 	if st.Current == "" {
 		return
@@ -285,7 +303,14 @@ func Start(st *State, now time.Time, o Origin) {
 		ps = &PhaseState{}
 		st.Phases[st.Current] = ps
 	}
-	if ps.Status != PhaseActive {
+	switch ps.Status {
+	case PhaseActive:
+	case PhaseParked:
+		ps.Status, ps.StartHead, ps.StartDirty, ps.Edited = PhaseActive, o.Head, o.Dirty, nil
+		if ps.Park != nil {
+			ps.Park.Resumed = now
+		}
+	default:
 		ps.Status, ps.StartedAt, ps.StartHead, ps.StartDirty = PhaseActive, now, o.Head, o.Dirty
 	}
 	st.BoundaryOwed = false
@@ -386,15 +411,6 @@ func Resume(st *State) error {
 	st.Blocked, st.Run.Escalation = nil, nil
 	st.Run.Progress()
 	return nil
-}
-
-func nextPending(st *State, p plan.Plan) string {
-	for _, ph := range p.Phases {
-		if ps := st.Phases[ph.ID]; ps == nil || ps.Status != PhaseDone {
-			return ph.ID
-		}
-	}
-	return ""
 }
 
 func phaseList(p plan.Plan) string {

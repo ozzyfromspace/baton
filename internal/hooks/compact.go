@@ -37,6 +37,9 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 		switch {
 		case ours && comp.Reason == "boundary" && st.BoundaryOwed:
 			kind = brief.Boundary
+			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
+				kind = brief.Resume
+			}
 			state.Start(st, c.Now, origin)
 		case ours && comp.Reason == "checkpoint":
 			kind = brief.Checkpoint
@@ -57,9 +60,17 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 	handoff, _ := os.ReadFile(s.HandoffPath())
 	text := brief.Write(brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s)})
 	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
-	if kind == brief.Boundary {
+	switch kind {
+	case brief.Boundary:
 		msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
 		s.Event("phase_started", map[string]any{"phase": st.Current})
+	case brief.Resume:
+		msg = "baton: " + phaseTitle(pl, st.Current) + " resumes now, from where it was set aside"
+		resumed := map[string]any{"phase": st.Current}
+		if pk := st.Phases[st.Current].Park; pk != nil {
+			resumed["reason"] = pk.Reason
+		}
+		s.Event("phase_resumed", resumed)
 	}
 	s.Event("brief", map[string]any{"type": kind, "phase": st.Current, "chars": len(text)})
 	return Result{Output: map[string]any{
@@ -91,7 +102,11 @@ func (h *handlers) postCompactRewake(c Context) (Result, error) {
 		}
 		comp.Rewoken, epoch = comp.Epoch, comp.Epoch
 		if comp.Reason == "boundary" {
-			msg = fmt.Sprintf("%s Context compacted. Begin %s now — the brief above has your instructions.", NudgePrefix, phaseTitle(pl, st.Current))
+			verb := "Begin"
+			if st.Resumed() {
+				verb = "Resume"
+			}
+			msg = fmt.Sprintf("%s Context compacted. %s %s now — the brief above has your instructions.", NudgePrefix, verb, phaseTitle(pl, st.Current))
 		} else {
 			msg = fmt.Sprintf("%s Context compacted at your checkpoint. Continue %s.", NudgePrefix, phaseTitle(pl, st.Current))
 		}

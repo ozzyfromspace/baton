@@ -1,6 +1,7 @@
 package brief
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,28 @@ import (
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
+
+var update = flag.Bool("update", false, "rewrite the golden files in testdata")
+
+// golden compares got with testdata/name, which -update rewrites. Line endings do not count: a Windows
+// checkout may turn the golden file's, and the plan document's, into CRLF.
+func golden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lf := strings.NewReplacer("\r\n", "\n")
+	if lf.Replace(got) != lf.Replace(string(want)) {
+		t.Errorf("the brief differs from %s (go test ./internal/brief -update rewrites it):\n%s", path, got)
+	}
+}
 
 func setup(t *testing.T) (plan.Plan, []byte, state.State) {
 	t.Helper()
@@ -75,6 +98,54 @@ func TestCheckpointAndAutoBriefsContinueThePhase(t *testing.T) {
 		b := Write(Input{Kind: kind, Plan: pl, Doc: doc, State: st})
 		if !strings.Contains(b, "continue P1 — The one-liners from where you left off") || strings.Contains(b, "Begin it now") {
 			t.Errorf("%s brief:\n%s", kind, b)
+		}
+	}
+}
+
+// resumed is a run of testdata/resume.md with a phase of each kind: P0 done, P1 parked while its job runs,
+// P2 resumed after its verification failed, P3 verifying, P4 waiting on them all.
+func resumed(t *testing.T) (plan.Plan, []byte, state.State) {
+	t.Helper()
+	doc, err := os.ReadFile(filepath.Join("testdata", "resume.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, err := plan.Build("/work/search.md", doc, plan.Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	st := state.Attach(pl, now, state.Origin{})
+	st.Phases["P0"].Status = state.PhaseDone
+	st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Since: now, Job: "j1", Notes: "Importer written."}}
+	st.Phases["P2"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkRed, Since: now, Job: "j2",
+		Notes: "Index and query done in 4f2a9c1; the ranking test is the slow one."}}
+	st.Phases["P3"].Status = state.PhaseVerifying
+	st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Status: state.JobRunning}, {ID: "j2", Phase: "P2", Status: state.JobFailed}, {ID: "j3", Phase: "P3", Status: state.JobRunning}}
+	st.Current, st.BoundaryOwed = "P2", true
+	state.Start(&st, now, state.Origin{})
+	return pl, doc, st
+}
+
+func TestResumeBrief(t *testing.T) {
+	pl, doc, st := resumed(t)
+	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st, Handoff: "## P0 — 2026-10-04 11:00\n\nTables in 1a2b3c4.\n", Words: decide.Words{Git: true}})
+	golden(t, "resume.golden", b)
+}
+
+// A phase set aside while its job ran picks up from its park notes, and they stay in every later brief
+// of the phase.
+func TestResumedPhaseKeepsItsParkNotes(t *testing.T) {
+	pl, doc, st := resumed(t)
+	st.Phases["P2"].Park.Reason = state.ParkJob
+	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st})
+	if !strings.Contains(b, "Now: resume P2 — Search from where it stood.") || strings.Contains(b, "verification failed") {
+		t.Errorf("resume brief:\n%s", b)
+	}
+	for _, kind := range []string{Checkpoint, Auto} {
+		b := Write(Input{Kind: kind, Plan: pl, Doc: doc, State: st})
+		if !strings.Contains(b, "This phase's park notes (where P2 stood when it was set aside):\n\nIndex and query done in 4f2a9c1") || !strings.Contains(b, "continue P2 — Search from where you left off") {
+			t.Errorf("%s brief of a resumed phase:\n%s", kind, b)
 		}
 	}
 }

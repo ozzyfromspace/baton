@@ -1,0 +1,155 @@
+package state
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/ozzyfromspace/baton/internal/plan"
+)
+
+// The scheduler picks the phase the run takes up whenever nothing is in hand: after a phase is done, or
+// set aside. The plan's dependency graph says what can start (plan.Deps); a phase that was parked comes
+// back as soon as what it waited for is over.
+
+// Job is a command baton runs for a phase while the session works on, such as a verification gate.
+type Job struct {
+	ID     string `json:"id"`
+	Phase  string `json:"phase"`
+	Status string `json:"status"`
+}
+
+// Job statuses: queued and running are unfinished; every other status is a result.
+const (
+	JobQueued      = "queued"
+	JobRunning     = "running"
+	JobPassed      = "passed"
+	JobFailed      = "failed"
+	JobLaneError   = "lane_error"
+	JobTimeout     = "timeout"
+	JobInterrupted = "interrupted"
+)
+
+// Finished reports whether the job has a result.
+func (j Job) Finished() bool { return j.Status != JobQueued && j.Status != JobRunning }
+
+// Job returns the job with this id, or nil when there is none on record.
+func (st State) Job(id string) *Job {
+	for i := range st.Jobs {
+		if st.Jobs[i].ID == id {
+			return &st.Jobs[i]
+		}
+	}
+	return nil
+}
+
+// Next is the phase the run takes up when nothing is in hand: a parked phase whose job has finished (the
+// one parked longest first), else the first pending phase, in document order, whose dependencies are all
+// done, else "": every phase left is verifying, parked while its job runs, or waits for one that is. In a
+// run that never parked a phase this is the first phase not done, as phases have always run.
+func Next(st State, p plan.Plan) string {
+	next, since := "", time.Time{}
+	for _, ph := range p.Phases {
+		ps := st.Phases[ph.ID]
+		if ps == nil || ps.Status != PhaseParked || !st.resolved(ps.Park) {
+			continue
+		}
+		var at time.Time
+		if ps.Park != nil {
+			at = ps.Park.Since
+		}
+		if next == "" || at.Before(since) {
+			next, since = ph.ID, at
+		}
+	}
+	if next != "" {
+		return next
+	}
+	for _, ph := range p.Phases {
+		if ps := st.Phases[ph.ID]; (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) {
+			return ph.ID
+		}
+	}
+	return ""
+}
+
+// ready reports whether every phase that id waits for is done. A verifying phase is not done yet: what
+// builds on it waits for its verification to pass.
+func ready(st State, p plan.Plan, id string) bool {
+	for _, d := range p.Deps(id) {
+		if ps := st.Phases[d]; ps == nil || ps.Status != PhaseDone {
+			return false
+		}
+	}
+	return true
+}
+
+// resolved reports whether a parked phase can be taken up again: the job it waits for has finished, or is
+// no longer on record.
+func (st State) resolved(pk *Park) bool {
+	if pk == nil || pk.Job == "" {
+		return true
+	}
+	j := st.Job(pk.Job)
+	return j == nil || j.Finished()
+}
+
+// Complete reports a run with nothing left to do: every phase of p done, and no job queued or running.
+func Complete(st State, p plan.Plan) bool {
+	if len(Remaining(st, p)) > 0 {
+		return false
+	}
+	for _, j := range st.Jobs {
+		if !j.Finished() {
+			return false
+		}
+	}
+	return true
+}
+
+// advance takes up the next phase once the one in hand is done or set aside; it starts after a
+// compaction, as at any phase boundary. With nothing that can start, the run is complete, or holds no
+// phase until a job finishes. It returns the phase taken up, or "".
+func advance(st *State, p plan.Plan) string {
+	next := Next(*st, p)
+	switch {
+	case next != "":
+		st.Current, st.BoundaryOwed = next, true
+	case Complete(*st, p):
+		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
+	default:
+		st.Current, st.BoundaryOwed = "", false
+	}
+	return next
+}
+
+// ParkPhase sets phase id aside unfinished, with why and where it stood (pk). Only a phase that has started
+// can be parked. If it was the phase in hand, the run takes up the next phase after a compaction, as at a
+// phase boundary. It returns the phase in hand afterwards ("" for none).
+func ParkPhase(st *State, p plan.Plan, id string, pk Park) (string, error) {
+	if st.Mode == ModeIdle {
+		return "", ErrNoPlan
+	}
+	if p.Index(id) < 0 {
+		return "", fmt.Errorf("unknown phase %q (phases: %s)", id, phaseList(p))
+	}
+	ps := st.Phases[id]
+	switch {
+	case ps == nil || ps.Status == PhasePending:
+		return "", fmt.Errorf("phase %s has not started, so there is nothing to set aside", id)
+	case ps.Status == PhaseDone:
+		return "", fmt.Errorf("phase %s is already done", id)
+	}
+	ps.Status, ps.Park = PhaseParked, &pk
+	st.Run.Progress()
+	if id != st.Current {
+		return st.Current, nil
+	}
+	st.CheckpointOwed, st.CheckpointDue = false, false
+	return advance(st, p), nil
+}
+
+// Resumed reports whether the phase in hand was set aside before and has been taken up again.
+func (st State) Resumed() bool {
+	ps := st.Phases[st.Current]
+	return ps != nil && ps.Park != nil && !ps.Park.Resumed.IsZero()
+}

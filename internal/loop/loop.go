@@ -581,8 +581,11 @@ func (l *Loop) checkResumed(v host.View, st state.State, in host.Injector) {
 		}
 		l.proceed()
 		verb := "Begin"
-		if comp.Reason == "checkpoint" {
+		switch {
+		case comp.Reason == "checkpoint":
 			verb = "Continue"
+		case st.Resumed():
+			verb = "Resume"
 		}
 		msg := fmt.Sprintf("[baton] Context compacted. %s %s now — the brief above has your instructions.", verb, st.Current)
 		l.update(func(st *state.State) { st.Run.Compaction.Nudged = v.Now })

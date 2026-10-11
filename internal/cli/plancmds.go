@@ -263,10 +263,17 @@ func cmdStatus(args []string, io IO) int {
 				mark = "✓"
 			case state.PhaseActive:
 				mark, extra = "▶", fmt.Sprintf("  (active %s)", io.Now().Sub(ps.StartedAt).Round(time.Minute))
+			case state.PhaseVerifying:
+				mark, extra = "⧗", "  (verifying)"
+			case state.PhaseParked:
+				mark, extra = "⏸", "  (parked)"
 			}
 		}
 		if ph.ID == st.Current && st.BoundaryOwed {
 			mark, extra = "→", "  (next, after compaction)"
+			if ps := st.Phases[ph.ID]; ps != nil && ps.Status == state.PhaseParked {
+				extra = "  (resumes next, after compaction)"
+			}
 		}
 		fmt.Fprintf(io.Out, "  %s %-8s %s%s%s\n", mark, ph.ID, ph.Title, deps, extra)
 	}
@@ -519,6 +526,10 @@ func cmdDone(args []string, io IO) int {
 			summary += fmt.Sprintf(", including the %d %s this run made without them (baton status lists them, each with its undo),", n, plural(n, "decision", "decisions"))
 		}
 		fmt.Fprintf(io.Out, "baton: %s done. That was the last phase — the plan is complete. %s and end your turn.\n", id, summary)
+		return 0
+	}
+	if next == "" {
+		fmt.Fprintf(io.Out, "baton: %s done. No other phase can start until a job finishes: every phase left waits for one. End your turn now; baton wakes you when there is something to do.\n", id)
 		return 0
 	}
 	np := pl.Phases[pl.Index(next)]

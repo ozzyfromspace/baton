@@ -54,6 +54,21 @@ func (p *pushes) Notify(project, kind, detail string) error {
 	return nil
 }
 
+// A phase taken up again after it was set aside is resumed, not begun.
+func TestTheResumeNudgeResumesAParkedPhase(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) {
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive, Park: &state.Park{Reason: state.ParkJob, Since: r.now, Resumed: r.now}}
+		st.BoundaryOwed = false
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, ByBaton: true, Reason: "boundary", Finished: r.now}
+	})
+	r.tick(0)
+	r.tick(DefaultTiming.ResumeNudge + time.Second)
+	if len(r.in.text) != 1 || !strings.HasPrefix(r.in.text[0], "[baton] Context compacted. Resume P1 now") {
+		t.Fatalf("nudge %q", r.in.text)
+	}
+}
+
 type rig struct {
 	t    *testing.T
 	now  time.Time

@@ -16,6 +16,7 @@ import (
 // Kind of compaction the brief follows.
 const (
 	Boundary   = "boundary"   // a phase finished; the next one starts now
+	Resume     = "resume"     // a phase that was set aside unfinished is taken up again
 	Checkpoint = "checkpoint" // the model asked to compact mid-phase
 	Auto       = "auto"       // Claude Code compacted on its own mid-phase
 )
@@ -52,6 +53,8 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "[baton] The plan %q (%s) was attached, and the conversation before it compacted. You are running it now, phase by phase.\n\n", pl.Title, pl.File)
 	case in.Kind == Boundary:
 		fmt.Fprintf(&b, "[baton] The context was compacted at a phase boundary. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
+	case in.Kind == Resume:
+		fmt.Fprintf(&b, "[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
 	case in.Kind == Checkpoint:
 		fmt.Fprintf(&b, "[baton] The context was compacted at your checkpoint, mid-phase. You are running the plan %q (%s).\n\n", pl.Title, pl.File)
 	default:
@@ -60,20 +63,35 @@ func Write(in Input) string {
 
 	b.WriteString("Progress:\n")
 	for _, ph := range pl.Phases {
-		mark := "·"
-		if ps := st.Phases[ph.ID]; ps != nil && ps.Status == state.PhaseDone {
-			mark = "✓"
+		mark, extra := "·", ""
+		if ps := st.Phases[ph.ID]; ps != nil {
+			switch ps.Status {
+			case state.PhaseDone:
+				mark = "✓"
+			case state.PhaseVerifying:
+				mark, extra = "⧗", " (verifying)"
+			case state.PhaseParked:
+				mark, extra = "⏸", " (parked)"
+			}
 		}
 		if ph.ID == st.Current {
-			mark = "▶"
+			mark, extra = "▶", ""
 		}
-		fmt.Fprintf(&b, "  %s %s — %s\n", mark, ph.ID, ph.Title)
+		fmt.Fprintf(&b, "  %s %s — %s%s\n", mark, ph.ID, ph.Title, extra)
 	}
 	b.WriteString("\n")
 
-	switch in.Kind {
-	case Boundary:
+	var park *state.Park
+	if ps := st.Phases[st.Current]; ps != nil {
+		park = ps.Park
+	}
+	switch {
+	case in.Kind == Boundary:
 		fmt.Fprintf(&b, "Now: %s. Begin it now.\n\n", title)
+	case in.Kind == Resume && park != nil && park.Reason == state.ParkRed:
+		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification failed: fix what failed, then finish it again.\n\n", title)
+	case in.Kind == Resume:
+		fmt.Fprintf(&b, "Now: resume %s from where it stood. Other phases may have changed the repository since: check its state before you go on.\n\n", title)
 	default:
 		fmt.Fprintf(&b, "Now: continue %s from where you left off (see your notes below and the repository's state).\n\n", title)
 	}
@@ -87,6 +105,9 @@ func Write(in Input) string {
 		} else {
 			fmt.Fprintf(&b, "(baton could not quote phase %s from the plan document: %v. Read %s directly.)\n\n", st.Current, err, pl.File)
 		}
+	}
+	if park != nil && strings.TrimSpace(park.Notes) != "" {
+		fmt.Fprintf(&b, "This phase's park notes (where %s stood when it was set aside):\n\n%s\n\n", st.Current, clip(strings.TrimSpace(park.Notes), maxNotes))
 	}
 	if notes := strings.TrimSpace(in.Handoff); notes != "" {
 		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))

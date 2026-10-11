@@ -230,6 +230,41 @@ func TestBoundarySequenceThroughTheHooks(t *testing.T) {
 	}
 }
 
+// A phase reopened after its verification failed comes back through the same boundary, as a resume: its
+// brief carries its park notes, and the model is told to resume it rather than begin it.
+func TestResumeSequenceThroughTheHooks(t *testing.T) {
+	f := newFixture(t, true)
+	pl, _ := f.store.LoadPlan()
+	f.store.Update(func(st *state.State) error {
+		_, err := state.ParkPhase(st, pl, "P0", state.Park{Reason: state.ParkRed, Since: f.now, Notes: "a.go done in 1a2b3c4."})
+		return err
+	})
+	if st := f.state(); st.Current != "P0" || !st.BoundaryOwed {
+		t.Fatalf("a reopened phase is not taken up again: %+v", st)
+	}
+	f.fire("Stop", map[string]any{})
+	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
+	f.fire("PreCompact", map[string]any{"trigger": "manual"})
+	out := f.fire("SessionStart", map[string]any{"source": "compact"})
+	ctx := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
+	if !strings.Contains(ctx, "Now: resume P0 — First. It was finished, but its verification failed") || !strings.Contains(ctx, "a.go done in 1a2b3c4.") {
+		t.Fatalf("brief:\n%s", ctx)
+	}
+	if out["systemMessage"] != "baton: P0 (First) resumes now, from where it was set aside" {
+		t.Errorf("announced %q", out["systemMessage"])
+	}
+	if st := f.state(); st.BoundaryOwed || st.Phases["P0"].Status != state.PhaseActive || !st.Resumed() {
+		t.Fatalf("P0 not resumed: %+v", st.Phases["P0"])
+	}
+	if log := f.eventLog(); !strings.Contains(log, `"kind":"phase_resumed"`) || !strings.Contains(log, `"reason":"red"`) || strings.Contains(log, `"kind":"phase_started"`) {
+		t.Errorf("events:\n%s", log)
+	}
+	f.fire("PostCompact", map[string]any{"trigger": "manual"})
+	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "[baton] Context compacted. Resume P0 (First) now") {
+		t.Fatalf("rewake: code %d %q", code, msg)
+	}
+}
+
 // The phase a boundary starts records what it finds: HEAD and the work already uncommitted, so its own
 // blocked and done refuse only what it leaves. Without git there is nothing to record.
 func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {

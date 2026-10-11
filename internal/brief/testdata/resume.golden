@@ -1,0 +1,36 @@
+[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. You are running the plan "The search campaign" (/work/search.md).
+
+Progress:
+  ✓ P0 — The schema
+  ⏸ P1 — The importer (parked)
+  ▶ P2 — Search
+  ⧗ P3 — Export (verifying)
+  · P4 — Release
+
+Now: resume P2 — Search. It was finished, but its verification failed: fix what failed, then finish it again.
+
+Standing rules (from the plan):
+
+## Standing rules
+
+- One conventional commit per coherent unit.
+
+Phase P2, from the plan:
+
+## P2 — Search
+
+After: P0
+
+Index the records and query them.
+
+This phase's park notes (where P2 stood when it was set aside):
+
+Index and query done in 4f2a9c1; the ranking test is the slow one.
+
+Notes left by earlier phases (most recent last):
+
+## P0 — 2026-10-04 11:00
+
+Tables in 1a2b3c4.
+
+When P2 is complete and committed, run `baton done P2 --notes "<what later phases need to know>"` and end your turn. If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), `baton propose` (a reversible way around a problem; the human may veto it by a deadline), `baton blocked --tried` (only if every way forward is irreversible). Waiting on something outside you: `baton waiting "<what>" --until <duration>`. Never type /compact yourself.
