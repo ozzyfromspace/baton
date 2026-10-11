@@ -23,11 +23,14 @@ type Runners interface {
 	Kill(pgid int)
 	// Sweep removes the project's lanes that no job holds and no live host brought up.
 	Sweep()
+	// Down brings down the lanes this host brought up that no job holds, and returns them.
+	Down() []int
 }
 
 // jobs runs the run's jobs: it starts a runner for each job queued, and ends a job whose runner died as
 // interrupted, since nothing else ever would. The runners do the rest, and record how each job ended. The
-// first time, it sweeps up the lanes hosts that are gone left behind.
+// first time, it sweeps up the lanes hosts that are gone left behind, and once the plan is complete, it
+// brings down the lanes this host brought up.
 func (l *Loop) jobs(v host.View, st state.State) {
 	if l.Runners == nil {
 		return
@@ -35,6 +38,14 @@ func (l *Loop) jobs(v host.View, st state.State) {
 	if !l.swept {
 		l.swept = true
 		go l.Runners.Sweep()
+	}
+	if st.Mode != state.ModeComplete {
+		l.downed = false
+	} else if !l.downed {
+		// Nothing runs in them until the next plan, and what they hold up (services, containers) would
+		// otherwise stay up until the session ends. A complete plan has no job left running.
+		l.downed = true
+		go l.lanesDown(l.Store)
 	}
 	for _, j := range st.Jobs {
 		switch {
@@ -52,6 +63,14 @@ func (l *Loop) jobs(v host.View, st state.State) {
 				l.lost(v, j, fmt.Sprintf("its runner (pid %d) has not been heard from for %s", j.PID, quiet.Round(time.Second)))
 			}
 		}
+	}
+}
+
+// lanesDown brings down the lanes this host brought up, as the plan is complete.
+func (l *Loop) lanesDown(s *state.Store) {
+	if lanes := l.Runners.Down(); len(lanes) > 0 {
+		l.logf("loop: the plan is complete: brought lanes %v down", lanes)
+		s.Event("lanes_down", map[string]any{"lanes": lanes, "why": "plan complete"})
 	}
 }
 

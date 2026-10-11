@@ -19,6 +19,8 @@ type runners struct {
 	dead    map[int]bool
 	killed  []int
 	sweeps  atomic.Int32
+	up      []int // the lanes this host brought up, which Down brings down
+	downs   atomic.Int32
 }
 
 func (f *runners) Spawn(run, id string) (int, error) {
@@ -31,6 +33,17 @@ func (f *runners) Spawn(run, id string) (int, error) {
 func (f *runners) Alive(pid int) bool { return !f.dead[pid] }
 func (f *runners) Kill(pgid int)      { f.killed = append(f.killed, pgid) }
 func (f *runners) Sweep()             { f.sweeps.Add(1) }
+func (f *runners) Down() []int        { f.downs.Add(1); return f.up }
+
+// eventually waits a moment for what a goroutine of the loop's does.
+func eventually(cond func() bool) bool {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return cond()
+}
 
 // jobRig is the rig with fake runners and nothing for baton to type.
 func jobRig(t *testing.T) (*rig, *runners) {
@@ -87,6 +100,41 @@ func TestTheHostStartsQueuedJobs(t *testing.T) {
 	r.run(time.Minute)
 	if len(f.spawned) != 2 || f.spawned[1] != run+"/j2" {
 		t.Errorf("spawned %v", f.spawned)
+	}
+}
+
+// The lanes come down once the plan is complete, and again for a plan attached later, once that one is.
+func TestAFinishedPlansLanesComeDown(t *testing.T) {
+	r, f := jobRig(t)
+	f.up = []int{1}
+	r.run(time.Minute)
+	r.set(func(st *state.State) { st.Mode = state.ModePaused })
+	r.run(time.Minute)
+	if f.downs.Load() != 0 {
+		t.Fatalf("a plan not complete brought its lanes down %d times", f.downs.Load())
+	}
+	// Each time, the test waits for the goroutine's event before its clock moves on.
+	downs := func(n int) bool {
+		return eventually(func() bool { return strings.Count(r.events(), `"kind":"lanes_down"`) == n })
+	}
+	r.set(func(st *state.State) { st.Mode = state.ModeComplete })
+	r.tick(time.Second)
+	if !downs(1) {
+		t.Fatalf("brought down %d times; events: %s", f.downs.Load(), r.events())
+	}
+	if ev := r.events(); !strings.Contains(ev, `"lanes":[1]`) || !strings.Contains(ev, `"why":"plan complete"`) {
+		t.Errorf("events: %s", ev)
+	}
+	r.run(time.Minute)
+	if f.downs.Load() != 1 {
+		t.Errorf("brought down %d times", f.downs.Load())
+	}
+	r.set(func(st *state.State) { st.Mode = state.ModeRunning })
+	r.tick(time.Second)
+	r.set(func(st *state.State) { st.Mode = state.ModeComplete })
+	r.tick(time.Second)
+	if !downs(2) {
+		t.Errorf("the next plan's lanes: brought down %d times in all", f.downs.Load())
 	}
 }
 

@@ -117,6 +117,7 @@ type Loop struct {
 
 	owner      bool      // this session has owned the project
 	swept      bool      // the lanes were swept
+	downed     bool      // the lanes came down, as the plan is complete
 	settled    time.Time // when the run's jobs were last settled
 	switchNext time.Time // when a switch may be tried next
 	switchHeld string    // the job whose switch uncommitted work holds, reported once

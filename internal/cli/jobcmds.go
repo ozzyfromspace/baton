@@ -283,6 +283,13 @@ func (h hostRunners) Spawn(run, id string) (int, error) {
 func (h hostRunners) Alive(pid int) bool { return lane.Alive(pid) }
 func (h hostRunners) Kill(pgid int)      { lane.KillGroup(pgid) }
 
+// Down brings down the lanes this host brought up that no job holds: its plan is complete.
+func (h hostRunners) Down() []int {
+	w := laneLog(h.proj.Dir)
+	defer w.Close()
+	return lane.Pool{Home: h.home, Root: h.proj.Root}.Down(h.instance, w)
+}
+
 // Sweep keeps the lanes of every host still running, this one included.
 func (h hostRunners) Sweep() {
 	live := map[string]bool{h.instance: true}
