@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -306,5 +307,125 @@ func TestTheStatusLineShowsUsageThatHoldsWorkersBack(t *testing.T) {
 				t.Errorf("status line %q", out)
 			}
 		})
+	}
+}
+
+// section is the block of baton status out that starts with the line header: it, and the indented lines
+// under it.
+func section(out, header string) string {
+	var b []string
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case len(b) == 0 && l == header:
+			b = append(b, l)
+		case len(b) > 0 && strings.HasPrefix(l, "  "):
+			b = append(b, l)
+		case len(b) > 0:
+			return strings.Join(b, "\n")
+		}
+	}
+	return strings.Join(b, "\n")
+}
+
+// baton status shows each of the run's workers: how it stands, its branch, session and worktree, what of
+// it waits on the human and where to answer it; the merge queue its finished work joins, and what that
+// waits on; a branch that keeps commits that never landed; the account's usage; and the decisions every
+// worker made without the human, beside the lead's.
+func TestBatonStatusShowsTheWorkers(t *testing.T) {
+	w, lead := asWorker(t)
+	lead.env["HOME"] = t.TempDir()
+	root := lead.store().Checkout
+	gittest.Isolate(t)
+	gittest.Init(t, root)
+	gittest.Write(t, root, "a.txt", "a\n")
+	gittest.Commit(t, root, "first")
+	gittest.Git(t, root, "branch", "baton/sess-1/R1")
+	now := lead.now
+	at := func(d time.Duration) string { return now.Add(d).Local().Format("15:04") }
+	w.must("", "note", "used a fake clock", "--undo", "revert the commit")
+	lead.now = now.Add(time.Minute)
+	lead.must("", "note", "skipped the flaky test", "--undo", "run it again")
+	lead.now = now
+	tree := lead.state().Workers[0].Worktree
+	lead.set(func(x *state.State) {
+		x.RunBranch = "main"
+		p1 := &x.Workers[0]
+		p1.Status, p1.Assigned, p1.Branch, p1.Needs = state.WorkerWorking, now.Add(-14*time.Minute), "baton/sess-1/P1", "a permission prompt for Bash"
+		x.Workers = append(x.Workers,
+			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "0123456789abcdef", Branch: "baton/sess-1/R1", Status: state.WorkerFailed,
+				Why: "its session ended unexpectedly (exit code 1), 3 times", Unlanded: 2},
+			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "fedcba9876543210", Branch: "baton/sess-1/R1", Worktree: "/wt/R1", Status: state.WorkerLanding,
+				Assigned: now.Add(-time.Hour), Resumes: 1,
+				Merge: &state.Merge{Queued: now.Add(-5 * time.Minute), Deferred: "the lead changed a.txt too", DeferredAt: now.Add(-2 * time.Minute)}})
+		x.Phases["R1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "sess-1/R1"}
+		x.Usage = &state.Usage{UsedPct: 62, Resets: now.Add(2 * time.Hour), At: now.Add(-time.Minute)}
+	})
+	out := lead.must("", "status")
+	for _, want := range []string{
+		"workers (each in a worktree of its own; baton view <phase>, in another terminal, shows one):\n" +
+			"  P1     working 14m · branch baton/sess-1/P1 · session wsess\n" +
+			"         worktree: " + tree + "\n" +
+			"         needs you: a permission prompt for Bash — answer it in its session: baton view P1\n" +
+			"  R1     finished, waits to land · branch baton/sess-1/R1 · session fedcba98 · resumed 1 time\n" +
+			"         worktree: /wt/R1",
+		"merge queue (first finished, first landed on main):\n" +
+			"  1. R1     finished " + at(-5*time.Minute) + " · waits to land: the lead changed a.txt too (since " + at(-2*time.Minute) + ")",
+		"decisions made without you (this run, oldest first):\n" +
+			"  P1.d1 P1       " + decide.Stamp(now) + "  noted: used a fake clock\n" +
+			"       undo: revert the commit\n" +
+			"  d1   P0       " + decide.Stamp(now.Add(time.Minute)) + "  noted: skipped the flaky test\n" +
+			"       undo: run it again",
+	} {
+		header, _, _ := strings.Cut(want, "\n")
+		if got := section(out, header); got != want {
+			t.Errorf("got:\n%s\nwant:\n%s\nin:\n%s", got, want, out)
+		}
+	}
+	for id, want := range map[string]string{"P1": "  ⚙ P1       The one-liners  — needs no other phase  (worker: working 14m)",
+		"R1": "  ⚙ R1       The roster can grow  — after P1  (worker: finished, waits to land)"} {
+		if got := phaseLines(out, id); got != want {
+			t.Errorf("%s: %q, want %q", id, got, want)
+		}
+	}
+	if want := "usage: 62% of the five-hour allowance, which resets at " + at(2*time.Hour) + " (read " + at(-time.Minute) + ") · new workers start below 80%"; !strings.Contains(out, want+"\n") {
+		t.Errorf("no %q in:\n%s", want, out)
+	}
+
+	// A worker that ended keeping commits that never landed is named while its branch is there, and while
+	// no later worker took its phase up on the same branch; a suspended one says what resumes it; a usage
+	// limit says until when.
+	lead.set(func(x *state.State) {
+		x.Workers = x.Workers[:2]
+		x.Phases["R1"] = &state.PhaseState{Status: state.PhasePending}
+		p1 := &x.Workers[0]
+		p1.Status, p1.Why, p1.Needs = state.WorkerSuspended, "baton exited", ""
+		x.Usage.Limited, x.Usage.Hit, x.Usage.By = now.Add(time.Hour), now.Add(-10*time.Minute), "P1"
+	})
+	out = lead.must("", "status")
+	for _, want := range []string{
+		"workers (each in a worktree of its own; baton view <phase>, in another terminal, shows one):\n" +
+			"  P1     suspended · branch baton/sess-1/P1 · session wsess\n" +
+			"         worktree: " + tree + "\n" +
+			"         baton exited; the next baton session of this run resumes it\n" +
+			"  R1     ended: its session ended unexpectedly (exit code 1), 3 times · its branch baton/sess-1/R1 keeps 2 commits that never landed",
+		"usage limit: the worker on P1 hit it at " + at(-10*time.Minute) + " → no worker starts, and baton types nothing into the run's sessions, until " + at(time.Hour),
+	} {
+		header, _, _ := strings.Cut(want, "\n")
+		if got := section(out, header); got != want {
+			t.Errorf("got:\n%s\nwant:\n%s\nin:\n%s", got, want, out)
+		}
+	}
+	if strings.Contains(out, "merge queue") {
+		t.Errorf("a merge queue with nothing in it:\n%s", out)
+	}
+	gittest.Git(t, root, "branch", "-D", "baton/sess-1/R1")
+	if out := lead.must("", "status"); strings.Contains(out, "never landed") {
+		t.Errorf("a branch that is gone is named:\n%s", out)
+	}
+
+	// With no workers, the reading is not shown.
+	lead.env["BATON_WORKERS"] = "0"
+	if out := lead.must("", "status"); strings.Contains(out, "usage: ") {
+		t.Errorf("usage shown with no workers:\n%s", out)
 	}
 }

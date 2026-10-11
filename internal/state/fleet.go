@@ -268,6 +268,24 @@ func TakeLandings(st *State) []Landing {
 	return out
 }
 
+// Decisions is every decision of run st, kept in s: its own, and those of its workers' sub-runs (numbered
+// under their phases, P3.d1), oldest first. A sub-run's are its own alone.
+func (s *Store) Decisions(st State) []Decision {
+	out := slices.Clone(st.Decisions)
+	if s.Parent != "" || len(st.Workers) == 0 {
+		return out
+	}
+	p, err := OpenProject(s.Project, s.Now)
+	if err != nil {
+		return out
+	}
+	for _, w := range p.Workers(s.Ref) {
+		out = append(out, w.State.Decisions...)
+	}
+	slices.SortStableFunc(out, func(a, b Decision) int { return a.At.Compare(b.At) })
+	return out
+}
+
 // LandedCommits lists every commit the run's workers landed.
 func (st State) LandedCommits() []string {
 	var out []string

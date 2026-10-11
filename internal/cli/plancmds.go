@@ -279,6 +279,8 @@ func cmdStatus(args []string, io IO) int {
 				mark = "⧗"
 			case state.PhaseParked:
 				mark = "⏸"
+			case state.PhaseWorking:
+				mark = "⚙"
 			}
 			if note := phaseNote(st, ph.ID, io.Now()); note != "" {
 				extra = "  (" + note + ")"
@@ -308,6 +310,8 @@ func cmdStatus(args []string, io IO) int {
 		}
 	}
 	printJobs(io, s, st)
+	printWorkers(io, s, st)
+	printMergeQueue(io, st)
 	printBackground(io, st)
 	if st.CheckpointOwed {
 		fmt.Fprintln(io.Out, "checkpoint: a mid-phase compaction is owed at the next stop")
@@ -317,10 +321,11 @@ func cmdStatus(args []string, io IO) int {
 	}
 	printWaitingOnYou(io, &st)
 	printRelay(io, s, st)
+	printUsage(io, st)
 	if cu := st.Run.Context; cu != nil {
 		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
 	}
-	printDecisions(io, st)
+	printDecisions(io, s.Decisions(st))
 	printSnapshots(io, snaps)
 	printOthers(io, s)
 	return 0
@@ -351,6 +356,11 @@ func phaseNote(st state.State, id string, now time.Time) string {
 		if pk := ps.Park; pk != nil {
 			note, job = note+parkWhy[pk.Reason], pk.Job
 		}
+	case state.PhaseWorking:
+		if w := st.WorkerOn(id); w != nil {
+			return "worker: " + workerState(*w, now)
+		}
+		return "worker"
 	default:
 		return ""
 	}
@@ -555,9 +565,9 @@ func leftHere(s *state.Store, st state.State, r state.Relay) bool {
 	return err == nil && sst.Waits(r)
 }
 
-// printDecisions lists what the run decided without the human, each with its undo.
-func printDecisions(io IO, st state.State) {
-	ds := decide.WithoutHuman(st.Decisions)
+// printDecisions lists what the run (and its workers) decided without the human, each with its undo.
+func printDecisions(io IO, all []state.Decision) {
+	ds := decide.WithoutHuman(all)
 	if len(ds) == 0 {
 		return
 	}
