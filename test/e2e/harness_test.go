@@ -79,6 +79,8 @@ type Session struct {
 	screen  bytes.Buffer
 	lastOut time.Time
 	exited  chan struct{}
+
+	closeOnce sync.Once
 }
 
 // NewProject makes a throwaway git repository to run a session in. It has its own identity and does
@@ -177,9 +179,11 @@ func StartProgram(t *testing.T, dir string, env []string, prog string, args ...s
 		}
 	}
 	// Tests never notify the developer, and run one session at a time, as before v0.5, unless a scenario
-	// starts workers itself.
+	// starts workers itself. A worker's screen is kept in its sub-run as it ends (screen.log), since no
+	// test sees it otherwise.
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=")
+		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=",
+		"BATON_SCREEN_DUMP=1")
 	cmd.Env = append(cmd.Env, env...) // later entries win
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {
@@ -287,9 +291,11 @@ func (s *Session) PlanMode() bool {
 	return strings.Contains(s.Screen(), "planmodeon")
 }
 
-// AutoApprove plays a human who approves every dialog Claude Code opens (permission prompts, plan-mode
-// entry and plan approval). Tests that let the model act freely need it whatever the permission mode:
-// the suite was written when Haiku had no auto mode (Haiku 5.5 has it).
+// AutoApprove plays a human who approves every dialog Claude Code opens in this session (permission
+// prompts, plan-mode entry and plan approval). Tests that let the model act freely need it whatever the
+// permission mode: the suite was written when Haiku had no auto mode (Haiku 5.5 has it). It never
+// answers a worker's dialogs, which are in the worker's own log, not the run's: a worker gets the lead's
+// flags, so a scenario with workers allows what they do up front.
 func (s *Session) AutoApprove() {
 	go func() {
 		approved := 0
@@ -395,19 +401,26 @@ func (s *Session) WaitEvent(kind string, timeout time.Duration) map[string]any {
 
 // Close ends the session and keeps its screen next to the project for debugging failures.
 func (s *Session) Close() {
+	s.closeOnce.Do(func() {
+		s.stop(3 * time.Second)
+		s.pty.Close()
+		if s.t.Failed() {
+			s.t.Logf("screen tail:\n%s", tail(s.Screen(), 3000))
+		}
+	})
+}
+
+// stop interrupts the program, and kills it if it has not exited after grace.
+func (s *Session) stop(grace time.Duration) {
 	select {
 	case <-s.exited:
 	default:
 		s.cmd.Process.Signal(os.Interrupt)
 		select {
 		case <-s.exited:
-		case <-time.After(3 * time.Second):
+		case <-time.After(grace):
 			s.cmd.Process.Kill()
 		}
-	}
-	s.pty.Close()
-	if s.t.Failed() {
-		s.t.Logf("screen tail:\n%s", tail(s.Screen(), 3000))
 	}
 }
 
