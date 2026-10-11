@@ -55,7 +55,7 @@ The workflow: plan in plan mode, then run a multi-phase plan across many compact
 ```
 terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude (interactive TUI)
                     │ injector · watchdog · notifier     │ hooks (passed via --settings) ──▶ `baton hook <event>`
-                    │                                     │ model ──Bash──▶ `baton done|blocked|waiting|checkpoint`
+                    │                                     │ model ──Bash──▶ `baton done|blocked|checkpoint|verify|await`
                     └──────── .baton/ (locked files, one schema, events.jsonl) ◀──────┘
 ```
 
@@ -129,7 +129,7 @@ v0.2.0 adds three rows: a review due after too many decisions without the human 
 **Watchdog:**
 - Liveness = hook heartbeats, never running processes.
 - Timers pause while a human or dialog is active, and reset after sleep or wake (clock jumps).
-- Per-state deadlines: ack 15s · compaction 180s · rewake → first activity 60s · idle 10 min · declared waits.
+- Per-state deadlines: ack 15s · compaction 180s · rewake → first activity 60s · idle 10 min · background work 60 min.
 - **StopFailure:** `rate_limit` → one push, then resume when the limit resets; `overloaded` → back off and nudge.
 - **SessionEnd** mid-plan → push, with the reason (crash vs deliberate).
 - Nudges go through the injector, so they're dialog-safe.

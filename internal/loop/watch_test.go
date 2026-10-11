@@ -68,23 +68,6 @@ func TestActivityKeepsTheWatchdogQuiet(t *testing.T) {
 	}
 }
 
-func TestDeclaredWaitAndBackgroundWorkHoldTheWatchdog(t *testing.T) {
-	r := newIdleRig(t)
-	r.set(func(st *state.State) { state.SetWaiting(st, "the deploy", 25*time.Minute, r.now) })
-	for i := 0; i < 25; i++ {
-		r.tick(time.Minute)
-	}
-	if len(r.in.text) != 0 {
-		t.Fatal("nudged during a declared wait")
-	}
-	for i := 0; i < 2; i++ {
-		r.tick(time.Minute)
-	}
-	if len(r.in.text) != 1 || !strings.Contains(r.in.text[0], `wait for "the deploy" has run out`) {
-		t.Fatalf("after the wait: %q", r.in.text)
-	}
-}
-
 // The model's own background work keeps reminders away until the oldest of it has run for BackgroundIdle,
 // counted from when a Stop first reported it. Then baton looks in, and reminders that change nothing bring
 // the human in.

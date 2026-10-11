@@ -123,7 +123,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 
 ## While a plan runs
 
-- Report progress only with `baton done <phase> --notes "…"`, `baton waiting "<what>" --until <duration>` and `baton checkpoint --notes "…"`.
+- Report progress only with `baton done <phase> --notes "…"` and `baton checkpoint --notes "…"`.
 - A run must not stop for something it can work around. When something goes wrong, keep the plan moving on a reversible path, and tell the human in the lightest way that fits:
   - `baton note "<what you did>" --undo "<how to reverse it>"`: you already took a reversible path, and the human should know. The run continues.
   - `baton propose "<what you will do>" --because "<what went wrong>" --undo "<how to reverse it>"`: a rule or convention of the plan can't be followed right now, or a human might choose differently. baton prints the exact question to put to the human; ask it exactly as printed. If nobody answers by its deadline (5 minutes unless the human set another), baton picks Go ahead, and you do it. A proposal is an action that makes progress: waiting, doing nothing or stopping is not a proposal. One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.
@@ -139,7 +139,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 - When the phase is complete and committed, run `baton done` even while its gate still runs. The phase is then verifying: baton marks it done when the gate passes, and phases that need it wait until then. If the gate fails, baton reopens the phase later, and you resume it from your notes.
 - `baton done` is refused while the phase's latest verification is red: fix what failed, commit, and verify again. Only if the failure is not the phase's to fix, `baton done <phase> --despite-red "<why>"` finishes it anyway; that is a decision without the human, and they are told.
 - Run each of these as a plain command on its own. Inside double quotes, the shell runs backticks and `$( )` as commands and expands `$NAME`, so keep those out of notes, or use single quotes.
-- Background work (a dev server, a build, a background subagent) is not a status. If you stop to wait for it, declare the wait with `baton waiting "<what>" --until <how long it should take>`; waits are capped at 2 hours.
+- A command that runs long moves to the background by itself (after 2 minutes, unless the human set `foreground_max`), and wakes you when it ends; so does a background subagent. Keep working on what does not depend on it. The first time you stop while such work runs, baton refuses the stop once to remind you of that; with nothing left to do, end your turn again, and that stop is allowed. A gate run that way in the checkout is invalidated by your own edits, so a long or stateful gate goes to `baton verify` instead. If background work runs on for an hour, baton reminds you to check on it.
 - Don't ask the human questions (AskUserQuestion) of your own while a plan runs: nobody may be there, and the run would wait. Decide and carry on, or use `baton propose`. (baton refuses such questions unless the human started the turn; the questions baton prints for you are the exception.)
 - Never type `/compact` yourself. baton does that at the right moment.
 - If the human's unsent draft is in the way of a compaction, baton saves it among its drafts and

@@ -69,9 +69,6 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "blocked asks the human once",
 			setup: func(st *state.State) { state.SetBlocked(st, "need a decision", tStop) },
 			block: true, reason: "AskUserQuestion", notice: "blocked"},
-		{name: "declared wait in its window",
-			setup: func(st *state.State) { state.SetWaiting(st, "the build", time.Hour, tStop) },
-			say:   "waiting for the build"},
 		{name: "the first stop on background work is refused once", block: true,
 			reason: "You stopped while your background work runs (npm test, and 1 more). Keep working on what does not depend on it",
 			setup: func(st *state.State) {
@@ -150,8 +147,6 @@ func TestStopDecisionTable(t *testing.T) {
 				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning, Queued: tStop}}
 				st.Run.Compaction.Queue("switch", tStop)
 			}},
-		{name: "expired wait is no status", block: true, reason: "not reported done",
-			setup: func(st *state.State) { state.SetWaiting(st, "x", time.Minute, tStop.Add(-time.Hour)) }},
 		{name: "fourth silent stop escalates", block: true, reason: "AskUserQuestion", notice: "stalled",
 			setup: func(st *state.State) { st.Run.StopBlocks = MaxStopBlocks }},
 		{name: "plan complete notifies once",

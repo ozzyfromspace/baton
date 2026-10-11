@@ -39,11 +39,11 @@ that mid-run, which is the point: the run has to keep moving without the diagnos
 ## Diagnosis: one token, three meanings
 
 baton refused a stop without a status and offered four:
-`done` · `blocked` · `waiting` · `checkpoint`.
+`done` · `blocked` · a declared wait · `checkpoint`.
 
 The model's actual state was none of them. The phase was finished and verified, so `done` would have
-been a lie; `waiting` is for external work with a duration; `checkpoint` compacts mid-phase. **The
-only remaining token was `blocked`**, and `blocked` is defined to halt the run and page a human.
+been a lie; a declared wait was for external work with a duration; `checkpoint` compacts mid-phase.
+**The only remaining token was `blocked`**, and `blocked` is defined to halt the run and page a human.
 
 Three distinct meanings were collapsed into it:
 
@@ -195,8 +195,9 @@ a principled reason (the signing rule). One got past it by unstaging its new fil
 - **The gate prompts.** `blocked` and `done` refuse dirt that is new or changed since the phase started,
   unless `--keep-dirty "<why>"`. Dirt that was already there when the phase began only warns. `checkpoint`
   warns.
-  - `waiting` is not gated: running the tests before committing is the normal shape of a wait (the
-    incident run declared two, both legitimate).
+  - `await` is not gated: a wait often comes before the commit (the incident run declared two waits on
+    its own test runs, both legitimate). `verify` refuses fresh uncommitted work instead, since it runs
+    the gate on `HEAD`.
   - `propose` is not gated: the uncommitted work is often what the proposal is about.
 - **The snapshot guarantees.** Whenever the run halts with a dirty tree, the host saves the work into a
   private ref, `refs/baton/snapshots/<phase>-<time>`. It covers staged and unstaged changes and new
@@ -221,9 +222,9 @@ surfaced in:
 - the human's next message: the ones they have not been shown yet (section 3).
 
 The model cannot clear its own block. While a block or a held proposal waits for the human, `resume`,
-`done`, `checkpoint`, `waiting` and `blocked` are refused until the human has taken part since: typed in
-the session, or answered one of baton's questions. If the model could silently clear its own blocked state,
-`blocked` would stop being a trustworthy signal.
+`done`, `checkpoint`, `verify`, `await` and `blocked` are refused until the human has taken part since:
+typed in the session, or answered one of baton's questions. If the model could silently clear its own
+blocked state, `blocked` would stop being a trustworthy signal.
 
 ### 8. Budget the decisions made without the human
 

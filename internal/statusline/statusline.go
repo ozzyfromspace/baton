@@ -62,9 +62,6 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 			s += fmt.Sprintf(" · ctx %.0f%%", c.UsedPct)
 		}
 	}
-	if st.Waiting != nil {
-		s += " · waiting: " + clip(st.Waiting.What, 20)
-	}
 	return s
 }
 

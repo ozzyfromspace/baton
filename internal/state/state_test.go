@@ -55,11 +55,10 @@ func TestPhaseLifecycle(t *testing.T) {
 	}
 }
 
-func TestBlockWaitCheckpointPauseResume(t *testing.T) {
+func TestBlockCheckpointPauseResume(t *testing.T) {
 	idle := New()
 	for name, err := range map[string]error{
 		"blocked":    SetBlocked(&idle, "x", t0),
-		"waiting":    SetWaiting(&idle, "x", time.Minute, t0),
 		"checkpoint": SetCheckpoint(&idle),
 		"pause":      Pause(&idle),
 	} {
@@ -68,14 +67,11 @@ func TestBlockWaitCheckpointPauseResume(t *testing.T) {
 		}
 	}
 	st := Attach(threePhases(), t0, Origin{})
-	if err := SetWaiting(&st, "build", 20*time.Minute, t0); err != nil || !st.Waiting.Until.Equal(t0.Add(20*time.Minute)) {
-		t.Fatalf("waiting: %v %+v", err, st.Waiting)
-	}
 	if err := SetBlocked(&st, "", t0); err == nil {
 		t.Error("blocked without a reason")
 	}
-	if err := SetBlocked(&st, "need a decision", t0); err != nil || st.Waiting != nil || st.Blocked.Reason != "need a decision" {
-		t.Fatalf("blocked replaces waiting: %v %+v", err, st)
+	if err := SetBlocked(&st, "need a decision", t0); err != nil || st.Blocked.Reason != "need a decision" {
+		t.Fatalf("blocked: %v %+v", err, st)
 	}
 	if err := Resume(&st); err != nil || st.Blocked != nil || st.Mode != ModeRunning {
 		t.Fatalf("resume clears a block: %v %+v", err, st)
@@ -264,16 +260,6 @@ func TestEventFieldsCannotOverrideReservedKeys(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
 	if !strings.Contains(string(b), `"kind":"brief"`) || !strings.Contains(string(b), `"instance":"inst"`) || strings.Contains(string(b), `"ts":"x"`) {
 		t.Fatalf("event: %s", b)
-	}
-}
-
-func TestWaitsAreBounded(t *testing.T) {
-	st := Attach(threePhases(), t0, Origin{})
-	if err := SetWaiting(&st, "the deploy", MaxWait, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := SetWaiting(&st, "the overnight batch", MaxWait+time.Minute, t0); err == nil || !strings.Contains(err.Error(), "baton blocked") {
-		t.Fatalf("an unbounded wait: %v", err)
 	}
 }
 

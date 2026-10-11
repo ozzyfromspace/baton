@@ -244,7 +244,7 @@ func TestBlockedNeedsWhatWasTried(t *testing.T) {
 
 // While the run waits on the human, the model cannot get out of it with a command of its own.
 func TestARunCannotClearItsOwnBlock(t *testing.T) {
-	commands := [][]string{{"run"}, {"done", "P0"}, {"checkpoint"}, {"waiting", "the build", "--until", "5m"},
+	commands := [][]string{{"run"}, {"done", "P0"}, {"checkpoint"}, {"await", "gh run watch", "--notes", "the build is pushed"},
 		{"blocked", "still stuck", "--tried", "more"}, {"propose", "x", "--because", "y", "--undo", "z"}}
 	halts := map[string]func(s *session){
 		"blocked": func(s *session) { s.must("", "blocked", "need the prod key", "--tried", "the vault") },
@@ -273,7 +273,7 @@ func TestARunCannotClearItsOwnBlock(t *testing.T) {
 					t.Errorf("events: %s", s.events())
 				}
 				if after := s.state(); after.Mode != before.Mode || (after.Blocked == nil) != (before.Blocked == nil) ||
-					(after.Run.Escalation == nil) != (before.Run.Escalation == nil) || after.CheckpointOwed || after.Waiting != nil || len(after.Decisions) > 0 {
+					(after.Run.Escalation == nil) != (before.Run.Escalation == nil) || after.CheckpointOwed || len(after.Jobs) > 0 || len(after.Decisions) > 0 {
 					t.Fatalf("a refused %s changed the state: %+v", args[0], after)
 				}
 
@@ -300,7 +300,7 @@ func TestARunCannotClearItsOwnBlock(t *testing.T) {
 func TestAProposalIsAskedBeforeAnythingElse(t *testing.T) {
 	s := attached(t)
 	s.must("", "propose", "skip the flaky test", "--because", "it times out on CI", "--undo", "re-enable it")
-	for _, args := range [][]string{{"done", "P0"}, {"checkpoint"}, {"waiting", "CI", "--until", "5m"}, {"blocked", "x", "--tried", "y"}} {
+	for _, args := range [][]string{{"done", "P0"}, {"checkpoint"}, {"await", "gh run watch", "--notes", "CI runs"}, {"blocked", "x", "--tried", "y"}} {
 		if why := s.fails(args...); !strings.Contains(why, "put your proposal d1 to the human first: call the AskUserQuestion tool with exactly one question, \"baton: it times out on CI.") {
 			t.Errorf("%v: %s", args, why)
 		}

@@ -106,14 +106,13 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 		t.Fatalf("status after done: %s", st)
 	}
 
-	s.must("", "waiting", "the", "build", "--until", "20m")
 	s.mustFail("needs --tried", "blocked", "need", "a", "product", "decision")
 	s.must("", "blocked", "need", "a", "product", "decision", "--tried", "the spec and the issue tracker")
-	if st := s.must("", "status"); !strings.Contains(st, "blocked: need a product decision\n  tried: the spec and the issue tracker") || strings.Contains(st, "waiting:") {
+	if st := s.must("", "status"); !strings.Contains(st, "blocked: need a product decision\n  tried: the spec and the issue tracker") {
 		t.Fatalf("status when blocked: %s", st)
 	}
 	// The model cannot clear its own block: only the human, by taking part, lets it act again.
-	for _, args := range [][]string{{"run"}, {"done", "P1"}, {"checkpoint"}, {"waiting", "x", "--until", "1m"}, {"blocked", "x", "--tried", "y"}} {
+	for _, args := range [][]string{{"run"}, {"done", "P1"}, {"checkpoint"}, {"await", "x", "--notes", "y"}, {"blocked", "x", "--tried", "y"}} {
 		s.mustFail("only they can clear that", args...)
 	}
 	s.human()
@@ -140,7 +139,7 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 	}
 
 	events, _ := os.ReadFile(filepath.Join(s.store().Dir, "events.jsonl"))
-	for _, kind := range []string{"attached", "phase_done", "waiting", "blocked", "resumed", "checkpoint", "paused"} {
+	for _, kind := range []string{"attached", "phase_done", "blocked", "resumed", "checkpoint", "paused"} {
 		if !strings.Contains(string(events), `"kind":"`+kind+`"`) {
 			t.Errorf("no %s event in %s", kind, events)
 		}
@@ -149,7 +148,7 @@ func TestPlanLifecycleThroughTheCLI(t *testing.T) {
 
 func TestCommandsWithoutAPlan(t *testing.T) {
 	s, _ := newSession(t)
-	for _, args := range [][]string{{"done", "P0"}, {"blocked", "x", "--tried", "y"}, {"waiting", "x", "--until", "1m"}, {"checkpoint"}} {
+	for _, args := range [][]string{{"done", "P0"}, {"blocked", "x", "--tried", "y"}, {"await", "x", "--notes", "y"}, {"checkpoint"}} {
 		s.mustFail("no plan is attached", args...)
 	}
 	if out := s.must("", "status"); !strings.Contains(out, "no plan attached") {

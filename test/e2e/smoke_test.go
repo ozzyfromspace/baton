@@ -49,17 +49,17 @@ func TestHostedSessionSmoke(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
 	s := Start(t, dir, "--model", "haiku",
-		`Run exactly this one command with the Bash tool: baton waiting "smoke test" --until 1m`+"\nThen reply DONE.")
+		`Run exactly this one command with the Bash tool: baton note "smoke test"`+"\nThen reply DONE.")
 	s.Trust()
 	started := s.WaitEvent("host_started", 30*time.Second)
-	waiting := s.WaitEvent("waiting", 120*time.Second)
-	if started == nil || waiting == nil {
+	note := s.WaitEvent("note", 120*time.Second)
+	if started == nil || note == nil {
 		t.Fatalf("events: %v", s.Events())
 	}
-	if waiting["instance"] != started["instance"] || waiting["instance"] == nil {
-		t.Fatalf("the CLI ran without the host's instance: host %v, cli %v", started["instance"], waiting["instance"])
+	if note["instance"] != started["instance"] || note["instance"] == nil {
+		t.Fatalf("the CLI ran without the host's instance: host %v, cli %v", started["instance"], note["instance"])
 	}
-	if waiting["what"] != "smoke test" {
-		t.Fatalf("waiting event: %v", waiting)
+	if note["what"] != "smoke test" {
+		t.Fatalf("note event: %v", note)
 	}
 }

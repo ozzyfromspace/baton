@@ -79,7 +79,7 @@ func TestBoundaryBrief(t *testing.T) {
 func TestBriefEndsWithTheWaysToReport(t *testing.T) {
 	pl, doc, st := setup(t)
 	git := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Words: decide.Words{Git: true}})
-	for _, want := range []string{"When P1 is complete and committed, run `baton done P1", "`baton note`", "`baton propose`", "`baton blocked --tried`", "baton waiting"} {
+	for _, want := range []string{"When P1 is complete and committed, run `baton done P1", "`baton note`", "`baton propose`", "`baton blocked --tried`", "Never type /compact yourself"} {
 		if !strings.Contains(git, want) {
 			t.Errorf("brief lacks %q", want)
 		}

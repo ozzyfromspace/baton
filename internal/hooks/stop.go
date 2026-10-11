@@ -226,9 +226,6 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: %s waits on background work (%s), which wakes Claude when it ends", cur, backgroundWhat(bg)))
 		d.emit("idle_on_background", map[string]any{"phase": st.Current, "tasks": len(bg)})
-	case st.Waiting != nil && now.Before(st.Waiting.Until):
-		st.Run.StopBlocks = 0
-		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))
 	default:
 		// While a plan runs, a stop needs a status even when the human started the turn: every run
 		// begins with a human "go". To talk without the plan, the human pauses baton.

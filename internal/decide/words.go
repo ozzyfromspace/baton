@@ -65,7 +65,7 @@ func (w Words) Reporting() string {
 		"One proposal covers the case in front of you: when the same thing happens again, `baton note` it each time. " +
 		"Only if every way forward is irreversible or needs a secret only the human holds: `baton blocked \"<why>\" --tried \"<what you tried>\"`, and end your turn. " +
 		"Hand a gate that takes more than about 2 minutes, or needs state of its own (a database, a server), to baton: " + w.verifyHow() + " " +
-		"If you must wait for something outside you (a build, a deploy, background work), run `baton waiting \"<what>\" --until <duration>` (at most 2h): background work alone is not a status. " +
+		"A command that runs long moves to the background by itself and wakes you when it ends: keep working on what does not depend on it, and with nothing left to do, end your turn. " +
 		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
 		"The plan runs unattended, so do not ask the human questions (AskUserQuestion) yourself: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. " +
 		"In a long phase, at a safe point (" + safePoint + "), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
@@ -97,7 +97,7 @@ func (w Words) NoStatus(id, title string) string {
 		"`baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"` "+
 		"(something is in the way and you have a reversible way around it: baton puts it to the human with %s, then you do it), "+
 		"`baton blocked \"<why>\" --tried \"<what you tried>\"` (only if every way forward is irreversible or needs a secret only the human holds), or "+
-		"`baton waiting \"<what>\" --until <duration>` (you are waiting on something outside you).", title, id, finished, w.deadline())
+		"`baton await \"<a command that ends when it is ready>\" --notes \"<where the phase stands>\"` (you are waiting on something outside you, such as a CI run or a deploy: baton runs it and gives you the result).", title, id, finished, w.deadline())
 }
 
 // BackgroundStop is why baton refuses the first stop while background work of the model's own runs:
@@ -138,6 +138,5 @@ func (w Words) Closing(id string) string {
 		"Gates that take more than about 2 minutes, or need state of their own, go to baton: %s "+
 		"If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), "+
 		"`baton propose` (a reversible way around a problem; the human may veto it by a deadline), "+
-		"`baton blocked --tried` (only if every way forward is irreversible). "+
-		"Waiting on something outside you: `baton waiting \"<what>\" --until <duration>`. Never type /compact yourself.", id, w.complete(), id, w.verifyHow())
+		"`baton blocked --tried` (only if every way forward is irreversible). Never type /compact yourself.", id, w.complete(), id, w.verifyHow())
 }

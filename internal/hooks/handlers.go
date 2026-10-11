@@ -932,8 +932,8 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 //
 // An automatic PreCompact proves nothing yet. Claude Code precomputes its summary in the background,
 // from about 80% of the window, and fires PreCompact then; the compaction itself may come much later or
-// never (docs/research/context-window.md). Treating it as the owed compaction would leave baton waiting
-// for a compaction that is not happening. Only SessionStart(compact) proves one happened, so an
+// never (docs/research/context-window.md). Treating it as the owed compaction would leave baton expecting
+// a compaction that is not happening. Only SessionStart(compact) proves one happened, so an
 // automatic compaction is adopted there (afterCompaction).
 func (h *handlers) preCompact(c Context) (Result, error) {
 	trigger := str(c.Input, "trigger")

@@ -27,7 +27,6 @@ func init() {
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
 	register("done", "mark the current phase finished (verifying while its job runs): done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
 	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
-	register("waiting", "declare a bounded wait: waiting <what> --until <duration, e.g. 20m>", cmdWaiting)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", cmdRun)
 	register("pause", "stop baton from acting until /baton run (the human takes the wheel)", cmdPause)
@@ -292,9 +291,6 @@ func cmdStatus(args []string, io IO) int {
 		if st.Blocked.Tried != "" {
 			fmt.Fprintf(io.Out, "  tried: %s\n", st.Blocked.Tried)
 		}
-	}
-	if st.Waiting != nil {
-		fmt.Fprintf(io.Out, "waiting: %s (until %s)\n", st.Waiting.What, st.Waiting.Until.Local().Format("15:04"))
 	}
 	printJobs(io, s, st)
 	if st.CheckpointOwed {
@@ -745,33 +741,6 @@ func fileList(paths []string) string {
 		b.WriteString("    " + p + "\n")
 	}
 	return strings.TrimSuffix(b.String(), "\n")
-}
-
-func cmdWaiting(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"until"}, nil)
-	if err != nil {
-		return fail(io, "%v", err)
-	}
-	what := strings.TrimSpace(strings.Join(p.pos, " "))
-	d, derr := time.ParseDuration(p.vals["until"])
-	if what == "" || derr != nil {
-		return fail(io, "usage: baton waiting <what> --until <duration, e.g. 20m or 1h30m>")
-	}
-	s, _, ok := storeAndPlan(io)
-	if !ok {
-		return 1
-	}
-	if _, err := s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not recorded", true); err != nil {
-			return err
-		}
-		return state.SetWaiting(st, what, d, io.Now())
-	}); err != nil {
-		return refused(io, s, "waiting", err)
-	}
-	s.Event("waiting", map[string]any{"what": what, "until": io.Now().Add(d).UTC().Format(time.RFC3339)})
-	fmt.Fprintf(io.Out, "baton: recorded a wait for %q until %s. You may end your turn; if nothing wakes you by then, baton will.\n", what, io.Now().Add(d).Local().Format("15:04"))
-	return 0
 }
 
 func cmdCheckpoint(args []string, io IO) int {

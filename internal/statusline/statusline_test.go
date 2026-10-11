@@ -66,7 +66,6 @@ func TestSegment(t *testing.T) {
 			return s
 		}, true, "◆ baton · ⚠ review due"},
 		{"complete", func() state.State { s := run; s.Mode = state.ModeComplete; return s }, true, "◆ baton · ✓ plan complete"},
-		{"waiting", func() state.State { s := run; state.SetWaiting(&s, "the build", time.Hour, now); return s }, true, "◆ baton · P0 1/2 The overlay · ctx 41% · waiting: the build"},
 		{"tokens against the limit", func() state.State {
 			s := run
 			s.Run.Context = &state.ContextUse{UsedPct: 41, Tokens: 412_345, WindowSize: 1_000_000, Limit: 810_000}

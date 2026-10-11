@@ -92,13 +92,6 @@ type Block struct {
 	Since  time.Time `json:"since"`
 }
 
-// Wait is a declared, bounded wait for something outside the model (a build, a deploy).
-type Wait struct {
-	What  string    `json:"what"`
-	Since time.Time `json:"since"`
-	Until time.Time `json:"until"`
-}
-
 // State is the content of .baton/state.json.
 type State struct {
 	Version int                    `json:"version"`
@@ -107,7 +100,6 @@ type State struct {
 	Current string                 `json:"current,omitempty"`
 	Phases  map[string]*PhaseState `json:"phases"`
 	Blocked *Block                 `json:"blocked,omitempty"`
-	Waiting *Wait                  `json:"waiting,omitempty"`
 	// Jobs are the commands baton runs for the run's phases while the session works on, oldest first.
 	Jobs []Job `json:"jobs,omitempty"`
 	// JobSeq numbers jobs. It outlives the jobs, and the plan they ran for, so a runner still winding
@@ -198,7 +190,7 @@ func Revise(st *State, p plan.Plan, now time.Time) string {
 		}
 	}
 	CancelJobs(st, func(j Job) bool { return p.Index(j.Phase) < 0 }, "its phase is no longer in the plan", now)
-	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, nil, false, false, false
+	st.Mode, st.Blocked, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, false, false, false
 	st.Run.CompleteNotified = false // a finished plan with phases added runs again, and finishes again
 	st.Run.Progress()
 	if ps := old[cur]; ps != nil && ps.Status == PhaseActive && !st.BoundaryOwed && p.Index(cur) >= 0 && ready(*st, p, cur) {
@@ -318,7 +310,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 			x.Delivered = now // the phase is finished with its results in hand
 		}
 	}
-	st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointDue = nil, nil, false, false
+	st.Blocked, st.CheckpointOwed, st.CheckpointDue = nil, false, false
 	st.Run.Progress()
 	st.Run.Escalation = nil
 	if cs := st.Phases[st.Current]; id != st.Current && cs != nil && cs.Status == PhaseActive {
@@ -361,27 +353,8 @@ func SetBlocked(st *State, reason string, now time.Time) error {
 	if reason == "" {
 		return errors.New("say why you are blocked")
 	}
-	st.Blocked, st.Waiting = &Block{Reason: reason, Since: now}, nil
+	st.Blocked = &Block{Reason: reason, Since: now}
 	st.Run.Progress()
-	return nil
-}
-
-// MaxWait bounds a declared wait. A longer one would let a run sit idle for hours on the model's say-so;
-// anything that slow needs the human to know.
-const MaxWait = 2 * time.Hour
-
-// SetWaiting records a bounded wait.
-func SetWaiting(st *State, what string, d time.Duration, now time.Time) error {
-	if st.Mode == ModeIdle {
-		return ErrNoPlan
-	}
-	if what == "" || d <= 0 {
-		return errors.New("say what you are waiting for and for how long (e.g. --until 20m)")
-	}
-	if d > MaxWait {
-		return fmt.Errorf("a wait can be at most %s; for anything longer, run `baton blocked \"<what you are waiting for>\" --tried \"<what you tried>\"` so the human knows", MaxWait)
-	}
-	st.Waiting, st.Blocked = &Wait{What: what, Since: now, Until: now.Add(d)}, nil
 	return nil
 }
 

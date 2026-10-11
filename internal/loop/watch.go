@@ -59,9 +59,6 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(l.since(backgroundSince(busy, st.Run.LastStop))) < l.Timing.BackgroundIdle {
 		return // the model's own background work wakes the session when it ends; baton looks in once it has run long
 	}
-	if w := st.Waiting; w != nil && v.Now.Before(w.Until.Add(l.Timing.WaitGrace)) {
-		return
-	}
 	if v.Now.Sub(quietSince) < l.Timing.IdleNudge {
 		return
 	}
@@ -71,8 +68,8 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.escalate("stalled", fmt.Sprintf("no activity on %s for %s, even after a reminder", st.Current, v.Now.Sub(st.Run.LastActivity).Round(time.Minute)))
 		return
 	case st.Run.IdleNudges >= MaxIdleNudges:
-		// The model answers reminders but the plan does not move (a wait declared again and again, or
-		// background work that runs on and on): more reminders would only burn tokens.
+		// The model answers reminders but the plan does not move (background work that runs on and on):
+		// more reminders would only burn tokens.
 		l.escalate("stalled", fmt.Sprintf("%s has not moved after %d reminders", st.Current, st.Run.IdleNudges))
 		return
 	}
@@ -90,12 +87,10 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 
 func (l *Loop) idleMessage(v host.View, st state.State) string {
 	switch {
-	case st.Waiting != nil:
-		return fmt.Sprintf("[baton] Your declared wait for %q has run out. Check on it, then continue %s, or report your status.", st.Waiting.What, st.Current)
 	case len(st.Run.BusyBackground()) > 0:
 		return fmt.Sprintf("[baton] Background work has been running for over %s with no progress on %s. Check on it, then continue, or report your status.", decide.Spell(l.Timing.BackgroundIdle), st.Current)
 	default:
-		return fmt.Sprintf("[baton] No activity for %s and %s is not reported done. Continue it, or report: baton done / baton propose / baton blocked --tried / baton waiting.", l.Timing.IdleNudge, st.Current)
+		return fmt.Sprintf("[baton] No activity for %s and %s is not reported done. Continue it, or report: baton done / baton propose / baton blocked --tried.", l.Timing.IdleNudge, st.Current)
 	}
 }
 
