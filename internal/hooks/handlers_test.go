@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -137,6 +138,59 @@ func TestSessionStartPrimer(t *testing.T) {
 	if !strings.Contains(ctx, ".)\n\nDecisions made without the human so far (if they ask, each has its undo):\n\n- d1 (P0, ") ||
 		!strings.HasSuffix(ctx, "noted: committed P0 unsigned. Undo: re-sign it") {
 		t.Errorf("primer after /clear:\n%s", ctx)
+	}
+}
+
+// The Primer names the phases verifying or set aside, and why, so a model starting afresh leaves them to
+// baton; the human's line at session start counts them.
+func TestPrimerNamesThePhasesAside(t *testing.T) {
+	doc := []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b.\n\n## P2 — Third\nDo c.\n\n## P3 — Fourth\nDo d.\n\n## P4 — Fifth\nDo e.\n")
+	pl, err := plan.Build("plan.md", doc, plan.Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name        string
+		set         func(st *state.State)
+		want, wantL string
+	}{
+		{"nothing aside", func(st *state.State) {}, "", "Demo · 0/5 phases done · current P0"},
+		{"verifying and set aside", func(st *state.State) {
+			st.Jobs = []state.Job{
+				{ID: "j1", Phase: "P0", Status: state.JobRunning},
+				{ID: "j2", Phase: "P1", Status: state.JobFailed},
+				{ID: "j3", Phase: "P2", Status: state.JobRunning},
+				{ID: "j4", Phase: "P3", Status: state.JobPassed},
+			}
+			st.Phases["P0"].Status = state.PhaseVerifying
+			st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkRed, Job: "j2"}}
+			st.Phases["P2"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Job: "j3"}}
+			st.Phases["P3"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Job: "j4"}}
+			st.Phases["P4"] = &state.PhaseState{Status: state.PhaseActive}
+			st.Current = "P4"
+		}, "Verifying, each done once its job passes: P0 — First (job j1). Set aside unfinished: P1 — Second (its verification failed); " +
+			"P2 — Third (until its job j3 ends); P3 — Fourth (its job j4 has ended). baton takes these up again by itself: work only on the current phase.",
+			"Demo · 0/5 phases done · current P4 · verifying P0 · parked P1, P2, P3"},
+		{"the current phase resumes next", func(st *state.State) {
+			st.Phases["P0"].Status = state.PhaseDone
+			st.Phases["P1"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkCheckpoint}}
+			st.Phases["P2"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkUnverified}}
+			st.Current, st.BoundaryOwed = "P2", true
+		}, "Set aside unfinished: P1 — Second (set aside at a checkpoint). baton takes these up again by itself: work only on the current phase.",
+			"Demo · 1/5 phases done · current P2 · parked P1"},
+	} {
+		st := state.Attach(pl, now, state.Origin{})
+		c.set(&st)
+		if got := phasesAside(pl, st); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if c.want != "" && !strings.Contains(Primer(pl, st, decide.Words{}), c.want+" ") {
+			t.Errorf("%s: the primer lacks it:\n%s", c.name, Primer(pl, st, decide.Words{}))
+		}
+		if got := progressLine(pl, st); got != c.wantL {
+			t.Errorf("%s: progress %q, want %q", c.name, got, c.wantL)
+		}
 	}
 }
 

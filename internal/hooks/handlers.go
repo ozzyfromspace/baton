@@ -403,12 +403,67 @@ func Primer(pl plan.Plan, st state.State, w decide.Words) string {
 		case st.CheckpointDue:
 			b.WriteString(decide.CheckpointOnResume(st.Current) + " ")
 		}
+		if aside := phasesAside(pl, st); aside != "" {
+			b.WriteString(aside + " ")
+		}
 		b.WriteString(w.Reporting())
 	}
 	if ds := decide.WithoutHuman(st.Decisions); len(ds) > 0 {
 		b.WriteString("\n\n" + strings.TrimSpace(decide.RecordSection(ds)))
 	}
 	return b.String()
+}
+
+// phasesAside names, for the Primer, the phases other than the current one that are verifying or set
+// aside, and why. baton takes each up again by itself, so the model leaves them alone. "" for none.
+func phasesAside(pl plan.Plan, st state.State) string {
+	var verifying, parked []string
+	for _, ph := range pl.Phases {
+		ps := st.Phases[ph.ID]
+		if ps == nil || ph.ID == st.Current {
+			continue
+		}
+		name := ph.ID + " — " + ph.Title
+		switch ps.Status {
+		case state.PhaseVerifying:
+			if j := st.Latest(ph.ID); j != nil {
+				name += " (job " + j.ID + ")"
+			}
+			verifying = append(verifying, name)
+		case state.PhaseParked:
+			parked = append(parked, name+" ("+parkedWhy(st, ps.Park)+")")
+		}
+	}
+	var out []string
+	if len(verifying) > 0 {
+		out = append(out, "Verifying, each done once its job passes: "+strings.Join(verifying, "; ")+".")
+	}
+	if len(parked) > 0 {
+		out = append(out, "Set aside unfinished: "+strings.Join(parked, "; ")+".")
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, " ") + " baton takes these up again by itself: work only on the current phase."
+}
+
+// parkedWhy is why a phase was set aside, for the model.
+func parkedWhy(st state.State, pk *state.Park) string {
+	if pk == nil {
+		return "set aside"
+	}
+	switch pk.Reason {
+	case state.ParkRed:
+		return "its verification failed"
+	case state.ParkUnverified:
+		return "its verification had no verdict"
+	case state.ParkCheckpoint:
+		return "set aside at a checkpoint"
+	}
+	if j := st.Job(pk.Job); j != nil && j.Finished() {
+		return "its job " + j.ID + " has ended"
+	}
+	return "until its job " + pk.Job + " ends"
 }
 
 // words is what the model-facing text depends on in this project: whether git is usable there, and how
@@ -427,6 +482,17 @@ func progressLine(pl plan.Plan, st state.State) string {
 	line := fmt.Sprintf("%s · %d/%d phases done", pl.Title, done, len(pl.Phases))
 	if st.Current != "" {
 		line += " · current " + st.Current
+	}
+	for _, status := range []string{state.PhaseVerifying, state.PhaseParked} {
+		var ids []string
+		for _, ph := range pl.Phases {
+			if ps := st.Phases[ph.ID]; ps != nil && ps.Status == status && ph.ID != st.Current {
+				ids = append(ids, ph.ID)
+			}
+		}
+		if len(ids) > 0 {
+			line += " · " + status + " " + strings.Join(ids, ", ")
+		}
 	}
 	if st.Mode != state.ModeRunning {
 		line += " · " + st.Mode
