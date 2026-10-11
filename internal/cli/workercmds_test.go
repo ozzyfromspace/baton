@@ -277,3 +277,34 @@ func TestTheStatusLineRecordsTheAccountsUsageInTheRun(t *testing.T) {
 		t.Errorf("a reading past its reset, or none, was recorded: %+v", u)
 	}
 }
+
+// The status line shows the account's usage where it holds new workers back: at or above
+// worker_usage_max, as the sessions' host set it, and never with no workers.
+func TestTheStatusLineShowsUsageThatHoldsWorkersBack(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		env      map[string]string
+		used     float64
+		shown    bool
+		wantText string
+	}{
+		{"the default, 80%", nil, 81, true, "5h 81%"},
+		{"under it", nil, 79, false, ""},
+		{"as the host set it", map[string]string{"BATON_WORKER_USAGE_MAX": "50"}, 62, true, "5h 62%"},
+		{"no check", map[string]string{"BATON_WORKER_USAGE_MAX": "0"}, 99, false, ""},
+		{"no workers", map[string]string{"BATON_WORKERS": "0"}, 99, false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := attached(t)
+			s.env["HOME"] = t.TempDir()
+			for k, v := range c.env {
+				s.env[k] = v
+			}
+			in := fmt.Sprintf(`{"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":%v,"resets_at":%d}}}`, c.used, s.now.Add(time.Hour).Unix())
+			out := s.must(in, "statusline")
+			if strings.Contains(out, "5h ") != c.shown || c.shown && !strings.Contains(out, c.wantText) {
+				t.Errorf("status line %q", out)
+			}
+		})
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,9 +24,11 @@ import (
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
-// Segment is baton's part of the status line: the phase in hand, then the jobs baton runs meanwhile, then
-// a worker's question waiting for the human, then the context's size.
-func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string {
+// Segment is baton's part of the status line: the phase in hand, then a usage limit the run waits on, the
+// run's workers, the jobs baton runs meanwhile, a worker's question waiting for the human, and the
+// context's size. With workers, usageMax is the share of the five-hour usage above which no new worker
+// starts (worker_usage_max): a reading above it is shown, as it holds workers back (0: none shown).
+func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time, usageMax float64) string {
 	const mark = "◆ baton"
 	if !havePlan || st.Mode == state.ModeIdle {
 		return mark
@@ -57,10 +60,18 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 	if i := pl.Index(st.Current); i >= 0 {
 		s += fmt.Sprintf(" · %s %d/%d %s", st.Current, i+1, len(pl.Phases), clip(pl.Phases[i].Title, 28))
 	}
+	if u := usage(st, now, usageMax); u != "" {
+		s += " · " + u
+	}
+	asked := map[string]bool{}
+	for _, w := range st.LiveWorkers() {
+		s += " · " + worker(st, w, now)
+		asked[w.Phase] = true
+	}
 	if j := jobs(st, now); j != "" {
 		s += " · " + j
 	}
-	if r := st.FrontRelay(); r != nil {
+	if r := st.FrontRelay(); r != nil && !asked[r.Phase] {
 		s += " · ? " + r.Phase // the lead puts it to the human as soon as it can
 	}
 	if c := st.Run.Context; c != nil {
@@ -71,6 +82,41 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 		}
 	}
 	return s
+}
+
+// usage is the account's usage, where it holds the run back: a usage limit the run waits on, until when,
+// or a reading at or above usageMax, above which no new worker starts. "" otherwise.
+func usage(st state.State, now time.Time, usageMax float64) string {
+	u := st.Usage
+	switch {
+	case u == nil:
+		return ""
+	case now.Before(u.Limited):
+		return "usage limit until " + u.Limited.Local().Format("15:04")
+	case usageMax > 0 && u.UsedPct >= usageMax && (u.Resets.IsZero() || now.Before(u.Resets)):
+		return fmt.Sprintf("5h %.0f%%", u.UsedPct)
+	}
+	return ""
+}
+
+// worker is one of the run's workers, by its phase: "! P3 needs you" while something in its own session
+// waits on the human, "? P3" while the lead has its question for them, "P3 landing" while its work waits
+// in the merge queue ("P3 waits to land" while it is held back), and otherwise "W P3" with how long it has
+// worked on its phase, or how it stands.
+func worker(st state.State, w state.Worker, now time.Time) string {
+	switch {
+	case w.Needs != "":
+		return "! " + w.Phase + " needs you"
+	case slices.ContainsFunc(st.Relay, func(r state.Relay) bool { return r.Phase == w.Phase && r.Answered == nil }):
+		return "? " + w.Phase
+	case w.Status == state.WorkerLanding && w.Merge != nil && w.Merge.Deferred != "":
+		return w.Phase + " waits to land"
+	case w.Status == state.WorkerLanding:
+		return w.Phase + " landing"
+	case w.Status == state.WorkerWorking:
+		return "W " + w.Phase + " " + decide.Span(max(now.Sub(w.Assigned), 0))
+	}
+	return "W " + w.Phase + " " + w.Status
 }
 
 // jobs is the run's jobs not finished yet: the oldest, as what its phase is doing and for how long, then

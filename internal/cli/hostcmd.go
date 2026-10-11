@@ -154,6 +154,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
+	// The hooks, the status line and the commands inside the sessions count the workers the host runs.
+	batonEnv = append(batonEnv, "BATON_WORKERS="+strconv.Itoa(workers), "BATON_WORKER_USAGE_MAX="+strconv.FormatFloat(usageMax, 'f', -1, 64))
 	if home := io.Env("BATON_HOME"); home != "" {
 		// baton's home moved: the CLI inside the session must find the same config and records (a
 		// `baton exit` leaves its record there for the shell to find).
@@ -359,7 +361,9 @@ func cmdStatusline(_ []string, io IO) int {
 		if p, err := state.OpenProject(dir, io.Now); err == nil {
 			if s, ok := p.Lookup(in.SessionID, io.Env("BATON_INSTANCE")); ok {
 				st, _ = recordContext(s, in, io)
-				recordUsage(s, in, io)
+				if recordUsage(s, in, io) {
+					st, _ = s.Load() // the segment shows it
+				}
 				if p, err := s.LoadPlan(); err == nil {
 					pl, havePlan = p, true
 				}
@@ -375,8 +379,19 @@ func cmdStatusline(_ []string, io IO) int {
 	if cmd := statusline.UserCommand(projectDir, home); cmd != "" {
 		user = statusline.RunUser(cmd, raw, projectDir, 3*time.Second)
 	}
-	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now()), user))
+	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now(), usageShown(io)), user))
 	return 0
+}
+
+// usageShown is the share of the five-hour usage at or above which the status line shows it: no new
+// worker starts above it (worker_usage_max). 0, for none shown, with no workers.
+func usageShown(io IO) float64 {
+	cfg := config.Load(batonRoot(io), io.Env)
+	if n, err := cfg.WorkerCount(); err != nil || n == 0 {
+		return 0
+	}
+	f, _ := cfg.WorkerUsage()
+	return f
 }
 
 // contextSettings works out the --autocompact value baton launches claude with, and the context valve
@@ -452,25 +467,25 @@ const usageFresh = 5 * time.Minute
 
 // recordUsage stores the account's five-hour usage Claude Code reports in the run's state (a worker's, in
 // the run it works for), where the run's host reads it: no new worker starts above worker_usage_max. A
-// reading is written when it changed, or once it is usageFresh old.
-func recordUsage(s *state.Store, in statusline.Input, io IO) {
+// reading is written when it changed, or once it is usageFresh old. It reports whether it wrote one.
+func recordUsage(s *state.Store, in statusline.Input, io IO) bool {
 	now := io.Now()
 	used, resets, ok := in.FiveHour(now)
 	if !ok {
-		return
+		return false
 	}
 	if s.Parent != "" {
 		up, err := s.ParentRun()
 		if err != nil {
-			return
+			return false
 		}
 		s = up
 	}
 	st, err := s.Load()
 	if u := st.Usage; err != nil || u != nil && u.UsedPct == used && u.Resets.Equal(resets) && now.Sub(u.At) < usageFresh {
-		return
+		return false
 	}
-	s.Update(func(st *state.State) error {
+	_, err = s.Update(func(st *state.State) error {
 		var u state.Usage
 		if st.Usage != nil {
 			u = *st.Usage
@@ -479,6 +494,7 @@ func recordUsage(s *state.Store, in statusline.Input, io IO) {
 		st.Usage = &u
 		return nil
 	})
+	return err == nil
 }
 
 func newInstanceID() string {
