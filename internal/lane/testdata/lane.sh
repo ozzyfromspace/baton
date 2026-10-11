@@ -18,7 +18,7 @@ up)
 	echo "up in $2"
 	;;
 run)
-	env | grep -E '^(BATON|GIT|CLAUDE)' | sort >"$calls.env"
+	env | grep -E '^(BATON_|GIT_|CLAUDE_|CLAUDECODE=)' | sort >"$calls.env"
 	cd "$2" || exit 125
 	sh -c "$3"
 	;;
