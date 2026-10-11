@@ -108,3 +108,14 @@ func (p Pool) Down(host string, w io.Writer) []int {
 	}
 	return downed
 }
+
+// Sweepable lists the lanes Sweep would remove now, with live as Sweep takes it, and touches none.
+func (p Pool) Sweepable(live func(host string) bool) []int {
+	var out []int
+	for _, l := range p.Lanes() {
+		if fi, err := os.Stat(l.Dir); err == nil && fi.IsDir() && !l.Busy && (l.UpBy == "" || live == nil || !live(l.UpBy)) {
+			out = append(out, l.N)
+		}
+	}
+	return out
+}

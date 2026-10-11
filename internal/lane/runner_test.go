@@ -228,6 +228,9 @@ func TestSweep(t *testing.T) {
 	busy, _ := p.tryLane(4)
 	defer busy.Release()
 
+	if got := p.Sweepable(func(h string) bool { return h == "alive" }); !slices.Equal(got, []int{2, 3}) || len(readCalls(path)) > 0 {
+		t.Errorf("Sweepable = %v, having run %v; want [2 3], having run nothing", got, readCalls(path))
+	}
 	var out strings.Builder
 	got := p.Sweep(context.Background(), func(h string) bool { return h == "alive" }, &out)
 	if !slices.Equal(got, []int{2, 3}) {
