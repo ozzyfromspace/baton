@@ -43,6 +43,8 @@ type Plan struct {
 	RulesAnchor string `json:"rules_anchor,omitempty"`
 	// EndAnchor optionally ends the last phase's section (e.g. "## Verification").
 	EndAnchor string `json:"end_anchor,omitempty"`
+	// Bounds are the anchors of the phases a narrowed plan leaves out (Only): sections still end at them.
+	Bounds []string `json:"bounds,omitempty"`
 }
 
 // Spec is what the model supplies to `baton attach`: everything except the file identity.
@@ -199,7 +201,7 @@ func (p Plan) Rules(doc []byte) string {
 // end of text. Anchors that no longer occur exactly once are passed over.
 func (p Plan) next(text string, start int) int {
 	end := len(text)
-	anchors := []string{p.RulesAnchor, p.EndAnchor}
+	anchors := append([]string{p.RulesAnchor, p.EndAnchor}, p.Bounds...)
 	for _, ph := range p.Phases {
 		anchors = append(anchors, ph.Anchor)
 	}
@@ -212,6 +214,26 @@ func (p Plan) next(text string, start int) int {
 		}
 	}
 	return end
+}
+
+// Only is p narrowed to phase id: the plan of a worker's sub-run, which holds only the phase it works on.
+// The phase waits for nothing there (what it needed is done before a worker takes it up). Its section,
+// the standing rules and the plan file are p's, so its brief reads as it would in p.
+func (p Plan) Only(id string) (Plan, error) {
+	i := p.Index(id)
+	if i < 0 {
+		return Plan{}, fmt.Errorf("unknown phase %q", id)
+	}
+	ph := p.Phases[i]
+	ph.After = []string{}
+	q := p
+	q.Phases, q.Bounds = []Phase{ph}, slices.Clone(p.Bounds)
+	for _, o := range p.Phases {
+		if o.ID != id {
+			q.Bounds = append(q.Bounds, o.Anchor)
+		}
+	}
+	return q, nil
 }
 
 // Load reads plan.json.

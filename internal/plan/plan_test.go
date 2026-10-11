@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -121,6 +122,48 @@ func TestSectionsAndRules(t *testing.T) {
 	}
 	if len(p.SHA256) != 64 || p.Version != SchemaVersion {
 		t.Error("identity fields not set")
+	}
+}
+
+// A worker's plan holds its one phase, which waits for nothing there, and reads as it does in the run's.
+func TestOnly(t *testing.T) {
+	doc := fixture(t, "headings-emdash.md")
+	p, err := Build("plan.md", doc, Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Phases[1].After; !reflect.DeepEqual(got, []string{"P0"}) {
+		t.Fatalf("P1 waits for %v in the run's plan", got)
+	}
+	for i, ph := range p.Phases {
+		q, err := p.Only(ph.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", ph.ID, err)
+		}
+		if len(q.Phases) != 1 || q.Phases[0].ID != ph.ID || q.Phases[0].Title != ph.Title || q.Phases[0].After == nil || len(q.Phases[0].After) != 0 {
+			t.Errorf("%s: phases %+v", ph.ID, q.Phases)
+		}
+		if q.File != p.File || q.SHA256 != p.SHA256 || q.Title != p.Title || q.Rules(doc) != p.Rules(doc) {
+			t.Errorf("%s: the plan's identity or rules changed: %+v", ph.ID, q)
+		}
+		want, _ := p.Section(doc, i)
+		if got, err := q.Section(doc, 0); err != nil || got != want {
+			t.Errorf("%s: section %q (%v), want %q", ph.ID, got, err, want)
+		}
+		// It is saved as the sub-run's plan.json, and read back the same.
+		path := filepath.Join(t.TempDir(), "plan.json")
+		if b, err := json.Marshal(q); err != nil || os.WriteFile(path, b, 0o644) != nil {
+			t.Fatal(err)
+		}
+		if back, err := Load(path); err != nil || !reflect.DeepEqual(back, q) {
+			t.Errorf("%s: read back as %+v (%v)", ph.ID, back, err)
+		}
+	}
+	if _, err := p.Only("P9"); err == nil {
+		t.Error("an unknown phase was narrowed to")
+	}
+	if p.Phases[1].After[0] != "P0" || len(p.Phases) != 3 {
+		t.Error("narrowing changed the run's plan")
 	}
 }
 
