@@ -45,6 +45,10 @@ func (c *Coordinator) sweep(now time.Time, s *state.Store) {
 	if isBaton == nil {
 		isBaton = batonRunning
 	}
+	quiet := c.AbandonAfter
+	if quiet <= 0 {
+		quiet = state.AbandonAfter
+	}
 	for _, r := range c.Project.Runs() {
 		live := r.State.LiveWorkers()
 		if r.ID == s.Ref || len(live) == 0 {
@@ -56,7 +60,7 @@ func (c *Coordinator) sweep(now time.Time, s *state.Store) {
 		}
 		var left []decide.Left
 		for _, e := range live {
-			if !state.Abandoned(r, &e, isBaton, now) {
+			if !state.Abandoned(r, &e, isBaton, now, quiet) {
 				c.Lead.logf("loop: run %s: its worker on %s is left alone: the run may yet go on", r.ID, e.Phase)
 				continue
 			}

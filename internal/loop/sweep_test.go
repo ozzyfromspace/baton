@@ -95,21 +95,23 @@ func TestANewRunRetiresTheWorkersOthersLeft(t *testing.T) {
 		name    string
 		after   time.Duration // from when sess-1's host ended to when sess-2's starts
 		owner   func(x *crew, ended time.Time) *state.Owner
-		fleet   bool // sess-2's host runs workers
+		fleet   bool          // sess-2's host runs workers
+		quiet   time.Duration // how long sess-2's host waits for a quiet run (0: state.AbandonAfter)
 		retired bool
 	}{
-		{"its host ended", 3 * time.Minute, nil, false, true},
-		{"its host ended, swept by a host with workers", 3 * time.Minute, nil, true, true},
+		{"its host ended", 3 * time.Minute, nil, false, 0, true},
+		{"its host ended, swept by a host with workers", 3 * time.Minute, nil, true, 0, true},
 		{"its host was killed", 3 * time.Minute, func(x *crew, ended time.Time) *state.Owner {
 			return &state.Owner{Instance: "inst", PID: 4243, Heartbeat: ended}
-		}, false, true},
-		{"its host ended a minute ago", time.Minute, nil, false, false},
+		}, false, 0, true},
+		{"its host ended a minute ago", time.Minute, nil, false, 0, false},
+		{"its host ended a minute ago, and a test waits 30s", time.Minute, nil, false, 30 * time.Second, true},
 		{"another host drives it now", 3 * time.Minute, func(x *crew, ended time.Time) *state.Owner {
 			return &state.Owner{Instance: "inst3", PID: 4243, Heartbeat: ended.Add(3 * time.Minute)}
-		}, false, false},
+		}, false, 0, false},
 		{"its host's baton still runs (the machine slept)", 3 * time.Minute, func(x *crew, ended time.Time) *state.Owner {
 			return &state.Owner{Instance: "inst", PID: 4242, Heartbeat: ended}
-		}, false, false},
+		}, false, 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newCrew(t, 2)
@@ -122,6 +124,7 @@ func TestANewRunRetiresTheWorkersOthersLeft(t *testing.T) {
 			x.quiet(ended)
 			x.advance(c.after)
 			c2, s2 := x.newHost("inst2", 4242)
+			c2.AbandonAfter = c.quiet
 			if c.fleet {
 				c2.Fleet = &Fleet{Max: 1, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return roomy },
 					Spawn: func(host.Spec) (Hidden, error) { return nil, errors.New("no sessions here") }}

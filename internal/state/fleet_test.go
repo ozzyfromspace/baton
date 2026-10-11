@@ -462,23 +462,30 @@ func TestAbandoned(t *testing.T) {
 		owner   *Owner
 		updated time.Time
 		e       *Worker
-		baton   bool // the owner's pid is a running baton
+		baton   bool          // the owner's pid is a running baton
+		quiet   time.Duration // AbandonAfter if 0
 		want    bool
 	}{
-		{"a live heartbeat", &Owner{Instance: "i1", PID: 4242, Heartbeat: now.Add(-10 * time.Second)}, now.Add(-time.Hour), nil, false, false},
-		{"a stale heartbeat, quiet for long", stale, now.Add(-time.Hour), nil, false, true},
-		{"its owner's baton still runs (the machine slept)", stale, now.Add(-time.Hour), nil, true, false},
-		{"no owner on record", nil, now.Add(-AbandonAfter), nil, false, true},
-		{"its state changed a minute ago (a restart)", stale, now.Add(-time.Minute), nil, false, false},
-		{"its worker ended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Minute)}, false, false},
-		{"its worker was suspended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Minute)}, false, false},
-		{"its worker quiet for long", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Hour)}, false, true},
+		{"a live heartbeat", &Owner{Instance: "i1", PID: 4242, Heartbeat: now.Add(-10 * time.Second)}, now.Add(-time.Hour), nil, false, 0, false},
+		{"a stale heartbeat, quiet for long", stale, now.Add(-time.Hour), nil, false, 0, true},
+		{"its owner's baton still runs (the machine slept)", stale, now.Add(-time.Hour), nil, true, 0, false},
+		{"no owner on record", nil, now.Add(-AbandonAfter), nil, false, 0, true},
+		{"its state changed a minute ago (a restart)", stale, now.Add(-time.Minute), nil, false, 0, false},
+		{"its worker ended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Minute)}, false, 0, false},
+		{"its worker was suspended a minute ago", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Minute)}, false, 0, false},
+		{"its worker quiet for long", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Hour), Ended: now.Add(-time.Hour)}, false, 0, true},
+		{"quiet for longer than a test asks", stale, now.Add(-10 * time.Second), nil, false, 5 * time.Second, true},
+		{"its worker quiet for less than a test asks", stale, now.Add(-time.Hour), &Worker{Since: now.Add(-time.Second)}, false, 5 * time.Second, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := RunInfo{ID: "r1", State: State{Owner: c.owner}, Updated: c.updated}
 			var asked int
 			baton := func(pid int) bool { asked = pid; return c.baton }
-			if got := Abandoned(r, c.e, baton, now); got != c.want {
+			quiet := c.quiet
+			if quiet == 0 {
+				quiet = AbandonAfter
+			}
+			if got := Abandoned(r, c.e, baton, now, quiet); got != c.want {
 				t.Errorf("Abandoned = %v, want %v", got, c.want)
 			}
 			if c.owner != nil && !c.owner.Live(now) && asked != c.owner.PID {

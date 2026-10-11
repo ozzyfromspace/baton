@@ -66,6 +66,9 @@ type Coordinator struct {
 	gen       int
 	sweepOwed bool
 	isBaton   func(pid int) bool // tells a running baton by its pid (nil: batonRunning; tests)
+	// AbandonAfter is how long another run must have been quiet before its workers count as abandoned
+	// (0: state.AbandonAfter; tests shorten it).
+	AbandonAfter time.Duration
 
 	// retireStep and resumeStep are called after each step of retiring and resuming a worker (tests).
 	retireStep, resumeStep func(step string)

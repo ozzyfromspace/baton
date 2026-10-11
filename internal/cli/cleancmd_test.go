@@ -473,6 +473,34 @@ func TestCleanInASession(t *testing.T) {
 	}
 }
 
+// BATON_ABANDON_AFTER changes how long a run must have been quiet before baton clean takes it for
+// abandoned (tests shorten it): the run whose host was killed a minute ago is cleaned when 30s is
+// enough, and left alone, saying how long baton waits, when 5m is not over yet.
+func TestCleanWaitsAsLongAsATestAsks(t *testing.T) {
+	for _, c := range []struct {
+		after, want string
+		cleaned     bool
+	}{
+		{"30s", "worker P1 of run run-rece…: ", true},
+		{"5m", "run run-rece… was active 1m0s ago: baton waits until a run has been quiet for 5m0s", false},
+	} {
+		t.Run(c.after, func(t *testing.T) {
+			x := newCleanRig(t)
+			var out bytes.Buffer
+			x.cleaner(false, map[string]string{"BATON_ABANDON_AFTER": c.after}).clean(&out)
+			if !strings.Contains(out.String(), c.want) {
+				t.Errorf("no %q in the report:\n%s", c.want, out.String())
+			}
+			if w := x.state("run-recent").Workers[0]; (w.Status == state.WorkerFailed && w.Why == cleanWhy) != c.cleaned {
+				t.Errorf("run-recent's worker: %+v", w)
+			}
+			if w := x.state("run-live").Workers[0]; w.Status != state.WorkerWorking {
+				t.Errorf("run-live's worker: %+v", w)
+			}
+		})
+	}
+}
+
 // Where baton reads no process table, the step says it cannot look, and the rest goes on: whether a
 // run's host still runs is told from its pid alone.
 func TestCleanWithoutAProcessTable(t *testing.T) {

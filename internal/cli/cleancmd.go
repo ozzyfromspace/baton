@@ -81,6 +81,7 @@ type cleaner struct {
 	proj     *state.Project
 	home     string // baton's home
 	now      time.Time
+	quiet    time.Duration // how long a run must have been quiet to count as abandoned
 	dry      bool
 	instance string // the host instance it runs under, recorded on events ("" from a shell)
 	self     string // the run of the session it runs in ("" from a shell)
@@ -113,7 +114,7 @@ func newCleaner(io IO, dir string) (*cleaner, error) {
 			return nil, fmt.Errorf("cannot use %s: %v", dir, err)
 		}
 	}
-	c := &cleaner{proj: proj, home: batonRoot(io), now: io.Now(), instance: instance(io), sockets: filepath.Dir(host.ViewSocket("x")),
+	c := &cleaner{proj: proj, home: batonRoot(io), now: io.Now(), quiet: abandonAfter(io), instance: instance(io), sockets: filepath.Dir(host.ViewSocket("x")),
 		procs: procs.List, stop: func(pids []int) []int { return procs.Stop(pids, stopGrace) },
 		isRunner: lane.IsRunner, terminate: lane.Terminate, alive: lane.Alive, parent: os.Getppid(), group: procs.Group()}
 	if hosted(io) {
@@ -122,6 +123,15 @@ func newCleaner(io IO, dir string) (*cleaner, error) {
 		}
 	}
 	return c, nil
+}
+
+// abandonAfter is how long a run must have been quiet before baton takes it for abandoned
+// (state.Abandoned): state.AbandonAfter, unless a test shortens it (BATON_ABANDON_AFTER).
+func abandonAfter(io IO) time.Duration {
+	if d, err := time.ParseDuration(io.Env("BATON_ABANDON_AFTER")); err == nil && d > 0 {
+		return d
+	}
+	return state.AbandonAfter
 }
 
 // cleanAction is one thing baton clean ends.
@@ -213,7 +223,7 @@ func (c *cleaner) read() *look {
 	}
 	for _, info := range c.proj.Runs() {
 		r := &cleanRun{RunInfo: info, subs: c.proj.Workers(info.ID)}
-		r.abandoned = state.Abandoned(info, nil, l.baton, c.now)
+		r.abandoned = state.Abandoned(info, nil, l.baton, c.now, c.quiet)
 		if !r.abandoned {
 			r.alone = c.whyAlone(info, l.baton)
 		}
@@ -284,7 +294,7 @@ func (c *cleaner) whyAlone(r state.RunInfo, baton func(int) bool) string {
 	case o != nil && o.PID > 0 && baton(o.PID):
 		return fmt.Sprintf("has a baton still running (pid %d), though its heartbeat is %s old", o.PID, ago(c.now.Sub(o.Heartbeat)))
 	}
-	return fmt.Sprintf("was active %s ago: baton waits until a run has been quiet for %s", ago(c.now.Sub(r.Updated)), ago(state.AbandonAfter))
+	return fmt.Sprintf("was active %s ago: baton waits until a run has been quiet for %s", ago(c.now.Sub(r.Updated)), ago(c.quiet))
 }
 
 func ago(d time.Duration) string {
@@ -348,7 +358,7 @@ func (c *cleaner) workers() {
 				c.alone = append(c.alone, what+" runs in another baton session")
 				continue
 			}
-			if !state.Abandoned(r.RunInfo, &e, c.look.baton, c.now) {
+			if !state.Abandoned(r.RunInfo, &e, c.look.baton, c.now, c.quiet) {
 				c.alone = append(c.alone, fmt.Sprintf("%s was active %s ago", what, ago(c.now.Sub(latest(e.Since, e.Ended)))))
 				continue
 			}

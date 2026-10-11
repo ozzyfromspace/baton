@@ -302,14 +302,14 @@ func ReleaseWorker(st *State, ref, session, why string, now time.Time) bool {
 }
 
 // AbandonAfter is how long a run must have shown no sign of life before Abandoned says so: a host that
-// restarts on a newer baton lets go of its run for a few seconds.
+// restarts on a newer baton lets go of its run for a few seconds. Tests shorten it (BATON_ABANDON_AFTER).
 const AbandonAfter = 2 * time.Minute
 
 // Abandoned reports a run no session will come back to on its own: no host's heartbeat is fresh, its
 // owner's process (if one is on record) is not a baton that is still running (a machine that slept
 // leaves a live host's heartbeat stale), and nothing of it, nor of its worker e (nil for none), has
-// changed for AbandonAfter. baton reports whether a pid is a running baton process.
-func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time) bool {
+// changed for quiet (AbandonAfter, but for tests). baton reports whether a pid is a running baton process.
+func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time, quiet time.Duration) bool {
 	if r.Live(now) {
 		return false
 	}
@@ -324,7 +324,7 @@ func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time) bo
 			}
 		}
 	}
-	return now.Sub(last) >= AbandonAfter
+	return now.Sub(last) >= quiet
 }
 
 // Landed records that l.Phase's work landed on the run's branch: the phase is done, its worker has
