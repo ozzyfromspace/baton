@@ -54,6 +54,11 @@ type Coordinator struct {
 	failedStarts int
 	retryAt      time.Time
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+	// The machine's swap readings of the last minute, why it had no room for another session at the last
+	// step ("" if it had), and when this host last started a worker's session (room.go).
+	swaps   []swapAt
+	noRoom  string
+	started time.Time
 	// genRun and gen are the host's run and its plan's generation as the lead's tick last saw them; a
 	// plan attached since owes a sweep of the workers other runs left behind (sweep.go). Only the lead's
 	// tick touches them.

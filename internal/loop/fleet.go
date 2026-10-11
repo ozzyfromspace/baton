@@ -15,13 +15,15 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // The coordinator runs the run's workers: hidden sessions that each work on a phase that can go ahead
 // beside the lead's, in a git worktree of its own, on a branch of its own made from the run's branch
-// (docs/research/workers.md). It starts one whenever a slot is free and a phase can start (Fleet.next).
+// (docs/research/workers.md). It starts one whenever a slot is free, a phase can start, and the machine
+// has room for another session (Fleet.next, room.go).
 // Before claude starts, it writes the worker onto the run's roster and links its sub-run to its session
 // and instance, so the worker's hooks find their run and never bind one. From then on it watches the
 // worker: its session must send its first prompt within Timing.WorkerStart, and an unexpected exit is
@@ -110,13 +112,19 @@ func (l Launch) env(e state.Worker, run, dir, checkout string) []string {
 		"BATON_ROLE=worker", "BATON_PHASE="+e.Phase, "BATON_RUN="+run, "BATON_WORKTREE="+e.Worktree, "BATON_CHECKOUT="+checkout)
 }
 
-// Fleet is what the coordinator needs to run workers. A coordinator without one runs none (workers: 0),
-// and retires those its run has on record.
+// Fleet is what the coordinator needs to run workers. A coordinator without one runs none (workers: 0, or
+// a machine with no room for one), and retires those its run has on record.
 type Fleet struct {
-	Max      int     // workers at once (workers)
+	Max int // workers at once: workers' number, or with auto what the machine allows (config.AutoWorkers)
+	// Auto is workers: auto: new workers start one Ramp apart (0: DefaultRamp).
+	Auto     bool
+	Ramp     time.Duration
 	UsageMax float64 // no new worker above this percent of the five-hour allowance (worker_usage_max; 0: no check)
 	MaxAuto  int     // the decisions a phase may make without the human before they review them (max_auto_decisions; 0: no cap)
-	Launch   Launch
+	// Machine reads the machine (nil: machine.Read): no worker starts or resumes while it has no room for
+	// another session (room.go).
+	Machine func() machine.Reading
+	Launch  Launch
 	// Spawn starts a hidden session (host.Supervisor.Spawn). It fails with host.ErrClosed once the host
 	// is ending.
 	Spawn func(host.Spec) (Hidden, error)
@@ -163,24 +171,46 @@ func launchable(st state.State, now time.Time) string {
 	return ""
 }
 
-// next is the phase a new worker would take up now, or "" and why none starts.
-func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time) (phase, why string) {
+// next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
+// one does): the run must be running, under Max workers of its plan, with a phase that can go ahead.
+// held names what holds a phase that waits back: no room on the machine (r.busy) or under
+// worker_usage_max (state.HoldBusy, state.HoldUsage); "" for none. With Auto, new workers start a Ramp
+// apart, so that the machine's readings show each one before the next starts: that wait is no hold.
+func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
-		return "", why
+		return "", why, ""
 	}
 	if st.RunBranch == "" {
-		return "", "the plan was attached with no branch checked out"
+		return "", "the plan was attached with no branch checked out", ""
 	}
-	if n := len(st.LiveWorkers()); n >= f.Max {
-		return "", fmt.Sprintf("%d of %d workers run already", n, f.Max)
+	if n := planWorkers(st); n >= f.Max {
+		return "", fmt.Sprintf("%d of %d workers run already", n, f.Max), ""
 	}
-	if u := st.Usage; u != nil && f.UsageMax > 0 && u.UsedPct >= f.UsageMax && (u.Resets.IsZero() || now.Before(u.Resets)) {
-		return "", fmt.Sprintf("%.0f%% of the five-hour usage is used (worker_usage_max %.0f%%)", u.UsedPct, f.UsageMax)
+	if phase = state.NextWorker(st, pl); phase == "" {
+		return "", "no other phase can start", ""
 	}
-	if phase := state.NextWorker(st, pl); phase != "" {
-		return phase, ""
+	u := st.Usage
+	switch {
+	case r.busy != "":
+		return phase, r.busy, state.HoldBusy
+	case u != nil && f.UsageMax > 0 && u.UsedPct >= f.UsageMax && (u.Resets.IsZero() || now.Before(u.Resets)):
+		return phase, fmt.Sprintf("%.0f%% of the five-hour usage is used (worker_usage_max %.0f%%)", u.UsedPct, f.UsageMax), state.HoldUsage
+	case f.Auto && now.Sub(r.started) < f.ramp():
+		return phase, fmt.Sprintf("a worker started %s ago, and with workers: auto the next starts %s after it", decide.Span(now.Sub(r.started)), decide.Span(f.ramp())), ""
 	}
-	return "", "no other phase can start"
+	return phase, "", ""
+}
+
+// planWorkers counts the live workers of the plan attached now: a worker of a replaced plan is on its
+// way out.
+func planWorkers(st state.State) int {
+	n := 0
+	for _, w := range st.LiveWorkers() {
+		if w.Generation == st.Generation {
+			n++
+		}
+	}
+	return n
 }
 
 // unwanted says why the run no longer counts on worker e (nil: it is not on the roster), or "" while it
@@ -223,6 +253,9 @@ func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
 		c.planAttached(s, st)
 	}
 	f := c.Fleet
+	if f == nil && st.Hold != nil { // an earlier host's: no worker starts in this one
+		s.Update(func(st *state.State) error { st.Hold = nil; return nil })
+	}
 	idle := f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0 && !c.sweepOwed)
 	if idle || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
 		return
@@ -281,6 +314,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		return
 	}
 	c.usage(now, s, st)
+	c.look(now)
 	for _, w := range c.launched() {
 		c.watch(now, s, st, pl, w)
 		c.waiting(now, s, st, w)
@@ -296,7 +330,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		}
 		if why := unwanted(st, pl, &e); why != "" {
 			c.retire(now, s, e, why)
-		} else if c.mayLaunch(now, s, st) == "" {
+		} else if c.mayLaunch(now, s, st) == "" && c.noRoom == "" {
 			why := e.Why
 			if why == "" {
 				why = "it ended with the baton session that ran it"
@@ -304,17 +338,23 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 			c.resume(now, s, e, why, false)
 		}
 	}
-	if st, err = s.Load(); err != nil || c.mayLaunch(now, s, st) != "" {
+	if st, err = s.Load(); err != nil {
 		return
 	}
-	if phase, _ := c.Fleet.next(st, pl, now); phase != "" {
+	phase, why, held := "", c.mayLaunch(now, s, st), ""
+	if why == "" {
+		phase, why, held = c.Fleet.next(st, pl, now, room{busy: c.noRoom, started: c.started})
+	}
+	c.hold(now, s, st, phase, why, held)
+	if phase != "" && why == "" {
 		c.spawn(now, s, st, pl, phase)
 	}
 }
 
-// mayLaunch says why this host may start no worker's session now, or "" if it may. The lead's session
-// must have started first: until a hook of its own has run, it may be showing Claude Code's trust
-// dialog, behind which nothing runs (spike 23), and a worker started then would meet the same dialog.
+// mayLaunch says why this host may start no worker's session now, or "" if it may, room on the machine
+// aside (Coordinator.noRoom). The lead's session must have started first: until a hook of its own has
+// run, it may be showing Claude Code's trust dialog, behind which nothing runs (spike 23), and a worker
+// started then would meet the same dialog.
 func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) string {
 	switch {
 	case c.closing || c.stopping.Load():
@@ -559,6 +599,7 @@ func (c *Coordinator) spawn(now time.Time, s *state.Store, st state.State, pl pl
 		c.unlaunched(now, s, e, err)
 		return
 	}
+	c.started = now
 	s.Event("worker_spawned", map[string]any{"phase": phase, "session": e.Session, "worktree": dir, "branch": e.Branch, "base": base})
 	c.announce(s, fmt.Sprintf("baton: a worker took up %s, in a worktree of its own on the branch %s (baton view %s in another terminal shows it)",
 		phaseName(pl, phase), e.Branch, phase))
@@ -687,6 +728,7 @@ func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why 
 		c.unlaunched(now, s, e, err)
 		return
 	}
+	c.started = now
 	s.Event("worker_resumed", map[string]any{"phase": e.Phase, "session": e.Session, "why": why, "resumes": e.Resumes, "anew": !again})
 	c.announce(s, fmt.Sprintf("baton: resumed the worker on %s: %s", e.Phase, why))
 }

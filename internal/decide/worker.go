@@ -84,6 +84,12 @@ func WorkersAttached(n int, auto bool, width int, mode string, local bool) strin
 	return s
 }
 
+// WorkerHeld tells the human that phase, which could go ahead, gets no worker for now, and why: no room
+// for another session on the machine, or in the account's usage.
+func WorkerHeld(phase, why string) string {
+	return fmt.Sprintf("baton: no worker on %s for now: %s. One starts once there is room; the workers at work carry on", phase, why)
+}
+
 // WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.
 func WorkerRefused(command, phase string) string {
 	return fmt.Sprintf("not run — this session is a worker: it works on %s alone, in a worktree of its own, while the lead session runs the plan in the human's terminal, "+

@@ -15,6 +15,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -64,11 +65,22 @@ type crew struct {
 	spawnErr error
 	leadIdle bool              // the lead's hooks do not run
 	typedTo  map[string]*typed // what was typed into each worker's session, by its phase
+	machine  machine.Reading   // what the machine reads (roomy, unless the test says otherwise)
 }
 
+// roomy is a machine with room for workers: 14 CPUs, 48 GiB, little load, and memory pressure normal.
+var roomy = machine.Reading{CPUs: 14, MemTotal: 48 << 30, MemAvailablePct: 45, Pressure: machine.PressureNormal, Load1: 3.1, Known: true}
+
 func newCrew(t *testing.T, max int) *crew {
+	return newCrewOn(t, max, plan.Plan{Version: 1, Title: "Demo", File: "/plans/demo.md", Phases: []plan.Phase{
+		{ID: "P0", Title: "zero", After: []string{}}, {ID: "P1", Title: "one", After: []string{}},
+		{ID: "P2", Title: "two", After: []string{}}, {ID: "P3", Title: "three", After: []string{"P1"}}}})
+}
+
+// newCrewOn is a crew whose run has the plan pl.
+func newCrewOn(t *testing.T, max int, pl plan.Plan) *crew {
 	gittest.Isolate(t)
-	x := &crew{t: t, now: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), repo: t.TempDir(), home: t.TempDir()}
+	x := &crew{t: t, now: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), repo: t.TempDir(), home: t.TempDir(), machine: roomy, pl: pl}
 	gittest.Git(t, x.repo, "init", "-q", "-b", "main")
 	gittest.Write(t, x.repo, "a.txt", "a\n")
 	gittest.Commit(t, x.repo, "first")
@@ -77,9 +89,6 @@ func newCrew(t *testing.T, max int) *crew {
 		t.Fatal(err)
 	}
 	state.ExcludeFromGit(x.repo)
-	x.pl = plan.Plan{Version: 1, Title: "Demo", File: "/plans/demo.md", Phases: []plan.Phase{
-		{ID: "P0", Title: "zero", After: []string{}}, {ID: "P1", Title: "one", After: []string{}},
-		{ID: "P2", Title: "two", After: []string{}}, {ID: "P3", Title: "three", After: []string{"P1"}}}}
 	x.c = x.coordinator("inst", max)
 	return x
 }
@@ -102,7 +111,7 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 	x.lead = lead
 	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}, Project: x.proj, Home: x.home}
 	t.Cleanup(c.snapshotsTaken) // before the test's directories are removed (cleanups run last first)
-	c.Fleet = &Fleet{Max: max, UsageMax: 80, Go: func(fn func()) { fn() },
+	c.Fleet = &Fleet{Max: max, UsageMax: 80, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return x.machine },
 		Launch: Launch{Args: []string{"--model", "haiku"}, Autocompact: "810k", Settings: `{"hooks":{}}`, Bin: "/opt/baton", Version: "v0.5.0",
 			Env: []string{"HOME=/home/x", "PWD=/checkout", "BATON_DIR=/stale"}, BatonEnv: []string{"BATON_ESCALATION_TIMEOUT=5m0s", "BATON_TTY=/dev/ttys001"}},
 		Spawn: func(spec host.Spec) (Hidden, error) {
@@ -300,50 +309,73 @@ func TestWhenAWorkerStarts(t *testing.T) {
 	chain := plan.Plan{Version: 1, Phases: []plan.Phase{{ID: "P0"}, {ID: "P1"}}}
 	on := func(st *state.State, phase, status string) {
 		st.Phases[phase] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/" + phase}
-		st.Workers = append(st.Workers, state.Worker{Phase: phase, Ref: "r/" + phase, Session: phase, Status: status})
+		st.Workers = append(st.Workers, state.Worker{Phase: phase, Ref: "r/" + phase, Session: phase, Status: status, Generation: st.Generation})
 	}
+	const busyWhy = "the machine is busy (load 15.0 on 14 CPUs)"
 	for _, c := range []struct {
 		name  string
-		max   int
-		usage float64
+		f     Fleet
+		room  room
 		pl    plan.Plan
 		st    func(*state.State)
-		want  string // the phase, or why none
+		phase string // the phase that waits for a worker, or gets one
+		why   string // why it gets none
+		held  string // what holds it back
 	}{
-		{"a free slot, and a phase that can start beside the lead's", 1, 80, pl, nil, "P1"},
-		{"never the lead's phase", 1, 80, pl, func(st *state.State) {
+		{"a free slot, and a phase that can start beside the lead's", Fleet{Max: 1}, room{}, pl, nil, "P1", "", ""},
+		{"never the lead's phase", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			st.Phases["P0"].Status, st.Current = state.PhaseDone, "P1"
 			st.Phases["P1"].Status = state.PhaseActive
-		}, "P2"},
-		{"nor the phase the idle lead takes up next", 1, 80, pl, func(st *state.State) {
+		}, "P2", "", ""},
+		{"nor the phase the idle lead takes up next", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			st.Phases["P0"].Status, st.Current = state.PhaseDone, ""
-		}, "P2"},
-		{"every slot taken", 1, 80, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "1 of 1 workers run already"},
-		{"a suspended worker keeps its slot", 1, 80, pl, func(st *state.State) { on(st, "P1", state.WorkerSuspended) }, "1 of 1 workers run already"},
-		{"never two workers on one phase", 2, 80, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "P2"},
-		{"a failed worker frees its slot", 1, 80, pl, func(st *state.State) {
+		}, "P2", "", ""},
+		{"every slot taken", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "", "1 of 1 workers run already", ""},
+		{"a suspended worker keeps its slot", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerSuspended) }, "", "1 of 1 workers run already", ""},
+		{"a worker of a replaced plan keeps none", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			st.Generation++
+		}, "P2", "", ""},
+		{"never two workers on one phase", Fleet{Max: 2}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "P2", "", ""},
+		{"a failed worker frees its slot", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "r/P1", Status: state.WorkerFailed})
-		}, "P1"},
-		{"a phase waits for one a worker has not landed", 3, 80, pl, func(st *state.State) {
+		}, "P1", "", ""},
+		{"a phase waits for one a worker has not landed", Fleet{Max: 3}, room{}, pl, func(st *state.State) {
 			on(st, "P1", state.WorkerWorking)
 			on(st, "P2", state.WorkerLanding)
-		}, "no other phase can start"},
-		{"a chain", 1, 80, chain, nil, "no other phase can start"},
-		{"paused", 1, 80, pl, func(st *state.State) { st.Mode = state.ModePaused }, "the run is paused"},
-		{"blocked by the lead", 1, 80, pl, func(st *state.State) { st.Blocked = &state.Block{Reason: "x"} }, "the run is blocked"},
-		{"a review due", 1, 80, pl, func(st *state.State) { st.ReviewDue = "P0" }, "the run waits on a review of its decisions"},
-		{"attached on a detached HEAD", 1, 80, pl, func(st *state.State) { st.RunBranch = "" }, "the plan was attached with no branch checked out"},
-		{"usage over the max", 1, 80, pl, func(st *state.State) {
+		}, "", "no other phase can start", ""},
+		{"a chain", Fleet{Max: 1}, room{}, chain, nil, "", "no other phase can start", ""},
+		{"paused", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Mode = state.ModePaused }, "", "the run is paused", ""},
+		{"blocked by the lead", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Blocked = &state.Block{Reason: "x"} }, "", "the run is blocked", ""},
+		{"a review due", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.ReviewDue = "P0" }, "", "the run waits on a review of its decisions", ""},
+		{"attached on a detached HEAD", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.RunBranch = "" }, "", "the plan was attached with no branch checked out", ""},
+		{"usage over the max", Fleet{Max: 1, UsageMax: 80}, room{}, pl, func(st *state.State) {
 			st.Usage = &state.Usage{UsedPct: 85, Resets: now.Add(time.Hour)}
-		}, "85% of the five-hour usage is used (worker_usage_max 80%)"},
-		{"usage over the max, past its reset", 1, 80, pl, func(st *state.State) {
+		}, "P1", "85% of the five-hour usage is used (worker_usage_max 80%)", state.HoldUsage},
+		{"usage over the max, past its reset", Fleet{Max: 1, UsageMax: 80}, room{}, pl, func(st *state.State) {
 			st.Usage = &state.Usage{UsedPct: 85, Resets: now.Add(-time.Minute)}
-		}, "P1"},
-		{"usage under the max", 1, 80, pl, func(st *state.State) { st.Usage = &state.Usage{UsedPct: 79} }, "P1"},
-		{"no usage check", 1, 0, pl, func(st *state.State) { st.Usage = &state.Usage{UsedPct: 99} }, "P1"},
-		{"a session waits on a usage limit", 1, 0, pl, func(st *state.State) {
+		}, "P1", "", ""},
+		{"usage under the max", Fleet{Max: 1, UsageMax: 80}, room{}, pl, func(st *state.State) { st.Usage = &state.Usage{UsedPct: 79} }, "P1", "", ""},
+		{"no usage check, the default", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Usage = &state.Usage{UsedPct: 99} }, "P1", "", ""},
+		{"a session waits on a usage limit", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			st.Usage = &state.Usage{Limited: now.Add(time.Minute)}
-		}, "a session waits on a usage limit"},
+		}, "", "a session waits on a usage limit", ""},
+
+		// workers: auto, and the machine.
+		{"auto, under what the machine allows", Fleet{Max: 6, Auto: true}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "P2", "", ""},
+		{"auto, at what the machine allows", Fleet{Max: 1, Auto: true}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "", "1 of 1 workers run already", ""},
+		{"no room on the machine", Fleet{Max: 6, Auto: true}, room{busy: busyWhy}, pl, nil, "P1", busyWhy, state.HoldBusy},
+		{"no room on the machine, with a number", Fleet{Max: 3}, room{busy: "memory is low (9% free)"}, pl, nil, "P1", "memory is low (9% free)", state.HoldBusy},
+		{"the machine before the usage", Fleet{Max: 1, UsageMax: 80}, room{busy: busyWhy}, pl, func(st *state.State) {
+			st.Usage = &state.Usage{UsedPct: 85}
+		}, "P1", busyWhy, state.HoldBusy},
+		{"no room, and no phase waits", Fleet{Max: 1}, room{busy: busyWhy}, chain, nil, "", "no other phase can start", ""},
+		{"no room, and every slot taken", Fleet{Max: 1}, room{busy: busyWhy}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "", "1 of 1 workers run already", ""},
+		{"auto: the ramp after a worker started", Fleet{Max: 6, Auto: true}, room{started: now.Add(-20 * time.Second)}, pl, nil,
+			"P1", "a worker started 20s ago, and with workers: auto the next starts 1m after it", ""},
+		{"auto: the ramp is over", Fleet{Max: 6, Auto: true}, room{started: now.Add(-time.Minute)}, pl, nil, "P1", "", ""},
+		{"auto: a ramp of its own", Fleet{Max: 6, Auto: true, Ramp: 5 * time.Second}, room{started: now.Add(-5 * time.Second)}, pl, nil, "P1", "", ""},
+		{"no ramp with a number", Fleet{Max: 6}, room{started: now.Add(-time.Second)}, pl, nil, "P1", "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := state.Attach(c.pl, now, state.Origin{})
@@ -351,11 +383,47 @@ func TestWhenAWorkerStarts(t *testing.T) {
 			if c.st != nil {
 				c.st(&st)
 			}
-			phase, why := (&Fleet{Max: c.max, UsageMax: c.usage}).next(st, c.pl, now)
-			if got := phase + why; got != c.want || phase != "" && why != "" {
-				t.Errorf("next = %q, %q; want %q", phase, why, c.want)
+			phase, why, held := c.f.next(st, c.pl, now, c.room)
+			if phase != c.phase || why != c.why || held != c.held {
+				t.Errorf("next = %q, %q, %q; want %q, %q, %q", phase, why, held, c.phase, c.why, c.held)
 			}
 		})
+	}
+}
+
+// The machine has room for another session while its load is under its CPUs and its memory is not short:
+// on macOS by the kernel's pressure and how fast swap grows, never by its free share, which macOS holds
+// near 36% by swapping; on Linux by what is available. With no live readings, it has room.
+func TestRoomOnTheMachine(t *testing.T) {
+	mac := roomy
+	linux := machine.Reading{CPUs: 8, MemTotal: 16 << 30, MemAvailablePct: 40, Load1: 2, Known: true}
+	with := func(m machine.Reading, fn func(*machine.Reading)) machine.Reading { fn(&m); return m }
+	for _, c := range []struct {
+		name string
+		m    machine.Reading
+		grew uint64
+		want string
+	}{
+		{"a roomy Mac", mac, 0, ""},
+		{"a roomy Linux machine", linux, 0, ""},
+		{"no live readings", machine.Reading{CPUs: 8, Load1: 99}, 0, ""},
+		{"a load just under the CPUs", with(linux, func(m *machine.Reading) { m.Load1 = 7.9 }), 0, ""},
+		{"a load at the CPUs", with(linux, func(m *machine.Reading) { m.Load1 = 8 }), 0, "the machine is busy (load 8.0 on 8 CPUs)"},
+		{"a busy Mac", with(mac, func(m *machine.Reading) { m.Load1 = 15.04 }), 0, "the machine is busy (load 15.0 on 14 CPUs)"},
+		{"macOS's free share is no guide", with(mac, func(m *machine.Reading) { m.MemAvailablePct = 5 }), 0, ""},
+		{"memory pressure critical", with(mac, func(m *machine.Reading) { m.Pressure = machine.PressureCritical }), 0, "memory pressure is critical"},
+		{"pressure at warn, swap steady", with(mac, func(m *machine.Reading) { m.Pressure = machine.PressureWarn }), 256 << 20, ""},
+		{"pressure at warn, swapping", with(mac, func(m *machine.Reading) { m.Pressure = machine.PressureWarn }), 1288 << 20,
+			"the machine is swapping (1.3 GiB in the last minute)"},
+		{"pressure at warn, swapping a little", with(mac, func(m *machine.Reading) { m.Pressure = machine.PressureWarn }), 300 << 20,
+			"the machine is swapping (300 MiB in the last minute)"},
+		{"swapping at normal pressure", mac, 2 << 30, ""},
+		{"Linux at the floor", with(linux, func(m *machine.Reading) { m.MemAvailablePct = 15 }), 0, ""},
+		{"Linux under it", with(linux, func(m *machine.Reading) { m.MemAvailablePct = 14 }), 0, "memory is low (14% free)"},
+	} {
+		if got := busy(c.m, c.grew); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

@@ -121,6 +121,22 @@ type Usage struct {
 	By      string    `json:"by,omitempty"`
 }
 
+// Hold is what holds back a phase that waits for a worker, since Since: no room for another session on
+// the machine (HoldBusy) or in the account's five-hour allowance (HoldUsage). Why says so in words. The
+// workers at work go on.
+type Hold struct {
+	Phase string    `json:"phase"`
+	Kind  string    `json:"kind"`
+	Why   string    `json:"why"`
+	Since time.Time `json:"since"`
+}
+
+// What holds a phase back from a worker (Hold.Kind).
+const (
+	HoldBusy  = "busy"
+	HoldUsage = "usage"
+)
+
 // LimitHit is when the session's last turn ended on the account's usage limit: zero if it did not, or
 // if a turn has started since.
 func (r Runtime) LimitHit() time.Time {

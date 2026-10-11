@@ -11,6 +11,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -122,7 +123,8 @@ func TestANewRunRetiresTheWorkersOthersLeft(t *testing.T) {
 			x.advance(c.after)
 			c2, s2 := x.newHost("inst2", 4242)
 			if c.fleet {
-				c2.Fleet = &Fleet{Max: 1, Go: func(fn func()) { fn() }, Spawn: func(host.Spec) (Hidden, error) { return nil, errors.New("no sessions here") }}
+				c2.Fleet = &Fleet{Max: 1, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return roomy },
+					Spawn: func(host.Spec) (Hidden, error) { return nil, errors.New("no sessions here") }}
 			}
 			x.tickHost(c2, s2) // the host starts with no plan
 			if st := x.state(); st.Workers[0].Status != state.WorkerSuspended || st.Workers[1].Status != state.WorkerSuspended {

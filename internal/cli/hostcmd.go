@@ -181,8 +181,12 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io)}
 	var sv *host.Supervisor
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
+		ramp := loop.DefaultRamp
+		if d, err := time.ParseDuration(io.Env("BATON_WORKER_RAMP")); err == nil && d > 0 {
+			ramp = d // for tests
+		}
 		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
-		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto,
+		coordinator.Fleet = &loop.Fleet{Max: workers, Auto: auto, Ramp: ramp, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Machine: io.Machine,
 			Launch: loop.Launch{Args: elevate.KeepWorkerArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
 				Env: env, BatonEnv: batonEnv, Bin: exe, Version: version.Version, ScreenDump: io.Env("BATON_SCREEN_DUMP") == "1"},
 			Spawn: func(spec host.Spec) (loop.Hidden, error) {
