@@ -18,6 +18,8 @@ import (
 // A document lists its phases in one notation, so only the strongest notation present counts: headings,
 // then bold bullets, then table rows. Lines in the others that merely look like phases (a table of
 // spike results whose rows start with S1, S2, … ahead of the phase headings) are not phases.
+//
+// When the suggestion builds, each phase carries the dependencies the text gives it (After).
 func Suggest(doc []byte) Spec {
 	lines := strings.Split(string(doc), "\n")
 	best := notationNone
@@ -54,6 +56,9 @@ func Suggest(doc []byte) Spec {
 		}
 		spec.Phases = append(spec.Phases, Phase{ID: id, Title: title, Anchor: strings.TrimSpace(line)})
 		lastPhaseLine, lastPhaseLevel = i, level
+	}
+	if p, err := Build("", doc, spec); err == nil {
+		spec.Phases = p.Phases
 	}
 	return spec
 }

@@ -239,6 +239,51 @@ func TestAttachSuggestedAndInlineSpec(t *testing.T) {
 	}
 }
 
+// A plan with After: lines shows its graph when suggested, attached and in status.
+func TestAttachShowsTheDependencyGraph(t *testing.T) {
+	s, planFile := newSession(t)
+	doc, err := os.ReadFile(filepath.Join("..", "plan", "testdata", "after.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(planFile, doc, 0o644)
+	const graph = "dependencies: P0 and P1 need no other phase; P3 after P0 and P2; P4 after every phase before it; " +
+		"every other phase follows the one before it; longest chain 4 of 5 phases"
+
+	code, spec, errs := s.run("", "attach", planFile, "--suggest")
+	if code != 0 || !strings.Contains(spec, `"after": [
+        "P0",
+        "P2"
+      ]`) || !strings.Contains(errs, "as suggested, "+graph+".") {
+		t.Fatalf("--suggest: exit %d\n%s\n%s", code, spec, errs)
+	}
+	out := s.must(spec, "attach", planFile, "--spec", "-")
+	if !strings.Contains(out, `"Ship the widget" — 5 phases (`+graph+`). Current phase: P0 (Research).`) {
+		t.Fatalf("attach: %s", out)
+	}
+	if !s.logged("attached", map[string]any{"phases": float64(5), "longest_chain": float64(4)}) {
+		t.Errorf("events: %s", s.events())
+	}
+	status := s.must("", "status")
+	for _, want := range []string{
+		"▶ P0       Research  — needs no other phase  (active 0s)",
+		"· P2       The API  — after P1\n",
+		"· P3       The page  — after P0 and P2\n",
+		"· P4       Release  — after every phase before it\n",
+		"longest chain: 4 of 5 phases (P1 → P2 → P3 → P4)\n",
+	} {
+		if !strings.Contains(status, want) {
+			t.Errorf("status lacks %q:\n%s", want, status)
+		}
+	}
+	// A spec that changes the graph is refused: the plan text is where it lives.
+	bad := strings.Replace(spec, `"P0",
+        "P2"`, `"P2"`, 1)
+	if code, _, errs := s.run(bad, "attach", planFile, "--replace", "--spec", "-"); code == 0 || !strings.Contains(errs, `the spec's "after" (P2) differs from the plan's (P0, P2)`) {
+		t.Fatalf("a spec with another graph: exit %d %s", code, errs)
+	}
+}
+
 // Two sessions in one working tree each run a plan of their own. From a shell, status lists both; in a
 // session, it shows that session's run and names the other one.
 func TestTwoSessionsRunTwoPlans(t *testing.T) {

@@ -77,18 +77,24 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 			say: "baton: plan approved, but baton could not attach it: " + err.Error()}
 	}
 	first := pl.Phases[0]
-	v := valveAction{event: "attached", fields: map[string]any{"plan": pl.File, "phases": len(pl.Phases), "git": gitx.Usable(s.Root), "by": "approval"}}
+	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, state.OriginOf(s.Root))
-		v.say = fmt.Sprintf("baton: attached %q (%d phases) → %s starts now", pl.Title, len(pl.Phases), first.ID)
+		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = []event{{"phase_started", map[string]any{"phase": first.ID}}}
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
-	v.say = fmt.Sprintf("baton: attached %q (%d phases) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), first.ID)
+	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID)
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	return v
+}
+
+// attachedFields are the fields of the "attached" event for a plan the human approved.
+func attachedFields(pl plan.Plan, root string) map[string]any {
+	k, _ := pl.LongestChain()
+	return map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": k, "git": gitx.Usable(root), "by": "approval"}
 }
 
 // phaseList names phases as the human knows them: "P3 (Polish) and P4 (Docs)".
@@ -139,7 +145,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 		if answer == "Start the new plan from P0" {
 			a := attach(st, s, c, pl, false, w)
 			a.event, a.fields = v.event, v.fields
-			a.also = append([]event{{"attached", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "git": gitx.Usable(s.Root), "by": "approval"}}}, a.also...)
+			a.also = append([]event{{"attached", attachedFields(pl, s.Root)}}, a.also...)
 			return a
 		}
 		if err := s.WritePlan(pl); err != nil {

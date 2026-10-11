@@ -107,11 +107,16 @@ func cmdAttach(args []string, io IO) int {
 		return fail(io, "cannot read the plan document: %v", err)
 	}
 	if p.bools["suggest"] {
-		out, _ := json.MarshalIndent(plan.Suggest(doc), "", "  ")
+		spec := plan.Suggest(doc)
+		out, _ := json.MarshalIndent(spec, "", "  ")
 		fmt.Fprintln(io.Out, string(out))
 		fmt.Fprintln(io.Err, "baton: this is a suggestion. Check every phase is present and in order, ids and titles are right, and each "+
-			"anchor is a verbatim snippet that starts its phase. If it is right as printed: baton attach "+p.pos[0]+" --suggested. "+
-			"Otherwise pass the corrected spec inline: baton attach "+p.pos[0]+" --spec '<json>'")
+			"anchor is a verbatim snippet that starts its phase. Each phase's \"after\" lists the phases it waits for, read from its After: line in the plan "+
+			"(a phase without one follows the phase before it): to change them, edit the plan, and leave \"after\" out of a corrected spec. "+
+			"If it is right as printed: baton attach "+p.pos[0]+" --suggested. Otherwise pass the corrected spec inline: baton attach "+p.pos[0]+" --spec '<json>'")
+		if pl, err := plan.Build(file, doc, spec); err == nil {
+			fmt.Fprintln(io.Err, "baton: as suggested, "+pl.Dependencies()+".")
+		}
 		return 0
 	}
 	src, ok := p.vals["spec"]
@@ -174,15 +179,17 @@ func cmdAttach(args []string, io IO) int {
 	}); err != nil {
 		return fail(io, "%v", err)
 	}
-	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "git": gitx.Usable(root), "compact_first": boundary})
+	chain, _ := pl.LongestChain()
+	s.Event("attached", map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary})
 	first := pl.Phases[0]
+	fmt.Fprintf(io.Out, "baton: attached %q — %d phases (%s). ", pl.Title, len(pl.Phases), pl.Dependencies())
 	switch {
 	case boundary && hosted(io):
-		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. End your turn now: baton compacts this conversation, then starts %s (%s) with a fresh brief.\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+		fmt.Fprintf(io.Out, "End your turn now: baton compacts this conversation, then starts %s (%s) with a fresh brief.\n", first.ID, first.Title)
 	case boundary:
-		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. %s (%s) starts once baton has compacted this conversation.\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+		fmt.Fprintf(io.Out, "%s (%s) starts once baton has compacted this conversation.\n", first.ID, first.Title)
 	default:
-		fmt.Fprintf(io.Out, "baton: attached %q — %d phases. Current phase: %s (%s).\n", pl.Title, len(pl.Phases), first.ID, first.Title)
+		fmt.Fprintf(io.Out, "Current phase: %s (%s).\n", first.ID, first.Title)
 	}
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
@@ -244,8 +251,12 @@ func cmdStatus(args []string, io IO) int {
 	if sha := pl.SHA(); sha != pl.SHA256 && st.Mode != state.ModeComplete {
 		fmt.Fprintln(io.Out, "  (the plan file changed since baton last read it; baton checks it again at the next stop)")
 	}
+	seq := pl.Sequential()
 	for _, ph := range pl.Phases {
-		mark, extra := "·", ""
+		mark, deps, extra := "·", "", ""
+		if !seq {
+			deps = "  — " + pl.DepsLabel(ph.ID)
+		}
 		if ps := st.Phases[ph.ID]; ps != nil {
 			switch ps.Status {
 			case state.PhaseDone:
@@ -257,7 +268,13 @@ func cmdStatus(args []string, io IO) int {
 		if ph.ID == st.Current && st.BoundaryOwed {
 			mark, extra = "→", "  (next, after compaction)"
 		}
-		fmt.Fprintf(io.Out, "  %s %-8s %s%s\n", mark, ph.ID, ph.Title, extra)
+		fmt.Fprintf(io.Out, "  %s %-8s %s%s%s\n", mark, ph.ID, ph.Title, deps, extra)
+	}
+	if seq {
+		fmt.Fprintln(io.Out, "dependencies: each phase follows the one before it")
+	} else {
+		k, chain := pl.LongestChain()
+		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)

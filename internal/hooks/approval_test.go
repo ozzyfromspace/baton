@@ -31,7 +31,7 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 	f := newFixture(t, false)
 	file := f.writePlan("humming-whistling-hare.md", approvedDoc)
 	out := f.approve(file)
-	if !strings.Contains(say(out), `attached "The next campaign" (2 phases) → compacting the planning conversation, then P0 starts`) {
+	if !strings.Contains(say(out), `attached "The next campaign" (2 phases; dependencies: each phase follows the one before it) → compacting the planning conversation, then P0 starts`) {
 		t.Fatalf("announced %q", say(out))
 	}
 	if tell := additionalContext(out); !strings.Contains(tell, "Do not start P0 in this turn: end your turn now") {
@@ -44,7 +44,7 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 	if pl, _ := f.store.LoadPlan(); pl.File != file || pl.RulesAnchor != "## Standing rules" || pl.EndAnchor != "## Verification" {
 		t.Fatalf("plan %+v", pl)
 	}
-	if !f.logged("attached", map[string]any{"plan": file, "phases": float64(2), "by": "approval"}) {
+	if !f.logged("attached", map[string]any{"plan": file, "phases": float64(2), "longest_chain": float64(2), "by": "approval"}) {
 		t.Errorf("events: %s", f.eventLog())
 	}
 	if d := denyReason(f.fire("PreToolUse", bash("go test ./..."))); !strings.Contains(d, "baton attached the plan, and compacts the conversation so far before P0 begins") {

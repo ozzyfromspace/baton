@@ -39,6 +39,9 @@ whole run — and saves the text first. Each draft is a file in the run's `draft
    - If it cannot start baton here (the shell does not restart sessions under baton yet, or there is no terminal), tell the user so in one line and go on to step 2. After the approval, attach the plan yourself as described under **run**.
 2. Call the `EnterPlanMode` tool and plan the goal as a formal, multi-phase plan. Write the plan so baton can run it:
    - Give each phase its own heading in this exact form: `## P0 — <title>`, `## P1 — <title>`, and so on, in order.
+   - Right under each heading, on a line of its own, say which earlier phases it needs done first: `After: P1, P3`, `After: none`, or `After: all` (every phase before it). A phase without the line follows the phase before it. baton uses this to tell which phases can go ahead while another waits.
+     - Mark a phase independent of another only when it needs nothing that phase produces: no code, schema, file, result or decision of it.
+     - Integration phases, phases that verify everything, and release phases use `After: all`.
    - Under each heading give the goal, the steps, and when the phase counts as done. Every phase should end with its work committed (in a git repository; otherwise saved).
    - Size each phase to finish comfortably in one context window. Between phases, context is compacted and only the plan, the brief and your notes carry over, so each phase must be understandable from the plan document alone.
    - If the run has rules that apply to every phase, put them in a `## Standing rules` section before the first phase.
@@ -63,6 +66,7 @@ whole run — and saves the text first. Each draft is a file in the run's `draft
    - every phase is present, in order;
    - ids and titles are right;
    - each `anchor` is a verbatim snippet that starts that phase's section and occurs only once in the document;
+   - each `after` lists the phases that phase waits for, read from its `After:` line in the plan (without one, the phase before it). To change them, edit the plan, and leave `after` out of a corrected spec;
    - set `rules_anchor` to the standing-rules heading if there is one, and `end_anchor` to the first heading after the last phase (for example `## Verification`).
 4. Attach it with one plain command (no heredocs or pipes, so the allow rule for `baton` covers it):
    - If the suggestion is right as printed: `baton attach <file> --suggested`.

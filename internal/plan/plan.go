@@ -3,7 +3,8 @@
 // Plan documents are free-form markdown: phases appear as headings, bold bullets, table rows, and more.
 // Rather than parse markdown, baton asks the model to name each phase's *anchor*, a verbatim snippet
 // that starts the phase's section, and checks deterministically that every anchor occurs exactly once
-// and in document order. A phase's section runs from its anchor to the next anchor.
+// and in document order. A phase's section runs from its anchor to the next anchor. Which phases a phase
+// waits for comes from the plan text too (graph.go).
 package plan
 
 import (
@@ -14,7 +15,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +27,9 @@ type Phase struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Anchor string `json:"anchor"`
+	// After lists the phases this one waits for, in document order (Deps). nil is a plan.json from before
+	// dependencies, read as the phase before it; empty waits for none.
+	After []string `json:"after"`
 }
 
 // Plan is the content of .baton/plan.json.
@@ -51,10 +55,35 @@ type Spec struct {
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 
-// Build validates spec against the plan document's text and returns the plan to store.
-// Every error names the exact problem so the model can fix its spec and retry.
+// Build validates spec against the plan document's text and returns the plan to store, with each phase's
+// dependencies derived from the text. Every error names the exact problem so the model can fix its spec
+// (or the plan) and retry.
 func Build(file string, doc []byte, spec Spec) (Plan, error) {
 	text := string(doc)
+	if errs := validate(text, spec); len(errs) > 0 {
+		return Plan{}, errors.Join(errs...)
+	}
+	sum := sha256.Sum256(doc)
+	p := Plan{
+		Version: SchemaVersion, Title: strings.TrimSpace(spec.Title), File: file, SHA256: hex.EncodeToString(sum[:]),
+		Phases: slices.Clone(spec.Phases), RulesAnchor: spec.RulesAnchor, EndAnchor: spec.EndAnchor,
+	}
+	errs := p.derive(text, func(int) bool { return true })
+	for i, ph := range spec.Phases {
+		if got := p.Phases[i].After; ph.After != nil && got != nil && !sameIDs(ph.After, got) {
+			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"after\" (%s) differs from the plan's (%s). Dependencies come from the plan text, "+
+				"each phase's After: line (a phase without one follows the phase before it): edit the plan to change them, and leave \"after\" out of the spec",
+				i+1, ph.ID, idList(ph.After), idList(got)))
+		}
+	}
+	if len(errs) > 0 {
+		return Plan{}, errors.Join(errs...)
+	}
+	return p, nil
+}
+
+// validate checks a spec's ids, titles and anchors against the plan text.
+func validate(text string, spec Spec) []error {
 	var errs []error
 	if len(spec.Phases) == 0 {
 		errs = append(errs, errors.New("the spec has no phases"))
@@ -95,14 +124,18 @@ func Build(file string, doc []byte, spec Spec) (Plan, error) {
 			errs = append(errs, errors.New("end_anchor must come after the last phase's anchor"))
 		}
 	}
-	if len(errs) > 0 {
-		return Plan{}, errors.Join(errs...)
+	return errs
+}
+
+func sameIDs(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+func idList(ids []string) string {
+	if len(ids) == 0 {
+		return "none"
 	}
-	sum := sha256.Sum256(doc)
-	return Plan{
-		Version: SchemaVersion, Title: strings.TrimSpace(spec.Title), File: file, SHA256: hex.EncodeToString(sum[:]),
-		Phases: spec.Phases, RulesAnchor: spec.RulesAnchor, EndAnchor: spec.EndAnchor,
-	}, nil
+	return strings.Join(ids, ", ")
 }
 
 // locate returns the byte offset of anchor in text, requiring exactly one occurrence.
@@ -130,25 +163,22 @@ func (p Plan) Index(id string) int {
 	return -1
 }
 
-// Section returns the text of phase i in doc: from its anchor up to the next phase's anchor, the
-// end anchor, or the end of the document.
+// Section returns the text of phase i in doc: from its anchor up to the nearest anchor after it (another
+// phase's, the rules' or the end anchor), or the end of the document.
 func (p Plan) Section(doc []byte, i int) (string, error) {
-	text := string(doc)
-	start, err := locate(text, p.Phases[i].Anchor)
+	sec, err := p.section(string(doc), i)
 	if err != nil {
 		return "", fmt.Errorf("phase %s: %w (was the plan edited after attach?)", p.Phases[i].ID, err)
 	}
-	end := len(text)
-	if i+1 < len(p.Phases) {
-		if e, err := locate(text, p.Phases[i+1].Anchor); err == nil {
-			end = e
-		}
-	} else if p.EndAnchor != "" {
-		if e, err := locate(text, p.EndAnchor); err == nil && e > start {
-			end = e
-		}
+	return sec, nil
+}
+
+func (p Plan) section(text string, i int) (string, error) {
+	start, err := locate(text, p.Phases[i].Anchor)
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(text[start:end]), nil
+	return strings.TrimSpace(text[start:p.next(text, start)]), nil
 }
 
 // Rules returns the standing-rules section, or "" if the plan has none. It runs from the rules anchor
@@ -162,8 +192,14 @@ func (p Plan) Rules(doc []byte) string {
 	if err != nil {
 		return ""
 	}
+	return strings.TrimSpace(text[start:p.next(text, start)])
+}
+
+// next returns where a section starting at start ends: at the nearest anchor of any kind after it, or the
+// end of text. Anchors that no longer occur exactly once are passed over.
+func (p Plan) next(text string, start int) int {
 	end := len(text)
-	anchors := []string{p.EndAnchor}
+	anchors := []string{p.RulesAnchor, p.EndAnchor}
 	for _, ph := range p.Phases {
 		anchors = append(anchors, ph.Anchor)
 	}
@@ -175,7 +211,7 @@ func (p Plan) Rules(doc []byte) string {
 			end = e
 		}
 	}
-	return strings.TrimSpace(text[start:end])
+	return end
 }
 
 // Load reads plan.json.
@@ -211,9 +247,10 @@ func Shaped(spec Spec) bool {
 
 // Recheck reads the plan document again and compares it with the text baton attached. changed is false
 // when it is that text. When it changed, err says what no longer fits: a phase still to run (one of
-// remaining), the rules or the end anchor missing, duplicated or out of order, or the file gone. With
-// err nil, adopted is p with the new text's hash, and baton follows the new text, including the phases
-// it adds (Added): they join the run in document order, after the phases already done.
+// remaining), the rules or the end anchor missing, duplicated or out of order, a dependency it cannot
+// follow, or the file gone. With err nil, adopted is p with the new text's hash, and baton follows the new
+// text: the phases it adds (Added) join the run, every phase stays in document order, and the
+// dependencies of the phases still to run and the added ones are derived again from the new text.
 func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error) {
 	doc, err := os.ReadFile(p.File)
 	if err != nil {
@@ -224,40 +261,41 @@ func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error)
 		return p, false, nil
 	}
 	text := string(doc)
-	spec := Spec{Title: p.Title, RulesAnchor: p.RulesAnchor, EndAnchor: p.EndAnchor}
-	keep := map[string]bool{}
+	redo := map[string]bool{}
 	for _, id := range remaining {
-		keep[id] = true
-	}
-	var done []Phase
-	for _, ph := range p.Phases {
-		if keep[ph.ID] {
-			spec.Phases = append(spec.Phases, ph)
-		} else {
-			done = append(done, ph)
-		}
+		redo[id] = true
 	}
 	added := Added(p, doc)
+	for _, ph := range added {
+		redo[ph.ID] = true
+	}
+	phases := append(slices.Clone(p.Phases), added...)
+	inDocumentOrder(text, phases)
+	spec := Spec{Title: p.Title, RulesAnchor: p.RulesAnchor, EndAnchor: p.EndAnchor}
+	for _, ph := range phases {
+		if redo[ph.ID] {
+			spec.Phases = append(spec.Phases, ph)
+		}
+	}
+	adopted = p
+	adopted.SHA256, adopted.Phases = hex.EncodeToString(sum[:]), phases
+	if len(spec.Phases) == 0 {
+		return adopted, true, nil
+	}
 	if len(added) > 0 {
-		spec.Phases = append(spec.Phases, added...)
-		sort.SliceStable(spec.Phases, func(i, j int) bool {
-			return strings.Index(text, spec.Phases[i].Anchor) < strings.Index(text, spec.Phases[j].Anchor)
-		})
 		// A phase added after the end marker (## Verification) is the last one now, and runs to the end.
 		last := strings.Index(text, spec.Phases[len(spec.Phases)-1].Anchor)
 		if spec.EndAnchor != "" && strings.Index(text, spec.EndAnchor) < last {
 			spec.EndAnchor = ""
 		}
 	}
-	adopted = p
-	adopted.SHA256, adopted.EndAnchor = hex.EncodeToString(sum[:]), spec.EndAnchor
-	if len(spec.Phases) == 0 {
-		return adopted, true, nil
+	if errs := validate(text, spec); len(errs) > 0 {
+		return p, true, errors.Join(errs...)
 	}
-	if _, err := Build(p.File, doc, spec); err != nil {
-		return p, true, err
+	adopted.EndAnchor = spec.EndAnchor
+	if errs := adopted.derive(text, func(i int) bool { return redo[phases[i].ID] }); len(errs) > 0 {
+		return p, true, errors.Join(errs...)
 	}
-	adopted.Phases = append(done, spec.Phases...)
 	return adopted, true, nil
 }
 
