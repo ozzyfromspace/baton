@@ -9,7 +9,8 @@ import (
 )
 
 // The heart of baton: a two-phase plan runs to completion with one compaction at the boundary and no
-// keystrokes from anyone. Every step is asserted from the run's events.jsonl.
+// keystrokes from anyone. Every step is asserted from the run's events.jsonl. The plan has no After:
+// lines, so each phase follows the one before it, and nothing is verified, set aside or switched.
 func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
@@ -56,4 +57,5 @@ func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 			t.Errorf("unexpected %v", e)
 		}
 	}
+	none(t, s, "job_queued", "phase_verifying", "phase_parked", "phase_switched", "phase_resumed")
 }
