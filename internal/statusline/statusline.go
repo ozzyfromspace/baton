@@ -17,13 +17,15 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
-// Segment is baton's part of the status line.
-func Segment(st state.State, pl plan.Plan, havePlan bool) string {
+// Segment is baton's part of the status line: the phase in hand, then the jobs baton runs meanwhile, then
+// the context's size.
+func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string {
 	const mark = "◆ baton"
 	if !havePlan || st.Mode == state.ModeIdle {
 		return mark
@@ -55,6 +57,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 	if i := pl.Index(st.Current); i >= 0 {
 		s += fmt.Sprintf(" · %s %d/%d %s", st.Current, i+1, len(pl.Phases), clip(pl.Phases[i].Title, 28))
 	}
+	if j := jobs(st, now); j != "" {
+		s += " · " + j
+	}
 	if c := st.Run.Context; c != nil {
 		if c.Limit > 0 {
 			s += " · ctx " + valve.Tokens(c.Used()) + "/" + valve.Tokens(c.Limit)
@@ -63,6 +68,38 @@ func Segment(st state.State, pl plan.Plan, havePlan bool) string {
 		}
 	}
 	return s
+}
+
+// jobs is the run's jobs not finished yet: the oldest, as what its phase is doing and for how long, then
+// how many more ("P3 verifying 12m +2"). "" when there are none.
+func jobs(st state.State, now time.Time) string {
+	open := st.Unfinished()
+	if len(open) == 0 {
+		return ""
+	}
+	j := open[0]
+	s := fmt.Sprintf("%s %s %s", j.Phase, doing(st, j), decide.Span(max(now.Sub(j.Queued), 0)))
+	if len(open) > 1 {
+		s += fmt.Sprintf(" +%d", len(open)-1)
+	}
+	return s
+}
+
+// doing is what job j's phase is doing while j runs: verifying (done was claimed, or it is the phase in
+// hand and j its gate), parked (set aside until j ends), or awaiting (something outside the project).
+func doing(st state.State, j state.Job) string {
+	if ps := st.Phases[j.Phase]; ps != nil {
+		switch ps.Status {
+		case state.PhaseVerifying:
+			return "verifying"
+		case state.PhaseParked:
+			return "parked"
+		}
+	}
+	if j.Kind == state.JobAwait {
+		return "awaiting"
+	}
+	return "verifying"
 }
 
 func clip(s string, n int) string {

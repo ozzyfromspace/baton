@@ -71,12 +71,54 @@ func TestSegment(t *testing.T) {
 			s.Run.Context = &state.ContextUse{UsedPct: 41, Tokens: 412_345, WindowSize: 1_000_000, Limit: 810_000}
 			return s
 		}, true, "◆ baton · P0 1/2 The overlay · ctx 412k/810k"},
+		{"the gate of the phase in hand", func() state.State {
+			s := withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+			return s
+		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 12m · ctx 41%"},
+		{"a wait on something outside", func() state.State {
+			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobQueued, Queued: now.Add(-40 * time.Second)})
+		}, true, "◆ baton · P0 1/2 The overlay · P0 awaiting 40s · ctx 41%"},
+		{"the oldest job first, then how many more", func() state.State {
+			s := withJobs(run,
+				state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobPassed, Queued: now.Add(-3 * time.Hour)},
+				state.Job{ID: "j2", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-125 * time.Minute)},
+				state.Job{ID: "j3", Phase: "P1", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-time.Minute)})
+			s.Phases["P0"].Status, s.Current = state.PhaseVerifying, "P1"
+			s.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive}
+			return s
+		}, true, "◆ baton · P1 2/2 A very long phase title tha… · P0 verifying 2h05m +1 · ctx 41%"},
+		{"a phase set aside while its job runs", func() state.State {
+			s := withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-6 * time.Minute)})
+			s.Phases["P0"].Status, s.Current = state.PhaseParked, "P1"
+			s.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive}
+			return s
+		}, true, "◆ baton · P1 2/2 A very long phase title tha… · P0 parked 6m · ctx 41%"},
+		{"no phase in hand: every phase left waits on a job", func() state.State {
+			s := withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+			s.Phases["P0"].Status, s.Current = state.PhaseVerifying, ""
+			return s
+		}, true, "◆ baton · P0 verifying 12m · ctx 41%"},
+		{"no phase in hand and no job", func() state.State { s := run; s.Current = ""; return s }, true, "◆ baton · ctx 41%"},
+		{"a job queued a moment from now, by another clock", func() state.State {
+			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobQueued, Queued: now.Add(time.Second)})
+		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 0s · ctx 41%"},
 	}
 	for _, c := range cases {
-		if got := Segment(c.st(), pl, c.plan); got != c.want {
+		if got := Segment(c.st(), pl, c.plan, now); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
+}
+
+// withJobs is st with jobs on record, and a copy of its phases to change.
+func withJobs(st state.State, jobs ...state.Job) state.State {
+	phases := map[string]*state.PhaseState{}
+	for id, ps := range st.Phases {
+		x := *ps
+		phases[id] = &x
+	}
+	st.Phases, st.Jobs = phases, jobs
+	return st
 }
 
 func TestUserCommandPrecedenceSkipsBaton(t *testing.T) {

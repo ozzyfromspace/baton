@@ -342,7 +342,7 @@ func cmdStatusline(_ []string, io IO) int {
 	if cmd := statusline.UserCommand(projectDir, home); cmd != "" {
 		user = statusline.RunUser(cmd, raw, projectDir, 3*time.Second)
 	}
-	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan), user))
+	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now()), user))
 	return 0
 }
 
