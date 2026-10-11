@@ -23,15 +23,17 @@ func (o *Owner) Live(now time.Time) bool {
 	return o != nil && now.Sub(o.Heartbeat) < OwnerTTL
 }
 
-// Claim makes instance the owner unless another live owner holds the project.
+// Claim makes instance the owner unless another live owner holds the project. pid is the process
+// claiming it for instance: the first claim is often a hook's, which ends at once, so each claim records
+// its own, and the host's heartbeat keeps the host's on record (Abandoned looks it up).
 func Claim(st *State, instance string, pid int, now time.Time) error {
 	if o := st.Owner; o.Live(now) && o.Instance != instance {
 		return fmt.Errorf("another baton session (pid %d, since %s) is driving this project", o.PID, o.Started.Local().Format("15:04"))
 	}
 	if st.Owner == nil || st.Owner.Instance != instance {
-		st.Owner = &Owner{Instance: instance, PID: pid, Started: now}
+		st.Owner = &Owner{Instance: instance, Started: now}
 	}
-	st.Owner.Heartbeat = now
+	st.Owner.PID, st.Owner.Heartbeat = pid, now
 	return nil
 }
 

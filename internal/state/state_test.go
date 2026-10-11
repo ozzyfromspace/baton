@@ -232,6 +232,11 @@ func TestOwnership(t *testing.T) {
 	if err := Claim(&st, "a", 1, t0.Add(10*time.Second)); err != nil || !st.Owner.Heartbeat.Equal(t0.Add(10*time.Second)) {
 		t.Fatalf("heartbeat: %v", err)
 	}
+	// The first claim was a hook's: the host's heartbeat puts its own pid on record, and ownership
+	// carries on from when it began.
+	if err := Claim(&st, "a", 7, t0.Add(10*time.Second)); err != nil || st.Owner.PID != 7 || !st.Owner.Started.Equal(t0) {
+		t.Fatalf("the host's heartbeat: %v %+v", err, st.Owner)
+	}
 	// A stale heartbeat (the machine slept, the host has not ticked yet) does not end ownership...
 	if !st.IsOwner("a", t0.Add(time.Hour)) {
 		t.Fatal("the owner's own hooks went dormant on a stale heartbeat")
