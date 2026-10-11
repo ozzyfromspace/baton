@@ -368,7 +368,7 @@ func (c *Coordinator) busy(now time.Time, s *state.Store) string {
 		return err.Error()
 	}
 	calls := st.Run.InFlight(now)
-	for _, r := range c.Fleet.Project.Others(s.Ref) {
+	for _, r := range c.Project.Others(s.Ref) {
 		calls = append(calls, r.State.Run.InFlight(now)...)
 	}
 	if len(calls) == 0 {

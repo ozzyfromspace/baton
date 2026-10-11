@@ -100,9 +100,9 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 		})
 	}
 	x.lead = lead
-	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}}
+	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}, Project: x.proj, Home: x.home}
 	t.Cleanup(c.snapshotsTaken) // before the test's directories are removed (cleanups run last first)
-	c.Fleet = &Fleet{Max: max, UsageMax: 80, Home: x.home, Project: x.proj, Go: func(fn func()) { fn() },
+	c.Fleet = &Fleet{Max: max, UsageMax: 80, Go: func(fn func()) { fn() },
 		Launch: Launch{Args: []string{"--model", "haiku"}, Autocompact: "810k", Settings: `{"hooks":{}}`, Bin: "/opt/baton", Version: "v0.5.0",
 			Env: []string{"HOME=/home/x", "PWD=/checkout", "BATON_DIR=/stale"}, BatonEnv: []string{"BATON_ESCALATION_TIMEOUT=5m0s", "BATON_TTY=/dev/ttys001"}},
 		Spawn: func(spec host.Spec) (Hidden, error) {
@@ -525,8 +525,15 @@ func TestDroppingTheRunEndsItsWorkers(t *testing.T) {
 			t.Errorf("worker %+v; worktree there %v", w, isDir(w.Worktree))
 		}
 	}
-	if x.worker("P1").Unlanded != 1 || gitx.RevParse(x.repo, "refs/heads/"+p1.Branch) == "" {
-		t.Error("P1's branch, with a commit that never landed, is gone")
+	// The run was dropped: P1's branch, with a commit that never landed, is kept under kept/, so that no
+	// worker of a later plan carries on from it.
+	kept := x.worker("P1").Branch
+	if x.worker("P1").Unlanded != 1 || kept != "baton/sess-1/kept/P1-20261011-1200" || gitx.RevParse(x.repo, "refs/heads/"+kept) == "" ||
+		gitx.RevParse(x.repo, "refs/heads/"+p1.Branch) != "" {
+		t.Errorf("P1's branch, with a commit that never landed: %q", kept)
+	}
+	if ann := strings.Join(x.state().Run.Announce, "\n"); !strings.Contains(ann, "its branch "+kept+" keeps 1 commit that never landed") {
+		t.Errorf("announced %q", ann)
 	}
 	if x.worker("P2").Unlanded != 0 || gitx.RevParse(x.repo, "refs/heads/"+p2.Branch) != "" {
 		t.Error("P2's branch, with nothing on it, is still there")

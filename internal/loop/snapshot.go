@@ -73,37 +73,46 @@ func (l *Loop) Ended() {
 
 // save takes a snapshot and records it: an event, and the ref on the escalation waiting on the human.
 func (l *Loop) save(phase, why string) {
-	snapshot := l.Snapshot
+	saved, err := saveWork(l.Store, l.Store.Root, l.Snapshot, l.logf, phase, why)
+	if err != nil || saved.Ref == "" {
+		return
+	}
+	l.update(func(st *state.State) {
+		if e := st.Run.Escalation; e != nil && e.Snapshot == "" {
+			e.Snapshot = saved.Ref
+		}
+	})
+}
+
+// saveWork snapshots the uncommitted work in root (with snapshot; nil: gitx.Snapshot) and records it in
+// the run s: an event, and a line in the log. Without git it does nothing, and returns gitx.ErrNoGit.
+func saveWork(s *state.Store, root string, snapshot func(string, time.Time, string, string) (gitx.Saved, error), logf func(string, ...any), phase, why string) (gitx.Saved, error) {
 	if snapshot == nil {
 		snapshot = gitx.Snapshot
 	}
 	start := time.Now()
-	saved, err := snapshot(l.Store.Root, l.Store.Now(), phase, why)
+	saved, err := snapshot(root, s.Now(), phase, why)
 	switch {
 	case errors.Is(err, gitx.ErrNoGit):
-		return
+		return saved, err
 	case err != nil:
-		l.logf("loop: saving uncommitted work: %v", err)
-		l.Store.Event("snapshot_failed", map[string]any{"why": why, "error": err.Error()})
-		return
+		logf("loop: saving uncommitted work: %v", err)
+		s.Event("snapshot_failed", map[string]any{"why": why, "error": err.Error()})
+		return saved, err
 	case saved.Ref == "" && len(saved.Skipped) == 0:
-		return // nothing uncommitted
+		return saved, nil // nothing uncommitted
 	}
 	fields := map[string]any{"ref": saved.Ref, "files": saved.Files, "why": why, "took": time.Since(start).Round(time.Millisecond).String()}
 	if len(saved.Skipped) > 0 {
 		fields["skipped"] = saved.Skipped[:min(len(saved.Skipped), 20)]
-		l.logf("loop: %d untracked files too big to snapshot: %v", len(saved.Skipped), saved.Skipped)
+		logf("loop: %d untracked files too big to snapshot: %v", len(saved.Skipped), saved.Skipped)
 	}
 	if saved.Unchanged {
 		fields["unchanged"] = true
 	}
 	if saved.Ref != "" {
-		l.update(func(st *state.State) {
-			if e := st.Run.Escalation; e != nil && e.Snapshot == "" {
-				e.Snapshot = saved.Ref
-			}
-		})
-		l.logf("loop: saved uncommitted work (%d files) as %s: %s", saved.Files, saved.Ref, why)
+		logf("loop: saved uncommitted work (%d files) as %s: %s", saved.Files, saved.Ref, why)
 	}
-	l.Store.Event("snapshot", fields)
+	s.Event("snapshot", fields)
+	return saved, nil
 }

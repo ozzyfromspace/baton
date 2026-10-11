@@ -167,6 +167,16 @@ func RemoveBranch(ctx context.Context, root, branch string) error {
 	return err
 }
 
+// RenameBranch renames branch from to to in the repository at root, and any worktree that has it checked
+// out with it.
+func RenameBranch(ctx context.Context, root, from, to string) error {
+	if !Usable(root) {
+		return ErrNoGit
+	}
+	_, err := run(ctx, root, nil, nil, "branch", "-m", from, to)
+	return err
+}
+
 // RevParse returns the commit rev names in the repository at root, or "" (no git, or no such commit).
 func RevParse(root, rev string) string {
 	if !Usable(root) {

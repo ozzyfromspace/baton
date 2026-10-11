@@ -26,10 +26,11 @@ import (
 // and instance, so the worker's hooks find their run and never bind one. From then on it watches the
 // worker: its session must send its first prompt within Timing.WorkerStart, and an unexpected exit is
 // resumed in its worktree, MaxResumes times at most. A worker the run no longer counts on (its run
-// dropped, its phase gone from the plan) is ended. Ending one saves its uncommitted work and removes its
-// worktree. Its branch goes too, unless it holds commits that never landed. A worker whose session ended
-// with the host is suspended (Ended), and the next host for the run resumes it in its worktree. All of
-// this runs off the lead's tick, one step at a time, since git and claude take a while to start.
+// dropped, its plan replaced, its phase gone from the plan) is ended, and retired (RetireWorker): its
+// uncommitted work is saved and its worktree removed. Its branch goes too, unless it holds commits that
+// never landed. A worker whose session ended with the host is suspended (Ended), and the next host for
+// the run resumes it in its worktree. All of this runs off the lead's tick, one step at a time, since git
+// and claude take a while to start.
 
 // MaxResumes is how many times a worker's session is resumed after it ended unexpectedly. After that its
 // phase goes back to the scheduler, and its commits stay on its branch.
@@ -114,8 +115,6 @@ type Fleet struct {
 	Max      int     // workers at once (workers)
 	UsageMax float64 // no new worker above this percent of the five-hour allowance (worker_usage_max; 0: no check)
 	MaxAuto  int     // the decisions a phase may make without the human before they review them (max_auto_decisions; 0: no cap)
-	Home     string  // baton's home: the worktrees live under it
-	Project  *state.Project
 	Launch   Launch
 	// Spawn starts a hidden session (host.Supervisor.Spawn). It fails with host.ErrClosed once the host
 	// is ending.
@@ -136,8 +135,8 @@ func (f *Fleet) run(fn func()) {
 
 // worktree is where worker phase of run works: under baton's home, outside the checkout, by its real
 // path (claude names the session's project after its working directory, and resolves it).
-func (f *Fleet) worktree(checkout, run, phase string) (string, error) {
-	parent := filepath.Join(f.Home, "worktrees", lane.Key(checkout), run)
+func (c *Coordinator) worktree(checkout, run, phase string) (string, error) {
+	parent := filepath.Join(c.Home, "worktrees", lane.Key(checkout), run)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return "", err
 	}
@@ -184,10 +183,11 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time) (phase, why st
 }
 
 // unwanted says why the run no longer counts on worker e (nil: it is not on the roster), or "" while it
-// does.
+// does. A worker of a plan the run has replaced is never a worker of the plan attached now, whatever its
+// phase's id.
 func unwanted(st state.State, pl plan.Plan, e *state.Worker) string {
 	switch {
-	case e == nil:
+	case e == nil || e.Generation < st.Generation:
 		return "the run's plan was replaced"
 	case e.Status == state.WorkerLanded:
 		return "its work landed"
@@ -262,11 +262,11 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 		return
 	}
 	for _, e := range st.LiveWorkers() {
-		if c.runs(e.Ref) {
+		if c.runs(e.Ref) || e.RetiringBy(s.Instance, now) {
 			continue
 		}
 		if why := unwanted(st, pl, &e); why != "" {
-			c.retire(now, s, e, nil, why)
+			c.retire(now, s, e, why)
 		} else if c.mayLaunch(now, s, st) == "" {
 			why := e.Why
 			if why == "" {
@@ -311,7 +311,7 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, st state.State, pl pl
 	select {
 	case <-w.sess.Done():
 		if !c.stopping.Load() { // or it ended with the host, and Ended suspends it
-			c.exited(now, s, w, e)
+			c.exited(now, s, w, e, unwanted(st, pl, e))
 		}
 		return
 	default:
@@ -442,9 +442,10 @@ func (c *Coordinator) end(w *worker, why string) {
 	}
 }
 
-// exited deals with a worker whose session has ended: one baton ended is retired, and one that ended by
-// itself is resumed, unless it has been too often already.
-func (c *Coordinator) exited(now time.Time, s *state.Store, w *worker, e *state.Worker) {
+// exited deals with a worker whose session has ended: one baton ended is retired, and so is one the run
+// no longer counts on (unwanted says why); one that ended by itself is resumed, unless it has been too
+// often already.
+func (c *Coordinator) exited(now time.Time, s *state.Store, w *worker, e *state.Worker, unwanted string) {
 	code := w.sess.ExitCode()
 	c.forget(w)
 	entry := w.entry
@@ -453,15 +454,15 @@ func (c *Coordinator) exited(now time.Time, s *state.Store, w *worker, e *state.
 	}
 	switch {
 	case w.ending != "":
-		c.retire(now, s, entry, w, w.ending)
+		c.retire(now, s, entry, w.ending)
 		if w.quick {
 			c.startFailed(now, s, w.phase, w.ending)
 		}
-	case e == nil || !e.Live():
-		c.retire(now, s, entry, w, unwanted(state.State{}, plan.Plan{}, e))
+	case unwanted != "":
+		c.retire(now, s, entry, unwanted)
 	case e.Resumes >= MaxResumes:
 		why := fmt.Sprintf("its session ended unexpectedly (exit code %d), %d times", code, e.Resumes+1)
-		c.retire(now, s, entry, w, why)
+		c.retire(now, s, entry, why)
 		c.later(now, s, w.phase, why)
 	default:
 		c.resume(now, s, entry, fmt.Sprintf("it ended unexpectedly (exit code %d)", code), true)
@@ -501,7 +502,7 @@ func (c *Coordinator) spawn(now time.Time, s *state.Store, st state.State, pl pl
 		c.later(now, s, phase, fmt.Sprintf("the run's branch %s is not there", st.RunBranch))
 		return
 	}
-	dir, err := f.worktree(s.Checkout, s.Ref, phase)
+	dir, err := c.worktree(s.Checkout, s.Ref, phase)
 	if err != nil {
 		c.later(now, s, phase, err.Error())
 		return
@@ -515,13 +516,13 @@ func (c *Coordinator) spawn(now time.Time, s *state.Store, st state.State, pl pl
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 	if _, err := gitx.AddBranch(ctx, s.Checkout, dir, e.Branch, base); err != nil {
-		c.retire(now, s, e, nil, "baton could not make its worktree: "+err.Error())
+		c.retire(now, s, e, "baton could not make its worktree: "+err.Error())
 		c.later(now, s, phase, err.Error())
 		return
 	}
 	sub, err := c.subRun(s, pl, e)
 	if err != nil {
-		c.retire(now, s, e, nil, "baton could not make its run: "+err.Error())
+		c.retire(now, s, e, "baton could not make its run: "+err.Error())
 		c.later(now, s, phase, err.Error())
 		return
 	}
@@ -545,7 +546,7 @@ func (c *Coordinator) later(now time.Time, s *state.Store, phase, why string) {
 // subRun makes worker e's sub-run, linked to its session and instance: the run's plan narrowed to its
 // phase, in hand.
 func (c *Coordinator) subRun(s *state.Store, pl plan.Plan, e state.Worker) (*state.Store, error) {
-	sub, err := c.Fleet.Project.NewWorker(s.Ref, e.Phase, e.Session, s.Instance, e.Worktree)
+	sub, err := c.Project.NewWorker(s.Ref, e.Phase, e.Session, s.Instance, e.Worktree)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +566,7 @@ func (c *Coordinator) subRun(s *state.Store, pl plan.Plan, e state.Worker) (*sta
 func (c *Coordinator) launch(now time.Time, s *state.Store, e state.Worker, sub *state.Store, args []string) (*worker, error) {
 	f := c.Fleet
 	w := c.worker(e.Phase)
-	spec := host.Spec{Name: e.Phase, Dir: e.Worktree, Args: args, Env: f.Launch.env(e, s.Ref, f.Project.Dir, s.Checkout),
+	spec := host.Spec{Name: e.Phase, Dir: e.Worktree, Args: args, Env: f.Launch.env(e, s.Ref, c.Project.Dir, s.Checkout),
 		Instance: e.Instance, Controller: w}
 	if f.Launch.ScreenDump {
 		spec.Dump = filepath.Join(sub.Dir, "screen.log")
@@ -590,18 +591,21 @@ func (c *Coordinator) unlaunched(now time.Time, s *state.Store, e state.Worker, 
 		c.setEntry(s, e, func(w *state.Worker) {
 			w.Status, w.Since, w.Why = state.WorkerSuspended, now, "the baton session ended as it started"
 		})
-		c.Fleet.Project.Unbind(e.Instance)
+		c.Project.Unbind(e.Instance)
 		return
 	}
-	c.retire(now, s, e, nil, "baton could not start its session: "+err.Error())
+	c.retire(now, s, e, "baton could not start its session: "+err.Error())
 	c.later(now, s, e.Phase, err.Error())
 }
 
 // resume starts worker e's session again in its worktree, for why: the same conversation, or, for a
-// session that never started, a new one. unexpected counts it against MaxResumes.
+// session that never started, a new one. unexpected counts it against MaxResumes. Once its sub-run is
+// claimed, the worker must still be on the roster as e was read, and not retiring: another baton process
+// may be retiring it meanwhile (RetireWorker), and a worker is never both resumed and retired.
 func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why string, unexpected bool) {
+	hook(c.resumeStep, "read")
 	if !isDir(e.Worktree) {
-		c.retire(now, s, e, nil, "its worktree is gone")
+		c.retire(now, s, e, "its worktree is gone")
 		return
 	}
 	again := !e.Started.IsZero()
@@ -610,19 +614,42 @@ func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why 
 		e.Session = state.NewSessionID() // a session id is never used twice (spike 23)
 	}
 	e.Instance = state.WorkerInstance(s.Instance, e.Phase)
-	sub, err := c.Fleet.Project.NewWorker(s.Ref, e.Phase, e.Session, s.Instance, e.Worktree)
+	sub, err := c.Project.NewWorker(s.Ref, e.Phase, e.Session, s.Instance, e.Worktree)
 	if err != nil {
 		c.Lead.logf("loop: %s: not resumed yet: %v", e.Phase, err) // still claimed by the host that ran it
 		return
 	}
+	hook(c.resumeStep, "claimed")
 	if unexpected {
 		e.Resumes++
 	}
-	c.setEntry(s, prev, func(w *state.Worker) {
+	var held string
+	_, err = s.Update(func(st *state.State) error {
+		w := rosterEntry(st, prev.Ref, prev.Session)
+		switch {
+		case w == nil || !w.Live() || w.Status != prev.Status || !w.Since.Equal(prev.Since):
+			held = "it changed since it was looked at"
+		case w.RetiringBy(s.Instance, now):
+			held = w.Retirer + " is retiring it"
+		}
+		if held != "" {
+			return errKept
+		}
 		w.Session, w.Instance, w.Resumes = e.Session, e.Instance, e.Resumes
 		w.Status, w.Since, w.Why, w.Ended, w.Merge = state.WorkerStarting, now, "", now, nil
 		w.Needs, w.NeedsSince = "", time.Time{}
+		w.Retiring, w.Retirer = time.Time{}, ""
+		return nil
 	})
+	if err != nil && held == "" {
+		held = err.Error()
+	}
+	if held != "" {
+		c.Lead.logf("loop: %s: not resumed: %s", e.Phase, held)
+		c.Project.Unbind(e.Instance)
+		return
+	}
+	hook(c.resumeStep, "guarded")
 	prompt := decide.WorkerBegin(e.Phase)
 	if again {
 		prompt = decide.WorkerResume(e.Phase, why)
@@ -635,72 +662,23 @@ func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why 
 	c.announce(s, fmt.Sprintf("baton: resumed the worker on %s: %s", e.Phase, why))
 }
 
-// retire ends a worker for good, once its session has ended (or with none running): its uncommitted work
-// is saved (its session's Loop saved it as it ended, if it had one), its jobs are stopped, and its
-// worktree is removed. Its branch goes too, unless it holds commits that never landed on the run's
-// branch, which it keeps for them. Its phase, if the run still has it working, goes back to the
-// scheduler (state.Unassign).
-func (c *Coordinator) retire(now time.Time, s *state.Store, e state.Worker, w *worker, why string) {
-	f := c.Fleet
-	fields := map[string]any{"phase": e.Phase, "why": why}
-	if sub, err := f.Project.ExistingRun(e.Ref, e.Instance); err == nil {
-		if w == nil && isDir(e.Worktree) {
-			(&Loop{Store: sub, Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf}).save(e.Phase, why)
-		}
-		sub.Update(func(st *state.State) error {
-			state.CancelJobs(st, func(state.Job) bool { return true }, "its worker ended: "+why, now)
-			return nil
-		})
+// retire ends a worker for good, once its session has ended (or with none running), for why
+// (RetireWorker): its uncommitted work is saved, its jobs are stopped, and its worktree is removed. Its
+// branch goes too, unless it holds commits that never landed on the run's branch, which it keeps for
+// them. Its phase, if the run still has it working, goes back to the scheduler (state.Unassign).
+func (c *Coordinator) retire(now time.Time, s *state.Store, e state.Worker, why string) {
+	r := RetireWorker(Retirement{Project: c.Project, Home: c.Home, Run: s, Entry: e, Why: why, By: s.Instance, Host: true, Now: now,
+		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, between: c.retireStep})
+	if r.Skipped != "" {
+		c.Lead.logf("loop: %s: not retired: %s", e.Phase, r.Skipped)
+		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-	if isDir(e.Worktree) {
-		if err := gitx.WorktreeRemove(ctx, s.Checkout, e.Worktree); err != nil {
-			fields["worktree_error"] = err.Error()
-		}
-	}
-	st, _ := s.Load()
-	unlanded := 0
-	if e.Branch != "" && gitx.RevParse(s.Checkout, "refs/heads/"+e.Branch) != "" {
-		into := e.Base
-		if st.RunBranch != "" {
-			into = "refs/heads/" + st.RunBranch
-		}
-		n, err := gitx.Ahead(ctx, s.Checkout, into, "refs/heads/"+e.Branch)
-		switch {
-		case err != nil:
-			fields["branch"], fields["branch_error"] = e.Branch, err.Error()
-		case n > 0:
-			unlanded, fields["branch"], fields["unlanded"] = n, e.Branch, n
-		default:
-			if err := gitx.RemoveBranch(ctx, s.Checkout, e.Branch); err != nil {
-				fields["branch"], fields["branch_error"] = e.Branch, err.Error()
-			}
-		}
-	}
-	pl, _ := s.LoadPlan()
-	var next string
-	s.Update(func(st *state.State) error {
-		cur := rosterEntry(st, e.Ref, e.Session)
-		if cur == nil || !cur.Live() {
-			return nil
-		}
-		if len(pl.Phases) > 0 && st.WorkerOn(e.Phase) == cur {
-			next, _ = state.Unassign(st, pl, e.Phase, why, now)
-		} else {
-			cur.Status, cur.Since, cur.Why, cur.Merge = state.WorkerFailed, now, why, nil
-		}
-		cur.Unlanded = unlanded
-		return nil
-	})
-	f.Project.Unbind(e.Instance)
-	if next != "" {
-		fields["next"] = next
-	}
-	s.Event("worker_ended", fields)
 	line := fmt.Sprintf("baton: the worker on %s ended: %s", e.Phase, why)
-	if unlanded > 0 {
-		line += fmt.Sprintf("; its branch %s keeps %d %s that never landed", e.Branch, unlanded, plural(unlanded, "commit", "commits"))
+	if r.Unlanded > 0 {
+		line += fmt.Sprintf("; its branch %s keeps %d %s that never landed", r.Branch, r.Unlanded, plural(r.Unlanded, "commit", "commits"))
+	}
+	if r.Kept != "" {
+		line += fmt.Sprintf("; its worktree %s was kept, as %s", e.Worktree, r.Kept)
 	}
 	c.announce(s, line)
 }
@@ -783,6 +761,13 @@ func (c *Coordinator) unregister(w *worker) {
 	defer c.mu.Unlock()
 	if c.workers[w.phase] == w {
 		delete(c.workers, w.phase)
+	}
+}
+
+// hook calls fn, a test's hook, at step, if there is one.
+func hook(fn func(string), step string) {
+	if fn != nil {
+		fn(step)
 	}
 }
 

@@ -29,6 +29,9 @@ type Coordinator struct {
 	Lead  *Loop
 	Lanes Lanes  // the project's lanes (nil: none)
 	Fleet *Fleet // how the run's workers start (nil: none)
+	// Project is the run's project, and Home baton's home, which keeps the workers' worktrees.
+	Project *state.Project
+	Home    string
 
 	mu      sync.Mutex
 	workers map[string]*worker // by phase
@@ -50,6 +53,9 @@ type Coordinator struct {
 	failedStarts int
 	retryAt      time.Time
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+
+	// retireStep and resumeStep are called after each step of retiring and resuming a worker (tests).
+	retireStep, resumeStep func(step string)
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the workers: no new one starts.

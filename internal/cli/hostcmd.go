@@ -179,11 +179,11 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
 	}
-	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners}
+	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io)}
 	var sv *host.Supervisor
 	if workers > 0 {
 		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
-		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Home: batonRoot(io), Project: proj,
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto,
 			Launch: loop.Launch{Args: elevate.KeepWorkerArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
 				Env: env, BatonEnv: batonEnv, Bin: exe, Version: version.Version, ScreenDump: io.Env("BATON_SCREEN_DUMP") == "1"},
 			Spawn: func(spec host.Spec) (loop.Hidden, error) {
