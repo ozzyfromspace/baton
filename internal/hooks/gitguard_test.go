@@ -77,6 +77,11 @@ func TestSweepingGit(t *testing.T) {
 func TestEditedPath(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "src"), 0o755)
+	// The working tree by another path to it, as /tmp is to /private/tmp on macOS.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
 	edit := func(tool, key, path string) map[string]any {
 		return map[string]any{"tool_name": tool, "cwd": root, "tool_input": map[string]any{key: path}}
 	}
@@ -88,7 +93,10 @@ func TestEditedPath(t *testing.T) {
 		{edit("Write", "file_path", filepath.Join(root, "new.md")), "new.md"},
 		{edit("MultiEdit", "file_path", "src/b.go"), "src/b.go"},
 		{edit("NotebookEdit", "notebook_path", filepath.Join(root, "n.ipynb")), "n.ipynb"},
+		{edit("Write", "file_path", filepath.Join(link, "src", "c.go")), "src/c.go"},
+		{edit("Write", "file_path", filepath.Join(link, "new", "dirs", "d.go")), "new/dirs/d.go"},
 		{edit("Write", "file_path", filepath.Join(t.TempDir(), "elsewhere.go")), ""},
+		{edit("Write", "file_path", filepath.Join(t.TempDir(), "new", "elsewhere.go")), ""},
 		{edit("Read", "file_path", filepath.Join(root, "src", "a.go")), ""},
 	} {
 		if got := editedPath(c.in, root); got != c.want {

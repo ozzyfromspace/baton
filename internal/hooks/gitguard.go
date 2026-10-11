@@ -252,14 +252,16 @@ func editedPath(in map[string]any, root string) string {
 			p = filepath.Join(cwd, p)
 		}
 	}
+	// The real path, through its deepest directory that exists: a new file may be in new directories.
 	real := func(path string) string {
-		if r, err := filepath.EvalSymlinks(path); err == nil {
-			return r
+		for dir, rest := path, ""; ; dir, rest = filepath.Dir(dir), filepath.Join(filepath.Base(dir), rest) {
+			if r, err := filepath.EvalSymlinks(dir); err == nil {
+				return filepath.Join(r, rest)
+			}
+			if filepath.Dir(dir) == dir {
+				return path
+			}
 		}
-		if r, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-			return filepath.Join(r, filepath.Base(path))
-		}
-		return path
 	}
 	rel, err := filepath.Rel(real(root), real(p))
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
