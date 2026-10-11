@@ -74,6 +74,10 @@ func Key(root string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// runnerArgs reports whether a command line, split on whitespace, is a job's runner's:
+// `<baton> lane-run <ref> <job>`, wherever the binary is.
+func runnerArgs(args []string) bool { return len(args) >= 4 && args[len(args)-3] == "lane-run" }
+
 // scriptTimeout bounds `.baton-lane slots`, which only prints a number.
 const scriptTimeout = 10 * time.Second
 

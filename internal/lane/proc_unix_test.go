@@ -53,3 +53,18 @@ func TestProcessHelpers(t *testing.T) {
 		t.Errorf("after KillGroup: %v", err)
 	}
 }
+
+// A job's runner is told from the process table: a pid on record that now belongs to another program is
+// not one.
+func TestIsRunner(t *testing.T) {
+	cmd := exec.Command("sleep", "300")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	for _, pid := range []int{-1, 0, 1, cmd.Process.Pid} {
+		if IsRunner(pid) {
+			t.Errorf("pid %d is taken for a runner", pid)
+		}
+	}
+}

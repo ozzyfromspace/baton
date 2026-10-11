@@ -70,5 +70,9 @@ func Terminate(pid int) error {
 	return p.Kill()
 }
 
+// IsRunner reports whether process pid is a job's runner. Windows has no process table baton reads: no
+// pid is taken for one.
+func IsRunner(int) bool { return false }
+
 // KillGroup kills the process a job's runner started; Windows has no process groups.
 func KillGroup(pgid int) error { return Terminate(pgid) }

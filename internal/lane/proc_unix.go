@@ -3,12 +3,14 @@
 package lane
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // shell runs a command line the way a terminal would.
@@ -68,6 +70,18 @@ func Terminate(pid int) error {
 		return nil
 	}
 	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
+// IsRunner reports whether process pid is a job's runner (`baton lane-run`), as the process table has it
+// now: a pid on record may since belong to another program.
+func IsRunner(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	return err == nil && runnerArgs(strings.Fields(string(out)))
 }
 
 // KillGroup kills process group pgid outright: whatever a job's runner left behind when it died.

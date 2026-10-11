@@ -308,3 +308,18 @@ func TestAJobWithNoCommitRunsInItsWorkDir(t *testing.T) {
 		t.Error("the job ran in the checkout")
 	}
 }
+
+func TestRunnerArgs(t *testing.T) {
+	for args, want := range map[string]bool{
+		"/home/x/.baton/bin/baton lane-run sess-1 j3":          true,
+		"/Users/A B/.baton/bin/baton lane-run sess-1/P3 P3.j1": true,
+		"./dist/baton lane-run":                                false,
+		"sleep 300":                                            false,
+		"vim lane-run":                                         false,
+		"":                                                     false,
+	} {
+		if got := runnerArgs(strings.Fields(args)); got != want {
+			t.Errorf("runnerArgs(%q) = %v, want %v", args, got, want)
+		}
+	}
+}
