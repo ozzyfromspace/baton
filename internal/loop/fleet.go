@@ -216,17 +216,23 @@ func rosterEntry(st *state.State, ref, session string) *state.Worker {
 }
 
 // fleet starts a step of the coordinator's work on the workers, unless one is still going, at most once a
-// second. A host with no Fleet steps only while its run st has workers on record, to retire them; with
-// none, it does nothing at all.
+// second. A host with no Fleet steps only while its run st has workers on record, to retire them, or
+// once a plan attached owes a sweep of those other runs left behind; otherwise it does nothing at all.
 func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
+	if c.Project != nil {
+		c.planAttached(s, st)
+	}
 	f := c.Fleet
-	if f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0) || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
+	idle := f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0 && !c.sweepOwed)
+	if idle || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
 		return
 	}
 	if c.since.IsZero() {
 		c.since = v.Now
 	}
 	c.fleetAt = v.Now
+	sweep := c.sweepOwed
+	c.sweepOwed = false
 	c.fleetWG.Add(1)
 	run := func(fn func()) { go fn() }
 	if f != nil {
@@ -244,15 +250,18 @@ func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
 				}
 			}
 		}()
-		c.step(v.Now, s)
+		c.step(v.Now, s, sweep)
 	})
 }
 
-// step looks over the run's workers once: the sessions this host runs, then the merge queue and the
-// answers to their questions, then the roster's workers no session runs, then whether a new one can
-// start. With no Fleet, it only retires the roster's workers: workers are off in this host, and their
-// phases go back to the lead.
-func (c *Coordinator) step(now time.Time, s *state.Store) {
+// step looks over the run's workers once: first, when a plan was attached (sweep), the workers other runs
+// left behind; then the sessions this host runs, the merge queue and the answers to their questions, the
+// roster's workers no session runs, and whether a new one can start. With no Fleet, it only retires the
+// roster's workers: workers are off in this host, and their phases go back to the lead.
+func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
+	if sweep {
+		c.sweep(now, s)
+	}
 	st, err := s.Load()
 	if err != nil {
 		return

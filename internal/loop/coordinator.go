@@ -54,6 +54,13 @@ type Coordinator struct {
 	failedStarts int
 	retryAt      time.Time
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+	// genRun and gen are the host's run and its plan's generation as the lead's tick last saw them; a
+	// plan attached since owes a sweep of the workers other runs left behind (sweep.go). Only the lead's
+	// tick touches them.
+	genRun    string
+	gen       int
+	sweepOwed bool
+	isBaton   func(pid int) bool // tells a running baton by its pid (nil: batonRunning; tests)
 
 	// retireStep and resumeStep are called after each step of retiring and resuming a worker (tests).
 	retireStep, resumeStep func(step string)

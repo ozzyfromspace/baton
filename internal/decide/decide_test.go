@@ -185,6 +185,30 @@ func TestTheSkillNamesTheThreeTiers(t *testing.T) {
 	}
 }
 
+// As a run starts, the human hears which workers an earlier run left behind baton ended, and what of
+// theirs it kept.
+func TestWorkersRetired(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		left []Left
+		want string
+	}{
+		{"one, with nothing kept", []Left{{Phase: "P3"}}, "baton: ended 1 worker left by an earlier run (P3)"},
+		{"two, one branch kept", []Left{{Phase: "P3", Branch: "baton/r1/P3", Unlanded: 1}, {Phase: "P4"}},
+			"baton: ended 2 workers left by an earlier run (P3, P4); its branch baton/r1/P3 keeps 1 commit that never landed"},
+		{"branches and a worktree kept", []Left{
+			{Phase: "P1", Branch: "baton/r1/P1", Unlanded: 2, Worktree: "/h/worktrees/k/r1/P1", Kept: "its uncommitted work could not be saved: disk full"},
+			{Phase: "P2", Branch: "baton/r1/P2", Unlanded: 1}},
+			"baton: ended 2 workers left by an earlier run (P1, P2); its branch baton/r1/P1 keeps 2 commits that never landed; " +
+				"its branch baton/r1/P2 keeps 1 commit that never landed; " +
+				"the worktree of its worker on P1 stays at /h/worktrees/k/r1/P1, as its uncommitted work could not be saved: disk full"},
+	} {
+		if got := WorkersRetired(c.left); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}
+
 // As a plan is attached, the lead hears how many workers will work beside it, and whether a permission
 // prompt would stop them.
 func TestWorkersAttached(t *testing.T) {

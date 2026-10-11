@@ -148,3 +148,34 @@ func WorkerResume(phase, why string) string {
 func DropWorkers(phases string) string {
 	return fmt.Sprintf("baton also ends the workers on %s: it saves their uncommitted work and removes their worktrees, and keeps the branch of any that holds commits that never landed.", phases)
 }
+
+// Left is a worker an earlier run left behind, which baton ended as a new run started: its phase, the
+// branch it kept for the Unlanded commits on it that never landed ("" for none), and its worktree, which
+// stayed in place for the reason Kept gives ("" when it was removed).
+type Left struct {
+	Phase, Branch  string
+	Unlanded       int
+	Worktree, Kept string
+}
+
+// WorkersRetired tells the human, in the session of a run that has just started, about the workers an
+// earlier run of the project left behind, which baton ended (left, in the order it ended them): what of
+// theirs it kept, and where.
+func WorkersRetired(left []Left) string {
+	phases := make([]string, len(left))
+	for i, l := range left {
+		phases[i] = l.Phase
+	}
+	s := fmt.Sprintf("baton: ended %d %s left by an earlier run (%s)", len(left), plural(len(left), "worker", "workers"), strings.Join(phases, ", "))
+	for _, l := range left {
+		if l.Branch != "" && l.Unlanded > 0 {
+			s += fmt.Sprintf("; its branch %s keeps %d %s that never landed", l.Branch, l.Unlanded, plural(l.Unlanded, "commit", "commits"))
+		}
+	}
+	for _, l := range left {
+		if l.Kept != "" {
+			s += fmt.Sprintf("; the worktree of its worker on %s stays at %s, as %s", l.Phase, l.Worktree, l.Kept)
+		}
+	}
+	return s
+}
