@@ -46,6 +46,12 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{}
 		return
 	}
+	if st.CurrentJob() != nil {
+		// The phase in hand waits on its job, which ends by itself: its result wakes the session, unless
+		// baton switches it to another phase first. Nothing is stalled.
+		l.idleNudged = time.Time{}
+		return
+	}
 	if !l.idleNudged.IsZero() && st.Run.LastActivity.After(l.idleNudged) {
 		l.idleNudged = time.Time{} // the model answered the reminder (IdleNudges still counts it)
 	}

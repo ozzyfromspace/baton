@@ -48,6 +48,7 @@ type Timing struct {
 	RestartIdle    time.Duration // with no plan running, a session idle this long may restart on a newer baton
 	JobStale       time.Duration // a running job whose runner has not beaten for this long is taken for dead
 	SpawnGrace     time.Duration // a runner gone this long after it was started, without taking up its job, never will
+	SwitchAfter    time.Duration // the phase in hand waiting this long on its job is set aside for another (switch_after)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -63,6 +64,7 @@ var DefaultTiming = Timing{
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
+	SwitchAfter:       config.DefaultSwitchAfter,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
@@ -113,16 +115,18 @@ type Loop struct {
 	alone   state.Dialog // baton's own question, alone on screen since aloneAt
 	aloneAt time.Time
 
-	owner    bool      // this session has owned the project
-	swept    bool      // the lanes were swept
-	settled  time.Time // when the run's jobs were last settled
-	typedFor string    // the jobs whose results baton last typed a line for, and when
-	typedAt  time.Time
-	quit     bool           // claude was asked to end: the human is leaving baton, or baton restarts
-	restart  *restart       // the restart claude was ended for
-	halted   bool           // the run is halted, and this halt's snapshot was started
-	snapping atomic.Bool    // a snapshot is running
-	saving   sync.WaitGroup // and Ended waits for it
+	owner      bool      // this session has owned the project
+	swept      bool      // the lanes were swept
+	settled    time.Time // when the run's jobs were last settled
+	switchNext time.Time // when a switch may be tried next
+	switchHeld string    // the job whose switch uncommitted work holds, reported once
+	typedFor   string    // the jobs whose results baton last typed a line for, and when
+	typedAt    time.Time
+	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
+	restart    *restart       // the restart claude was ended for
+	halted     bool           // the run is halted, and this halt's snapshot was started
+	snapping   atomic.Bool    // a snapshot is running
+	saving     sync.WaitGroup // and Ended waits for it
 
 	lastTick       time.Time
 	wokeAt         time.Time
@@ -180,6 +184,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.wished = false
 	l.resolve(v, st)
 	l.remind(v, st)
+	st = l.switching(v, st)
 	l.clearDraft(v, st, in)
 
 	comp := st.Run.Compaction
@@ -315,7 +320,7 @@ func (l *Loop) drive(s *state.Store) {
 	}
 	l.Store = s
 	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}
-	l.settled, l.typedFor, l.typedAt = time.Time{}, "", time.Time{}
+	l.settled, l.typedFor, l.typedAt, l.switchNext, l.switchHeld = time.Time{}, "", time.Time{}, time.Time{}, ""
 	l.rateNotified, l.errNudged, l.errRetries = false, time.Time{}, 0
 	l.alone, l.aloneAt, l.heldWhy, l.heldSince = state.Dialog{}, time.Time{}, "", time.Time{}
 }
