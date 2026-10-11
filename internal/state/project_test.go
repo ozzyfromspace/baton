@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -238,7 +239,13 @@ func TestSweepRemovesOnlyWhatNobodyCanUse(t *testing.T) {
 		os.Chtimes(filepath.Join(dir, "state.json"), old, old)
 		os.Chtimes(dir, old, old)
 	}
-	p.Sweep()
+	want := []string{"runs/empty", "sessions/dangling", "sessions/empty"}
+	if got := p.Swept(true, nil); !reflect.DeepEqual(got, want) || !exists(empty.Dir) || !exists(p.path(sessionsDir, "dangling")) {
+		t.Fatalf("a dry sweep says %q (want %q), and removes nothing", got, want)
+	}
+	if got := p.Swept(false, nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("swept %q, want %q", got, want)
+	}
 	if exists(empty.Dir) || exists(p.path(sessionsDir, "empty")) || exists(p.path(sessionsDir, "dangling")) {
 		t.Fatal("an empty, abandoned run (or a dangling link) survived")
 	}

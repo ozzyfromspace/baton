@@ -569,10 +569,17 @@ const sweepAge = 10 * time.Minute
 // Sweep removes what no one can use any more: runs that never had a plan, drafts or notes and that no
 // host drives (every hosted session starts one), links to runs (workers' sub-runs among them) that are
 // gone, and links to hosts that no longer drive their run. Hosts call it when they start.
-func (p *Project) Sweep() {
+func (p *Project) Sweep() { p.Swept(false, nil) }
+
+// Swept is Sweep, saying what it removed, each as its path under the project's .baton directory
+// (runs/<run>, sessions/<session>, hosts/<instance>). With dry, it removes nothing, and says what Sweep
+// would remove. keep (nil: none) names hosts whose links stay, though they do not drive their run now.
+func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
+	var out []string
 	p.withLock(func() error {
 		now := p.Now()
 		pending := p.readLink(pendingFile)
+		gone := map[string]bool{} // runs a dry sweep would remove
 		for _, r := range p.Runs() {
 			dir := p.path(runsDir, r.ID)
 			if r.ID == pending || r.Title != "" || r.Live(now) || now.Sub(r.Updated) < sweepAge || r.Updated.IsZero() && !olderThan(dir, now) {
@@ -581,27 +588,35 @@ func (p *Project) Sweep() {
 			if exists(filepath.Join(dir, "plan.json")) || exists(filepath.Join(dir, "handoff.md")) || hasEntries(filepath.Join(dir, DraftsDirName)) {
 				continue
 			}
-			os.RemoveAll(dir)
+			out, gone[r.ID] = append(out, filepath.Join(runsDir, r.ID)), true
+			if !dry {
+				os.RemoveAll(dir)
+			}
 		}
 		for _, sub := range []string{sessionsDir, hostsDir} {
 			links, _ := os.ReadDir(p.path(sub))
 			for _, l := range links {
 				id := p.readLink(sub, l.Name())
-				if !p.runExists(id) {
-					os.Remove(p.path(sub, l.Name()))
-					continue
-				}
-				if sub == hostsDir {
+				run, _, _ := splitRef(id)
+				stale := !p.runExists(id) || gone[run]
+				if !stale && sub == hostsDir && (keep == nil || !keep(l.Name())) {
 					if s, err := p.Run(id, ""); err == nil {
 						if st, err := s.peek(); err == nil && !(st.Owner != nil && st.Owner.Instance == l.Name() && st.Owner.Live(now)) {
-							os.Remove(p.path(sub, l.Name()))
+							stale = true
 						}
+					}
+				}
+				if stale {
+					out = append(out, filepath.Join(sub, l.Name()))
+					if !dry {
+						os.Remove(p.path(sub, l.Name()))
 					}
 				}
 			}
 		}
 		return nil
 	})
+	return out
 }
 
 func exists(path string) bool { _, err := os.Stat(path); return err == nil }
