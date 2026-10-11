@@ -25,7 +25,7 @@ import (
 func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", cmdAttach)
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
-	register("done", "mark the current phase finished: done <phase> [--notes TEXT] [--keep-dirty WHY]", cmdDone)
+	register("done", "mark the current phase finished (verifying while its job runs): done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
 	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("waiting", "declare a bounded wait: waiting <what> --until <duration, e.g. 20m>", cmdWaiting)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
@@ -455,9 +455,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 }
 
 func cmdDone(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"notes", "keep-dirty"}, []string{"force"})
+	p, err := parseArgs(args, []string{"notes", "keep-dirty", "despite-red"}, []string{"force"})
 	if err != nil || len(p.pos) != 1 {
-		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--force]%s", errSuffix(err))
+		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--force]%s", errSuffix(err))
 	}
 	id := p.pos[0]
 	s, pl, ok := storeAndPlan(io)
@@ -483,8 +483,12 @@ func cmdDone(args []string, io IO) int {
 		s.Event("refused", map[string]any{"command": "done", "phase": id, "why": "uncommitted work", "files": len(work.fresh)})
 		return fail(io, "%s", decide.UncommittedRefusal("done", id, fileList(work.fresh)))
 	}
-	var next string
-	var startHead string
+	despite := decide.Sanitize(p.vals["despite-red"])
+	most := config.EscalationFromEnv(io.Env).MaxAuto
+	var next, startHead string
+	var note *state.Decision
+	var count int
+	var latest *state.Job
 	st, err := s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not done", true); err != nil {
 			return err
@@ -498,22 +502,73 @@ func cmdDone(args []string, io IO) int {
 				s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
 			}
 		}
+		if j := st.Latest(id); j != nil {
+			x := *j
+			latest = &x
+		}
+		red := latest != nil && latest.Red() && despite != ""
+		if red {
+			// Finishing a phase over a red verification is a decision without the human, like any note.
+			if st.ReviewDue != "" {
+				return reviewRefusal(st)
+			}
+			d, err := state.NoteOn(st, id, fmt.Sprintf("finished %s despite its red verification (job %s, %s %s): %s", id, latest.ID, decide.Ran(*latest), decide.Outcome(*latest), despite),
+				fmt.Sprintf("reopen %s: fix what job %s found (its log: %s), then verify it again", id, latest.ID, jobLog(s, *latest)), io.Now())
+			if err != nil {
+				return err
+			}
+			note = &d
+			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "note", Text: d.What, At: io.Now()})
+		}
 		var err error
-		next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"]})
-		return err
+		if next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"], DespiteRed: red}); err != nil {
+			return err
+		}
+		if note != nil {
+			if count = st.Unattended(id); decide.CapReached(count, most) {
+				state.DueReview(st, id, io.Now())
+			}
+		}
+		return nil
 	})
+	var re state.RedError
+	if errors.As(err, &re) {
+		return refusedRed(io, s, re.Job)
+	}
 	if err != nil {
 		return refused(io, s, "done", err)
 	}
 	s.AppendHandoff(id, p.vals["notes"])
+	if note != nil {
+		s.Event("note", map[string]any{"id": note.ID, "phase": id, "what": note.What, "undo": note.Undo, "despite_red": latest.ID})
+		if st.ReviewDue != "" {
+			s.Event("review_due", map[string]any{"phase": id, "decisions": count})
+		}
+	}
+	verifying := st.Phases[id] != nil && st.Phases[id].Status == state.PhaseVerifying
 	done := map[string]any{"phase": id, "next": next}
 	if len(work.fresh) > 0 {
 		done["keep_dirty"], done["files"] = keep, len(work.fresh)
 	}
-	s.Event("phase_done", done)
+	if verifying {
+		done["job"] = latest.ID
+		s.Event("phase_verifying", done)
+	} else {
+		s.Event("phase_done", done)
+	}
 	work.report(io, id, keep)
 	if startHead != "" && startHead == gitx.Head(s.Root) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
+	}
+	switch {
+	case note != nil:
+		fmt.Fprintf(io.Out, "baton: noted (%s): %s finished despite its red verification; the human will be told.\n", note.ID, id)
+	case despite != "":
+		fmt.Fprintf(io.Out, "baton: note — %s's latest verification is not red, so --despite-red recorded nothing.\n", id)
+	}
+	if latest != nil && latest.Finished() && !latest.Red() && latest.Status != state.JobPassed {
+		fmt.Fprintf(io.Out, "baton: note — %s's latest job, %s (%s), %s, so it checked nothing. Make sure the gate passes, in place if need be.\n",
+			id, latest.ID, decide.Ran(*latest), decide.Outcome(*latest))
 	}
 	var mine []state.Decision
 	for _, d := range decide.WithoutHuman(st.Decisions) {
@@ -525,24 +580,56 @@ func cmdDone(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "baton: %s made %d %s without the human (baton status lists them for the human, each with its undo):\n%s",
 			id, len(mine), plural(len(mine), "decision", "decisions"), decide.Listed(mine, 0))
 	}
+	finished := fmt.Sprintf("baton: %s done.", id)
+	if verifying {
+		finished = fmt.Sprintf("baton: %s is finished, and verifying: job %s (%s) is still running. baton marks %s done when it passes; "+
+			"if it fails, %s reopens, and is taken up again from your notes on that job.", id, latest.ID, decide.Ran(*latest), id, id)
+	}
+	if st.ReviewDue != "" {
+		fmt.Fprintf(io.Out, "%s That makes as many decisions without the human as baton lets a phase make before they review them: "+
+			"end your turn now, and baton stops for the human to review them.\n", finished)
+		return 0
+	}
 	if st.Mode == state.ModeComplete {
-		summary := "Summarize the results for the human"
-		if n := len(decide.WithoutHuman(st.Decisions)); n > 0 {
-			summary += fmt.Sprintf(", including the %d %s this run made without them (baton status lists them, each with its undo),", n, plural(n, "decision", "decisions"))
-		}
-		fmt.Fprintf(io.Out, "baton: %s done. That was the last phase — the plan is complete. %s and end your turn.\n", id, summary)
+		fmt.Fprintf(io.Out, "%s That was the last phase — the plan is complete. %s\n", finished, decide.PlanComplete(len(decide.WithoutHuman(st.Decisions))))
 		return 0
 	}
 	if next == "" {
-		fmt.Fprintf(io.Out, "baton: %s done. No other phase can start until a job finishes: every phase left waits for one. End your turn now; baton wakes you when there is something to do.\n", id)
+		fmt.Fprintf(io.Out, "%s No other phase can start until a job finishes: every phase left waits for one. End your turn now; baton wakes you when there is something to do.\n", finished)
 		return 0
 	}
 	np := pl.Phases[pl.Index(next)]
-	fmt.Fprintf(io.Out, "baton: %s done. Next phase: %s (%s). End your turn now: baton compacts the context, then starts %s with a fresh brief.\n", id, np.ID, np.Title, np.ID)
+	fmt.Fprintf(io.Out, "%s Next phase: %s (%s). End your turn now: baton compacts the context, then starts %s with a fresh brief.\n", finished, np.ID, np.Title, np.ID)
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so no compaction will happen automatically.")
 	}
 	return 0
+}
+
+// refusedRed turns down done for a phase whose latest verification is red. A result the model has not
+// been given yet comes with it, and counts as given.
+func refusedRed(io IO, s *state.Store, j state.Job) int {
+	var fresh bool
+	s.Update(func(st *state.State) error {
+		if x := st.Job(j.ID); x != nil && x.Delivered.IsZero() {
+			x.Delivered, fresh = io.Now(), true
+		}
+		return nil
+	})
+	s.Event("refused", map[string]any{"command": "done", "phase": j.Phase, "why": "red", "job": j.ID})
+	if fresh {
+		tail, _ := lane.Tail(jobLog(s, j), 80, 6<<10)
+		fmt.Fprintln(io.Err, decide.JobResult(j, jobLog(s, j), tail, nil))
+	}
+	return fail(io, "%s", decide.RedRefusal(j))
+}
+
+// jobLog is where job j's output is.
+func jobLog(s *state.Store, j state.Job) string {
+	if j.Log != "" {
+		return j.Log
+	}
+	return s.JobLog(j.ID)
 }
 
 func cmdBlocked(args []string, io IO) int {

@@ -260,7 +260,7 @@ func TestStatusListsTheJobs(t *testing.T) {
 	for _, want := range []string{
 		"jobs (newest first):\n  j4   P0       await  queued  `sleep 1`\n       log: " + s.store().JobLog("j4") + "\n" +
 			"  j3   P0       verify running 2h05m, lane 1  `make test` on " + head[:12] + "\n       log: /elsewhere/j3.log\n" +
-			"  j2   P0       await  interrupted after 30s: replaced by j3  `gh run watch`\n",
+			"  j2   P0       await  was interrupted after 30s: replaced by j3  `gh run watch`\n",
 		"  j1   P0       verify failed (exit 2) after 12m, lane 1  `make test` on " + head[:12] + "\n",
 		"lanes: this project has no .baton-lane, so a gate runs with sh -c in a bare checkout of its commit, one at a time",
 	} {

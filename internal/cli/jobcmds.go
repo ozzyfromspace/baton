@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -330,16 +331,8 @@ func printJobs(io IO, s *state.Store, st state.State) {
 	}
 }
 
-// jobProgress is where a job stands: "running 4m, lane 1", "failed (exit 1) after 12m".
+// jobProgress is where a job stands: "running 4m, lane 1", "failed (exit 1) after 12m, lane 1".
 func jobProgress(j state.Job, now time.Time) string {
-	var ran time.Duration
-	switch {
-	case j.Started.IsZero():
-	case j.Ended.IsZero():
-		ran = now.Sub(j.Started)
-	default:
-		ran = j.Ended.Sub(j.Started)
-	}
 	in := ""
 	if j.Lane > 0 {
 		in = fmt.Sprintf(", lane %d", j.Lane)
@@ -348,22 +341,7 @@ func jobProgress(j state.Job, now time.Time) string {
 	case state.JobQueued:
 		return "queued"
 	case state.JobRunning:
-		return "running " + span(ran) + in
-	case state.JobPassed:
-		return "passed after " + span(ran) + in
-	case state.JobFailed:
-		return fmt.Sprintf("failed (exit %d) after %s%s", j.Exit, span(ran), in)
+		return "running " + decide.Span(j.Took(now)) + in
 	}
-	return fmt.Sprintf("%s after %s%s: %s", j.Status, span(ran), in, j.Reason)
-}
-
-// span is a duration as a person reads it: 45s, 12m, 2h05m.
-func span(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	return decide.Outcome(j) + in
 }
