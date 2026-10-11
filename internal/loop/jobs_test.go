@@ -86,7 +86,7 @@ func TestTheHostStartsQueuedJobs(t *testing.T) {
 	if len(f.spawned) != 1 {
 		t.Errorf("a job's runner was started again: %v", f.spawned)
 	}
-	if f.sweeps.Load() != 1 {
+	if !eventually(func() bool { return f.sweeps.Load() == 1 }) { // the coordinator sweeps off the tick
 		t.Errorf("the lanes were swept %d times", f.sweeps.Load())
 	}
 
