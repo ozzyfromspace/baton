@@ -284,8 +284,13 @@ func sessionOf(args []string) (string, []string) {
 	if resumed != "" {
 		return resumed, args
 	}
+	// Before "--", if there is one: what follows it is the prompt.
 	id := newSessionID()
-	return id, append(append([]string{}, args...), "--session-id", id)
+	at := slices.Index(args, "--")
+	if at < 0 {
+		at = len(args)
+	}
+	return id, slices.Insert(slices.Clone(args), at, "--session-id", id)
 }
 
 // looksLikeSessionID reports a UUID, the form Claude Code's session ids take.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +246,11 @@ func TestTheSessionIsKnownAtLaunchWhenItCanBe(t *testing.T) {
 	b, _ := sessionOf(nil)
 	if a == b {
 		t.Error("two new sessions got the same id")
+	}
+	// What follows "--" is the prompt: the id goes before it.
+	got, args := sessionOf([]string{"--allowedTools", "Edit", "--", "fix the bug"})
+	if want := []string{"--allowedTools", "Edit", "--session-id", got, "--", "fix the bug"}; !slices.Equal(args, want) {
+		t.Errorf("args %q, want %q", args, want)
 	}
 }
 
