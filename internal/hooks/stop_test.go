@@ -72,11 +72,26 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "declared wait in its window",
 			setup: func(st *state.State) { state.SetWaiting(st, "the build", time.Hour, tStop) },
 			say:   "waiting for the build"},
-		{name: "background work is not a status: declare the wait",
+		{name: "the first stop on background work is refused once", block: true,
+			reason: "You stopped while your background work runs (npm test, and 1 more). Keep working on what does not depend on it",
 			setup: func(st *state.State) {
-				st.Run.Background = []state.Task{{Type: "shell", Status: "running", Description: "npm run dev"}}
-			},
-			block: true, reason: "Background work is still running (npm run dev), but that is not a status"},
+				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Description: "npm test"}, {ID: "s1", Type: "subagent"}}
+			}},
+		{name: "a stop on background work already told about is allowed", say: "P0 (First) waits on background work (npm test), which wakes Claude when it ends",
+			setup: func(st *state.State) {
+				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Description: "npm test"}}
+				st.Run.BackgroundTold, st.Run.StopBlocks = []string{"b1", "b2"}, 2
+			}},
+		{name: "background work started since is news again", block: true, reason: "your background work runs (npm test, and 1 more)",
+			setup: func(st *state.State) {
+				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Description: "npm test"}, {ID: "b3", Type: "shell", Description: "npm run lint"}}
+				st.Run.BackgroundTold = []string{"b1"}
+			}},
+		{name: "the phase's job comes before background work", say: "P0 (First) waits on job j1",
+			setup: func(st *state.State) {
+				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Description: "npm test"}}
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+			}},
 		{name: "Claude Code's own housekeeping is not background work", block: true, reason: "not reported done",
 			setup: func(st *state.State) {
 				st.Run.Background = []state.Task{{Type: "dream"}, {Type: "auto-mode scan"}}
@@ -232,6 +247,40 @@ func TestRefusalsCountThenEscalate(t *testing.T) {
 	d := decideStop(&st, pl, tStop, decide.Words{Git: true})
 	if !strings.Contains(d.output["reason"].(string), "AskUserQuestion") || st.Run.Escalation == nil {
 		t.Fatalf("escalation: %v", d.output)
+	}
+}
+
+// Background work is refused once, then the stops on it are allowed; new work is refused once again, and
+// none of it counts toward bringing the human in.
+func TestBackgroundWorkIsRefusedOncePerNewTask(t *testing.T) {
+	pl := demoPlan()
+	st := running()
+	stop := func(ids ...string) decision {
+		var bg []state.Task
+		for _, id := range ids {
+			bg = append(bg, state.Task{ID: id, Type: "shell", Description: "task " + id})
+		}
+		st.Run.SetBackground(bg, tStop)
+		return decideStop(&st, pl, tStop, decide.Words{Git: true})
+	}
+	for i, c := range []struct {
+		ids   []string
+		block bool
+		event string
+	}{
+		{[]string{"b1"}, true, "stop_refused"},
+		{[]string{"b1"}, false, "idle_on_background"},
+		{[]string{"b1"}, false, "idle_on_background"},
+		{[]string{"b1", "b2"}, true, "stop_refused"},
+		{[]string{"b2"}, false, "idle_on_background"},
+	} {
+		d := stop(c.ids...)
+		if blocked := d.output["decision"] == "block"; blocked != c.block || len(d.events) != 1 || d.events[0].kind != c.event || st.Run.Escalation != nil {
+			t.Fatalf("stop %d on %v: %v, events %+v", i+1, c.ids, d.output, d.events)
+		}
+	}
+	if d := stop(); d.output["decision"] != "block" || !strings.Contains(d.output["reason"].(string), "not reported done") || st.Run.StopBlocks != 1 {
+		t.Fatalf("once the work ended: %v (blocks %d)", d.output, st.Run.StopBlocks)
 	}
 }
 

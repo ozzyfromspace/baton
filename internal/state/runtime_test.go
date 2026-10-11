@@ -153,7 +153,7 @@ func TestMonitorsAreToldApartByID(t *testing.T) {
 	r.Watch("m1")
 	r.Watch("m1")
 	r.Watch("")
-	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}, {ID: "d", Type: "dream"}, {ID: "s", Type: "subagent"}})
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}, {ID: "d", Type: "dream"}, {ID: "s", Type: "subagent"}}, time.Time{})
 	if got := ids(r.BusyBackground()); !same(got, []string{"b1", "s"}) {
 		t.Errorf("busy = %v", got)
 	}
@@ -162,8 +162,41 @@ func TestMonitorsAreToldApartByID(t *testing.T) {
 	}
 	// A Monitor armed in this turn is in the next Stop's list; one that ended is forgotten.
 	r.Watch("m2")
-	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m2", Type: "shell"}})
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m2", Type: "shell"}}, time.Time{})
 	if !same(r.Monitors, []string{"m2"}) || !same(ids(r.BusyBackground()), []string{"b1"}) {
 		t.Errorf("monitors = %v, busy = %v", r.Monitors, ids(r.BusyBackground()))
+	}
+}
+
+// Claude Code does not say when a background task started, so baton keeps when a Stop first reported it.
+func TestBackgroundWorkKeepsWhenItWasFirstSeen(t *testing.T) {
+	t0 := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	var r Runtime
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}}, t0)
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "b2", Type: "subagent"}}, t0.Add(time.Minute))
+	if b := r.Background; !b[0].Since.Equal(t0) || !b[1].Since.Equal(t0.Add(time.Minute)) || !Oldest(r.BusyBackground()).Equal(t0) {
+		t.Fatalf("background %+v", b)
+	}
+	r.SetBackground([]Task{{ID: "b2", Type: "subagent"}}, t0.Add(2*time.Minute))
+	if !Oldest(r.BusyBackground()).Equal(t0.Add(time.Minute)) || !Oldest(nil).IsZero() {
+		t.Fatalf("after b1 ended: %+v", r.Background)
+	}
+}
+
+// A stop is refused over background work once; work started since makes it news again, and work that
+// ended does not.
+func TestUntoldBackgroundWork(t *testing.T) {
+	r := Runtime{BackgroundTold: []string{"b1", "b2"}}
+	for _, c := range []struct {
+		ids  []string
+		want bool
+	}{{[]string{"b1"}, false}, {[]string{"b1", "b2"}, false}, {[]string{"b1", "b3"}, true}, {nil, false}} {
+		var bg []Task
+		for _, id := range c.ids {
+			bg = append(bg, Task{ID: id, Type: "shell"})
+		}
+		if got := r.Untold(bg); got != c.want {
+			t.Errorf("%v: %v, want %v", c.ids, got, c.want)
+		}
 	}
 }

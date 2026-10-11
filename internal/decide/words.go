@@ -100,6 +100,16 @@ func (w Words) NoStatus(id, title string) string {
 		"`baton waiting \"<what>\" --until <duration>` (you are waiting on something outside you).", title, id, finished, w.deadline())
 }
 
+// BackgroundStop is why baton refuses the first stop while background work of the model's own runs:
+// what names the work. Nothing is wrong with the stop itself, so the next one on the same work is allowed.
+func (w Words) BackgroundStop(what string) string {
+	s := "[baton] You stopped while your background work runs (" + what + "). Keep working on what does not depend on it: Claude Code wakes you when it ends. "
+	if w.Git {
+		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then `baton verify \"<command>\" --notes \"<where the phase stands>\"` runs it on that commit, and baton gives you the result. "
+	}
+	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until the work ends, end your turn again."
+}
+
 // QuestionRefused is why a question of the model's own is refused while a plan runs, and what to do
 // instead. call is the exact call for a question baton issued and is waiting on ("" if none).
 func (w Words) QuestionRefused(call string) string {

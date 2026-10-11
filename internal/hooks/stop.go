@@ -208,22 +208,34 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		j := st.CurrentJob()
 		d.say(fmt.Sprintf("baton: %s waits on job %s (`%s`); Claude is given its result when it ends", cur, j.ID, j.Command))
 		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
+	case len(st.Run.BusyBackground()) > 0:
+		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.
+		// The first stop on new work is refused once, since there is usually something to do meanwhile.
+		// After that the stop is allowed: the work wakes the session when it ends, and the watchdog looks
+		// in if it runs long.
+		bg := st.Run.BusyBackground()
+		if st.Run.Untold(bg) {
+			st.Run.BackgroundTold = nil
+			for _, t := range bg {
+				st.Run.BackgroundTold = append(st.Run.BackgroundTold, t.ID)
+			}
+			d.refuse(w.BackgroundStop(backgroundWhat(bg)))
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "background work", "tasks": len(bg)})
+			return d
+		}
+		st.Run.StopBlocks = 0
+		d.say(fmt.Sprintf("baton: %s waits on background work (%s), which wakes Claude when it ends", cur, backgroundWhat(bg)))
+		d.emit("idle_on_background", map[string]any{"phase": st.Current, "tasks": len(bg)})
 	case st.Waiting != nil && now.Before(st.Waiting.Until):
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))
 	default:
 		// While a plan runs, a stop needs a status even when the human started the turn: every run
-		// begins with a human "go". To talk without the plan, the human pauses baton. Background work
-		// is no excuse either: a dev server or a log watcher runs forever, so a stop that waits on it
-		// must say for how long (baton waiting), and baton holds it to that.
+		// begins with a human "go". To talk without the plan, the human pauses baton.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
-			reason := w.NoStatus(st.Current, cur)
-			if bg := st.Run.BusyBackground(); len(bg) > 0 {
-				reason += " " + backgroundNote(bg)
-			}
-			d.refuse(reason)
-			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "background": len(st.Run.BusyBackground())})
+			d.refuse(w.NoStatus(st.Current, cur))
+			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks})
 			return d
 		}
 		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without reporting status", st.Run.StopBlocks, st.Current), now)
@@ -231,7 +243,8 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	return d
 }
 
-func backgroundNote(bg []state.Task) string {
+// backgroundWhat names background work: the first task, and how many more.
+func backgroundWhat(bg []state.Task) string {
 	what := bg[0].Description
 	if what == "" {
 		what = bg[0].Type
@@ -239,7 +252,7 @@ func backgroundNote(bg []state.Task) string {
 	if len(bg) > 1 {
 		what = fmt.Sprintf("%s, and %d more", what, len(bg)-1)
 	}
-	return fmt.Sprintf("Background work is still running (%s), but that is not a status: if you are waiting on it, use `baton waiting` with how long it should take, so baton can wake you if it never reports back.", what)
+	return what
 }
 
 // escalate brings the human in: once in the session (a question, which reaches all their devices) and

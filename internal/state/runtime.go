@@ -40,6 +40,9 @@ type Runtime struct {
 	Subagents int `json:"subagents"`
 	// Background is the in-flight background work Claude Code reported at the last Stop.
 	Background []Task `json:"background,omitempty"`
+	// BackgroundTold are the ids of the background work a stop was last refused over, so the model has
+	// been told to keep working meanwhile: another stop on that work is allowed.
+	BackgroundTold []string `json:"background_told,omitempty"`
 	// Monitors are the task ids of the Monitor watchers the session armed (PostToolUse(Monitor)
 	// tool_response.taskId), while they still run. Claude Code reports a Monitor at Stop as type "shell",
 	// like a background command, so its id is the only way to tell the two apart (spike 19).
@@ -202,6 +205,8 @@ type Task struct {
 	Type        string `json:"type"` // shell (a Monitor too), subagent, workflow, …
 	Status      string `json:"status"`
 	Description string `json:"description,omitempty"`
+	// Since is when a Stop first reported the task: Claude Code does not say when it started.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // Compaction statuses, in order.
@@ -351,6 +356,23 @@ func (r Runtime) BusyBackground() []Task {
 	return out
 }
 
+// Untold reports whether bg holds work the model has not been told about at a stop: work that started
+// since the last stop refused over background work.
+func (r Runtime) Untold(bg []Task) bool {
+	return slices.ContainsFunc(bg, func(t Task) bool { return !slices.Contains(r.BackgroundTold, t.ID) })
+}
+
+// Oldest is when the longest-running of tasks was first reported (zero for none).
+func Oldest(tasks []Task) time.Time {
+	var out time.Time
+	for _, t := range tasks {
+		if out.IsZero() || t.Since.Before(out) {
+			out = t.Since
+		}
+	}
+	return out
+}
+
 // Watching reports the Monitors still running. They are not work, but they live inside the claude
 // process and end with it.
 func (r Runtime) Watching() []Task {
@@ -370,9 +392,16 @@ func (r *Runtime) Watch(id string) {
 	}
 }
 
-// SetBackground records the background work a Stop reported, and forgets the Monitors that have ended:
-// a Monitor's PostToolUse always comes before the Stop of its turn, so one missing from the list is gone.
-func (r *Runtime) SetBackground(tasks []Task) {
+// SetBackground records the background work a Stop reported at now, keeping when each task was first
+// reported, and forgets the Monitors that have ended: a Monitor's PostToolUse always comes before the
+// Stop of its turn, so one missing from the list is gone.
+func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
+	for i := range tasks {
+		tasks[i].Since = now
+		if j := slices.IndexFunc(r.Background, func(t Task) bool { return t.ID == tasks[i].ID }); j >= 0 && !r.Background[j].Since.IsZero() {
+			tasks[i].Since = r.Background[j].Since
+		}
+	}
 	r.Background = tasks
 	r.Monitors = slices.DeleteFunc(r.Monitors, func(id string) bool {
 		return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id })

@@ -121,7 +121,7 @@ func TestWords(t *testing.T) {
 		return map[string]string{
 			"playbook": w.Playbook(), "reporting": w.Reporting(), "no status": w.NoStatus("P4", "P4 (Ship)"),
 			"question refused": w.QuestionRefused(""), "question refused, one issued": w.QuestionRefused("call the AskUserQuestion tool with …"),
-			"finish step": w.FinishStep(), "closing": w.Closing("P4"),
+			"finish step": w.FinishStep(), "closing": w.Closing("P4"), "background stop": w.BackgroundStop("npm test"),
 		}
 	}
 	for name, text := range texts(Words{Git: false, Timeout: time.Minute}) {
@@ -139,7 +139,9 @@ func TestWords(t *testing.T) {
 		"no status":        {"(the phase is finished and committed, even while a job you handed to baton still runs)", "baton propose", "--tried", "baton waiting", "`baton note` it and carry on"},
 		"question refused": {"baton note", "baton propose", "a deadline of 5 minutes", "--tried"},
 		"finish step":      {"and commit it"},
-		"closing":          {"When P4 is complete and committed", "baton note", "baton propose", "baton blocked --tried", "`baton verify \"<command>\"", "Quick checks run in place"},
+		"background stop": {"You stopped while your background work runs (npm test). Keep working on what does not depend on it",
+			"invalidated by your own edits", "`baton verify \"<command>\" --notes", "If the phase is complete and committed, report it with `baton done`", "end your turn again"},
+		"closing": {"When P4 is complete and committed", "baton note", "baton propose", "baton blocked --tried", "`baton verify \"<command>\"", "Quick checks run in place"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(git[name], want) {

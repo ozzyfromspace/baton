@@ -893,7 +893,7 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 func recordStop(st *state.State, c Context) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
-	st.Run.SetBackground(tasks(c.Input["background_tasks"]))
+	st.Run.SetBackground(tasks(c.Input["background_tasks"]), c.Now)
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
