@@ -168,7 +168,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	code, err := host.NewSupervisor(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
-		Controller: controller,
+		Controller: controller, ViewSocket: host.ViewSocket(instance),
 	}).Run()
 	if to, session, ok := controller.Restart(); ok && err == nil {
 		host.Release(proj, instance)
