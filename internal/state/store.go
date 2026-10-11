@@ -80,7 +80,12 @@ func (s *Store) Relay(r Relay) error {
 	}
 	r.Phase = s.Worker()
 	var queued bool
-	if _, err := up.Update(func(st *State) error { queued = QueueRelay(st, r, s.Now()); return nil }); err != nil {
+	if _, err := up.Update(func(st *State) error {
+		if queued = QueueRelay(st, r, s.Now()); queued {
+			st.Run.Announce = append(st.Run.Announce, "baton: the worker on "+r.Phase+" has a question for you ("+relayWhat[r.Kind]+"); this session puts it to you as soon as it can")
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if queued {

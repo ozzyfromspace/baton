@@ -156,7 +156,7 @@ func cmdPropose(args []string, io IO) int {
 	}
 	s.Event("proposed", fields)
 	if relayed {
-		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID}); err != nil {
+		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID, What: d.What, Because: d.Because, Untimed: d.Untimed}); err != nil {
 			fmt.Fprintf(io.Err, "baton: warning — could not queue it for the lead session yet (%v); baton queues it again when you end your turn.\n", err)
 		}
 		fmt.Fprintln(io.Out, "baton: "+decide.WorkerProposed(d.ID, d.Untimed, timeout))

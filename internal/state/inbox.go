@@ -13,7 +13,8 @@ type Message struct {
 
 // Message kinds.
 const (
-	MessageLand = "land" // a worker's work did not land, and the worker must act on why
+	MessageLand   = "land"   // a worker's work did not land, and the worker must act on why
+	MessageAnswer = "answer" // the human answered a worker's question, which the lead session put to them
 )
 
 // Tell leaves m for the session's model.

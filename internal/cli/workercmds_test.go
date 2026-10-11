@@ -89,6 +89,9 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	if got := relays(lead); got != "P1/proposal/P1.d1" || !lead.logged("relay_queued", map[string]any{"phase": "P1", "type": "proposal", "decision": "P1.d1"}) {
 		t.Errorf("the run's relay queue %q; events:\n%s", got, lead.events())
 	}
+	if r := lead.state().Relay[0]; r.What != "use a fake clock" || r.Because != "the real one drifts" || r.Untimed != "" {
+		t.Errorf("queued %+v: the lead words its question from it", r)
+	}
 	if !w.logged("proposed", map[string]any{"id": "P1.d1", "relayed": true}) || strings.Contains(w.events(), `"deadline"`) {
 		t.Errorf("the worker's events:\n%s", w.events())
 	}
@@ -100,12 +103,15 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	}
 
 	// One that looks outward-facing has no deadline.
-	w, _ = asWorker(t)
+	w, lead2 := asWorker(t)
 	if out := w.must("", "propose", "push the branch", "--because", "CI needs it", "--undo", "delete it"); !strings.Contains(out, "It has no deadline: 'push' looks outward-facing or irreversible") {
 		t.Errorf("untimed: %s", out)
 	}
 	if ws := w.state(); ws.PendingProposal().Question != "" || ws.PendingProposal().Untimed == "" {
 		t.Errorf("the lead words the question, as it asks it: %+v", ws.PendingProposal())
+	}
+	if ws, r := w.state(), lead2.state().Relay[0]; r.Untimed == "" || r.Untimed != ws.PendingProposal().Untimed {
+		t.Errorf("queued %+v without why it has no deadline", r)
 	}
 }
 
@@ -116,8 +122,8 @@ func TestAWorkersBlockGoesThroughTheLead(t *testing.T) {
 	if !strings.Contains(out, "baton: recorded. baton puts it to the human through the lead session; it stops only P1, while the lead session and any other workers carry on") {
 		t.Errorf("blocked: %s", out)
 	}
-	if got := relays(lead); got != "P1/blocked" {
-		t.Errorf("the run's relay queue: %q", got)
+	if got := relays(lead); got != "P1/blocked" || lead.state().Relay[0].Because != "need the signing key" || !lead.state().Relay[0].Since.Equal(w.state().Blocked.Since) {
+		t.Errorf("the run's relay queue: %q, %+v", got, lead.state().Relay)
 	}
 	w.mustFail("only they can clear that", "blocked", "again", "--tried", "y")
 	if st := lead.state(); st.Blocked != nil || st.Mode != state.ModeRunning || relays(lead) != "P1/blocked" {

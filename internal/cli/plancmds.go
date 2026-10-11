@@ -764,6 +764,7 @@ func cmdBlocked(args []string, io IO) int {
 		s.Event("refused", map[string]any{"command": "blocked", "phase": st.Current, "why": "uncommitted work", "files": len(work.fresh)})
 		return fail(io, "%s", decide.UncommittedRefusal("blocked", st.Current, fileList(work.fresh)))
 	}
+	var since time.Time
 	if _, err := s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not recorded", true); err != nil {
 			return err
@@ -771,7 +772,7 @@ func cmdBlocked(args []string, io IO) int {
 		if err := state.SetBlocked(st, reason, io.Now()); err != nil {
 			return err
 		}
-		st.Blocked.Tried = tried
+		st.Blocked.Tried, since = tried, st.Blocked.Since
 		return nil
 	}); err != nil {
 		return refused(io, s, "blocked", err)
@@ -783,7 +784,7 @@ func cmdBlocked(args []string, io IO) int {
 	s.Event("blocked", blocked)
 	work.report(io, st.Current, keep)
 	if s.Worker() != "" {
-		if err := s.Relay(state.Relay{Kind: state.RelayBlocked}); err != nil {
+		if err := s.Relay(state.Relay{Kind: state.RelayBlocked, Since: since, Because: reason}); err != nil {
 			fmt.Fprintf(io.Err, "baton: warning — could not queue it for the lead session yet (%v); baton queues it again when you end your turn.\n", err)
 		}
 		fmt.Fprintln(io.Out, "baton: "+decide.WorkerBlocked(st.Current))

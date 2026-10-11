@@ -159,7 +159,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	case st.ReviewDue != "" && w.Worker:
 		// A worker's review is put to the human by the lead session; the phase waits for it.
 		st.Run.StopBlocks = 0
-		relayed(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", state.Relay{Kind: state.RelayReview}, now)
+		relayed(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", state.Relay{Kind: state.RelayReview, Since: st.ReviewAt, Count: st.Unattended(st.ReviewDue)}, now)
 	case st.ReviewDue != "":
 		// Before the boundary: a phase that ended on its last decision without the human is reviewed
 		// before the next one starts.
@@ -226,7 +226,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	case st.Blocked != nil && w.Worker:
 		// A worker's block stops its phase alone, and is put to the human by the lead session.
 		st.Run.StopBlocks = 0
-		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked}, now)
+		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked, Since: st.Blocked.Since, Because: st.Blocked.Reason}, now)
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
 	case st.Run.WarnOwed && st.Run.WarnQuestion != "":
@@ -254,7 +254,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		// and their answer wakes it. It is queued again, in case its own queueing failed.
 		rp := st.PendingProposal()
 		st.Run.StopBlocks = 0
-		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID}
+		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID, What: rp.What, Because: rp.Because, Untimed: rp.Untimed}
 		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which the lead session puts to them", cur, rp.ID))
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":

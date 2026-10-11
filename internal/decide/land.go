@@ -72,8 +72,11 @@ func ReverifyNotes(branch, notes string) string {
 // with the prompt.
 func MailTyped(kinds []string) string {
 	for _, k := range kinds {
-		if k == state.MessageLand {
+		switch k {
+		case state.MessageLand:
 			return "[baton] Your work did not land yet: baton's message, attached, says why and what to do."
+		case state.MessageAnswer:
+			return "[baton] The human answered your question: baton's message, attached, says what to do."
 		}
 	}
 	return "[baton] baton has a message for you, attached."

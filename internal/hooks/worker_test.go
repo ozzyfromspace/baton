@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,20 +227,24 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 		say     string // in the announcement
 		refused string // in the refusal ("" for a stop let through)
 		relays  string // the run's relay queue after two stops
+		detail  string // what its question carries: what|because|count
 		event   map[string]any
 	}{
 		{"its phase done", func(st *state.State, _ time.Time) { st.Mode, st.Current = state.ModeComplete, "" },
-			"baton: P2 (Third) done → baton lands its work on the run's branch", "", "", map[string]any{"kind": "worker_finished", "phase": "P2"}},
+			"baton: P2 (Third) done → baton lands its work on the run's branch", "", "", "", map[string]any{"kind": "worker_finished", "phase": "P2"}},
 		{"blocked", func(st *state.State, now time.Time) { state.SetBlocked(st, "need a key", now) },
-			"baton: waiting on the human — blocked on P2: need a key; the lead session asks them", "", "P2/blocked", map[string]any{"kind": "escalated", "type": "blocked", "relayed": true}},
-		{"a review due", func(st *state.State, now time.Time) { state.DueReview(st, "P2", now) },
-			"baton: waiting on the human — review the decisions P2 made without you; the lead session asks them", "", "P2/review", map[string]any{"kind": "escalated", "type": "review"}},
-		{"its proposal waits", func(st *state.State, now time.Time) {
-			state.AddProposal(st, state.Decision{What: "use a fake", Relayed: true}, now)
+			"baton: waiting on the human — blocked on P2: need a key; the lead session asks them", "", "P2/blocked", "|need a key|0", map[string]any{"kind": "escalated", "type": "blocked", "relayed": true}},
+		{"a review due", func(st *state.State, now time.Time) {
+			state.AddNote(st, "used a fake", "", now)
+			state.DueReview(st, "P2", now)
 		},
-			"baton: P2 (Third) waits on the human's answer to proposal P2.d1, which the lead session puts to them", "", "P2/proposal/P2.d1",
+			"baton: waiting on the human — review the decisions P2 made without you; the lead session asks them", "", "P2/review", "||1", map[string]any{"kind": "escalated", "type": "review"}},
+		{"its proposal waits", func(st *state.State, now time.Time) {
+			state.AddProposal(st, state.Decision{What: "use a fake", Because: "no clock", Relayed: true}, now)
+		},
+			"baton: P2 (Third) waits on the human's answer to proposal P2.d1, which the lead session puts to them", "", "P2/proposal/P2.d1", "use a fake|no clock|0",
 			map[string]any{"kind": "idle_on_relay", "id": "P2.d1"}},
-		{"no status", func(*state.State, time.Time) {}, "", "baton puts it to the human through the lead session", "", map[string]any{"kind": "stop_refused", "phase": "P2"}},
+		{"no status", func(*state.State, time.Time) {}, "", "baton puts it to the human through the lead session", "", "", map[string]any{"kind": "stop_refused", "phase": "P2"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, lead, _ := newWorker(t)
@@ -261,6 +266,16 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 			}
 			if c.relays != "" && !lead.logged("relay_queued", map[string]any{"phase": "P2"}) {
 				t.Errorf("the run's events:\n%s", lead.eventLog())
+			}
+			if c.relays != "" {
+				// The question carries what the lead needs to ask it, and the human is told it is coming.
+				r, ann := lead.state().Relay[0], lead.state().Run.Announce
+				if got := fmt.Sprint(r.What, "|", r.Because, "|", r.Count); got != c.detail {
+					t.Errorf("queued with %q, want %q", got, c.detail)
+				}
+				if len(ann) != 1 || !strings.Contains(ann[0], "baton: the worker on P2 has a question for you") {
+					t.Errorf("announced %q", ann)
+				}
 			}
 			st := w.state()
 			if n := len(st.Run.Notices); c.event["kind"] == "escalated" && (n != 1 || st.Run.Escalation == nil || !st.Run.Escalation.Asked || st.Run.Escalation.Question != "") {
