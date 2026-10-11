@@ -83,10 +83,24 @@ func TestDeclaredWaitAndBackgroundWorkHoldTheWatchdog(t *testing.T) {
 	if len(r.in.text) != 1 || !strings.Contains(r.in.text[0], `wait for "the deploy" has run out`) {
 		t.Fatalf("after the wait: %q", r.in.text)
 	}
+}
 
-	r = newIdleRig(t)
-	r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "shell", Status: "running"}} })
-	for i := 0; i < 29; i++ {
+// The model's own background work keeps reminders away until the oldest of it has run for BackgroundIdle,
+// counted from when a Stop first reported it. Then baton looks in, and reminders that change nothing bring
+// the human in.
+func TestBackgroundWorkHoldsTheWatchdogForAnHour(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Since: r.now}}
+	})
+	for i := 0; i < 20; i++ {
+		r.tick(time.Minute)
+	}
+	r.set(func(st *state.State) { // the model stops on it again, and starts more
+		st.Run.Background = append(st.Run.Background, state.Task{ID: "b2", Type: "shell", Since: r.now})
+		st.Run.LastActivity, st.Run.LastStop = r.now, r.now
+	})
+	for i := 0; i < 39; i++ {
 		r.tick(time.Minute)
 	}
 	if len(r.in.text) != 0 {
@@ -95,8 +109,31 @@ func TestDeclaredWaitAndBackgroundWorkHoldTheWatchdog(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		r.tick(time.Minute)
 	}
-	if len(r.in.text) != 1 || !strings.Contains(r.in.text[0], "Background work has been running") {
-		t.Fatalf("after background max: %q", r.in.text)
+	if len(r.in.text) != 1 || r.in.text[0] != "[baton] Background work has been running for over 60 minutes with no progress on P1. Check on it, then continue, or report your status." {
+		t.Fatalf("after an hour: %q\n%s", r.in.text, r.events())
+	}
+	// The model answers each reminder and stops on the work again: one more reminder, then the human.
+	for n := 1; n <= 2; n++ {
+		r.tick(time.Second)
+		r.set(func(st *state.State) { st.Run.LastActivity, st.Run.LastStop = r.now, r.now })
+		for i := 0; i < 11; i++ {
+			r.tick(time.Minute)
+		}
+	}
+	if e := r.state().Run.Escalation; len(r.in.text) != 2 || e == nil || e.Reason != "P1 has not moved after 2 reminders" {
+		t.Fatalf("typed %q, escalation %+v", r.in.text, e)
+	}
+}
+
+// Work a Stop has not reported a start for counts from the last Stop.
+func TestBackgroundSince(t *testing.T) {
+	stop := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		since, want time.Time
+	}{{stop.Add(-time.Hour), stop.Add(-time.Hour)}, {time.Time{}, stop}, {stop.Add(time.Minute), stop}} {
+		if got := backgroundSince([]state.Task{{ID: "b1", Type: "shell", Since: c.since}}, stop); !got.Equal(c.want) {
+			t.Errorf("since %s: %s, want %s", c.since, got, c.want)
+		}
 	}
 }
 

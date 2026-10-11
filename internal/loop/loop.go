@@ -38,7 +38,8 @@ type Timing struct {
 	StaleTurn      time.Duration // an open turn with no hook activity this long is not trusted to be open
 	IdleNudge      time.Duration // no hook activity this long mid-plan: type a reminder (then escalate)
 	WaitGrace      time.Duration // extra time after a declared wait runs out
-	BackgroundMax  time.Duration // background work may hold a quiet session (or a compaction) this long
+	BackgroundMax  time.Duration // background subagents may hold a compaction this long
+	BackgroundIdle time.Duration // the model's own background work may keep a quiet session from reminders this long
 	DialogNotify   time.Duration // a permission prompt or question open this long: notify the human
 	WarnTimeout    time.Duration // the context question unanswered this long: baton answers "Keep going"
 	RateLimitRetry time.Duration // retry interval after a usage-limit error (doubled once at most)
@@ -61,7 +62,7 @@ var DefaultTiming = Timing{
 	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute,
 	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
-	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
+	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute, BackgroundIdle: time.Hour,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter:       config.DefaultSwitchAfter,

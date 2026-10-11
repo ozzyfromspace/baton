@@ -56,8 +56,8 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{} // the model answered the reminder (IdleNudges still counts it)
 	}
 	quietSince := latest(st.Run.LastActivity, st.Run.LastStop, l.wokeAt, l.idleNudged)
-	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(l.since(st.Run.LastStop)) < l.Timing.BackgroundMax {
-		return // background work will wake the session when it finishes
+	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(l.since(backgroundSince(busy, st.Run.LastStop))) < l.Timing.BackgroundIdle {
+		return // the model's own background work wakes the session when it ends; baton looks in once it has run long
 	}
 	if w := st.Waiting; w != nil && v.Now.Before(w.Until.Add(l.Timing.WaitGrace)) {
 		return
@@ -71,8 +71,8 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.escalate("stalled", fmt.Sprintf("no activity on %s for %s, even after a reminder", st.Current, v.Now.Sub(st.Run.LastActivity).Round(time.Minute)))
 		return
 	case st.Run.IdleNudges >= MaxIdleNudges:
-		// The model answers reminders but the plan does not move (a wait declared again and again, or a
-		// stop that background work let through): more reminders would only burn tokens.
+		// The model answers reminders but the plan does not move (a wait declared again and again, or
+		// background work that runs on and on): more reminders would only burn tokens.
 		l.escalate("stalled", fmt.Sprintf("%s has not moved after %d reminders", st.Current, st.Run.IdleNudges))
 		return
 	}
@@ -93,10 +93,19 @@ func (l *Loop) idleMessage(v host.View, st state.State) string {
 	case st.Waiting != nil:
 		return fmt.Sprintf("[baton] Your declared wait for %q has run out. Check on it, then continue %s, or report your status.", st.Waiting.What, st.Current)
 	case len(st.Run.BusyBackground()) > 0:
-		return fmt.Sprintf("[baton] Background work has been running for over %s with no progress on %s. Check on it, then continue, or report your status.", l.Timing.BackgroundMax, st.Current)
+		return fmt.Sprintf("[baton] Background work has been running for over %s with no progress on %s. Check on it, then continue, or report your status.", decide.Spell(l.Timing.BackgroundIdle), st.Current)
 	default:
 		return fmt.Sprintf("[baton] No activity for %s and %s is not reported done. Continue it, or report: baton done / baton propose / baton blocked --tried / baton waiting.", l.Timing.IdleNudge, st.Current)
 	}
+}
+
+// backgroundSince is when the oldest of the background work started running, as far as baton knows: when a
+// Stop first reported it (at the latest, the last Stop).
+func backgroundSince(busy []state.Task, lastStop time.Time) time.Time {
+	if t := state.Oldest(busy); !t.IsZero() && t.Before(lastStop) {
+		return t
+	}
+	return lastStop
 }
 
 // watchDialog tells the human when Claude Code has been waiting on them (a permission prompt or a
