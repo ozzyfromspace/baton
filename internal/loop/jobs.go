@@ -169,13 +169,14 @@ func verdictLine(vd state.Verdict) string {
 	return fmt.Sprintf("baton: %s's verification %s (job %s), with no verdict → %s reopens", vd.Phase, decide.Outcome(j), j.ID, vd.Phase)
 }
 
-// deliver wakes an idle session whose phase in hand has job results due (state.Due), or whose plan a
-// verification just completed: it types a short line, and the prompt's hook hands the results over. It
-// waits for the typing gates like anything baton types, and never while the session is to ask the human
-// something (a worker's proposal is the lead session's to ask). It reports whether it typed.
+// deliver wakes an idle session whose phase in hand has job results due (state.Due), whose plan a
+// verification just completed, or that baton has messages for (state.Mail): it types a short line, and
+// the prompt's hook hands them over. It waits for the typing gates like anything baton types, and never
+// while the session is to ask the human something (a worker's proposal is the lead session's to ask). It
+// reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
-	due := st.Due()
-	if len(due) == 0 || st.Run.Escalation != nil || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
+	due, mail := st.Due(), st.Mail()
+	if len(due) == 0 && len(mail) == 0 || st.Run.Escalation != nil || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {
@@ -183,13 +184,25 @@ func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 		return false
 	}
 	ids := jobIDs(due)
+	var kinds []string
+	for _, m := range mail {
+		kinds = append(kinds, m.Kind)
+		ids += " mail@" + m.At.Format(time.RFC3339Nano)
+	}
 	if ids == l.typedFor && v.Now.Sub(l.since(l.typedAt)) < l.Timing.ResumeNudge {
 		return false // typed already: its prompt has not arrived yet
 	}
 	l.proceed()
 	l.typedFor, l.typedAt = ids, v.Now
-	l.Store.Event("results_typed", map[string]any{"jobs": ids})
-	if err := in.Type(decide.JobsFinished(due), true); err != nil {
+	var line string
+	if len(due) > 0 {
+		line = decide.JobsFinished(due) // the prompt's hook hands over baton's messages too
+		l.Store.Event("results_typed", map[string]any{"jobs": jobIDs(due)})
+	} else {
+		line = decide.MailTyped(kinds)
+		l.Store.Event("mail_typed", map[string]any{"messages": kinds})
+	}
+	if err := in.Type(line, true); err != nil {
 		l.logf("loop: typing the results: %v", err)
 	}
 	return true

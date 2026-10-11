@@ -117,6 +117,8 @@ type Fleet struct {
 	Spawn func(host.Spec) (Hidden, error)
 	// Go runs the coordinator's work on the workers off the lead's tick (nil: on a goroutine of its own).
 	Go func(fn func())
+
+	git landGit // the merge queue's git (nil: gitx)
 }
 
 func (f *Fleet) run(fn func()) {
@@ -235,8 +237,8 @@ func (c *Coordinator) fleet(v host.View, s *state.Store) {
 	})
 }
 
-// step looks over the run's workers once: the sessions this host runs, then the roster's workers no
-// session runs, then whether a new one can start.
+// step looks over the run's workers once: the sessions this host runs, then the merge queue, then the
+// roster's workers no session runs, then whether a new one can start.
 func (c *Coordinator) step(now time.Time, s *state.Store) {
 	st, err := s.Load()
 	if err != nil {
@@ -246,11 +248,12 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 	for _, w := range c.launched() {
 		c.watch(now, s, st, pl, w)
 	}
+	c.merge(now, s)
 	if st, err = s.Load(); err != nil {
 		return
 	}
 	for _, e := range st.LiveWorkers() {
-		if c.runs(e.Ref) || e.Status == state.WorkerLanding {
+		if c.runs(e.Ref) {
 			continue
 		}
 		if why := unwanted(st, pl, &e); why != "" {
@@ -531,7 +534,7 @@ func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why 
 	}
 	c.setEntry(s, prev, func(w *state.Worker) {
 		w.Session, w.Instance, w.Resumes = e.Session, e.Instance, e.Resumes
-		w.Status, w.Since, w.Why, w.Ended = state.WorkerStarting, now, "", now
+		w.Status, w.Since, w.Why, w.Ended, w.Merge = state.WorkerStarting, now, "", now, nil
 	})
 	prompt := decide.WorkerBegin(e.Phase)
 	if again {
@@ -631,8 +634,8 @@ func (c *Coordinator) Ended(why string) []state.Worker {
 		}
 		now := s.Now()
 		c.setEntry(s, w.entry, func(e *state.Worker) {
-			if e.Status == state.WorkerStarting || e.Status == state.WorkerWorking {
-				e.Status, e.Since, e.Why, e.Ended = state.WorkerSuspended, now, why, now
+			if e.Status == state.WorkerStarting || e.Status == state.WorkerWorking || e.Status == state.WorkerLanding {
+				e.Status, e.Since, e.Why, e.Ended, e.Merge = state.WorkerSuspended, now, why, now, nil
 			}
 		})
 		s.Event("worker_ended", map[string]any{"phase": w.phase, "why": why, "suspended": true})

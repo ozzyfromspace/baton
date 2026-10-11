@@ -49,6 +49,7 @@ type Coordinator struct {
 	off          string
 	failedStarts int
 	retryAt      time.Time
+	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
 }
 
 // Tick is the lead's tick: its Loop, then the run's duties.

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,8 +50,8 @@ func logEvents(t *testing.T, of string, events []map[string]any) {
 }
 
 // A worker takes up P1 beside the lead, which works on P0: in a worktree of its own, from its own brief,
-// with the lead's permission rules. Its commit stays on its branch (landing it is the merge queue's), and
-// the worker is suspended when the session ends.
+// with the lead's permission rules. Once it reports P1 done, its commit lands on the run's branch under
+// the lead, the worker ends, and P2, which needs both, starts only then. The lead hears what landed.
 func TestAWorkerWorksBesideTheLead(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, workerPlan)
@@ -70,10 +71,9 @@ func TestAWorkerWorksBesideTheLead(t *testing.T) {
 	if spawned == nil || spawned["phase"] != "P1" {
 		t.Fatalf("no worker on P1: %v", spawned)
 	}
-	branch, _ := spawned["branch"].(string)
 	worktree, _ := spawned["worktree"].(string)
-	s.Until("the worker on P1 to finish", 4*time.Minute, func() bool {
-		return first(s.WorkerEvents("P1"), is("worker_finished", "phase", "P1")) >= 0 && first(s.Events(), is("phase_done", "phase", "P0")) >= 0
+	s.Until("the plan to complete", 8*time.Minute, func() bool {
+		return first(s.Events(), is("plan_complete")) >= 0 || first(s.Events(), is("phase_done", "phase", "P2")) >= 0
 	})
 	if first(s.Events(), is("worker_started", "phase", "P1")) < 0 {
 		t.Error("the worker never started")
@@ -84,26 +84,28 @@ func TestAWorkerWorksBesideTheLead(t *testing.T) {
 			t.Fatalf("the worker's events lack step %d", i)
 		}
 	}
-	if log := Git(t, dir, "log", "--format=%s", branch); !strings.Contains(log, "feat: one") {
-		t.Errorf("the worker's branch %s: %s", branch, log)
+	ev := s.Events()
+	landed := first(ev, is("landed", "phase", "P1"))
+	if first(ev, is("land_queued", "phase", "P1")) < 0 || landed < 0 {
+		t.Fatal("P1's work did not land")
 	}
-	if got := Git(t, worktree, "show", "HEAD:one.txt"); strings.TrimSpace(got) != "one" {
-		t.Errorf("one.txt in the worker's commit: %q", got)
+	if p2 := first(ev, is("phase_started", "phase", "P2")); p2 < landed || first(ev, is("phase_done", "phase", "P0")) > p2 {
+		t.Errorf("P2 started (event %d) before P0 was done or P1 landed (event %d)", p2, landed)
 	}
-	if strings.Contains(Git(t, dir, "log", "--format=%s"), "feat: one") {
-		t.Error("the worker's commit is on the run's branch, with nothing to land it")
+	if log := Git(t, dir, "log", "--format=%s"); !strings.Contains(log, "feat: one") {
+		t.Errorf("the run's branch lacks the worker's commit: %s", log)
 	}
-	none(t, s, "workers_off", "worker_resumed", "controller_panic")
-
-	// The session ends: the worker with it, suspended for the next host.
-	s.WaitQuiet(3*time.Second, time.Minute)
-	s.Type("/exit")
-	select {
-	case <-s.exited:
-	case <-time.After(time.Minute):
-		t.Fatal("the session did not end")
+	if got, err := os.ReadFile(filepath.Join(dir, "one.txt")); err != nil || strings.TrimSpace(string(got)) != "one" {
+		t.Errorf("one.txt in the checkout: %q, %v", got, err)
 	}
-	if first(s.Events(), is("worker_ended", "phase", "P1", "suspended", "true")) < 0 {
-		t.Errorf("the worker was not suspended")
+	if first(ev, is("worker_ended", "phase", "P1", "why", "its work landed")) < 0 {
+		t.Error("the landed worker did not end")
 	}
+	if _, err := os.Stat(worktree); err == nil {
+		t.Errorf("the landed worker's worktree %s is still there", worktree)
+	}
+	if first(ev, is("landed_told")) < 0 {
+		t.Error("the lead was never told what landed")
+	}
+	none(t, s, "workers_off", "worker_resumed", "controller_panic", "land_returned", "land_deferred")
 }

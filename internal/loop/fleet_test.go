@@ -62,7 +62,8 @@ type crew struct {
 	specs    []host.Spec
 	sessions []*fake
 	spawnErr error
-	leadIdle bool // the lead's hooks do not run
+	leadIdle bool              // the lead's hooks do not run
+	typedTo  map[string]*typed // what was typed into each worker's session, by its phase
 }
 
 func newCrew(t *testing.T, max int) *crew {
@@ -139,7 +140,13 @@ func (x *crew) tick(d time.Duration) {
 		default:
 		}
 		sub, _ := x.proj.Lookup("", spec.Instance)
-		spec.Controller.Tick(view(sub), &typed{})
+		if x.typedTo == nil {
+			x.typedTo = map[string]*typed{}
+		}
+		if x.typedTo[spec.Name] == nil {
+			x.typedTo[spec.Name] = &typed{}
+		}
+		spec.Controller.Tick(view(sub), x.typedTo[spec.Name])
 	}
 }
 
