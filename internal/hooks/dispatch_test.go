@@ -3,17 +3,12 @@ package hooks
 import (
 	"bytes"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
-
-// events lists every hook event baton subscribes to; each one must fail open.
-var events = []string{
-	"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
-	"PermissionDenied", "Notification", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
-	"PreCompact", "PostCompact",
-}
 
 func hosted(k string) string {
 	if k == "BATON_HOST" {
@@ -33,7 +28,13 @@ func run(t *testing.T, event, input string, env func(string) string, h Handler) 
 	return code, out.String(), errb.String()
 }
 
+// Every event baton handles must fail open, so the list is the handler map itself: a new handler is
+// covered the moment it is registered.
 func TestPanicFailsOpenForEveryEvent(t *testing.T) {
+	events := slices.Sorted(maps.Keys(Handlers(Deps{})))
+	if len(events) < 17 {
+		t.Fatalf("only %d events: %v", len(events), events)
+	}
 	for _, ev := range events {
 		code, out, errs := run(t, ev, `{"hook_event_name":"`+ev+`"}`, hosted, func(Context) (Result, error) { panic("boom") })
 		if code != 0 {
