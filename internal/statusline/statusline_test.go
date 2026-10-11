@@ -190,6 +190,11 @@ func TestWorkerSegments(t *testing.T) {
 			st.Usage = &state.Usage{UsedPct: 84.6, Resets: now.Add(time.Hour)}
 			return st
 		}, 80, head + "5h 85% · ctx 41%"},
+		{"a reading at it", func() state.State {
+			st := with()
+			st.Usage = &state.Usage{UsedPct: 80, Resets: now.Add(time.Hour)}
+			return st
+		}, 80, head + "5h 80% · ctx 41%"},
 		{"a reading under it", func() state.State {
 			st := with()
 			st.Usage = &state.Usage{UsedPct: 79, Resets: now.Add(time.Hour)}

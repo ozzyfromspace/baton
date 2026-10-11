@@ -390,6 +390,10 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 	if want := "usage: 62% of the five-hour allowance, which resets at " + at(2*time.Hour) + " (read " + at(-time.Minute) + ") · new workers start below 80%"; !strings.Contains(out, want+"\n") {
 		t.Errorf("no %q in:\n%s", want, out)
 	}
+	lead.set(func(x *state.State) { x.Usage.Limited, x.Usage.Hit, x.Usage.By = now, now.Add(-time.Hour), "lead" })
+	if out := lead.must("", "status"); strings.Contains(out, "usage limit") {
+		t.Errorf("a limit that is over is shown:\n%s", out)
+	}
 
 	// A worker that ended keeping commits that never landed is named while its branch is there, and while
 	// no later worker took its phase up on the same branch; a suspended one says what resumes it; a usage

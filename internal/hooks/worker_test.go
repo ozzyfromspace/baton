@@ -482,6 +482,11 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 		t.Errorf("the worker was handed:\n%s", ctx)
 	}
 
+	lead.fire("PreCompact", map[string]any{"trigger": "auto"})
+	if ctx := additionalContext(lead.fire("SessionStart", map[string]any{"source": "compact"})); !strings.Contains(ctx, "- P2.d1 (P2, ") {
+		t.Errorf("the lead's brief after a compaction:\n%s", ctx)
+	}
+
 	st := lead.state()
 	st.Mode = state.ModeComplete
 	pl, _ := lead.store.LoadPlan()

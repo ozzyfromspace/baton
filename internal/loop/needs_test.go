@@ -106,3 +106,64 @@ func TestAWorkersDialogIsPushedUnderItsPhase(t *testing.T) {
 	}
 	t.Errorf("pushed %q to %q: %q", p.kinds, p.projects, p.details)
 }
+
+// A worker's question answered so that it goes on, whose answer has yet to reach its sub-run, waits on
+// nobody in its session.
+func TestNeeds(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	sub := state.State{Mode: state.ModeRunning, Current: "P1", Decisions: []state.Decision{{ID: "P1.d1", Kind: state.Proposal, Phase: "P1",
+		What: "use a fake clock", Relayed: true, At: now}}}
+	p := sub.PendingProposal()
+	if p == nil {
+		t.Fatal("no proposal pending")
+	}
+	for _, c := range []struct {
+		answer, want string
+	}{
+		{"Go ahead", ""},
+		{"Wait for me", "its proposal " + p.ID + ", use a fake clock"},
+		{"Pause baton", "its proposal " + p.ID + ", use a fake clock"},
+	} {
+		st := state.State{Relay: []state.Relay{{Phase: "P1", Kind: state.RelayProposal, Decision: p.ID, What: p.What,
+			Answered: &state.Resolution{By: state.ByHuman, Answer: c.answer, At: now}}}}
+		if got, relayed := needs(sub, st, "P1"); got != c.want || relayed != (c.want != "") {
+			t.Errorf("answered %q: needs %q (relayed %v), want %q", c.answer, got, relayed, c.want)
+		}
+	}
+}
+
+// What waits in a worker's session is the human's no more once baton ends it, and a resumed worker
+// starts with nothing waiting.
+func TestAnEndedOrResumedWorkerNeedsNothing(t *testing.T) {
+	x := newCrew(t, 1)
+	x.tick(time.Second)
+	x.started("P1")
+	x.tick(time.Second)
+	prompt := func() {
+		x.sub("P1").Update(func(st *state.State) error {
+			st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Key: "k1", Since: x.now})
+			return nil
+		})
+	}
+	prompt()
+	x.tick(time.Second)
+	if w := x.worker("P1"); w.Needs == "" {
+		t.Fatal("the prompt is not on the roster")
+	}
+	_, f := x.last()
+	f.exit(1) // ended unexpectedly: resumed
+	x.tick(time.Second)
+	if w := x.worker("P1"); w.Status != state.WorkerStarting || w.Needs != "" || !w.NeedsSince.IsZero() {
+		t.Fatalf("resumed: %+v", w)
+	}
+
+	x.sub("P1").Update(func(st *state.State) error { st.Run.Dialogs.Clear(); return nil })
+	x.started("P1")
+	x.tick(time.Second)
+	x.c.end(x.c.launched()[0], "the run was dropped")
+	prompt()
+	x.tick(time.Second)
+	if w := x.worker("P1"); w.Needs != "" || strings.Count(x.events(), `"kind":"worker_waiting"`) != 1 {
+		t.Errorf("a worker baton is ending: %+v\n%s", w, x.events())
+	}
+}
