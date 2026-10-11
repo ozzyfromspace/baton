@@ -1,6 +1,6 @@
 // fakeclaude stands in for claude in the host's integration tests. It records its arguments, its
-// BATON_* environment and every byte it receives into $FAKE_OUT, and exits with $FAKE_EXIT when it
-// reads a 'Q'.
+// BATON_* environment (and CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS) and every byte it receives into
+// $FAKE_OUT, and exits with $FAKE_EXIT when it reads a 'Q'.
 //
 // With FAKE_HUP set it floods the screen instead, the way a busy claude does. FAKE_HUP=loop notices
 // SIGHUP only between writes, as claude does (its handler runs on the thread that writes), so it
@@ -25,7 +25,7 @@ func main() {
 	out := os.Getenv("FAKE_OUT")
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "BATON_") {
+		if strings.HasPrefix(kv, "BATON_") || strings.HasPrefix(kv, "CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=") {
 			k, v, _ := strings.Cut(kv, "=")
 			env[k] = v
 		}

@@ -131,7 +131,7 @@ func (r *rig) quit() int {
 }
 
 func TestPassthroughSettingsAndExitCode(t *testing.T) {
-	r := startRig(t, nil)
+	r := startRig(t, nil, "CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=120000") // foreground_max, set by the CLI
 	r.stdinW.Write([]byte("hello\r"))
 	r.waitScreen(`got:"hello\r"`)
 	if code := r.quit(); code != 7 {
@@ -155,7 +155,8 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 	if len(hooks) < 10 || settings["statusLine"] == nil || !strings.Contains(args[1]+args[3], "Bash(baton:*)") || settings["idleCompaction"] != false {
 		t.Fatalf("settings: %v", settings)
 	}
-	for k, want := range map[string]string{"BATON_HOST": "1", "BATON_INSTANCE": "inst-1", "BATON_BIN": "/opt/baton/bin/baton", "BATON_VERSION": "test"} {
+	for k, want := range map[string]string{"BATON_HOST": "1", "BATON_INSTANCE": "inst-1", "BATON_BIN": "/opt/baton/bin/baton", "BATON_VERSION": "test",
+		"CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS": "120000"} {
 		if env[k] != want {
 			t.Errorf("%s = %q, want %q", k, env[k], want)
 		}

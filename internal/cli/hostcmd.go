@@ -7,6 +7,7 @@ import (
 	goio "io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -122,6 +123,10 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	foreground, err := cfg.ForegroundWait()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	// Shorter watchdog timings, for tests and impatient humans.
@@ -137,6 +142,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 			env = append(env, kv)
 		}
 	}
+	env = backgroundAfter(env, foreground)
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
@@ -189,6 +195,21 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	controller.Flush()
 	return code
+}
+
+// autoBackground is Claude Code's cap, in milliseconds, on how long a command runs in the foreground
+// before it is moved to the background (spike 20).
+const autoBackground = "CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS"
+
+// backgroundAfter caps how long claude runs a command in the foreground at d (foreground_max): a command
+// still running then moves to the background, where it keeps running and wakes the session when it ends,
+// so a long test run or a CI watch never holds the session. A cap the human set themselves stays, and 0
+// (off) leaves Claude Code's own.
+func backgroundAfter(env []string, d time.Duration) []string {
+	if d <= 0 || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, autoBackground+"=") }) {
+		return env
+	}
+	return append(env, autoBackground+"="+strconv.FormatInt(d.Milliseconds(), 10))
 }
 
 // restartOn hands this process over to baton `to`, resuming the session on it: the same pid, terminal

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -275,11 +276,37 @@ func TestTheHostRefusesAnInvalidJobSetting(t *testing.T) {
 	for name, want := range map[string]string{
 		"BATON_VERIFY_TIMEOUT": `BATON_VERIFY_TIMEOUT "forever" is not valid: use a duration from 1s to 24h`,
 		"BATON_SWITCH_AFTER":   `BATON_SWITCH_AFTER "forever" is not valid: use a duration from 1s to 2h`,
+		"BATON_FOREGROUND_MAX": `BATON_FOREGROUND_MAX "forever" is not valid: use a duration from 1s to 10m`,
 	} {
 		t.Chdir(t.TempDir())
 		io, _, errb := testIO("", map[string]string{"BATON_HOME": t.TempDir(), name: "forever", "BATON_CLAUDE": "/nonexistent/claude"})
 		if code := runHostWith(nil, io, nil); code != 1 || !strings.Contains(errb.String(), want) {
 			t.Errorf("%s: exit %d: %s", name, code, errb)
+		}
+	}
+}
+
+// claude moves a command to the background after foreground_max, unless the human capped that themselves
+// or turned it off.
+func TestClaudeBackgroundsLongCommands(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		env  []string
+		d    time.Duration
+		want []string
+	}{
+		{"set", []string{"PATH=/bin"}, 2 * time.Minute, []string{"CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=120000"}},
+		{"the human's own", []string{"CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=30000"}, 2 * time.Minute, []string{"CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=30000"}},
+		{"off", []string{"PATH=/bin"}, 0, nil},
+	} {
+		var got []string
+		for _, kv := range backgroundAfter(c.env, c.d) {
+			if strings.HasPrefix(kv, "CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS=") {
+				got = append(got, kv)
+			}
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }
