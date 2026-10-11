@@ -23,8 +23,10 @@ func (h *handlers) stop(c Context) (Result, error) {
 	}
 	pl, _ := s.LoadPlan()
 	var d decision
+	var ann string
 	_, _, err = h.update(c, func(st *state.State, s *state.Store) error {
 		recordStop(st, c)
+		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
 		drift, ev := planDrift(st, s, pl, c.Now)
 		if ev != nil {
@@ -50,6 +52,18 @@ func (h *handlers) stop(c Context) (Result, error) {
 	for _, e := range d.events {
 		s.Event(e.kind, e.fields)
 	}
+	msg, _ := d.out()["systemMessage"].(string)
+	if d.deliver.any() {
+		d.out()["reason"] = d.deliver.text(s)
+		msg = lines(msg, d.deliver.says())
+		d.deliver.event(s, "stop")
+	}
+	if msg = lines(ann, msg); msg != "" {
+		d.say(msg)
+	}
+	if len(d.output) == 0 {
+		d.output = nil
+	}
 	return Result{Output: d.output}, nil
 }
 
@@ -59,8 +73,9 @@ type event struct {
 }
 
 type decision struct {
-	output map[string]any
-	events []event
+	output  map[string]any
+	events  []event
+	deliver delivery // results the stop is refused with; stop writes the reason from them
 }
 
 func (d *decision) say(msg string) { d.out()["systemMessage"] = msg }
@@ -86,6 +101,12 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 	case state.ModeIdle, state.ModePaused:
 		return d
 	case state.ModeComplete:
+		if len(st.Due()) > 0 {
+			// The verification that completed the plan: the model hears it first, and sums the run up.
+			d.deliver = take(st, now)
+			d.refuse("")
+			return d
+		}
 		if !st.Run.CompleteNotified {
 			st.Run.CompleteNotified = true
 			done := fmt.Sprintf("all %d phases done", len(pl.Phases))
@@ -166,6 +187,20 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 		d.say("baton: waiting on you — " + st.Run.Escalation.Reason)
 	case st.Blocked != nil:
 		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
+	case len(st.Due()) > 0:
+		// A job of the phase in hand finished: its result is what the model goes on with.
+		st.Run.StopBlocks = 0
+		d.deliver = take(st, now)
+		d.refuse("")
+	case st.Current == "":
+		// Every phase left waits for a job, so there is nothing to work on; baton takes the next phase up
+		// as soon as one can start.
+		st.Run.StopBlocks = 0
+		msg := "baton: no phase can start yet; baton takes the next one up as soon as one can"
+		if jobs := st.Unfinished(); len(jobs) > 0 {
+			msg = "baton: no phase can start until " + waitingOn(jobs) + " finishes; baton takes the next one up then"
+		}
+		d.say(msg)
 	case st.Waiting != nil && now.Before(st.Waiting.Until):
 		st.Run.StopBlocks = 0
 		d.say(fmt.Sprintf("baton: waiting for %s until %s", st.Waiting.What, st.Waiting.Until.Local().Format("15:04")))
@@ -237,8 +272,7 @@ func notice(st *state.State, kind, text string, now time.Time) {
 }
 
 func queueCompaction(st *state.State, reason string, now time.Time) {
-	c := &st.Run.Compaction
-	*c = state.Compaction{Epoch: c.Epoch + 1, Status: state.CompactQueued, Reason: reason, Queued: now, Rewoken: c.Rewoken}
+	st.Run.Compaction.Queue(reason, now)
 }
 
 // started reports whether any phase of the run has started: before that, a boundary owed is the one

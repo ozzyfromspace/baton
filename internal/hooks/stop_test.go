@@ -88,6 +88,24 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "a human-started turn still needs a status", setup: func(st *state.State) { st.Run.TurnBy = "human" },
 			block: true, reason: "answer it first"},
 		{name: "no status is refused", block: true, reason: "baton done P0"},
+		{name: "a job's result answers the stop", block: true,
+			setup: func(st *state.State) { st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Status: state.JobFailed}} }},
+		{name: "a result given already does not", block: true, reason: "baton done P0",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Status: state.JobFailed, Delivered: tStop}}
+			}},
+		{name: "another phase's result does not", block: true, reason: "baton done P0",
+			setup: func(st *state.State) { st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Status: state.JobFailed}} }},
+		{name: "a result waits for a block", block: true, reason: "AskUserQuestion", notice: "blocked",
+			setup: func(st *state.State) {
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Status: state.JobFailed}}
+				state.SetBlocked(st, "need a decision", tStop)
+			}},
+		{name: "nothing in hand: the stop waits for the job", say: "no phase can start until job j1 (`make test`, P0) finishes",
+			setup: func(st *state.State) {
+				st.Phases["P0"].Status, st.Current = state.PhaseVerifying, ""
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+			}},
 		{name: "expired wait is no status", block: true, reason: "not reported done",
 			setup: func(st *state.State) { state.SetWaiting(st, "x", time.Minute, tStop.Add(-time.Hour)) }},
 		{name: "fourth silent stop escalates", block: true, reason: "AskUserQuestion", notice: "stalled",
@@ -120,6 +138,9 @@ func TestStopDecisionTable(t *testing.T) {
 				c.setup(&st)
 			}
 			d := decideStop(&st, pl, tStop, decide.Words{Git: true})
+			if delivered := d.deliver.any(); delivered != (c.name == "a job's result answers the stop") {
+				t.Errorf("delivered %+v", d.deliver)
+			}
 			blocked := d.output["decision"] == "block"
 			if blocked != c.block {
 				t.Fatalf("blocked = %v, want %v (%v)", blocked, c.block, d.output)

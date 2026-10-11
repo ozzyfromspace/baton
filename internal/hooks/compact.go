@@ -10,8 +10,9 @@ import (
 
 // afterCompaction runs for SessionStart with source "compact": it starts the next phase if this was the
 // boundary compaction, and injects the brief. Claude Code runs this before PostCompact, so the brief is
-// in place before the rewake wakes the model (docs/research/verification-2.md).
-func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
+// in place before the rewake wakes the model (docs/research/verification-2.md). A phase resumed after its
+// job finished gets the job's result in its brief. ann is what the host left for the human.
+func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Result, error) {
 	pl, err := s.LoadPlan()
 	if err != nil {
 		return Result{}, nil
@@ -23,6 +24,7 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 		origin = state.OriginOf(s.Root)
 	}
 	kind := ""
+	var result *state.Job // the job a resumed phase was set aside for, now finished
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if st.Mode != state.ModeRunning {
 			return nil
@@ -39,6 +41,13 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 			kind = brief.Boundary
 			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
 				kind = brief.Resume
+				if j := st.Job(parkJob(ps.Park)); j != nil && j.Finished() {
+					if j.Delivered.IsZero() {
+						j.Delivered = c.Now
+					}
+					x := *j
+					result = &x
+				}
 			}
 			state.Start(st, c.Now, origin)
 		case ours && comp.Reason == "checkpoint":
@@ -58,7 +67,11 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 	}
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
-	text := brief.Write(brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s)})
+	in := brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s)}
+	if result != nil {
+		in.Result = jobResult(s, *result, nil)
+	}
+	text := brief.Write(in)
 	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
 	switch kind {
 	case brief.Boundary:
@@ -72,9 +85,12 @@ func (h *handlers) afterCompaction(c Context, s *state.Store) (Result, error) {
 		}
 		s.Event("phase_resumed", resumed)
 	}
+	if result != nil {
+		delivery{jobs: []state.Job{*result}}.event(s, "brief")
+	}
 	s.Event("brief", map[string]any{"type": kind, "phase": st.Current, "chars": len(text)})
 	return Result{Output: map[string]any{
-		"systemMessage": msg,
+		"systemMessage": lines(ann, msg),
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":     "SessionStart",
 			"additionalContext": text,
@@ -117,4 +133,12 @@ func (h *handlers) postCompactRewake(c Context) (Result, error) {
 	}
 	s.Event("rewake", map[string]any{"epoch": epoch})
 	return Result{Rewake: msg}, nil
+}
+
+// parkJob is the job a park waits for ("" for none).
+func parkJob(pk *state.Park) string {
+	if pk == nil {
+		return ""
+	}
+	return pk.Job
 }

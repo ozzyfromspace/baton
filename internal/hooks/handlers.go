@@ -288,8 +288,10 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	var havePlan bool
 	var events []event
 	var restarted *state.Restart
+	var ann string
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = nil
+		ann = announced(st)
 		if source == "startup" || source == "resume" {
 			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
 		}
@@ -339,13 +341,13 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		pl, havePlan = p, true
 	}
 	if source == "compact" {
-		return h.afterCompaction(c, s)
+		return h.afterCompaction(c, s, ann)
 	}
 	if !havePlan {
-		return Result{Output: map[string]any{"systemMessage": note + "baton: hosting this session (no plan attached — /baton plan or /baton run)"}}, nil
+		return Result{Output: map[string]any{"systemMessage": lines(ann, note+"baton: hosting this session (no plan attached — /baton plan or /baton run)")}}, nil
 	}
 	return Result{Output: map[string]any{
-		"systemMessage": note + "baton: hosting · " + progressLine(pl, st),
+		"systemMessage": lines(ann, note+"baton: hosting · "+progressLine(pl, st)),
 		"hookSpecificOutput": map[string]any{
 			"hookEventName":     "SessionStart",
 			"additionalContext": Primer(pl, st, words(c, s)),
@@ -485,10 +487,12 @@ func TurnSource(prompt string) string {
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
 	var events []event
-	var tell, staleSkill string
+	var tell, staleSkill, ann string
 	var told []string
+	var dl delivery
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
+		ann = announced(st)
 		staleSkill, st.Run.StaleSkill = st.Run.StaleSkill, ""
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
 		st.Run.ClearedPlan = nil   // a "clear context" approval starts working with no prompt
@@ -514,22 +518,36 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			st.Run.Escalation = nil
 			st.Run.HumanAt = c.Now
 		}
+		// Results due come with the prompt, whoever wrote it: the host types one to hand them over to an
+		// idle session.
+		dl = take(st, c.Now)
 		return nil
 	})
 	if err != nil {
 		return Result{}, ok(err)
 	}
 	s.Event("turn_started", map[string]any{"by": by})
+	var says []string
+	if ann != "" {
+		says = append(says, ann)
+	}
+	if dl.any() {
+		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
+		says = append(says, dl.says())
+		dl.event(s, "prompt")
+	}
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
 	}
-	var says []string
 	if refresh := skillRefresh(c, staleSkill); refresh != "" {
 		tell = strings.TrimSpace(tell + "\n\n" + refresh)
 		s.Event("skill_refreshed", map[string]any{"from": staleSkill, "to": c.Env("BATON_VERSION")})
 		says = append(says, fmt.Sprintf("baton: gave Claude the current /baton instructions (the copy earlier in this conversation is from baton %s)", staleSkill))
 	}
 	if tell == "" {
+		if len(says) > 0 {
+			return Result{Output: map[string]any{"systemMessage": strings.Join(says, "\n")}}, nil
+		}
 		return Result{}, nil
 	}
 	out := map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": "UserPromptSubmit", "additionalContext": tell}}
@@ -622,7 +640,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	var dropped []event
-	var notes string
+	var notes, ann string
+	var dl delivery
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" {
@@ -655,11 +674,13 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			if file, ok := clearedApproval(st, c); ok && v.event == "" {
 				v = approved(st, s, c, file, true, w)
 			}
-			// No other question while a proposal, a review or an approved plan waits on the human: one at a time.
+			// No other question while a proposal, a review or an approved plan waits on the human: one at a
+			// time. A job's result waits too: the model must put the question first.
 			if v.event == "" && st.PendingProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
+				dl = take(st, c.Now)
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
-			notes = announceNotes(st)
+			notes, ann = announceNotes(st), announced(st)
 		}
 		dropped, _ = vanished(st, c.Now, false) // a proposal's question that failed or was denied went unanswered
 		return nil
@@ -670,18 +691,23 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if v.event == "" && notes == "" {
+	if v.event == "" && notes == "" && ann == "" && !dl.any() {
 		return Result{}, nil
 	}
-	out := map[string]any{"systemMessage": strings.TrimSpace(notes + "\n" + v.say)}
+	tell := v.tell
+	if dl.any() {
+		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
+		dl.event(s, "tool")
+	}
+	out := map[string]any{"systemMessage": lines(ann, notes, dl.says(), v.say)}
 	if v.event != "" {
 		s.Event(v.event, v.fields)
 		for _, e := range v.also {
 			s.Event(e.kind, e.fields)
 		}
 	}
-	if v.tell != "" {
-		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": v.tell}
+	if tell != "" {
+		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": tell}
 	}
 	return Result{Output: out}, nil
 }
