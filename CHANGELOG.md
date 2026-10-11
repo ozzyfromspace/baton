@@ -4,6 +4,83 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+v0.4 kept a run from waiting on its gates, but still worked on one phase at a time. The replays behind it
+put the next step at two sessions working at once: 58 hours to 40 on one long campaign, and 31 to 14 on
+another, while a third session added about 1%. baton now works on phases that don't need each other at
+the same time. The session in your terminal, the *lead*, works as before; beside it, a hidden *worker*
+session takes another phase that can go ahead, in a git worktree of its own, and baton lands its work on
+your branch under the lead when it is done. A worker's questions are put to you in your terminal, by the
+lead, and `baton view` shows a worker live in another terminal. The experiments behind the design are in
+[docs/research/workers.md](docs/research/workers.md).
+
+A session hosted by v0.4 stays on its version after you update (before 1.0, a minor release counts as a
+major one) and says so once: exit and run `baton --continue` to move it to v0.5.
+
+### Added
+- **Workers.** While a plan runs, baton starts up to `workers` hidden sessions (1 by default, 0 to 3,
+  `BATON_WORKERS`), each on the first phase in document order that can start besides the lead's, in a
+  worktree under `~/.baton/worktrees/` on a branch `baton/<run>/<phase>` from your branch. A worker
+  starts with the lead's flags (model and permission mode included), works from a brief of its phase, the
+  standing rules and the notes of the phases it needs, and does everything a phase does: `verify` and
+  `await`, `done` while its gate runs, notes, proposals, checkpoints and compactions. Commands that belong
+  to the lead, plan mode and edits in your checkout are refused in a worker. A worker whose session exits
+  unexpectedly is resumed in its worktree, at most twice. `workers: 0` turns workers off, and baton then
+  runs exactly as v0.4; a plan whose phases form a chain never starts one.
+- **Landing.** A worker's finished phase joins a merge queue, first finished, first landed. baton rebases
+  its branch onto your branch in the worker's worktree, verifies it again in a lane if anything landed
+  meanwhile, waits while the branch would touch a file you have uncommitted, staged or untracked (ignored
+  files included), and lands it with `git merge --ff-only` in your checkout, only between the lead's tool
+  calls. A conflict goes back to the worker, which rebases and resolves it itself; a red re-verification
+  reopens its phase. The lead is told what landed and that `HEAD` moved, and baton refuses its
+  `git commit --amend`, `reset` and `rebase` over landed commits. The worker then ends, its worktree and
+  branch are removed, and its phase is done.
+- **Questions relayed through the lead.** A worker's proposals, blocks and reviews are put to you by the
+  lead, one at a time and never over a question of its own, naming the phase (`baton: worker P3: …`). A
+  timed proposal goes ahead at its deadline as in the lead; anything else that nobody answers within
+  `escalation_timeout` is left for you in the worker's own session, so the lead never waits on a worker.
+  Your answer goes back to the worker. A worker's block stops only its phase.
+- **`baton view [phase]`**, in another terminal, shows a worker's screen live, repainted at your
+  terminal's size, and passes your keys to it as yours; `Ctrl-]` leaves. With no phase it lists the
+  workers. A permission prompt in a worker is never answered by baton: the lead tells you, baton pushes,
+  and you answer it there.
+- **Usage limits across sessions.** Every session's status line records the account's five-hour usage
+  (`rate_limits`, on Pro and Max plans). No new worker starts above `worker_usage_max` (80%,
+  `BATON_WORKER_USAGE_MAX`, 0 turns the check off), and once any session hits a usage limit, no worker
+  starts and baton types nothing into any of the run's sessions until it resets.
+- **Seeing the workers.** The status line shows each worker after the lead's phase (`W P3 14m`,
+  `P3 landing`, `P3 waits to land`, `? P3` while its question waits, `! P3 needs you`), the usage reading
+  once it reaches `worker_usage_max` (`5h 85%`), and `usage limit until 15:40`. `baton status` marks a
+  worker's phase `⚙` with how it stands, and lists the workers (branch, session, worktree), the merge
+  queue with any deferral, the questions from workers, the usage, and the branches of workers that ended
+  with commits that never landed. Attaching a plan says how many workers will run, and warns when the
+  lead's permission mode would stop them at prompts, or the project has a `.claude/settings.local.json`,
+  which worktrees lack. Every step is announced in the lead and logged: `worker_spawned`,
+  `worker_started`, `worker_waiting`, `worker_ended`, `worker_resumed`, `land_queued`, `land_deferred`,
+  `rebased`, `reverify_queued`, `land_returned`, `landed`, `relay_queued`, `relay_asked`,
+  `relay_answered`, `relay_applied`, `usage_limited`. A worker's own events are in
+  `.baton/runs/<session>/workers/<phase>/events.jsonl`, and its decisions are numbered with its phase
+  (`P3.d1`).
+
+### Changed
+- **baton's requests mid-turn are hook feedback.** A checkpoint nudge, the context-warning question, a
+  job's result, and now a worker's question or a landing reach the model as PostToolUse
+  `{"decision": "block", "reason": …}` instead of `additionalContext`, which Haiku sometimes refused as
+  possible injection. Claude Code shows them as "PostToolUse hook returned blocking error" followed by
+  baton's text: the tool call ran, and nothing failed. A context-warning question still unasked when the
+  turn ends refuses the stop once with the same call.
+- **`/baton pause`, `drop` and `exit` reach the workers.** Pause stops baton starting workers and landing
+  their work; those already at work carry on. Drop saves each worker's uncommitted work as a snapshot,
+  ends it, removes its worktree, and keeps a branch with commits that never landed. Exit, a hang-up or the
+  session ending suspends the workers, and the next baton session of the run resumes them.
+- **An update restart waits until every worker is idle**, starts no new worker meanwhile, and the
+  restarted baton resumes each one in its worktree.
+
+### Fixed
+- **An edit in directories that don't exist yet** is matched to the session's files through the deepest
+  directory that does, so a checkout reached through a symlink (`/tmp` on macOS) no longer misses it.
+- **A prompt after `--` keeps its words.** `baton -- "<prompt>"` put the session id baton picks after the
+  `--`, where claude took it for part of the prompt; it now goes before it.
+
 ## [0.4.0] - 2026-10-11
 
 Four real runs, replayed second by second, showed where a long plan's time goes: waiting on gates was 65%

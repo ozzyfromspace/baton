@@ -12,6 +12,12 @@ status now offers `await` alongside `done`, `propose` and `blocked`. `blocked` i
 stops the whole run: the jobs baton runs keep going while it waits, and the run picks up once the human
 answers. The diagnosis below describes the statuses as they were at the time.
 
+**v0.5.0 adds workers,** hidden sessions that work on other phases beside the lead in worktrees of their
+own. A worker's proposals, blocks and reviews are put to the human by the lead, one at a time, and a
+worker's block stops only its phase (section 10). Every request baton makes of the model mid-turn now
+arrives as hook feedback rather than `additionalContext`, which Haiku sometimes refused as possible
+injection.
+
 It extends [`docs/research/reliability.md`](research/reliability.md), which asked *what can stall or
 loop a run*. That review looked for stalls caused by Claude Code's own non-determinism. This one is
 about a stall **baton's interface invited**: a run that halted over a recoverable problem, with the
@@ -251,6 +257,56 @@ decides it: is there a `.git` at the project root, and `git` on the `PATH`? With
 - baton's wording says "complete" and "saved" rather than "committed", and never asks the model to commit
   (or to create a repository);
 - `events.jsonl` records which mode the run was in.
+
+### 10. Workers: questions relayed through the lead, blocks per phase
+
+Added in v0.5.0. A worker is a hidden session that works on one phase in a git worktree of its own, beside
+the lead session in the human's terminal ([README](../README.md#working-on-phases-at-once)). Nobody
+watches a worker, so nothing it needs from the human may wait in its own terminal. The spikes behind this
+section are in [`research/workers.md`](research/workers.md).
+
+- **Queued, not asked.** A worker's `note`, `propose`, `blocked`, and a review that falls due are recorded
+  in its own sub-run, exactly as in the lead. A note is announced in the lead. Anything that needs an
+  answer is queued for the lead instead of being asked, and the worker is told that baton is asking the
+  human: it works on what does not depend on the answer, or ends its turn, and that stop is let through.
+  While its proposal waits, the worker may not do it, report the phase done, or propose again.
+- **Asked by the lead, one question at a time,** and only while the lead has no question of its own open.
+  The question names the phase: *baton: worker P3: gpg signing timed out. Unless you answer by 15:33, I
+  will commit P3 unsigned.*
+- **Hook feedback, not context.** The lead's model is given the question as hook feedback, which it asks
+  word for word: with the result of its next tool call (PostToolUse `decision: block`), by a refusal of
+  its stop, or, when it is idle, with the prompt of a short line baton types
+  (`[baton] worker P3 has a question for you`). Its other tool calls are held until it has asked. Spike 24
+  found that `additionalContext`, baton's channel for mid-turn requests until then, was refused by Haiku 2
+  times in 5 as possible injection; hook feedback was asked 12 times in 12. Since v0.5.0, every request
+  baton makes mid-turn goes that way, the context-warning question of section 4 included.
+- **The deadline starts when the question is issued.** The third option is what baton picks when nobody
+  answers, by typing `3` under the conditions of section 4:
+  - a timed proposal: `Wait for me` · `Pause baton` · `Go ahead`, and baton picks Go ahead at the time the
+    question names;
+  - a proposal with no timer (outward-facing or irreversible): `Go ahead` · `Pause baton` · `Wait for me`;
+  - a block, or a review: `Continue` · `Pause baton` · `Wait for me`.
+
+  For the last two, baton picks Wait for me after `escalation_timeout`.
+- **Wait for me never holds the lead.** It takes the question off the lead's screen and leaves it in the
+  worker's own session, where the human answers it by typing into the worker (`baton view P3`, in another
+  terminal). A proposal waiting there is not done; a block or a review is answered by what the human
+  writes. It is pushed, naming `baton view P3`, and the status line shows `! P3 needs you`.
+- **Answers go to the worker's sub-run,** as its own answer would have: Go ahead resolves the proposal (a
+  Go ahead on the timer counts toward `max_auto_decisions` for the worker's phase), Continue ends the block
+  or the review, an answer in the human's own words reaches the worker as their instruction, and Pause
+  baton pauses the whole run. The worker gets it like a job's result: with its next tool call, at its stop,
+  or with a line typed into its idle session. A question settled meanwhile in the worker's own session, or
+  whose worker is gone, is withdrawn from the lead.
+- **A worker's block stops only its phase.** The lead and any other worker carry on, and the phases that
+  need the blocked one wait. A block in the lead still stops the whole run: no worker starts and nothing
+  lands until the human answers, though workers already at work carry on.
+- **Decisions stay with their phase.** A worker's decisions are numbered with its phase (`P3.d1`), so ids
+  never clash across the run, and the cap is per phase as before. `baton status`, the lead's next prompt
+  after the human types, and the plan-complete notice include them.
+- **Never relayed: a permission prompt, or any other dialog, in a worker's session.** baton never answers
+  one and never types through it, in a worker as in the lead. The lead is told, the human is pushed, and
+  `baton status` names `baton view P3`. Only that phase waits.
 
 ## What this must not become
 

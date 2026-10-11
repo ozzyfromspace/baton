@@ -1,8 +1,8 @@
 # baton
 
-**Run a long, multi-phase Claude Code plan unattended. baton compacts the context at every phase boundary and never lets the run sit idle on a gate, in one live terminal session you can watch.**
+**Run a long, multi-phase Claude Code plan unattended. baton compacts the context at every phase boundary, never lets the run sit idle on a gate, and works on phases that don't need each other at the same time, from one live terminal session you can watch.**
 
-You plan the work in plan mode, approve it, and walk away. baton picks up the plan the moment you approve it, and keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. A long test run goes to baton, which runs it on a commit of its own while the model works on; if the wait is long and another phase can go ahead, baton switches the session to it and comes back when the result is in. If something needs you, it tells you on whatever device you're on.
+You plan the work in plan mode, approve it, and walk away. baton picks up the plan the moment you approve it, and keeps the session moving: at each phase boundary it compacts the context, hands the model a brief for the next phase, and wakes it up. A long test run goes to baton, which runs it on a commit of its own while the model works on; if the wait is long and another phase can go ahead, baton switches the session to it and comes back when the result is in. A phase that doesn't need the one in hand goes to a hidden worker session in a git worktree of its own, and baton lands its work on your branch when it's done. If something needs you, it tells you on whatever device you're on.
 
 > Status: **v0.4.0**. macOS and Linux. Windows is planned.
 
@@ -23,17 +23,19 @@ baton takes every one of those decisions away from the model. The model does the
 - **One run per session.** Each Claude Code session has a run of its own in `.baton/runs/` at the root of your project, which is kept out of git. So every `baton` terminal can run a plan, in the same project or not ([Several sessions](#several-sessions-in-one-project)). A run stays with its conversation through `--resume`, and through a `/clear` in the same terminal. The model reports progress with `baton done` or `checkpoint`, hands long gates to baton with `verify` or `await`, and reaches you with `note`, `propose` or `blocked`.
 - **Plan approval.** When you approve a plan with phase headings (`## P0 — …`), baton attaches it, compacts the planning conversation away, and starts P0 from a brief. `/baton run` does the same whenever the conversation had turns before it, so a plan never starts in the middle of whatever came before. If a run is already under way, it asks you whether to continue with the revised plan or start the new one. baton reads the plan from the file Claude Code wrote, and checks it at every stop: an edit that keeps the phases still to run is followed, a phase you add (a heading like the plan's own, `## P3 — …`) joins the run, and an edit that loses a phase still to run pauses the run. `/baton run` picks up phases added to a plan that has finished.
 - **Phase boundaries.** When a phase is done, baton's hooks (not the model) decide to compact. baton waits until no turn, dialog, subagent or human draft is in the way, types `/compact` itself, and confirms it ran. Then it injects a brief for the next phase, quoted from your plan, and wakes the model.
-- **Which phase needs which.** A plan can say what each phase waits for (`After: P1, P3`). Without it, each phase follows the one before, as in any plan. baton runs one phase at a time, and picks the next one that can start ([Never waiting on a gate](#never-waiting-on-a-gate)).
+- **Which phase needs which.** A plan can say what each phase waits for (`After: P1, P3`). Without it, each phase follows the one before, as in any plan. Your session works on one phase at a time, and picks the next one that can start ([Never waiting on a gate](#never-waiting-on-a-gate)).
+- **Workers.** Another phase that can start goes to a hidden worker session, in a git worktree of its own outside your checkout. When it's done, baton lands its work on your branch with a fast-forward merge, between your session's tool calls, and tells your session what moved. A worker's questions are put to you in your terminal, by your session; `baton view P3`, in another terminal, shows a worker live ([Working on phases at once](#working-on-phases-at-once)).
 - **Gates off the critical path.** The model hands a gate that takes more than a couple of minutes to baton (`baton verify`), which runs it on the committed code in a lane outside your checkout while the model keeps working. A phase that is finished is reported done while its gate runs, and is marked done when the gate passes, or reopened if it fails. A phase that can't go on without the result is set aside for another phase that can start, and comes back when the result is in.
 - **Long commands.** A command that runs for more than 2 minutes moves to the background by itself and wakes the session when it ends.
 - **Silent stops.** A stop without a status is refused with instructions. The model also can't start the next phase until the compaction has happened.
+- **Requests mid-turn.** When baton needs something of the model in the middle of a turn (a checkpoint, a job's result, a question to put to you, news of a landing), it answers the model's next tool call with hook feedback, which the model acts on as an instruction. Claude Code shows it as "PostToolUse hook returned blocking error" followed by baton's text: nothing failed, and the tool call ran.
 - **Context valves.** baton reads the exact context size from Claude Code's status line. When a long phase reaches 60% of the limit, it asks the model to checkpoint at its next safe point. At 90% it asks you, with a question in the session, whether to checkpoint now or keep going. If nobody answers within 20 minutes, it keeps going. Claude Code's own auto-compaction remains the backstop.
 - **No questions mid-run.** While a plan runs, the model may not stop to ask you questions of its own, because nobody may be there. It takes a reversible way forward and tells you, proposes one with a deadline, or reports itself blocked ([When something goes wrong](#when-something-goes-wrong)). Questions in turns you started yourself still get through.
 - **Watchdog.** It catches a session that has gone quiet: idle turns, background work that has run for an hour, unanswered prompts, usage limits, API errors. **Everything baton waits for before it acts either clears by itself or expires into action**, so nothing can hold a run — a half-typed message is saved and taken out of the box, a hung background subagent is overridden, an open turn and a never-settling screen stop being trusted after their ceilings. Whatever still needs you is pushed again until it's resolved.
 - **One exception, and it is deliberate: an open permission prompt.** Keystrokes landing in a prompt *select* an option, so a baton that typed through one could approve a tool call you never approved. That wait is escalated and pushed; it is never overridden.
 - **Drafts.** If an unsent draft is in the way of a compaction, baton saves it and clears the box rather than waiting. `baton drafts` hands it back. Each one is a file holding exactly the text, so `cat .baton/runs/*/drafts/*.txt` works even if baton will not start.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification. Whenever the run halts, baton first saves any uncommitted work.
-- **Status line.** A permanent `◆ baton · P6 6/23 <title> · P3 verifying 12m · ctx 412k/810k` segment sits in front of your own status line. It shows the oldest job the run waits on (`+2` when there are more), the context size against the limit, and `? proposal · goes ahead 15:33` while a proposal waits on you.
+- **Status line.** A permanent `◆ baton · P6 6/23 <title> · W P3 14m · P4 verifying 12m · ctx 412k/810k` segment sits in front of your own status line. It shows each worker, the oldest job the run waits on (`+2` when there are more), the context size against the limit, and `? proposal · goes ahead 15:33` while a proposal waits on you.
 
 The design and the experiments behind it are in [`docs/plan.md`](docs/plan.md) and [`docs/research/`](docs/research).
 
@@ -62,6 +64,7 @@ To update later, run `baton update` (or `/baton update` in a session). It update
 baton              # instead of `claude`; it takes the same arguments
 baton --version    # or -v: which baton this is, which one hosts the session, which is installed (claude --version for Claude Code's)
 baton --help       # or -h: every command
+baton view P3      # in another terminal: watch P3's worker and type into it (Ctrl-] leaves)
 ```
 
 Inside the session:
@@ -90,7 +93,7 @@ Started a session with plain `claude` and want baton to drive it? Run `/baton st
 
 ### Several sessions in one project
 
-Each `baton` terminal runs its own session's plan, so you can run two plans in one project at once, or keep one terminal for a plan and another for everything else. `baton status` in a session shows its own run and names the other sessions working in the checkout. From a plain shell it lists every run.
+Each `baton` terminal runs its own session's plan, so you can run two plans in one project at once, or keep one terminal for a plan and another for everything else. `baton status` in a session shows its own run and names the other sessions working in the checkout. From a plain shell it lists every run. A run's [workers](#working-on-phases-at-once) are part of its run, not sessions of their own here: each works in its own worktree.
 
 Two sessions in one checkout share its files and its git index, so while another baton session is live there:
 
@@ -126,7 +129,7 @@ After: P1
 
 Mark a phase independent only when it needs nothing another phase produces: no code, schema, file, result or decision of it. `/baton plan` writes the lines for you. When baton attaches a plan, it prints each phase's dependencies and the longest chain of phases that must run one after another. The lines are read from the plan file at every stop, so you can change them mid-run; a changed line only decides when a phase may start.
 
-baton still runs one phase at a time, in one session. The graph tells it which phase can go ahead while another waits on a gate: a phase set aside whose result is in comes first, then the first phase in document order whose dependencies are done. A phase never starts while one it needs is still verifying, or has failed its verification.
+Your session works on one phase at a time. The graph tells it which phase can go ahead while another waits on a gate: a phase set aside whose result is in comes first, then the first phase in document order whose dependencies are done. The graph also tells baton which phases a [worker](#working-on-phases-at-once) can take beside it. A phase never starts while one it needs is still verifying, has failed its verification, or is a worker's that hasn't landed yet.
 
 ### Long gates go to baton
 
@@ -147,7 +150,7 @@ The command runs detached from the session, so it survives baton restarting itse
 
 **Switching.** Sometimes the phase can't go on without the result: the model has committed, handed the gate over and ended its turn. Once the gate has run for `switch_after` (5 minutes; at once for a command whose earlier runs took that long), and another phase can start, baton sets the phase aside with its notes, compacts, and starts that phase from a fresh brief. When the gate ends, the phase set aside comes back at the next phase boundary or `baton checkpoint`, with the result in its brief. If the gate ends before the switch's compaction is typed, the switch is called off and the result is given in place. baton never sets a phase aside with its work uncommitted. In practice, a phase that is finished is reported done while its gate runs, so a switch happens only when the phase truly waits on the result.
 
-**When nothing can go ahead,** the session idles until a result is in. A block still stops the whole run, since its question is on screen; jobs keep running meanwhile, and the run picks up once you answer.
+**When nothing can go ahead,** the session idles until a result is in, or until a worker's phase it needs has landed. A block in your session still stops the whole run, since its question is on screen; jobs and the workers already at work keep going meanwhile (though no worker starts and nothing lands), and the run picks up once you answer. A worker's block stops only its phase.
 
 A job that runs past `verify_timeout` (3 hours) is stopped and counts as failed. `baton status` lists the jobs with their logs (`.baton/runs/<session>/jobs/`), and the lanes. `/baton drop` stops the run's jobs and removes their logs; `/baton exit` and the session ending stop them too.
 
@@ -179,6 +182,92 @@ baton never writes a `.baton-lane` into your project.
 ### Long commands
 
 baton starts Claude Code with `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` set to `foreground_max` (2 minutes), unless you set it yourself. A command that runs longer moves to the background, keeps running, and wakes the session when it ends. The first time the model stops on such work, baton refuses the stop once, to remind it to keep working on what doesn't depend on it, and to send a long or stateful gate to `baton verify`, since its own edits would invalidate a gate running in the checkout. After that, the session may idle until the work wakes it. If the work runs for an hour, the watchdog looks in. Monitors are not counted as work.
+
+## Working on phases at once
+
+The session in your terminal, the **lead**, works on the plan in your checkout as before. Beside it, baton starts a hidden **worker** session for another phase that can go ahead, in a git worktree of its own. When the worker's phase is done, baton lands its work on your branch, underneath the lead, and the phases that need it can start. You keep watching the lead; a worker's questions come to you there, and `baton view` shows a worker live in another terminal. In the measurements behind this, a second session working at once took one long campaign from 58 hours to 40, and a third added about 1% ([`docs/research/parallel.md`](docs/research/parallel.md)). The experiments behind the design are in [`docs/research/workers.md`](docs/research/workers.md).
+
+### When a worker starts
+
+A worker takes the first phase in document order that can start, other than the one the lead has or takes next, when:
+
+- the run is running: not paused, blocked, or waiting on a review of its decisions;
+- a worker slot is free: `workers` is 1 by default, up to 3. `0` turns workers off, and baton then runs exactly as v0.4 did;
+- the account's five-hour usage, as Claude Code's status line reports it, is under `worker_usage_max` (80%), and no session waits on a usage limit;
+- no newer baton is waiting to restart the session.
+
+A plan with no `After:` lines is a chain, so no worker ever starts on it. When a plan is attached, baton says how many workers will work beside the lead.
+
+A worker starts with the flags you gave `baton` (the same model and permission mode), baton's hooks, and a prompt to begin its phase. Its brief holds the phase's section of the plan, the standing rules, and the notes of the phases it depends on. Inside its phase it does everything the lead does: `verify` and `await`, `done` while a gate runs, notes and proposals, checkpoints and compactions. It works only in its worktree: an edit in your checkout is refused, and so are the commands that belong to the lead (`attach`, `run`, `pause`, `drop`, `exit`, and plan mode).
+
+If a worker's session exits unexpectedly, baton resumes it in its worktree, at most twice; then its phase goes back to the queue, and its commits stay on its branch. If a worker can't start (a trust dialog, or two failed starts in a row), baton turns workers off for this session and tells you.
+
+### Landing
+
+When a worker's phase is done and its last verification passed, the phase joins the merge queue: first finished, first landed. The worker waits, idle, while baton:
+
+1. **rebases** the worker's branch onto your branch, in the worker's worktree. On a conflict, the phase goes back to the worker, which rebases and resolves it itself, then reports done again;
+2. **verifies it again** in a lane, with the phase's last verification command, if anything landed on your branch since the commit it verified. Red reopens the phase in the worker;
+3. **waits for your changes:** if the branch changes a file that is uncommitted, staged or untracked in your checkout (ignored files included), landing waits until the lead has committed it. It also waits while your checkout is on another branch than the one the plan was attached on;
+4. **lands it** with `git merge --ff-only` in your checkout, while no tool call of the lead's is running (the lead's next call waits for it, 10 seconds at most). A fast-forward changes only the files the branch changed, and leaves the lead's uncommitted work alone, or does nothing at all;
+5. **tells the lead** what landed (the phase, its commits and the files they changed), that `HEAD` moved, to read those files again before editing them, and never to amend, reset, rebase or revert commits it didn't make. baton refuses the lead's `git commit --amend`, `reset` and `rebase` over landed commits;
+6. **ends the worker**, removes its worktree and branch, and marks the phase done.
+
+baton never moves your branch any other way: no `update-ref`, no `branch -f`, no `--autostash`.
+
+### Questions from workers
+
+Nobody watches a worker, so its questions come to you through the lead. A worker's `propose`, `blocked`, or a review of its decisions that is due goes into a queue, and the worker is told that baton is asking you: it keeps working on what doesn't depend on the answer, or ends its turn. The lead puts the questions to you one at a time, and only while no question of its own is open: *"baton: worker P3: gpg signing timed out. Unless you answer by 15:33, I will commit P3 unsigned."* baton gives your answer to the worker.
+
+| The worker | Your answers | If nobody answers in time |
+|---|---|---|
+| proposes something, with a deadline | Wait for me, Pause baton, Go ahead | Go ahead, at the time the question names. |
+| proposes something outward-facing or irreversible | Go ahead, Pause baton, Wait for me | Wait for me, after `escalation_timeout`. |
+| is blocked, or is due a review of its decisions | Continue, Pause baton, Wait for me | Wait for me, after `escalation_timeout`. |
+
+- **Go ahead** and **Continue** let the worker go on. An answer in your own words reaches it as your instruction.
+- **Wait for me** takes the question off the lead's screen and leaves it in the worker's own session: open it with `baton view P3`, and what you type there answers it. Only that phase waits; the lead never waits on a worker's question.
+- **Pause baton** pauses the whole run.
+
+The lead is given the question with its next tool call, when it stops, or, if it is idle, with a short `[baton] worker P3 has a question for you` line that baton types. A worker's block stops only its phase; the lead and any other worker carry on.
+
+A **permission prompt**, or any other dialog, in a worker's session is never answered by baton and never relayed. The lead tells you about it, baton pushes, the status line shows `! P3 needs you`, and you answer it with `baton view P3`. Only that phase waits.
+
+### Watching a worker: `baton view`
+
+```sh
+baton view        # list the workers
+baton view P3     # show P3's worker and type into it; Ctrl-] leaves
+```
+
+Run it in another terminal, in the project; inside a session it only lists them, since it would take over the terminal. The viewer repaints the worker's whole screen at your terminal's size, and your keys go to the worker as if you typed in its session: baton counts them as yours, so it never types over you. `Ctrl-]` leaves; the worker carries on, at its own size again. One viewer at a time per worker. The lead's terminal never changes.
+
+### Permission modes
+
+Workers start in the permission mode the lead started in. In `auto` or `bypassPermissions` they run like the lead. In `default`, `acceptEdits` or `plan`, a permission prompt stops a worker until you answer it with `baton view`, and baton warns you about that when you attach a plan. To keep workers going, start baton with `--permission-mode auto`, or allow what the plan needs in `.claude/settings.json`. Workers don't see `.claude/settings.local.json`: a worktree holds only what is committed.
+
+### Usage limits
+
+Every session's status line reports the account's five-hour usage to baton (Claude Code reports it on Pro and Max plans). No new worker starts above `worker_usage_max`. When a session's turn ends on a usage limit, no worker starts and baton types nothing into any of the run's sessions until the limit resets (15 minutes when baton can't tell when); Claude Code resumes each session by itself.
+
+### Pausing, dropping, leaving
+
+- **`/baton pause`** stops baton starting workers and landing their work. Workers already at work carry on, and their work waits to land until `/baton run`.
+- **`/baton drop`** saves each worker's uncommitted work into a snapshot ref, ends it, and removes its worktree. A worker's branch is kept if it holds commits that never landed, and `baton status` names it.
+- **`/baton exit`**, closing the terminal, or the lead session ending suspends the workers. The next baton session of the run (`baton --continue`) resumes each one in its worktree.
+- **An update restart** waits until every worker is idle (its turn over, nothing of its own running, no dialog open), and the restarted baton resumes them.
+
+### Seeing the workers
+
+- **The status line** shows each worker after the lead's phase: `W P3 14m` while it works, `P3 landing` (`P3 waits to land` while landing waits for your changes), `? P3` while the lead has its question for you, and `! P3 needs you` while something in its session waits on you. In front of them, `5h 85%` once the usage reading reaches `worker_usage_max`, and `usage limit until 15:40` while a limit holds the run.
+- **`baton status`** marks a worker's phase `⚙` with how it stands, and lists the workers (branch, session, worktree, and `baton view P3` when one needs you), the merge queue with any deferral and why, the questions from workers, and the usage reading.
+- **Every step** is announced in the lead and logged to the run's `events.jsonl`; each worker also has its own log, in `.baton/runs/<session>/workers/<phase>/`.
+
+### What workers write
+
+- **Worktrees** under `~/.baton/worktrees/`, outside your checkout, one per worker (`git worktree list` shows them), removed once its work lands or the run is dropped.
+- **Branches** named `baton/<run>/<phase>` in your repository, from your branch, removed once landed. A branch with commits that never landed is kept.
+- **Your branch** moves forward by fast-forward merges in your checkout, as each worker's work lands. Nothing else of yours is changed.
 
 ## When something goes wrong
 
@@ -249,6 +338,8 @@ Optional settings live in `~/.baton/config.json`. Environment variables override
 | `switch_after` | `BATON_SWITCH_AFTER` | `5m` | How long a phase that can't go on waits on its gate before baton switches the session to another phase that can start: 1m to 2h. A command whose earlier runs took at least that long switches at once. See [Switching](#long-gates-go-to-baton). |
 | `verify_timeout` | `BATON_VERIFY_TIMEOUT` | `3h` | How long a job handed to baton (`verify` or `await`) may run before baton stops it and counts it as failed: 1m to 24h. |
 | `foreground_max` | `BATON_FOREGROUND_MAX` | `2m` | How long a command runs in the foreground before Claude Code moves it to the background: 10s to 10m, or `off` to leave it to Claude Code. baton passes it as `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS`, unless that is already set. |
+| `workers` | `BATON_WORKERS` | `1` | How many hidden worker sessions may work on other phases beside your session: 0 to 3. `0` turns workers off. See [Working on phases at once](#working-on-phases-at-once). |
+| `worker_usage_max` | `BATON_WORKER_USAGE_MAX` | `80` | The share of the account's five-hour usage (%) above which no new worker starts. `0` turns the check off. |
 
 With the defaults on a 1M-token model, baton asks for a checkpoint at 486k tokens and asks you at 729k, and Claude Code compacts on its own at about 777k. `/baton setup` prints the numbers for your settings.
 
@@ -256,10 +347,10 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 
 ## Privacy and safety
 
-- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and short `[baton] …` reminders when a session stalls. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text among the run's drafts and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to the run's `events.jsonl`.
-- **Git.** baton never commits, stages or changes your files. All it writes to a repository is its snapshot refs under `refs/baton/`, a line in `.git/info/exclude` that keeps `.baton/` out of git, and, once the model runs `baton verify`, the worktrees of its lanes under `~/.baton/lanes/` (`git worktree list` shows them). When it tidies lanes away it runs `git worktree prune`, which also makes git forget any worktree of yours whose directory is gone, such as one on a drive that isn't mounted. The only git commands it ever refuses are the ones above, and only while another baton session works in the same checkout.
+- **Typing.** baton types into the terminals it hosts, yours and its workers': `/compact` at boundaries, short `[baton] …` reminders when a session stalls, and `/exit` to end a worker. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text among the run's drafts and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to the run's `events.jsonl`.
+- **Git.** baton never commits or stages your files. All it writes to a repository is its snapshot refs under `refs/baton/`, a line in `.git/info/exclude` that keeps `.baton/` out of git, and, once the model runs `baton verify`, the worktrees of its lanes under `~/.baton/lanes/` (`git worktree list` shows them). With workers, it also makes their worktrees under `~/.baton/worktrees/` and their branches (`baton/<run>/<phase>`), rebases those branches in their worktrees, and lands them on your branch with `git merge --ff-only`, which changes only the files the worker changed and only when none of them holds changes of yours. When it tidies worktrees away it runs `git worktree prune`, which also makes git forget any worktree of yours whose directory is gone, such as one on a drive that isn't mounted. The only git commands it ever refuses are the ones above, while another baton session works in the same checkout, and an amend, reset or rebase over commits that landed from a worker.
 - **Running your code.** A gate handed to baton runs the command the model gave it, in a lane, through your `.baton-lane` if you committed one; baton itself runs only that script's `up`, `down` and `slots`.
-- **Settings.** baton never edits your Claude Code settings. Its hooks, status line, an allow rule for its own CLI, and `"idleCompaction": false` (baton decides when a hosted session compacts) are passed to each hosted session with `claude --settings`. claude also gets `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` (see `foreground_max`), unless you set it yourself.
+- **Settings.** baton never edits your Claude Code settings. Its hooks, status line, an allow rule for its own CLI, and `"idleCompaction": false` (baton decides when a hosted session compacts) are passed to each hosted session, workers included, with `claude --settings`. claude also gets `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` (see `foreground_max`), unless you set it yourself.
 - **Notifications.** Pushes go to the ntfy topic you configure and say only that you're needed, unless you turn on `details`.
 - **Downloads.** The binary download is verified against checksums committed to this repository. Set `BATON_BIN` to use a binary you built yourself.
 
@@ -270,15 +361,17 @@ See [SECURITY.md](SECURITY.md).
 ```sh
 claude plugin uninstall baton@baton
 claude plugin marketplace remove baton
-rm -rf ~/.baton          # binaries, config, lanes, and records of sessions handed over
+rm -rf ~/.baton          # binaries, config, lanes, workers' worktrees, and records of sessions handed over
 ```
 
-Then remove the `baton init` line from your shell config, and the `.baton/` directory from any project you ran baton in. In a git project, this removes baton's snapshots, and makes git forget the lanes you just deleted:
+Then remove the `baton init` line from your shell config, and the `.baton/` directory from any project you ran baton in. In a git project, this removes baton's snapshots, and makes git forget the lanes and worktrees you just deleted:
 
 ```sh
 git for-each-ref --format='%(refname)' refs/baton/ | xargs -n1 git update-ref -d
 git worktree prune
 ```
+
+`git branch --list 'baton/*'` lists the branches of workers that ended with commits that never landed. Merge what you want from them, then delete them with `git branch -D`.
 
 ## Develop
 
