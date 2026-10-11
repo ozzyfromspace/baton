@@ -41,6 +41,6 @@ Earlier attempts in this space had the model run a script that typed `/compact` 
 ## Other observations
 
 - Haiku refuses to run an unexplained "run this script" instruction, and calls it a hidden instruction sequence. Skill text has to say plainly what each command does.
-- Auto mode is unavailable on Haiku, which falls back to manual. End-to-end tests that need auto mode must use Sonnet or Opus.
+- Auto mode is unavailable on Haiku, which falls back to manual. End-to-end tests that need auto mode must use Sonnet or Opus. (No longer true: Haiku 5.5 runs in auto mode, seen on 2026-10-10 in [spike 19](../../spikes/19-background-work/).)
 - A `claude` started from inside another Claude Code session inherits `CLAUDE_CODE_CHILD_SESSION` and doesn't save transcripts. Test harnesses must scrub `CLAUDE*` variables.
 - Auto-compaction precomputes its summary in the background: `PreCompact` can fire several times before the swap actually happens.

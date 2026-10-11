@@ -27,7 +27,7 @@ make e2e        # real-claude scenarios (needs BATON_E2E=1, costs a few cents)
 make release-prep VERSION=v0.1.0   # pin checksums + plugin version, then commit and tag
 ```
 
-End-to-end tests run real `claude --model haiku`. Haiku has no auto mode, so tests approve dialogs with `AutoApprove`, or, where a proposal is on screen, use `acceptEdits` and narrow allow rules (AutoApprove's Enter would pick option 1). Every session gets its own `BATON_HOME` and `GNUPGHOME`, so neither your baton config nor your keyring is ever touched, and the signing tests use stand-in gpg scripts. Tests never notify, and they remove any plan file plan mode writes to `~/.claude/plans`. `BATON_E2E_SONNET=1` adds the Sonnet scenarios: auto mode at a phase boundary, and the replay of the signing outage behind graduated escalation ([`docs/escalation.md`](docs/escalation.md)).
+End-to-end tests run real `claude --model haiku`. They approve dialogs with `AutoApprove`, or, where a proposal is on screen, use `acceptEdits` and narrow allow rules (AutoApprove's Enter would pick option 1). That keeps them independent of the permission mode: Haiku had no auto mode when they were written, and Haiku 5.5 has it ([spike 19](spikes/19-background-work/)). Every session gets its own `BATON_HOME` and `GNUPGHOME`, so neither your baton config nor your keyring is ever touched, and the signing tests use stand-in gpg scripts. Tests never notify, and they remove any plan file plan mode writes to `~/.claude/plans`. `BATON_E2E_SONNET=1` adds the Sonnet scenarios: auto mode at a phase boundary, and the replay of the signing outage behind graduated escalation ([`docs/escalation.md`](docs/escalation.md)).
 
 ## Conventions
 

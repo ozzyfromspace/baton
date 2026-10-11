@@ -41,4 +41,4 @@ Notes:
 - `ptydrive.py` removes every `CLAUDE*` variable from the child's environment. Without that, a `claude` started from inside another Claude Code session inherits `CLAUDE_CODE_CHILD_SESSION` and doesn't save transcripts.
 - Spike 01 needs a large prompt to get past the 100k minimum window. Generate it with `python3 make_prompt.py`, then run `claude -p --model haiku --output-format stream-json --verbose < prompt.txt`.
 - Spike 08 runs an isolated zsh: `ZDOTDIR="$PWD/zdot" zsh -d -i`, then type `./start-raw.sh`.
-- Each run costs a few cents. Haiku has no auto mode, so the spikes ran in manual mode with narrow allow rules.
+- Each run costs a few cents. Haiku had no auto mode before Haiku 5.5, so spikes 01–18 ran in manual mode with narrow allow rules.

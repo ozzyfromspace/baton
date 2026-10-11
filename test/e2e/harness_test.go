@@ -287,7 +287,8 @@ func (s *Session) PlanMode() bool {
 }
 
 // AutoApprove plays a human who approves every dialog Claude Code opens (permission prompts, plan-mode
-// entry and plan approval). Haiku has no auto mode, so tests that let the model act freely need it.
+// entry and plan approval). Tests that let the model act freely need it whatever the permission mode:
+// the suite was written when Haiku had no auto mode (Haiku 5.5 has it).
 func (s *Session) AutoApprove() {
 	go func() {
 		approved := 0

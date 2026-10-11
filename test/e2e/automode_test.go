@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// baton's premise is auto mode, which Haiku lacks. This runs the boundary scenario on Sonnet in auto
-// mode with no help: no dialog may open (the allow rule baton passes covers its CLI), and the plan must
-// complete with one boundary compaction. Costs more than the Haiku suite, so it has its own switch.
+// baton's premise is auto mode. This runs the boundary scenario on Sonnet in auto mode with no help: no
+// dialog may open (the allow rule baton passes covers its CLI), and the plan must complete with one
+// boundary compaction. Costs more than the Haiku suite, so it has its own switch.
 func TestAutoModeOnSonnet(t *testing.T) {
 	if os.Getenv("BATON_E2E_SONNET") != "1" {
 		t.Skip("set BATON_E2E_SONNET=1 to run the Sonnet auto-mode scenario")
