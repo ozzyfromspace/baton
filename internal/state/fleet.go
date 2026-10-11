@@ -52,6 +52,11 @@ type Worker struct {
 	// kept for them.
 	Unlanded int    `json:"unlanded,omitempty"`
 	Merge    *Merge `json:"merge,omitempty"`
+	// Needs says what in its own session waits on the human (a permission prompt, an escalation, its
+	// question they chose to answer there), since NeedsSince. Nobody watches a worker's session: the lead's
+	// says so.
+	Needs      string    `json:"needs,omitempty"`
+	NeedsSince time.Time `json:"needs_since,omitzero"`
 }
 
 // Live reports a worker the run still counts on: one not landed and not failed.

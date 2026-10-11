@@ -41,12 +41,12 @@ func (t *typed) Quit() error {
 }
 
 type pushes struct {
-	kinds []string
-	fail  int // fail this many sends first
+	kinds, projects, details []string
+	fail                     int // fail this many sends first
 }
 
 func (p *pushes) Notify(project, kind, detail string) error {
-	p.kinds = append(p.kinds, kind)
+	p.kinds, p.projects, p.details = append(p.kinds, kind), append(p.projects, project), append(p.details, detail)
 	if p.fail > 0 {
 		p.fail--
 		return fmt.Errorf("network down")

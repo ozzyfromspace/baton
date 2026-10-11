@@ -142,8 +142,12 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 		return
 	}
 	l.dialogNotified = d.Since.Add(due[n-1])
+	text := "waiting for your answer (" + d.Tool + ")"
+	if l.Role == RoleWorker {
+		text += " in the worker's session: baton view " + st.Current
+	}
 	l.update(func(st *state.State) {
-		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: "waiting for your answer (" + d.Tool + ")", At: v.Now})
+		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: text, At: v.Now})
 	})
 	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
 }

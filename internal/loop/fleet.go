@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -250,6 +251,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 	c.usage(now, s, st)
 	for _, w := range c.launched() {
 		c.watch(now, s, st, pl, w)
+		c.waiting(now, s, st, w)
 	}
 	c.merge(now, s)
 	c.relay(now, s)
@@ -346,6 +348,72 @@ func (c *Coordinator) starting(now time.Time, s *state.Store, w *worker) {
 		c.stopLaunching(now, s, "Claude Code asked whether to trust a worker's worktree, which baton never answers. Trust the project in Claude Code, then restart the session")
 	}
 	c.end(w, why)
+}
+
+// waiting keeps the roster's word of what in worker w's own session waits on the human (Worker.Needs),
+// which the lead's status line and baton status show. Nobody watches a worker's session, so the human is
+// told in the lead's, once for each thing, and where to answer it. (A question of its that they chose to
+// answer in its session was announced as they chose it.)
+func (c *Coordinator) waiting(now time.Time, s *state.Store, st state.State, w *worker) {
+	select {
+	case <-w.sess.Done():
+		return
+	default:
+	}
+	e := rosterEntry(&st, w.entry.Ref, w.entry.Session)
+	if e == nil || !e.Live() || w.ending != "" {
+		return
+	}
+	sub, err := w.store.Load()
+	if err != nil {
+		return
+	}
+	what, relayed := needs(sub, st, w.phase)
+	if what == e.Needs {
+		return
+	}
+	c.setEntry(s, *e, func(e *state.Worker) {
+		e.Needs, e.NeedsSince = what, now
+		if what == "" {
+			e.NeedsSince = time.Time{}
+		}
+	})
+	if what == "" || relayed {
+		return
+	}
+	s.Event("worker_waiting", map[string]any{"phase": w.phase, "what": what})
+	c.announce(s, fmt.Sprintf("baton: the worker on %s waits for you: %s. Answer it in its session: baton view %s, in another terminal", w.phase, what, w.phase))
+}
+
+// needs says what in worker phase's own session waits on the human, from its sub-run sub and the run's
+// state st: the dialog Claude Code shows there, an escalation of its watchdog, or its question the human
+// chose to answer there (relayed). "" for nothing. A question the lead puts to the human is not the
+// worker's session's to show.
+func needs(sub, st state.State, phase string) (what string, relayed bool) {
+	if d, ok := sub.Run.Dialogs.Front(); ok {
+		if d.Tool == "AskUserQuestion" {
+			return "a question on its screen", false
+		}
+		return "a permission prompt for " + d.Tool, false
+	}
+	if e := sub.Run.Escalation; e != nil && e.Watchdog {
+		return e.Reason, false
+	}
+	for _, r := range slices.Backward(st.Relay) {
+		if r.Phase != phase || r.Answered == nil || r.Answered.By == state.ByWithdrawn || !sub.Waits(r) {
+			continue
+		}
+		if o := decide.RelayOutcome(r, r.Answered.Answer); o == decide.OutcomeWait || o == decide.OutcomePause {
+			switch r.Kind {
+			case state.RelayProposal:
+				return "its proposal " + r.Decision + ", " + r.What, true
+			case state.RelayReview:
+				return "a review of the decisions it made without you", true
+			}
+			return "its block, " + r.Because, true
+		}
+	}
+	return "", false
 }
 
 // trustRE finds Claude Code's question whether to trust a folder on a screen, its words run together.
@@ -545,6 +613,7 @@ func (c *Coordinator) resume(now time.Time, s *state.Store, e state.Worker, why 
 	c.setEntry(s, prev, func(w *state.Worker) {
 		w.Session, w.Instance, w.Resumes = e.Session, e.Instance, e.Resumes
 		w.Status, w.Since, w.Why, w.Ended, w.Merge = state.WorkerStarting, now, "", now, nil
+		w.Needs, w.NeedsSince = "", time.Time{}
 	})
 	prompt := decide.WorkerBegin(e.Phase)
 	if again {
@@ -646,6 +715,7 @@ func (c *Coordinator) Ended(why string) []state.Worker {
 		c.setEntry(s, w.entry, func(e *state.Worker) {
 			if e.Status == state.WorkerStarting || e.Status == state.WorkerWorking || e.Status == state.WorkerLanding {
 				e.Status, e.Since, e.Why, e.Ended, e.Merge = state.WorkerSuspended, now, why, now, nil
+				e.Needs, e.NeedsSince = "", time.Time{}
 			}
 		})
 		s.Event("worker_ended", map[string]any{"phase": w.phase, "why": why, "suspended": true})

@@ -91,12 +91,13 @@ func (c *Coordinator) duties(v host.View) {
 
 // Worker makes the Loop of the worker on phase, and returns the controller its hidden session ticks it
 // through (host.Spec.Controller). The Loop drives the sub-run its session is bound to, with the lead's
-// settings; it never leaves, switches or restarts (RoleWorker).
+// settings; it never leaves, switches or restarts (RoleWorker). Its pushes name its phase beside the
+// project, since its session is not the one the human watches.
 func (c *Coordinator) Worker(phase string) host.Controller { return c.worker(phase) }
 
 func (c *Coordinator) worker(phase string) *worker {
 	lead := c.Lead
-	w := &worker{phase: phase, loop: &Loop{Role: RoleWorker, Notify: lead.Notify, Project: lead.Project, Timing: lead.Timing,
+	w := &worker{phase: phase, loop: &Loop{Role: RoleWorker, Notify: lead.Notify, Project: lead.Project + " · " + phase, Timing: lead.Timing,
 		Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
 		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }}}
 	c.mu.Lock()
