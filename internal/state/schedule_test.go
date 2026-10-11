@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -133,7 +134,7 @@ func TestParkAndResume(t *testing.T) {
 		t.Fatalf("park P0: next %q err %v state %+v", next, err, st)
 	}
 	Start(&st, t1, Origin{Head: "def"})
-	if next, err := Done(&st, p, "P1", t1, false); err != nil || next != "" || st.Current != "" || st.BoundaryOwed || st.Mode != ModeRunning {
+	if next, err := Done(&st, p, "P1", t1, DoneOpts{}); err != nil || next != "" || st.Current != "" || st.BoundaryOwed || st.Mode != ModeRunning {
 		t.Fatalf("done P1 while P0's job runs: next %q err %v state %+v", next, err, st)
 	}
 
@@ -150,7 +151,7 @@ func TestParkAndResume(t *testing.T) {
 	if ps.Status != PhaseActive || ps.StartHead != "ghi" || ps.StartDirty != dirt || ps.Edited != nil || !ps.StartedAt.Equal(t0) || !ps.Park.Resumed.Equal(t2) || !st.Resumed() || st.BoundaryOwed {
 		t.Fatalf("resumed P0: %+v park %+v", ps, ps.Park)
 	}
-	if next, err := Done(&st, p, "P0", t2, false); err != nil || next != "P2" {
+	if next, err := Done(&st, p, "P0", t2, DoneOpts{}); err != nil || next != "P2" {
 		t.Fatalf("done P0: next %q err %v", next, err)
 	}
 	Start(&st, t2, Origin{})
@@ -169,7 +170,7 @@ func TestParkPhaseRefuses(t *testing.T) {
 		"not begun": func() error { _, err := ParkPhase(&st, p, "P1", Park{}); return err }(),
 		"done": func() error {
 			st := Attach(p, t0, Origin{})
-			Done(&st, p, "P0", t0, false)
+			Done(&st, p, "P0", t0, DoneOpts{})
 			_, err := ParkPhase(&st, p, "P0", Park{})
 			return err
 		}(),
@@ -185,17 +186,216 @@ func TestParkPhaseRefuses(t *testing.T) {
 	}
 }
 
-// Every phase is done but a job still runs: the plan is not complete until it ends.
-func TestDoneWithAJobRunningIsNotComplete(t *testing.T) {
-	p := graph("P0:")
-	st := Attach(p, t0, Origin{})
-	st.Jobs = []Job{{ID: "j1", Phase: "P0", Status: JobRunning}}
-	if next, err := Done(&st, p, "P0", t0, false); err != nil || next != "" || st.Mode != ModeRunning || st.Current != "" {
-		t.Fatalf("next %q err %v state %+v", next, err, st)
+// Done with the phase's job still to finish makes it verifying, and the run moves on; what the job
+// decides is applied by Settle. Phases that build on a verifying phase wait for it to pass.
+func TestTwoStageDone(t *testing.T) {
+	p := graph("P0:", "P1:", "P2:P0")
+	t1 := t0.Add(time.Hour)
+	verifying := func(status string) State {
+		st := Attach(p, t0, Origin{})
+		st.Jobs = []Job{{ID: "j1", Phase: "P0", Status: JobRunning, Notes: "all written; make test running"}}
+		if next, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || next != "P1" || st.Phases["P0"].Status != PhaseVerifying || !st.Phases["P0"].DoneAt.IsZero() {
+			t.Fatalf("done P0 with its job running: next %q err %v state %+v", next, err, st)
+		}
+		if Unsettled(st) {
+			t.Fatal("unsettled while the job runs")
+		}
+		if got := Settle(&st, p, t1); got.Changed() {
+			t.Fatalf("settled while the job runs: %+v", got)
+		}
+		if status == "" {
+			st.Jobs = nil
+		} else {
+			st.Jobs[0].Status = status
+		}
+		if status != JobRunning && !Unsettled(st) {
+			t.Fatal("settled before Settle")
+		}
+		return st
+	}
+	for _, c := range []struct {
+		status, phase, park string
+		delivered           bool
+	}{
+		{JobPassed, PhaseDone, "", true},
+		{JobFailed, PhaseParked, ParkRed, false},
+		{JobTimeout, PhaseParked, ParkRed, false},
+		{JobLaneError, PhaseParked, ParkUnverified, false},
+		{JobInterrupted, PhaseParked, ParkUnverified, false},
+		{"", PhaseParked, ParkUnverified, false}, // the job is gone from the record
+	} {
+		st := verifying(c.status)
+		got := Settle(&st, p, t1)
+		ps := st.Phases["P0"]
+		if len(got.Verdicts) != 1 || got.Verdicts[0].Phase != "P0" || got.Verdicts[0].Park != c.park || got.Taken != "" || got.Complete || ps.Status != c.phase || st.Current != "P1" {
+			t.Errorf("%q: settled %+v, P0 %+v, in hand %q", c.status, got, ps, st.Current)
+			continue
+		}
+		if c.phase == PhaseDone && !ps.DoneAt.Equal(t1) {
+			t.Errorf("%q: done at %v", c.status, ps.DoneAt)
+		}
+		if c.park != "" {
+			if pk := ps.Park; pk == nil || pk.Reason != c.park || !pk.Since.Equal(t1) || c.status != "" && (pk.Job != "j1" || pk.Notes != "all written; make test running") {
+				t.Errorf("%q: park %+v", c.status, pk)
+			}
+			// A reopened phase comes back before any phase not started, and what builds on it waits.
+			Start(&st, t1, Origin{})
+			if next, _ := Done(&st, p, "P1", t1, DoneOpts{}); next != "P0" {
+				t.Errorf("%q: after P1, %q is taken up", c.status, next)
+			}
+		}
+		if j := st.Job("j1"); j != nil && !j.Delivered.IsZero() != c.delivered {
+			t.Errorf("%q: delivered %v", c.status, j.Delivered)
+		}
+		if Unsettled(st) {
+			t.Errorf("%q: still unsettled", c.status)
+		}
+	}
+	st := verifying(JobRunning)
+	if Unsettled(st) || st.Phases["P2"].Status != PhasePending || Next(st, p) == "P2" {
+		t.Fatalf("P2 started on a verifying P0: %+v", st)
+	}
+}
+
+// With no phase in hand, a verdict lets the run take up what can start now, or completes it.
+func TestSettleWithNothingInHand(t *testing.T) {
+	t1 := t0.Add(time.Hour)
+	waiting := func(p plan.Plan, status string) State {
+		st := Attach(p, t0, Origin{})
+		st.Jobs = []Job{{ID: "j1", Phase: "P0", Status: JobRunning}}
+		if next, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || next != "" || st.Current != "" || st.Mode != ModeRunning {
+			t.Fatalf("done P0: next %q err %v state %+v", next, err, st)
+		}
+		st.Jobs[0].Status = status
+		return st
+	}
+	chain := graph("P0:", "P1:P0")
+	st := waiting(chain, JobPassed)
+	if got := Settle(&st, chain, t1); got.Taken != "P1" || got.Complete || st.Current != "P1" || !st.BoundaryOwed || st.Phases["P0"].Status != PhaseDone {
+		t.Errorf("green: %+v, state %+v", got, st)
+	}
+	st = waiting(chain, JobFailed)
+	if got := Settle(&st, chain, t1); got.Taken != "P0" || st.Current != "P0" || !st.BoundaryOwed || st.Phases["P0"].Status != PhaseParked {
+		t.Errorf("red: %+v, state %+v", got, st)
+	}
+
+	// The verification that completes the run is how the model hears of it: its result stays due.
+	one := graph("P0:")
+	st = waiting(one, JobPassed)
+	if got := Settle(&st, one, t1); got.Taken != "" || !got.Complete || st.Mode != ModeComplete {
+		t.Fatalf("last phase green: %+v, state %+v", got, st)
+	}
+	if due := st.Due(); len(due) != 1 || due[0].ID != "j1" {
+		t.Errorf("due once complete: %+v", due)
+	}
+	st.Run.CompleteNotified = true
+	if due := st.Due(); len(due) != 0 {
+		t.Errorf("due after the human was told: %+v", due)
+	}
+
+	// No phase in hand, and nothing left to wait for: the run is set right.
+	st = runState(chain, map[string]string{"P0": PhaseDone}, nil)
+	if !Unsettled(st) {
+		t.Fatal("not unsettled")
+	}
+	if got := Settle(&st, chain, t1); got.Taken != "P1" || len(got.Verdicts) != 0 {
+		t.Errorf("nothing to wait for: %+v", got)
+	}
+	// A parked phase whose job finished is taken up.
+	st = runState(chain, map[string]string{"P0": PhaseParked}, map[string]Park{"P0": {Reason: ParkJob, Job: "j1"}}, Job{ID: "j1", Phase: "P0", Status: JobRunning})
+	if Unsettled(st) {
+		t.Fatal("unsettled while the job runs")
 	}
 	st.Jobs[0].Status = JobPassed
-	if next := advance(&st, p); next != "" || st.Mode != ModeComplete {
-		t.Fatalf("after the job: next %q state %+v", next, st)
+	if got := Settle(&st, chain, t1); got.Taken != "P0" || len(got.Verdicts) != 0 {
+		t.Errorf("parked and resolved: %+v", got)
+	}
+}
+
+// A phase whose latest job is red is not finished, unless the model says why it is despite that.
+func TestDoneRefusesRed(t *testing.T) {
+	p := graph("P0:", "P1:")
+	run := func(jobs ...Job) State {
+		st := Attach(p, t0, Origin{})
+		st.Jobs = jobs
+		return st
+	}
+	red := Job{ID: "j1", Phase: "P0", Command: "make test", Status: JobFailed, Exit: 1}
+	st := run(red)
+	_, err := Done(&st, p, "P0", t0, DoneOpts{})
+	var re RedError
+	if !errors.As(err, &re) || re.Job.ID != "j1" || st.Phases["P0"].Status != PhaseActive || !strings.Contains(err.Error(), "make test") {
+		t.Fatalf("red: err %v, P0 %+v", err, st.Phases["P0"])
+	}
+	if next, err := Done(&st, p, "P0", t0, DoneOpts{DespiteRed: true}); err != nil || next != "P1" || st.Phases["P0"].Status != PhaseDone || st.Job("j1").Delivered.IsZero() {
+		t.Fatalf("despite red: next %q err %v state %+v", next, err, st)
+	}
+	// Another phase's red, an older red, and a job with no verdict do not stand in the way.
+	for name, jobs := range map[string][]Job{
+		"another phase":  {{ID: "j1", Phase: "P1", Status: JobFailed}},
+		"verified again": {red, {ID: "j2", Phase: "P0", Status: JobPassed}},
+		"lane error":     {red, {ID: "j2", Phase: "P0", Status: JobLaneError}},
+	} {
+		st := run(jobs...)
+		if _, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || st.Phases["P0"].Status != PhaseDone {
+			t.Errorf("%s: err %v, P0 %+v", name, err, st.Phases["P0"])
+		}
+	}
+	st = run(red, Job{ID: "j2", Phase: "P0", Status: JobQueued})
+	if _, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || st.Phases["P0"].Status != PhaseVerifying {
+		t.Errorf("verifying again: err %v, P0 %+v", err, st.Phases["P0"])
+	}
+}
+
+func TestDue(t *testing.T) {
+	p := graph("P0:", "P1:")
+	t1 := t0.Add(time.Minute)
+	finished := Job{ID: "j1", Phase: "P0", Status: JobFailed}
+	for _, c := range []struct {
+		name string
+		set  func(*State)
+		due  bool
+	}{
+		{"in hand", func(*State) {}, true},
+		{"already given", func(st *State) { st.Jobs[0].Delivered = t0 }, false},
+		{"still running", func(st *State) { st.Jobs[0].Status = JobRunning }, false},
+		{"another phase's", func(st *State) { st.Jobs[0].Phase = "P1" }, false},
+		{"boundary owed", func(st *State) { st.BoundaryOwed = true }, false},
+		{"checkpoint owed", func(st *State) { st.CheckpointOwed = true }, false},
+		{"checkpoint due", func(st *State) { st.CheckpointDue = true }, false},
+		{"compacting", func(st *State) { st.Run.Compaction.Queue("checkpoint", t0) }, false},
+		{"paused", func(st *State) { st.Mode = ModePaused }, false},
+		{"phase parked", func(st *State) { st.Phases["P0"].Status = PhaseParked }, false},
+		{"nothing in hand", func(st *State) { st.Current = "" }, false},
+	} {
+		st := Attach(p, t0, Origin{})
+		st.Jobs = []Job{finished}
+		c.set(&st)
+		if due := st.Due(); (len(due) == 1) != c.due {
+			t.Errorf("%s: due %+v", c.name, due)
+		}
+		if due := TakeDue(&st, t1); len(due) > 0 && (!st.Jobs[0].Delivered.Equal(t1) || len(st.Due()) != 0) {
+			t.Errorf("%s: taken, but %+v", c.name, st.Jobs[0])
+		}
+	}
+}
+
+func TestRed(t *testing.T) {
+	st := State{Jobs: []Job{
+		{ID: "j1", Phase: "P0", Status: JobFailed},
+		{ID: "j2", Phase: "P1", Status: JobTimeout},
+		{ID: "j3", Phase: "P0", Status: JobPassed},
+		{ID: "j4", Phase: "P2", Status: JobLaneError},
+		{ID: "j5", Phase: "P3", Status: JobFailed},
+		{ID: "j6", Phase: "P3", Status: JobRunning},
+		{ID: "j7", Phase: "P4", Status: JobFailed},
+	}}
+	var ids []string
+	for _, j := range st.Red() {
+		ids = append(ids, j.ID)
+	}
+	if strings.Join(ids, " ") != "j2 j7" {
+		t.Errorf("red: %v", ids)
 	}
 }
 
@@ -248,7 +448,7 @@ func TestQueueJob(t *testing.T) {
 	if j.ID != "j3" || old == nil || old.ID != "j1" || old.Status != JobRunning {
 		t.Fatalf("the replacement %+v of %+v", j, old)
 	}
-	if j1 := st.Job("j1"); j1.Status != JobInterrupted || j1.Reason != "replaced by j3" || j1.Exit != -1 || !j1.Ended.Equal(t0) {
+	if j1 := st.Job("j1"); j1.Status != JobInterrupted || j1.Reason != "replaced by j3" || j1.Exit != -1 || !j1.Ended.Equal(t0) || !j1.Delivered.Equal(t0) {
 		t.Errorf("the replaced job: %+v", *j1)
 	}
 	if j2 := st.Job("j2"); j2.Status != JobQueued {

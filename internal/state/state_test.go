@@ -25,20 +25,20 @@ func TestPhaseLifecycle(t *testing.T) {
 	if st.Mode != ModeRunning || st.Current != "P0" || st.Phases["P0"].Status != PhaseActive || st.Phases["P0"].StartHead != "abc" || st.Phases["P0"].StartDirty != dirt {
 		t.Fatalf("after attach: %+v", st)
 	}
-	if _, err := Done(&st, p, "P1", t0, false); err == nil || !strings.Contains(err.Error(), "not the current phase") {
+	if _, err := Done(&st, p, "P1", t0, DoneOpts{}); err == nil || !strings.Contains(err.Error(), "not the current phase") {
 		t.Fatalf("done on a non-current phase: %v", err)
 	}
-	if _, err := Done(&st, p, "P9", t0, false); err == nil || !strings.Contains(err.Error(), "unknown phase") {
+	if _, err := Done(&st, p, "P9", t0, DoneOpts{}); err == nil || !strings.Contains(err.Error(), "unknown phase") {
 		t.Fatalf("done on an unknown phase: %v", err)
 	}
-	next, err := Done(&st, p, "P0", t0.Add(time.Hour), false)
+	next, err := Done(&st, p, "P0", t0.Add(time.Hour), DoneOpts{})
 	if err != nil || next != "P1" || !st.BoundaryOwed || st.Current != "P1" || st.Phases["P1"].Status != PhasePending {
 		t.Fatalf("done P0: next %q err %v state %+v", next, err, st)
 	}
-	if _, err := Done(&st, p, "P0", t0, false); err == nil || !strings.Contains(err.Error(), "already done") {
+	if _, err := Done(&st, p, "P0", t0, DoneOpts{}); err == nil || !strings.Contains(err.Error(), "already done") {
 		t.Fatalf("done twice: %v", err)
 	}
-	if _, err := Done(&st, p, "P1", t0, false); err == nil || !strings.Contains(err.Error(), "has not started yet") {
+	if _, err := Done(&st, p, "P1", t0, DoneOpts{}); err == nil || !strings.Contains(err.Error(), "has not started yet") {
 		t.Fatalf("finishing the next phase before the boundary compaction: %v", err)
 	}
 	Start(&st, t0.Add(2*time.Hour), Origin{Head: "def"})
@@ -46,10 +46,10 @@ func TestPhaseLifecycle(t *testing.T) {
 		t.Fatalf("after start: %+v", st)
 	}
 	// --force finishes a phase out of order.
-	if _, err := Done(&st, p, "P2", t0, true); err != nil {
+	if _, err := Done(&st, p, "P2", t0, DoneOpts{Force: true}); err != nil {
 		t.Fatal(err)
 	}
-	next, err = Done(&st, p, "P1", t0, false)
+	next, err = Done(&st, p, "P1", t0, DoneOpts{})
 	if err != nil || next != "" || st.Mode != ModeComplete || st.Current != "" || st.BoundaryOwed {
 		t.Fatalf("final done: next %q err %v state %+v", next, err, st)
 	}
@@ -284,7 +284,7 @@ func TestAttachAtBoundaryStartsAfterACompaction(t *testing.T) {
 	if st.Mode != ModeRunning || st.Current != "P0" || !st.BoundaryOwed || st.Phases["P0"].Status != PhasePending || st.Owner == nil {
 		t.Fatalf("%+v", st)
 	}
-	if _, err := Done(&st, threePhases(), "P0", t0, false); err == nil {
+	if _, err := Done(&st, threePhases(), "P0", t0, DoneOpts{}); err == nil {
 		t.Fatal("P0 finished before it started")
 	}
 	Start(&st, t0, Origin{Head: "abc"})
@@ -297,7 +297,7 @@ func TestReviseKeepsWhatIsDone(t *testing.T) {
 	p := threePhases()
 	running := func() State {
 		st := Attach(p, t0, Origin{})
-		Done(&st, p, "P0", t0, false)
+		Done(&st, p, "P0", t0, DoneOpts{})
 		Start(&st, t0, Origin{})
 		return st // P0 done, P1 under way
 	}
@@ -380,7 +380,7 @@ func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 	// The checkpoint, or the end of the phase, settles it.
 	for name, settle := range map[string]func(st *State) error{
 		"checkpoint": SetCheckpoint,
-		"done":       func(st *State) error { _, err := Done(st, threePhases(), "P0", t0, false); return err },
+		"done":       func(st *State) error { _, err := Done(st, threePhases(), "P0", t0, DoneOpts{}); return err },
 	} {
 		st := Attach(threePhases(), t0, Origin{})
 		st.CheckpointDue = true

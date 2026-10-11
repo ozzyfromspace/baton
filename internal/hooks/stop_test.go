@@ -39,17 +39,17 @@ func TestStopDecisionTable(t *testing.T) {
 		{name: "idle", setup: func(st *state.State) { *st = state.New() }},
 		{name: "paused", setup: func(st *state.State) { st.Mode = state.ModePaused }},
 		{name: "phase done queues the boundary compaction",
-			setup: func(st *state.State) { state.Done(st, pl, "P0", tStop, false) },
+			setup: func(st *state.State) { state.Done(st, pl, "P0", tStop, state.DoneOpts{}) },
 			say:   "compacting, then P1 (Second) starts", compact: "boundary"},
 		{name: "checkpoint", setup: func(st *state.State) { st.CheckpointOwed = true }, say: "checkpoint → compacting", compact: "checkpoint"},
 		{name: "compaction already in flight",
 			setup: func(st *state.State) {
-				state.Done(st, pl, "P0", tStop, false)
+				state.Done(st, pl, "P0", tStop, state.DoneOpts{})
 				st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactTyped}
 			}},
 		{name: "a review comes before the boundary", block: true, reason: "P0 has made 0 decisions without you", notice: "review",
 			setup: func(st *state.State) {
-				state.Done(st, pl, "P0", tStop, false)
+				state.Done(st, pl, "P0", tStop, state.DoneOpts{})
 				state.DueReview(st, "P0", tStop)
 			}},
 		{name: "a proposal not yet put to the human", block: true, reason: "You stopped, but put your proposal d1 to the human first: call the AskUserQuestion tool",
@@ -94,21 +94,21 @@ func TestStopDecisionTable(t *testing.T) {
 			setup: func(st *state.State) { st.Run.StopBlocks = MaxStopBlocks }},
 		{name: "plan complete notifies once",
 			setup: func(st *state.State) {
-				state.Done(st, pl, "P0", tStop, false)
+				state.Done(st, pl, "P0", tStop, state.DoneOpts{})
 				state.Start(st, tStop, state.Origin{}) // the boundary compaction happened
-				state.Done(st, pl, "P1", tStop, false)
+				state.Done(st, pl, "P1", tStop, state.DoneOpts{})
 			},
 			say: "plan complete", notice: "plan_complete"},
 		{name: "plan complete counts the decisions made without the human",
 			setup: func(st *state.State) {
 				state.AddNote(st, "a", "", tStop)
-				state.Done(st, pl, "P0", tStop, false)
+				state.Done(st, pl, "P0", tStop, state.DoneOpts{})
 				state.Start(st, tStop, state.Origin{})
 				state.AddProposal(st, state.Decision{What: "b"}, tStop)
 				state.Resolve(st, "d2", state.ByTimeout, "Go ahead", tStop)
 				state.AddProposal(st, state.Decision{What: "c"}, tStop)
 				state.Resolve(st, "d3", state.ByHuman, "Go ahead", tStop) // the human said so: not without them
-				state.Done(st, pl, "P1", tStop, false)
+				state.Done(st, pl, "P1", tStop, state.DoneOpts{})
 			},
 			say: "plan complete — all 2 phases done · 2 decisions made without you — /baton status", notice: "plan_complete",
 			detail: "Demo: all 2 phases done · 2 decisions made without you — /baton status"},
@@ -199,7 +199,7 @@ func (f *fixture) fireCode(event string, input map[string]any) (int, string) {
 func TestBoundarySequenceThroughTheHooks(t *testing.T) {
 	f := newFixture(t, true)
 	pl, _ := f.store.LoadPlan()
-	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
 
 	out := f.fire("Stop", map[string]any{"stop_hook_active": false})
 	if out["decision"] == "block" || f.state().Run.Compaction.Status != state.CompactQueued {
@@ -270,7 +270,7 @@ func TestResumeSequenceThroughTheHooks(t *testing.T) {
 func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {
 	boundary := func(f *fixture) *state.PhaseState {
 		pl, _ := f.store.LoadPlan()
-		f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+		f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
 		f.fire("Stop", map[string]any{})
 		f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
 		f.fire("PreCompact", map[string]any{"trigger": "manual"})

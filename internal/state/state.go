@@ -62,8 +62,9 @@ type Park struct {
 
 // Why a phase is parked.
 const (
-	ParkJob = "job" // set aside while its job runs, so the session could work on another phase
-	ParkRed = "red" // its verification failed after done was claimed
+	ParkJob        = "job"        // set aside while its job runs, so the session could work on another phase
+	ParkRed        = "red"        // its verification failed after done was claimed
+	ParkUnverified = "unverified" // its verification ended without a verdict after done was claimed
 )
 
 // MaxEdited bounds the files a phase records as edited; past it, it stops recording.
@@ -261,11 +262,26 @@ func attachKeeping(owner *Owner, prev *Runtime, p plan.Plan, now time.Time, o Or
 // ErrNoPlan is returned by transitions that need an attached plan.
 var ErrNoPlan = errors.New("no plan is attached (run /baton plan or /baton run first)")
 
-// Done marks phase id finished. Unless force is set, id must be the current phase. It returns the phase
-// in hand afterwards: the next one, which starts after a compaction, or the one under way when id was
-// finished out of order; "" when the plan is complete (ModeComplete) or nothing can start until a job
-// finishes.
-func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next string, err error) {
+// DoneOpts are what `baton done` may override.
+type DoneOpts struct {
+	Force      bool // finish a phase other than the one in hand
+	DespiteRed bool // finish it although its latest verification is red
+}
+
+// RedError turns down done for a phase whose latest verification is red.
+type RedError struct{ Job Job }
+
+func (e RedError) Error() string {
+	return fmt.Sprintf("phase %s's latest verification, job %s (`%s`), is red (%s)", e.Job.Phase, e.Job.ID, e.Job.Command, e.Job.Status)
+}
+
+// Done marks phase id finished. Unless o.Force is set, id must be the current phase. While the phase's
+// job is queued or running, the phase is verifying rather than done: Settle marks it done once the job
+// passes, and reopens it if the job fails. A phase whose latest job is red is not finished at all, unless
+// o.DespiteRed. It returns the phase in hand afterwards: the next one, which starts after a compaction, or
+// the one under way when id was finished out of order; "" when the plan is complete (ModeComplete) or
+// nothing can start until a job finishes.
+func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next string, err error) {
 	if st.Mode == ModeIdle {
 		return "", ErrNoPlan
 	}
@@ -281,13 +297,26 @@ func Done(st *State, p plan.Plan, id string, now time.Time, force bool) (next st
 	if ps.Status == PhaseDone {
 		return "", fmt.Errorf("phase %s is already done", id)
 	}
-	if id != st.Current && !force {
+	if id != st.Current && !o.Force {
 		return "", fmt.Errorf("phase %s is not the current phase (%s); finish %s first, or pass --force", id, st.Current, st.Current)
 	}
-	if st.BoundaryOwed && !force {
+	if st.BoundaryOwed && !o.Force {
 		return "", fmt.Errorf("phase %s has not started yet: end your turn now, so baton can compact the context before %s begins", id, id)
 	}
-	ps.Status, ps.DoneAt = PhaseDone, now
+	j := st.Latest(id)
+	if j != nil && j.Red() && !o.DespiteRed {
+		return "", RedError{*j}
+	}
+	if j != nil && !j.Finished() {
+		ps.Status = PhaseVerifying
+	} else {
+		ps.Status, ps.DoneAt = PhaseDone, now
+	}
+	for i := range st.Jobs {
+		if x := &st.Jobs[i]; x.Phase == id && x.Finished() && x.Delivered.IsZero() {
+			x.Delivered = now // the phase is finished with its results in hand
+		}
+	}
 	st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointDue = nil, nil, false, false
 	st.Run.Progress()
 	st.Run.Escalation = nil

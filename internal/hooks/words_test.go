@@ -48,7 +48,7 @@ func TestTheWordingFitsTheProject(t *testing.T) {
 			// The brief at the next phase boundary.
 			pl, _ := f.store.LoadPlan()
 			f.store.Update(func(st *state.State) error {
-				_, err := state.Done(st, pl, "P0", f.now, false)
+				_, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{})
 				st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactActive, Reason: "boundary", ByBaton: true}
 				return err
 			})

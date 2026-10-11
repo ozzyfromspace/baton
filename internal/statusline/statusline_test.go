@@ -28,7 +28,7 @@ func TestSegment(t *testing.T) {
 		{"running", func() state.State { return run }, true, "◆ baton · P0 1/2 The overlay · ctx 41%"},
 		{"long title", func() state.State {
 			s := run
-			state.Done(&s, pl, "P0", now, false)
+			state.Done(&s, pl, "P0", now, state.DoneOpts{})
 			state.Start(&s, now, state.Origin{})
 			return s
 		}, true,

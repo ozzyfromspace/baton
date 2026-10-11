@@ -90,6 +90,11 @@ func AddNote(st *State, what, undo string, now time.Time) (Decision, error) {
 	return add(st, Decision{Kind: Note, What: what, Undo: undo}, now)
 }
 
+// NoteOn records a note on phase, which need not be the current one.
+func NoteOn(st *State, phase, what, undo string, now time.Time) (Decision, error) {
+	return add(st, Decision{Kind: Note, Phase: phase, What: what, Undo: undo}, now)
+}
+
 // AddProposal records a proposal on the current phase. It fills in d's ID, kind, phase and time.
 func AddProposal(st *State, d Decision, now time.Time) (Decision, error) {
 	if p := st.PendingProposal(); p != nil {
@@ -106,7 +111,10 @@ func add(st *State, d Decision, now time.Time) (Decision, error) {
 	if d.What == "" {
 		return Decision{}, errors.New("say what you did or will do")
 	}
-	d.ID, d.Phase, d.At = fmt.Sprintf("d%d", len(st.Decisions)+1), st.Current, now
+	if d.Phase == "" {
+		d.Phase = st.Current
+	}
+	d.ID, d.At = fmt.Sprintf("d%d", len(st.Decisions)+1), now
 	st.Decisions = append(st.Decisions, d)
 	return d, nil
 }

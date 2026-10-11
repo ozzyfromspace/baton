@@ -34,6 +34,10 @@ type Job struct {
 	Started   time.Time `json:"started,omitzero"`
 	Ended     time.Time `json:"ended,omitzero"`
 	Heartbeat time.Time `json:"heartbeat,omitzero"` // the runner's, while the job runs
+	// Delivered is when the model was given the job's result, or found to need none: the job was
+	// cancelled, its phase was finished with it in hand, or its verification passed for a phase the run
+	// had moved on from. Each result is given once.
+	Delivered time.Time `json:"delivered,omitzero"`
 }
 
 // Job kinds: a verify job runs a gate on a commit, in a lane; an await job waits on something outside the
@@ -56,6 +60,21 @@ const (
 
 // Finished reports whether the job has a result.
 func (j Job) Finished() bool { return j.Status != JobQueued && j.Status != JobRunning }
+
+// Red reports a verdict against what the job checked: its command failed, or ran out of time. A job that
+// could not run its command (lane_error) or did not finish (interrupted) has no verdict.
+func (j Job) Red() bool { return j.Status == JobFailed || j.Status == JobTimeout }
+
+// Took is how long the job has run, or ran.
+func (j Job) Took(now time.Time) time.Duration {
+	switch {
+	case j.Started.IsZero():
+		return 0
+	case j.Ended.IsZero():
+		return now.Sub(j.Started)
+	}
+	return j.Ended.Sub(j.Started)
+}
 
 // MaxJobs is how many jobs a run keeps on record. Past it, the oldest finished jobs are dropped.
 const MaxJobs = 30
@@ -100,7 +119,7 @@ func CancelJobs(st *State, which func(Job) bool, reason string, now time.Time) [
 			continue
 		}
 		out = append(out, *j)
-		j.Status, j.Exit, j.Reason, j.Ended = JobInterrupted, -1, reason, now
+		j.Status, j.Exit, j.Reason, j.Ended, j.Delivered = JobInterrupted, -1, reason, now, now
 	}
 	return out
 }
@@ -114,6 +133,65 @@ func (st State) Unfinished() []Job {
 		}
 	}
 	return out
+}
+
+// Latest is phase's latest job, or nil when it has none on record. A phase has one job at a time, so its
+// latest is the one that says where its verification stands.
+func (st State) Latest(phase string) *Job {
+	for i := len(st.Jobs) - 1; i >= 0; i-- {
+		if st.Jobs[i].Phase == phase {
+			return &st.Jobs[i]
+		}
+	}
+	return nil
+}
+
+// Red lists the phases whose latest job is red, by that job, oldest first. They share the branch with
+// the phase in hand, so failures in their area are theirs.
+func (st State) Red() []Job {
+	var out []Job
+	for _, j := range st.Jobs {
+		if j.Red() && st.Latest(j.Phase).ID == j.ID {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// Due lists the results the model has not been given and should be given now: those of the phase in
+// hand, or, once the plan is complete and before the human is told, of the verification that completed
+// it. None is due while a compaction is owed or underway: the result comes after it.
+func (st State) Due() []Job {
+	switch {
+	case st.BoundaryOwed || st.CheckpointOwed || st.CheckpointDue || st.Run.Compaction.InFlight():
+		return nil
+	case st.Mode == ModeComplete:
+		if st.Run.CompleteNotified {
+			return nil
+		}
+	case st.Mode != ModeRunning:
+		return nil
+	case st.Phases[st.Current] == nil || st.Phases[st.Current].Status != PhaseActive:
+		return nil
+	}
+	var out []Job
+	for _, j := range st.Jobs {
+		if j.Finished() && j.Delivered.IsZero() && (st.Mode == ModeComplete || j.Phase == st.Current) {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// TakeDue returns the results due (Due) and records them as given.
+func TakeDue(st *State, now time.Time) []Job {
+	due := st.Due()
+	for _, d := range due {
+		if j := st.Job(d.ID); j != nil {
+			j.Delivered = now
+		}
+	}
+	return due
 }
 
 // Job returns the job with this id, or nil when there is none on record.
@@ -204,6 +282,102 @@ func advance(st *State, p plan.Plan) string {
 		st.Current, st.BoundaryOwed = "", false
 	}
 	return next
+}
+
+// Verdict is what a finished job decided about the phase that was verifying on it: the phase is done
+// (Park ""), or reopened, parked for the reason Park gives.
+type Verdict struct {
+	Phase string
+	Job   Job // the job as it ended; zero when none is on record
+	Park  string
+}
+
+// Settled is what Settle changed.
+type Settled struct {
+	Verdicts []Verdict
+	Taken    string // the phase the run took up, now that one can start ("" for none)
+	Complete bool   // the run is complete now
+}
+
+// Changed reports whether Settle changed anything.
+func (s Settled) Changed() bool { return len(s.Verdicts) > 0 || s.Taken != "" || s.Complete }
+
+// Unsettled reports a run that Settle would move: a phase verifying on a job that has finished (or is
+// gone from the record), or, with no phase in hand, a parked phase that can be taken up again or no job
+// left to wait for.
+func Unsettled(st State) bool {
+	for id, ps := range st.Phases {
+		if ps.Status == PhaseVerifying {
+			if j := st.Latest(id); j == nil || j.Finished() {
+				return true
+			}
+		}
+	}
+	if st.Mode != ModeRunning || st.Current != "" {
+		return false
+	}
+	for _, ps := range st.Phases {
+		if ps.Status == PhaseParked && st.resolved(ps.Park) {
+			return true
+		}
+	}
+	return len(st.Unfinished()) == 0
+}
+
+// Settle applies the verdicts of finished jobs to the phases verifying on them: a phase whose job passed
+// is done; one whose job failed or ran out of time reopens, parked as red, and one whose job ended
+// without a verdict (it could not run, or was interrupted) reopens as unverified. Either comes back
+// before any phase not started yet (Next). With no phase in hand, the run then takes up the next one that
+// can start, after a compaction, or is complete.
+//
+// The result of a verification that passed needs no telling, unless it completed the run: then it is how
+// the model hears that the plan is complete (Due).
+func Settle(st *State, p plan.Plan, now time.Time) Settled {
+	var out Settled
+	for _, ph := range p.Phases {
+		ps := st.Phases[ph.ID]
+		if ps == nil || ps.Status != PhaseVerifying {
+			continue
+		}
+		j := st.Latest(ph.ID)
+		if j != nil && !j.Finished() {
+			continue
+		}
+		v := Verdict{Phase: ph.ID}
+		if j != nil {
+			v.Job = *j
+		}
+		switch {
+		case j != nil && j.Status == JobPassed:
+			ps.Status, ps.DoneAt = PhaseDone, now
+		default:
+			v.Park = ParkUnverified
+			pk := Park{Reason: ParkUnverified, Since: now}
+			if j != nil {
+				if j.Red() {
+					v.Park, pk.Reason = ParkRed, ParkRed
+				}
+				pk.Job, pk.Notes = j.ID, j.Notes
+			}
+			ps.Status, ps.Park = PhaseParked, &pk
+		}
+		out.Verdicts = append(out.Verdicts, v)
+	}
+	if len(out.Verdicts) > 0 {
+		st.Run.Progress()
+	}
+	if st.Mode == ModeRunning && st.Current == "" {
+		out.Taken = advance(st, p)
+		out.Complete = st.Mode == ModeComplete
+	}
+	if !out.Complete {
+		for _, v := range out.Verdicts {
+			if j := st.Job(v.Job.ID); v.Park == "" && j != nil && j.Delivered.IsZero() {
+				j.Delivered = now
+			}
+		}
+	}
+	return out
 }
 
 // ParkPhase sets phase id aside unfinished, with why and where it stood (pk). Only a phase that has started

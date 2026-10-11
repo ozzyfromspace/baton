@@ -56,6 +56,9 @@ type Runtime struct {
 	Compaction Compaction `json:"compaction"`
 	// Notices are messages for the human that the host sends out of band (push and desktop), then clears.
 	Notices []Notice `json:"notices,omitempty"`
+	// Announce are lines for the human about what the host did on its own, such as a verification it
+	// settled: the host cannot write into the session, so the next hook that answers it shows them.
+	Announce []string `json:"announce,omitempty"`
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
@@ -232,6 +235,11 @@ type Compaction struct {
 	// over. A failed compaction is retried with backoff, never abandoned while one is owed.
 	FailedAt time.Time `json:"failed_at,omitzero"`
 	Rounds   int       `json:"rounds,omitempty"`
+}
+
+// Queue asks the host to compact, for reason ("boundary" or "checkpoint"), as a new epoch.
+func (c *Compaction) Queue(reason string, now time.Time) {
+	*c = Compaction{Epoch: c.Epoch + 1, Status: CompactQueued, Reason: reason, Queued: now, Rewoken: c.Rewoken}
 }
 
 // InFlight reports whether a baton-requested compaction is queued or underway.

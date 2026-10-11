@@ -499,7 +499,7 @@ func cmdDone(args []string, io IO) int {
 			}
 		}
 		var err error
-		next, err = state.Done(st, pl, id, io.Now(), p.bools["force"])
+		next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"]})
 		return err
 	})
 	if err != nil {

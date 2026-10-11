@@ -256,7 +256,7 @@ func TestCompactionLifecycle(t *testing.T) {
 func TestAutoCompactionSatisfiesAnOwedBoundary(t *testing.T) {
 	f := newFixture(t, true)
 	pl, _ := f.store.LoadPlan()
-	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
 	f.fire("PreCompact", map[string]any{"trigger": "auto"})
 	ctx := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
 	if !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") {
@@ -433,7 +433,7 @@ func TestToolsAreHeldWhileACompactionIsOwed(t *testing.T) {
 		t.Fatalf("held with nothing owed: %v", out)
 	}
 	pl, _ := f.store.LoadPlan()
-	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, false); return err })
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
 	out := f.fire("PreToolUse", map[string]any{"tool_name": "Edit"})
 	hso, _ := out["hookSpecificOutput"].(map[string]any)
 	if hso["permissionDecision"] != "deny" || !strings.Contains(hso["permissionDecisionReason"].(string), "End your turn now") {

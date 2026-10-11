@@ -48,7 +48,7 @@ func setup(t *testing.T) (plan.Plan, []byte, state.State) {
 	}
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	st := state.Attach(pl, now, state.Origin{})
-	if _, err := state.Done(&st, pl, "P0", now, false); err != nil {
+	if _, err := state.Done(&st, pl, "P0", now, state.DoneOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	return pl, doc, st
