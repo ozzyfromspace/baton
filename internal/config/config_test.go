@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/machine"
 )
 
 func TestLoadFileEnvAndDefaults(t *testing.T) {
@@ -193,28 +195,37 @@ func TestEscalationEnvRoundTrip(t *testing.T) {
 
 func TestWorkerSettings(t *testing.T) {
 	root := t.TempDir()
+	const valid = `is not valid: use "auto", or a number from 0 to 8`
 	for _, c := range []struct {
 		name    string
 		file    string
 		env     map[string]string
 		workers int
+		auto    bool
 		usage   float64
 		err     string
 	}{
-		{"defaults", `{}`, nil, 1, 80, ""},
-		{"file", `{"workers":3,"worker_usage_max":50}`, nil, 3, 50, ""},
-		{"none: one phase at a time, and no check", `{"workers":0,"worker_usage_max":0}`, nil, 0, 0, ""},
-		{"env wins", `{"workers":3,"worker_usage_max":50}`, map[string]string{"BATON_WORKERS": "0", "BATON_WORKER_USAGE_MAX": "95.5"}, 0, 95.5, ""},
-		{"too many", `{"workers":4}`, nil, 1, 80, "workers 4 is not valid: use a number from 0 to 3"},
-		{"fewer than none", `{"workers":-1}`, nil, 1, 80, "workers -1"},
-		{"not a number", `{}`, map[string]string{"BATON_WORKERS": "two"}, 1, 80, `BATON_WORKERS "two"`},
-		{"over 100 percent", `{"worker_usage_max":120}`, nil, 1, 80, "worker_usage_max 120 is not valid"},
-		{"a negative percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "-5"}, 1, 80, "worker_usage_max -5"},
-		{"not a percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "most"}, 1, 80, `BATON_WORKER_USAGE_MAX "most"`},
+		{"defaults: auto, and no usage check", `{}`, nil, 0, true, 0, ""},
+		{"auto in the file", `{"workers":"auto"}`, nil, 0, true, 0, ""},
+		{"a number", `{"workers":3,"worker_usage_max":50}`, nil, 3, false, 50, ""},
+		{"the most", `{"workers":8}`, nil, 8, false, 0, ""},
+		{"a number written as a string", `{"workers":"2"}`, nil, 2, false, 0, ""},
+		{"none: one phase at a time", `{"workers":0}`, nil, 0, false, 0, ""},
+		{"env wins", `{"workers":3,"worker_usage_max":50}`, map[string]string{"BATON_WORKERS": "0", "BATON_WORKER_USAGE_MAX": "95.5"}, 0, false, 95.5, ""},
+		{"auto in the env", `{"workers":3}`, map[string]string{"BATON_WORKERS": "auto"}, 0, true, 0, ""},
+		{"too many", `{"workers":9}`, nil, 0, true, 0, "workers 9 " + valid},
+		{"fewer than none", `{"workers":-1}`, nil, 0, true, 0, "workers -1 " + valid},
+		{"not a whole number", `{"workers":2.5}`, nil, 0, true, 0, "workers 2.5 " + valid},
+		{"another word", `{"workers":"lots"}`, nil, 0, true, 0, `workers "lots" ` + valid},
+		{"another kind", `{"workers":true}`, nil, 0, true, 0, "workers true " + valid},
+		{"not a number in the env", `{}`, map[string]string{"BATON_WORKERS": "two"}, 0, true, 0, `BATON_WORKERS "two" ` + valid},
+		{"over 100 percent", `{"worker_usage_max":120}`, nil, 0, true, 0, "worker_usage_max 120 is not valid"},
+		{"a negative percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "-5"}, 0, true, 0, "worker_usage_max -5"},
+		{"not a percent", `{}`, map[string]string{"BATON_WORKER_USAGE_MAX": "most"}, 0, true, 0, `BATON_WORKER_USAGE_MAX "most"`},
 	} {
 		os.WriteFile(Path(root), []byte(c.file), 0o644)
 		cfg := Load(root, func(k string) string { return c.env[k] })
-		n, nerr := cfg.WorkerCount()
+		n, auto, nerr := cfg.WorkerCount()
 		f, ferr := cfg.WorkerUsage()
 		err := errors.Join(nerr, ferr)
 		switch {
@@ -223,8 +234,51 @@ func TestWorkerSettings(t *testing.T) {
 		case c.err == "" && err != nil:
 			t.Errorf("%s: %v", c.name, err)
 		}
-		if n != c.workers || f != c.usage {
-			t.Errorf("%s: workers %d, usage max %v; want %d, %v", c.name, n, f, c.workers, c.usage)
+		if n != c.workers || auto != c.auto || f != c.usage {
+			t.Errorf("%s: workers %d (auto %v), usage max %v; want %d (auto %v), %v", c.name, n, auto, f, c.workers, c.auto, c.usage)
+		}
+	}
+}
+
+// A value of the wrong kind for workers is reported, and the settings after it in the file still count.
+func TestABadWorkersKeepsTheRest(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(Path(root), []byte(`{"workers":{"most":3},"ntfy_topic":"after","worker_usage_max":70}`), 0o644)
+	cfg := Load(root, func(string) string { return "" })
+	if _, _, err := cfg.WorkerCount(); err == nil || !strings.Contains(err.Error(), `workers {"most":3} is not valid`) {
+		t.Errorf("WorkerCount: %v", err)
+	}
+	if f, err := cfg.WorkerUsage(); cfg.NtfyTopic != "after" || f != 70 || err != nil {
+		t.Errorf("the settings after it: topic %q, usage max %v %v", cfg.NtfyTopic, f, err)
+	}
+}
+
+// With auto, a worker for each 2 CPUs or 4 GiB, whichever allows fewer, less one for the lead's session.
+func TestAutoWorkers(t *testing.T) {
+	const gib = 1 << 30
+	for _, c := range []struct {
+		name string
+		m    machine.Reading
+		want int
+	}{
+		{"a roomy Mac", machine.Reading{CPUs: 14, MemTotal: 48 * gib}, 6},
+		{"an 8 GB, 8-core laptop", machine.Reading{CPUs: 8, MemTotal: 8 * gib}, 1},
+		{"Linux leaves the kernel's share out of 8 GB (7.6 GiB)", machine.Reading{CPUs: 8, MemTotal: 76 * gib / 10}, 1},
+		{"4 GB", machine.Reading{CPUs: 8, MemTotal: 4 * gib}, 0},
+		{"two CPUs", machine.Reading{CPUs: 2, MemTotal: 64 * gib}, 0},
+		{"memory not known", machine.Reading{CPUs: 16}, 0},
+		{"a big server", machine.Reading{CPUs: 128, MemTotal: 1024 * gib}, 8},
+	} {
+		if got := AutoWorkers(c.m); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+	root := t.TempDir()
+	read := func() machine.Reading { return machine.Reading{CPUs: 14, MemTotal: 48 * gib} }
+	for file, want := range map[string]int{`{}`: 6, `{"workers":2}`: 2, `{"workers":0}`: 0, `{"workers":"x"}`: 0} {
+		os.WriteFile(Path(root), []byte(file), 0o644)
+		if n, _, _ := Load(root, func(string) string { return "" }).WorkerCap(read); n != want {
+			t.Errorf("%s: %d workers, want %d", file, n, want)
 		}
 	}
 }

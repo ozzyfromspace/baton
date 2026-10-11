@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/loop"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -386,16 +388,41 @@ func TestStatusShowsLanesAndBackgroundWork(t *testing.T) {
 	}
 }
 
-func TestTheHostRefusesAnInvalidJobSetting(t *testing.T) {
+func TestTheHostRefusesAnInvalidSetting(t *testing.T) {
 	for name, want := range map[string]string{
 		"BATON_VERIFY_TIMEOUT": `BATON_VERIFY_TIMEOUT "forever" is not valid: use a duration from 1s to 24h`,
 		"BATON_SWITCH_AFTER":   `BATON_SWITCH_AFTER "forever" is not valid: use a duration from 1s to 2h`,
 		"BATON_FOREGROUND_MAX": `BATON_FOREGROUND_MAX "forever" is not valid: use a duration from 1s to 10m`,
+		"BATON_WORKERS":        `BATON_WORKERS "forever" is not valid: use "auto", or a number from 0 to 8`,
 	} {
 		t.Chdir(t.TempDir())
 		io, _, errb := testIO("", map[string]string{"BATON_HOME": t.TempDir(), name: "forever", "BATON_CLAUDE": "/nonexistent/claude"})
 		if code := runHostWith(nil, io, nil); code != 1 || !strings.Contains(errb.String(), want) {
 			t.Errorf("%s: exit %d: %s", name, code, errb)
+		}
+	}
+}
+
+// The sessions the host runs read back the workers' settings the host started with: auto stays auto,
+// whatever the file says, and the machine they read decides as it did for the host.
+func TestTheWorkerSettingsReachTheSession(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(config.Path(root), []byte(`{"workers":3,"worker_usage_max":50}`), 0o644)
+	for _, c := range []struct {
+		n     int
+		auto  bool
+		usage float64
+	}{{6, true, 0}, {2, false, 85.5}, {0, false, 0}} {
+		env := map[string]string{}
+		for _, kv := range workerEnv(c.n, c.auto, c.usage) {
+			k, v, _ := strings.Cut(kv, "=")
+			env[k] = v
+		}
+		cfg := config.Load(root, func(k string) string { return env[k] })
+		n, auto, err := cfg.WorkerCap(func() machine.Reading { return roomy })
+		usage, uerr := cfg.WorkerUsage()
+		if n != c.n || auto != c.auto || usage != c.usage || err != nil || uerr != nil {
+			t.Errorf("%+v: read back %d, auto %v, usage max %v (%v, %v)", c, n, auto, usage, err, uerr)
 		}
 	}
 }

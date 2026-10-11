@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -26,6 +27,9 @@ const NudgePrefix = "[baton]"
 type Deps struct {
 	// Open returns the run of the session the hook is for (OpenRun, in production).
 	Open func(c Context) (*state.Store, error)
+	// Machine reads the machine (nil: machine.Read), which with workers: auto decides how many workers may
+	// run beside the session (Context.Machine).
+	Machine func() machine.Reading
 }
 
 // OpenRun returns the run a hook's session belongs to, in the project the host named in BATON_DIR,
@@ -53,7 +57,7 @@ func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 // Handlers returns baton's handler for each hook event.
 func Handlers(d Deps) map[string]Handler {
 	h := &handlers{d}
-	return map[string]Handler{
+	m := map[string]Handler{
 		"SessionStart":       h.sessionStart,
 		"SessionEnd":         h.sessionEnd,
 		"UserPromptSubmit":   h.userPromptSubmit,
@@ -72,6 +76,14 @@ func Handlers(d Deps) map[string]Handler {
 		"PostCompactRewake":  h.postCompactRewake,
 		"SessionStartRewake": h.sessionStartRewake,
 	}
+	read := d.Machine
+	if read == nil {
+		read = machine.Read
+	}
+	for event, fn := range m {
+		m[event] = func(c Context) (Result, error) { c.Machine = read; return fn(c) }
+	}
+	return m
 }
 
 type handlers struct{ d Deps }

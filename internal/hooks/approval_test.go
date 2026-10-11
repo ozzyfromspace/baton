@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -279,7 +280,8 @@ func TestAnApprovalSaysHowManyWorkersRun(t *testing.T) {
 		name, mode, want string
 		warned           bool
 	}{
-		{"the default mode", "", "baton: up to 1 worker works beside this session", true},
+		{"the default mode", "", "baton: up to 1 worker works beside this session on the phases that can go ahead, each in a worktree of its own, " +
+			"and baton lands their work on this branch (the plan's widest step is 2 phases; this machine allows 6).", true},
 		{"auto mode", "auto", "baton: up to 1 worker works beside this session", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -295,6 +297,12 @@ func TestAnApprovalSaysHowManyWorkersRun(t *testing.T) {
 	f.vars = map[string]string{"HOME": t.TempDir(), "BATON_HOME": t.TempDir(), "BATON_WORKERS": "0"}
 	if out := say(f.approve(f.writePlan("p.md", doc))); strings.Contains(out, "worker") {
 		t.Errorf("no workers, and said %q", out)
+	}
+	f = newFixture(t, false)
+	f.vars = map[string]string{"HOME": t.TempDir(), "BATON_HOME": t.TempDir()}
+	f.machine = machine.Reading{CPUs: 8, MemTotal: 4 << 30}
+	if out := say(f.approve(f.writePlan("p.md", doc))); !strings.Contains(out, "\nbaton: no worker runs beside this session: with workers: auto, a machine needs 4 CPUs and 8 GiB") {
+		t.Errorf("a machine too small for a worker, and said %q", out)
 	}
 
 	// Approved with "clear context", the plan starts at once, and says so too.

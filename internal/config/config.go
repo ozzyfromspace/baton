@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/machine"
 )
 
 // Config is ~/.baton/config.json.
@@ -59,12 +61,13 @@ type Config struct {
 	// baton passes it to claude as CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, unless that is set already.
 	ForegroundMax string `json:"foreground_max,omitempty"`
 	// Workers is how many hidden worker sessions may work on other phases of a plan beside the visible one,
-	// each in a git worktree of its own: 0 to 3, 1 by default; 0 runs one phase at a time
-	// (BATON_WORKERS).
-	Workers *int `json:"workers,omitempty"`
+	// each in a git worktree of its own: "auto" (the default) leaves it to the plan and the machine
+	// (AutoWorkers), and a number from 0 to 8 caps it; 0 runs one phase at a time (BATON_WORKERS). It is
+	// kept as written, and read by WorkerCount: a value of the wrong kind is reported there, and never
+	// loses the settings after it in the file.
+	Workers json.RawMessage `json:"workers,omitempty"`
 	// WorkerUsageMax is how much of the account's five-hour usage allowance, in percent, may be used before
-	// baton starts no new worker: up to 100, 80 by default; 0 turns the check off
-	// (BATON_WORKER_USAGE_MAX).
+	// baton starts no new worker: up to 100, or 0, the default, for no check (BATON_WORKER_USAGE_MAX).
 	WorkerUsageMax *float64 `json:"worker_usage_max,omitempty"`
 
 	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after,
@@ -86,9 +89,8 @@ const (
 	DefaultSwitchAfter       = 5 * time.Minute
 	DefaultForegroundMax     = 2 * time.Minute
 
-	DefaultWorkers        = 1
-	MaxWorkers            = 3
-	DefaultWorkerUsageMax = 80.0
+	MaxWorkers            = 8
+	DefaultWorkerUsageMax = 0.0
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
@@ -305,23 +307,46 @@ func within(def, min, max time.Duration, example, name, file, env string) (time.
 	return d, nil
 }
 
-// WorkerCount checks workers (the environment's value wins) and fills in the default. A value out of
-// bounds is an error.
-func (c Config) WorkerCount() (int, error) {
-	n := DefaultWorkers
-	if c.Workers != nil {
-		n = *c.Workers
+// WorkerCount checks workers (the environment's value wins): auto, the default, leaves how many workers
+// run at once to the plan and the machine (AutoWorkers), and a number n from 0 to MaxWorkers caps them.
+// Anything else is an error, and gives auto.
+func (c Config) WorkerCount() (n int, auto bool, err error) {
+	shown := strings.TrimSpace(string(c.Workers))
+	name, v := "workers", shown
+	var s string
+	if json.Unmarshal(c.Workers, &s) == nil {
+		v = s // "auto", or a number written as a string
 	}
-	if v := c.envWorkers; v != "" {
-		var err error
-		if n, err = strconv.Atoi(v); err != nil {
-			return DefaultWorkers, fmt.Errorf("BATON_WORKERS %q is not valid: use a number from 0 to %d", v, MaxWorkers)
-		}
+	if e := c.envWorkers; e != "" {
+		name, v, shown = "BATON_WORKERS", e, strconv.Quote(e)
 	}
-	if n < 0 || n > MaxWorkers {
-		return DefaultWorkers, fmt.Errorf("workers %d is not valid: use a number from 0 to %d", n, MaxWorkers)
+	if v == "" || v == "null" || v == "auto" {
+		return 0, true, nil
 	}
-	return n, nil
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= MaxWorkers {
+		return n, false, nil
+	}
+	return 0, true, fmt.Errorf(`%s %s is not valid: use "auto", or a number from 0 to %d`, name, shown, MaxWorkers)
+}
+
+// AutoWorkers is how many workers may run at once on the machine m read with workers: auto: one for each
+// 2 CPUs or each 4 GiB of memory, whichever allows fewer, less one for the lead's session, and at most
+// MaxWorkers. A machine whose memory is not known gets none.
+func AutoWorkers(m machine.Reading) int {
+	return min(max(0, min(m.CPUs/2, m.MemGiB()/4)-1), MaxWorkers)
+}
+
+// WorkerCap is how many workers may run at once: workers' number, or, with auto, what the machine read
+// allows (AutoWorkers). read is called only for auto. With an error, it is 0.
+func (c Config) WorkerCap(read func() machine.Reading) (n int, auto bool, err error) {
+	n, auto, err = c.WorkerCount()
+	if err != nil {
+		return 0, auto, err
+	}
+	if auto {
+		n = AutoWorkers(read())
+	}
+	return n, auto, nil
 }
 
 // WorkerUsage checks worker_usage_max (the environment's value wins) and fills in the default: the

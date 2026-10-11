@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/machine"
 )
 
 // maxInput bounds how much hook input is read; hook payloads are small JSON objects.
@@ -24,6 +26,8 @@ type Context struct {
 	Raw   []byte
 	Env   func(string) string
 	Now   time.Time
+	// Machine reads the machine (Deps.Machine; nil: machine.Read).
+	Machine func() machine.Reading
 }
 
 // Result is what a handler asks Dispatch to send back to Claude Code.

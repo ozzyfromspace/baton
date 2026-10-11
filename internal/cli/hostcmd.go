@@ -127,7 +127,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
-	workers, err := cfg.WorkerCount()
+	workers, auto, err := cfg.WorkerCap(io.reading)
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
@@ -154,8 +154,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// baton's own settings travel separately: the host drops every BATON_* from the inherited
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
-	// The hooks, the status line and the commands inside the sessions count the workers the host runs.
-	batonEnv = append(batonEnv, "BATON_WORKERS="+strconv.Itoa(workers), "BATON_WORKER_USAGE_MAX="+strconv.FormatFloat(usageMax, 'f', -1, 64))
+	batonEnv = append(batonEnv, workerEnv(workers, auto, usageMax)...)
 	if mode := elevate.PermissionMode(args); mode != "" {
 		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
 	}
@@ -181,7 +180,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io)}
 	var sv *host.Supervisor
-	if workers > 0 {
+	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
 		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto,
 			Launch: loop.Launch{Args: elevate.KeepWorkerArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
@@ -237,6 +236,17 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	controller.Flush()
 	return code
+}
+
+// workerEnv passes the workers' settings to the sessions the host runs (n workers at once, or auto, and
+// worker_usage_max), so that the hooks, the status line and the commands inside them count the workers
+// the host runs: with auto, they read the machine as the host did.
+func workerEnv(n int, auto bool, usageMax float64) []string {
+	setting := strconv.Itoa(n)
+	if auto {
+		setting = "auto"
+	}
+	return []string{"BATON_WORKERS=" + setting, "BATON_WORKER_USAGE_MAX=" + strconv.FormatFloat(usageMax, 'f', -1, 64)}
 }
 
 // autoBackground is Claude Code's cap, in milliseconds, on how long a command runs in the foreground
@@ -387,13 +397,16 @@ func cmdStatusline(_ []string, io IO) int {
 }
 
 // usageShown is the share of the five-hour usage at or above which the status line shows it: no new
-// worker starts above it (worker_usage_max). 0, for none shown, with no workers.
+// worker starts above it (worker_usage_max). 0, for none shown, with no check or no workers.
 func usageShown(io IO) float64 {
 	cfg := config.Load(batonRoot(io), io.Env)
-	if n, err := cfg.WorkerCount(); err != nil || n == 0 {
+	f, err := cfg.WorkerUsage()
+	if err != nil || f == 0 {
 		return 0
 	}
-	f, _ := cfg.WorkerUsage()
+	if n, _, err := cfg.WorkerCap(io.reading); err != nil || n == 0 {
+		return 0
+	}
 	return f
 }
 

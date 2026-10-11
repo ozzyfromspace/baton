@@ -14,18 +14,24 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
+
+// roomy is the machine commands read in tests, unless one says otherwise: 14 CPUs and 48 GiB, little
+// load, and memory pressure normal. With workers: auto, it allows 6.
+var roomy = machine.Reading{CPUs: 14, MemTotal: 48 << 30, MemAvailablePct: 45, Pressure: machine.PressureNormal, Load1: 3.1, Known: true}
 
 func testIO(stdin string, env map[string]string) (IO, *bytes.Buffer, *bytes.Buffer) {
 	var out, errb bytes.Buffer
 	return IO{
 		In:  strings.NewReader(stdin),
 		Out: &out, Err: &errb,
-		Env: func(k string) string { return env[k] },
-		Now: func() time.Time { return time.Unix(0, 0) },
+		Env:     func(k string) string { return env[k] },
+		Now:     func() time.Time { return time.Unix(0, 0) },
+		Machine: func() machine.Reading { return roomy },
 	}, &out, &errb
 }
 

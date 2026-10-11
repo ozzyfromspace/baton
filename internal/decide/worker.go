@@ -46,21 +46,30 @@ func WorkingPhases(names []string) string {
 }
 
 // WorkersAttached says, as a plan is attached, how many workers will work beside the lead session: up to
-// n (workers), and no more than the phases that can be worked on at once allow (width), less the lead's.
-// mode is the permission mode they start in ("" for Claude Code's default): one that asks before tools
-// makes them stop at prompts, which only the human can answer, in the worker's own session. local: the
-// project has a .claude/settings.local.json, which a worktree lacks. It is the human's to read: the
-// caller says so, and who it is from. "" with no workers.
-func WorkersAttached(n, width int, mode string, local bool) string {
-	if n == 0 {
+// n, the most that may run at once (workers' number, or with auto what this machine allows), and no more
+// than the phases that can be worked on at once allow (width), less the lead's. mode is the permission
+// mode they start in ("" for Claude Code's default): one that asks before tools makes them stop at
+// prompts, which only the human can answer, in the worker's own session. local: the project has a
+// .claude/settings.local.json, which a worktree lacks. It is the human's to read: the caller says so, and
+// who it is from. "" with workers off.
+func WorkersAttached(n int, auto bool, width int, mode string, local bool) string {
+	switch {
+	case n == 0 && !auto:
 		return ""
+	case n == 0:
+		return "no worker runs beside this session: with workers: auto, a machine needs 4 CPUs and 8 GiB of memory for one, and this one has less. " +
+			"To run them anyway, set workers to a number in baton's config.json."
 	}
 	k := min(n, width-1)
 	if k <= 0 {
 		return "no worker runs beside this session: each phase of this plan needs the one before it."
 	}
-	s := fmt.Sprintf("up to %d %s %s beside this session on the phases that can go ahead, each in a worktree of its own, and baton lands their work on this branch (workers: %d).",
-		k, plural(k, "worker", "workers"), plural(k, "works", "work"), n)
+	why := fmt.Sprintf("workers: %d", n)
+	if auto {
+		why = fmt.Sprintf("the plan's widest step is %d phases; this machine allows %d", width, n)
+	}
+	s := fmt.Sprintf("up to %d %s %s beside this session on the phases that can go ahead, each in a worktree of its own, and baton lands their work on this branch (%s).",
+		k, plural(k, "worker", "workers"), plural(k, "works", "work"), why)
 	switch mode {
 	case "", "default", "acceptEdits", "plan":
 		if mode == "" {

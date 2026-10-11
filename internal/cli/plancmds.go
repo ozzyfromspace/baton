@@ -210,12 +210,12 @@ func cmdAttach(args []string, io IO) int {
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
 // and warns when they would stop at permission prompts. "" with no workers.
 func workersAttached(io IO, checkout string, pl plan.Plan) string {
-	n, err := config.Load(batonRoot(io), io.Env).WorkerCount()
+	n, auto, err := config.Load(batonRoot(io), io.Env).WorkerCap(io.reading)
 	if err != nil {
 		return ""
 	}
 	mode, local := config.WorkerMode(io.Env, checkout)
-	return decide.WorkersAttached(n, pl.Width(), mode, local)
+	return decide.WorkersAttached(n, auto, pl.Width(), mode, local)
 }
 
 func errSuffix(err error) string {

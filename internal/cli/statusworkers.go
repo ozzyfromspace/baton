@@ -109,7 +109,7 @@ func printUsage(io IO, st state.State) {
 			who, u.Hit.Local().Format("15:04"), u.Limited.Local().Format("15:04"))
 	}
 	cfg := config.Load(batonRoot(io), io.Env)
-	if n, err := cfg.WorkerCount(); err != nil || n == 0 || !u.Resets.IsZero() && !now.Before(u.Resets) {
+	if n, _, err := cfg.WorkerCap(io.reading); err != nil || n == 0 || !u.Resets.IsZero() && !now.Before(u.Resets) {
 		return
 	}
 	line := fmt.Sprintf("usage: %.0f%% of the five-hour allowance", u.UsedPct)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -22,12 +23,18 @@ type fixture struct {
 	inst  string
 	sid   string            // the session every hook is for, unless its input names another
 	vars  map[string]string // extra environment for the hooks
+	// machine is what the machine reads (roomy, unless the test says otherwise).
+	machine machine.Reading
 }
+
+// roomy is a machine with room for workers: 14 CPUs and 48 GiB, little load. With workers: auto, it
+// allows 6.
+var roomy = machine.Reading{CPUs: 14, MemTotal: 48 << 30, MemAvailablePct: 45, Pressure: machine.PressureNormal, Load1: 3.1, Known: true}
 
 func newFixture(t *testing.T, withPlan bool) *fixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), ".baton")
-	f := &fixture{t: t, dir: dir, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), inst: "inst-1", sid: "sess-1"}
+	f := &fixture{t: t, dir: dir, now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), inst: "inst-1", sid: "sess-1", machine: roomy}
 	p, err := state.OpenProject(dir, f.clock)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +86,7 @@ func (f *fixture) fireAs(instance, event string, input map[string]any) map[strin
 	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
-	h := Handlers(Deps{Open: OpenRun(f.clock)})
+	h := Handlers(Deps{Open: OpenRun(f.clock), Machine: func() machine.Reading { return f.machine }})
 	if code := Dispatch(event, bytes.NewReader(raw), &out, &errb, f.env(instance), func() time.Time { return f.now }, h); code != 0 {
 		f.t.Fatalf("%s exited %d: %s", event, code, errb.String())
 	}

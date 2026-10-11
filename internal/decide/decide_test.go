@@ -216,21 +216,28 @@ func TestWorkersAttached(t *testing.T) {
 	const local = "Workers do not see .claude/settings.local.json"
 	for _, c := range []struct {
 		name         string
-		n, width     int
+		n            int
+		auto         bool
+		width        int
 		mode         string
 		local        bool
 		want, absent []string
 	}{
-		{"no workers", 0, 4, "", true, nil, nil},
-		{"a chain", 2, 1, "default", true, []string{"no worker runs beside this session: each phase of this plan needs the one before it."}, []string{warn, local}},
-		{"as many as the phases allow", 3, 3, "auto", false, []string{"up to 2 workers work beside this session", "(workers: 3)."}, []string{warn, local}},
-		{"as many as configured", 1, 5, "bypassPermissions", false, []string{"up to 1 worker works beside this session"}, []string{warn}},
-		{"the default mode", 1, 2, "", false, []string{warn + " (default), so a permission prompt stops a worker", "--permission-mode auto"}, []string{local}},
-		{"acceptEdits", 1, 2, "acceptEdits", true, []string{warn + " (acceptEdits)", local}, nil},
-		{"plan mode", 1, 2, "plan", false, []string{warn + " (plan)"}, nil},
-		{"local settings, no prompts", 1, 2, "dontAsk", true, []string{local}, []string{warn}},
+		{"workers off", 0, false, 4, "", true, nil, nil},
+		{"a machine too small for one", 0, true, 4, "", true, []string{"no worker runs beside this session: with workers: auto, a machine needs 4 CPUs and 8 GiB of memory for one, " +
+			"and this one has less. To run them anyway, set workers to a number in baton's config.json."}, []string{warn, local}},
+		{"a chain", 2, false, 1, "default", true, []string{"no worker runs beside this session: each phase of this plan needs the one before it."}, []string{warn, local}},
+		{"as many as the phases allow", 3, false, 3, "auto", false, []string{"up to 2 workers work beside this session", "(workers: 3)."}, []string{warn, local}},
+		{"as many as configured", 1, false, 5, "bypassPermissions", false, []string{"up to 1 worker works beside this session"}, []string{warn}},
+		{"auto: as many as the phases allow", 6, true, 4, "auto", false, []string{"up to 3 workers work beside this session on the phases that can go ahead, each in a worktree of its own, " +
+			"and baton lands their work on this branch (the plan's widest step is 4 phases; this machine allows 6)."}, []string{warn, local}},
+		{"auto: as many as the machine allows", 1, true, 5, "auto", false, []string{"up to 1 worker works beside this session", "(the plan's widest step is 5 phases; this machine allows 1)."}, nil},
+		{"the default mode", 1, false, 2, "", false, []string{warn + " (default), so a permission prompt stops a worker", "--permission-mode auto"}, []string{local}},
+		{"acceptEdits", 1, false, 2, "acceptEdits", true, []string{warn + " (acceptEdits)", local}, nil},
+		{"plan mode", 1, false, 2, "plan", false, []string{warn + " (plan)"}, nil},
+		{"local settings, no prompts", 1, false, 2, "dontAsk", true, []string{local}, []string{warn}},
 	} {
-		got := WorkersAttached(c.n, c.width, c.mode, c.local)
+		got := WorkersAttached(c.n, c.auto, c.width, c.mode, c.local)
 		if c.want == nil && got != "" {
 			t.Errorf("%s: %q", c.name, got)
 		}

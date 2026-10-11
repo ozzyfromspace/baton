@@ -11,6 +11,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -102,12 +103,16 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
 // and warns when they would stop at permission prompts (decide.WorkersAttached). "" with no workers.
 func workersAttached(c Context, checkout string, pl plan.Plan) string {
-	n, err := config.Load(config.Root(c.Env), c.Env).WorkerCount()
+	read := c.Machine
+	if read == nil {
+		read = machine.Read
+	}
+	n, auto, err := config.Load(config.Root(c.Env), c.Env).WorkerCap(read)
 	if err != nil {
 		return ""
 	}
 	mode, local := config.WorkerMode(c.Env, checkout)
-	return decide.WorkersAttached(n, pl.Width(), mode, local)
+	return decide.WorkersAttached(n, auto, pl.Width(), mode, local)
 }
 
 // attachedFields are the fields of the "attached" event for a plan the human approved.

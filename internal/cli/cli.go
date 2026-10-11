@@ -16,6 +16,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -26,11 +27,22 @@ type IO struct {
 	Out, Err io.Writer
 	Env      func(string) string
 	Now      func() time.Time
+	// Machine reads the machine (nil: machine.Read): with workers: auto, it decides how many workers run
+	// at once, and no worker starts while it has no room for another session.
+	Machine func() machine.Reading
 }
 
 // StdIO is the real process environment.
 func StdIO() IO {
-	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now}
+	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now, Machine: machine.Read}
+}
+
+// reading reads the machine now (IO.Machine).
+func (io IO) reading() machine.Reading {
+	if io.Machine == nil {
+		return machine.Read()
+	}
+	return io.Machine()
 }
 
 type command struct {

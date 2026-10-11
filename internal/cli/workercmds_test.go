@@ -289,11 +289,11 @@ func TestTheStatusLineShowsUsageThatHoldsWorkersBack(t *testing.T) {
 		shown    bool
 		wantText string
 	}{
-		{"the default, 80%", nil, 81, true, "5h 81%"},
-		{"under it", nil, 79, false, ""},
-		{"as the host set it", map[string]string{"BATON_WORKER_USAGE_MAX": "50"}, 62, true, "5h 62%"},
+		{"no check, the default", nil, 99, false, ""},
+		{"as the host set it", map[string]string{"BATON_WORKER_USAGE_MAX": "80"}, 81, true, "5h 81%"},
+		{"under it", map[string]string{"BATON_WORKER_USAGE_MAX": "80"}, 79, false, ""},
 		{"no check", map[string]string{"BATON_WORKER_USAGE_MAX": "0"}, 99, false, ""},
-		{"no workers", map[string]string{"BATON_WORKERS": "0"}, 99, false, ""},
+		{"no workers", map[string]string{"BATON_WORKERS": "0", "BATON_WORKER_USAGE_MAX": "80"}, 99, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := attached(t)
@@ -333,7 +333,7 @@ func section(out, header string) string {
 // worker made without the human, beside the lead's.
 func TestBatonStatusShowsTheWorkers(t *testing.T) {
 	w, lead := asWorker(t)
-	lead.env["HOME"] = t.TempDir()
+	lead.env["HOME"], lead.env["BATON_WORKER_USAGE_MAX"] = t.TempDir(), "80"
 	root := lead.store().Checkout
 	gittest.Isolate(t)
 	gittest.Init(t, root)
@@ -455,7 +455,9 @@ func TestAttachSaysHowManyWorkersRun(t *testing.T) {
 		env          map[string]string
 		want, absent string
 	}{
-		{"one by default, in the default mode", nil, "baton: tell the human: up to 1 worker works beside this session", ""},
+		{"auto by default: as many as the plan allows, in the default mode", nil,
+			"baton: tell the human: up to 1 worker works beside this session on the phases that can go ahead, each in a worktree of its own, " +
+				"and baton lands their work on this branch (the plan's widest step is 2 phases; this machine allows 6).", ""},
 		{"the default mode stops them at prompts", nil, "Workers start in the permission mode this session started in (default)", ""},
 		{"a mode with no prompts", map[string]string{"BATON_WORKER_MODE": "auto"}, "(workers: 2).", "permission mode"},
 		{"none", map[string]string{"BATON_WORKERS": "0"}, "", "worker"},
