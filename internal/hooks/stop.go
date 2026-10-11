@@ -123,10 +123,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words) de
 			return d
 		}
 		if w.Worker && !st.Run.CompleteNotified {
-			// A worker's plan is its phase: done, it is the run's to land, not a plan complete.
+			// A worker's plan is its phase (plan.Only): done, it is the run's to land, not a plan complete.
 			st.Run.CompleteNotified = true
-			d.say(fmt.Sprintf("baton: %s done → baton lands its work on the run's branch", cur))
-			d.emit("worker_finished", map[string]any{"phase": st.Current, "decisions": len(decide.WithoutHuman(st.Decisions))})
+			phase := ""
+			if len(pl.Phases) == 1 {
+				phase = pl.Phases[0].ID
+			}
+			d.say(fmt.Sprintf("baton: %s done → baton lands its work on the run's branch", phaseTitle(pl, phase)))
+			d.emit("worker_finished", map[string]any{"phase": phase, "decisions": len(decide.WithoutHuman(st.Decisions))})
 			return d
 		}
 		if !st.Run.CompleteNotified {

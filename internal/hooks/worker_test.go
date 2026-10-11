@@ -228,7 +228,7 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 		relays  string // the run's relay queue after two stops
 		event   map[string]any
 	}{
-		{"its phase done", func(st *state.State, _ time.Time) { st.Mode = state.ModeComplete },
+		{"its phase done", func(st *state.State, _ time.Time) { st.Mode, st.Current = state.ModeComplete, "" },
 			"baton: P2 (Third) done → baton lands its work on the run's branch", "", "", map[string]any{"kind": "worker_finished", "phase": "P2"}},
 		{"blocked", func(st *state.State, now time.Time) { state.SetBlocked(st, "need a key", now) },
 			"baton: waiting on the human — blocked on P2: need a key; the lead session asks them", "", "P2/blocked", map[string]any{"kind": "escalated", "type": "blocked", "relayed": true}},
