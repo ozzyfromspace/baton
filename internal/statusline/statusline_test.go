@@ -1,6 +1,7 @@
 package statusline
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -172,6 +173,35 @@ func TestParse(t *testing.T) {
 	}
 	if Parse([]byte(`{"context_window":{"used_percentage":null}}`)).ContextWindow.UsedPercentage != nil {
 		t.Fatal("null percentage")
+	}
+}
+
+// The five-hour limit, as Claude Code 2.1.296 documents its status line input: used_percentage (0 to 100)
+// and resets_at (Unix seconds), present only while its reset has not passed.
+func TestFiveHour(t *testing.T) {
+	now := time.Unix(1_790_000_000, 0)
+	resets := now.Add(2 * time.Hour)
+	for _, c := range []struct {
+		name, raw string
+		used      float64
+		resets    time.Time
+		ok        bool
+	}{
+		{"present", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":%d},"seven_day":{"used_percentage":41.2,"resets_at":%d}}}`,
+			resets.Unix(), now.Add(72*time.Hour).Unix()), 23.5, resets, true},
+		{"at its limit", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":100,"resets_at":%d}}}`, resets.Unix()), 100, resets, true},
+		{"no reset said", `{"rate_limits":{"five_hour":{"used_percentage":61}}}`, 61, time.Time{}, true},
+		{"absent: an API key, or before the first response", `{"context_window":{"used_percentage":4}}`, 0, time.Time{}, false},
+		{"null", `{"rate_limits":null}`, 0, time.Time{}, false},
+		{"the weekly limit only", fmt.Sprintf(`{"rate_limits":{"seven_day":{"used_percentage":90,"resets_at":%d}}}`, resets.Unix()), 0, time.Time{}, false},
+		{"no percentage", fmt.Sprintf(`{"rate_limits":{"five_hour":{"resets_at":%d}}}`, resets.Unix()), 0, time.Time{}, false},
+		{"past its reset", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":97,"resets_at":%d}}}`, now.Add(-time.Second).Unix()), 0, time.Time{}, false},
+		{"resetting now", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":97,"resets_at":%d}}}`, now.Unix()), 0, time.Time{}, false},
+	} {
+		used, at, ok := Parse([]byte(c.raw)).FiveHour(now)
+		if used != c.used || !at.Equal(c.resets) || ok != c.ok {
+			t.Errorf("%s: %v %v %v, want %v %v %v", c.name, used, at, ok, c.used, c.resets, c.ok)
+		}
 	}
 }
 

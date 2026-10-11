@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,5 +212,68 @@ func TestStatusListsTheWorkersQuestions(t *testing.T) {
 	w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
 	if out := w.must("", "status"); !strings.Contains(out, "proposal P1.d1: use a fake clock\n  because: the real one drifts\n  the lead session puts it to you, and baton gives this worker your answer") {
 		t.Errorf("the worker's status:\n%s", out)
+	}
+}
+
+// Every session's status line records the account's five-hour usage in the run (a worker's, in the run it
+// works for), where the host reads it before it starts a worker. The same reading is written once in a
+// while only, and a reading past its reset, or none, changes nothing.
+func TestTheStatusLineRecordsTheAccountsUsageInTheRun(t *testing.T) {
+	w, lead := asWorker(t)
+	home := t.TempDir()
+	w.env["HOME"], lead.env["HOME"] = home, home
+	line := func(s *session, used float64, resets time.Time) {
+		t.Helper()
+		in := fmt.Sprintf(`{"session_id":%q,"rate_limits":{"five_hour":{"used_percentage":%v,"resets_at":%d}}}`, s.env["CLAUDE_CODE_SESSION_ID"], used, resets.Unix())
+		s.must(in, "statusline")
+	}
+	usage := func() state.Usage {
+		t.Helper()
+		u := lead.state().Usage
+		if u == nil {
+			t.Fatal("no usage recorded in the run")
+		}
+		return *u
+	}
+	resets := lead.now.Add(2 * time.Hour).Truncate(time.Second)
+	first := w.now
+	line(w, 42.5, resets)
+	if u := usage(); u.UsedPct != 42.5 || !u.Resets.Equal(resets) || !u.At.Equal(first) {
+		t.Fatalf("usage %+v", u)
+	}
+	if w.state().Usage != nil {
+		t.Error("the worker's sub-run recorded the run's usage")
+	}
+
+	w.now = w.now.Add(time.Minute)
+	line(w, 42.5, resets)
+	if u := usage(); !u.At.Equal(first) {
+		t.Errorf("the same reading was written again a minute on: %+v", u)
+	}
+	w.now = w.now.Add(usageFresh)
+	line(w, 42.5, resets)
+	if u := usage(); !u.At.Equal(w.now) {
+		t.Errorf("a reading %s old was not written again: %+v", usageFresh, u)
+	}
+	w.now = w.now.Add(time.Second)
+	resets = resets.Add(5 * time.Hour) // the window rolled over, at the same use
+	line(w, 42.5, resets)
+	if u := usage(); !u.Resets.Equal(resets) || !u.At.Equal(w.now) {
+		t.Errorf("a new reset was not recorded: %+v", u)
+	}
+
+	// The lead's reading goes into its own run; what the run's host recorded about a limit stays.
+	lead.set(func(x *state.State) { x.Usage.Limited = lead.now.Add(time.Hour) })
+	lead.now = w.now.Add(time.Second)
+	line(lead, 81, resets)
+	if u := usage(); u.UsedPct != 81 || !u.At.Equal(lead.now) || !u.Limited.Equal(first.Add(time.Hour)) {
+		t.Errorf("usage %+v", u)
+	}
+
+	lead.now = lead.now.Add(time.Minute)
+	line(lead, 3, lead.now.Add(-time.Second)) // the window reset since
+	lead.must(fmt.Sprintf(`{"session_id":%q}`, "sess-1"), "statusline")
+	if u := usage(); u.UsedPct != 81 {
+		t.Errorf("a reading past its reset, or none, was recorded: %+v", u)
 	}
 }

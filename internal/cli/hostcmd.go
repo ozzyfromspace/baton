@@ -359,6 +359,7 @@ func cmdStatusline(_ []string, io IO) int {
 		if p, err := state.OpenProject(dir, io.Now); err == nil {
 			if s, ok := p.Lookup(in.SessionID, io.Env("BATON_INSTANCE")); ok {
 				st, _ = recordContext(s, in, io)
+				recordUsage(s, in, io)
 				if p, err := s.LoadPlan(); err == nil {
 					pl, havePlan = p, true
 				}
@@ -440,6 +441,42 @@ func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, err
 	}
 	return s.Update(func(st *state.State) error {
 		st.Run.Context = &state.ContextUse{UsedPct: pct, Tokens: tokens, WindowSize: size, Limit: limit, At: now}
+		return nil
+	})
+}
+
+// usageFresh is how long a reading of the account's usage stands. The status line refreshes every few
+// seconds in each session of a run, all of them reading the same account's: the same reading is written
+// again only once it is that old.
+const usageFresh = 5 * time.Minute
+
+// recordUsage stores the account's five-hour usage Claude Code reports in the run's state (a worker's, in
+// the run it works for), where the run's host reads it: no new worker starts above worker_usage_max. A
+// reading is written when it changed, or once it is usageFresh old.
+func recordUsage(s *state.Store, in statusline.Input, io IO) {
+	now := io.Now()
+	used, resets, ok := in.FiveHour(now)
+	if !ok {
+		return
+	}
+	if s.Parent != "" {
+		up, err := s.ParentRun()
+		if err != nil {
+			return
+		}
+		s = up
+	}
+	st, err := s.Load()
+	if u := st.Usage; err != nil || u != nil && u.UsedPct == used && u.Resets.Equal(resets) && now.Sub(u.At) < usageFresh {
+		return
+	}
+	s.Update(func(st *state.State) error {
+		var u state.Usage
+		if st.Usage != nil {
+			u = *st.Usage
+		}
+		u.UsedPct, u.Resets, u.At = used, resets, now
+		st.Usage = &u
 		return nil
 	})
 }

@@ -129,6 +129,34 @@ type Input struct {
 			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		} `json:"current_usage"`
 	} `json:"context_window"`
+	// RateLimits is how much of the account's plan limits is used: for subscribers only, from the first
+	// response on. Claude Code leaves a window out once its reset has passed.
+	RateLimits struct {
+		FiveHour *Window `json:"five_hour"`
+	} `json:"rate_limits"`
+}
+
+// Window is one of the account's usage limits.
+type Window struct {
+	UsedPercentage *float64 `json:"used_percentage"` // 0 to 100
+	ResetsAt       *float64 `json:"resets_at"`       // Unix seconds
+}
+
+// FiveHour is the account's five-hour limit: how much of it is used, in percent, and when it resets
+// (zero if not said). ok is false with no reading, and for one whose reset has passed: that use was of a
+// window gone by.
+func (in Input) FiveHour(now time.Time) (used float64, resets time.Time, ok bool) {
+	w := in.RateLimits.FiveHour
+	if w == nil || w.UsedPercentage == nil {
+		return 0, time.Time{}, false
+	}
+	if w.ResetsAt != nil {
+		resets = time.Unix(int64(*w.ResetsAt), 0)
+		if !now.Before(resets) {
+			return 0, time.Time{}, false
+		}
+	}
+	return *w.UsedPercentage, resets, true
 }
 
 // Tokens is the context size as of the last request: everything it sent, cached or not. ok is false
