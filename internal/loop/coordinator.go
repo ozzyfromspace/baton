@@ -29,7 +29,8 @@ type Coordinator struct {
 	Lead  *Loop
 	Lanes Lanes  // the project's lanes (nil: none)
 	Fleet *Fleet // how the run's workers start (nil: none)
-	// Project is the run's project, and Home baton's home, which keeps the workers' worktrees.
+	// Project is the run's project, and Home baton's home, which keeps the workers' worktrees. A host with
+	// no Fleet still retires the workers its run has on record (fleet.go).
 	Project *state.Project
 	Home    string
 
@@ -83,7 +84,7 @@ func (c *Coordinator) duties(v host.View) {
 		go c.Lanes.Sweep()
 	}
 	s := c.Lead.Store
-	if s == nil || !v.Owner || c.Lanes == nil && c.Fleet == nil {
+	if s == nil || !v.Owner || c.Lanes == nil && c.Fleet == nil && c.Project == nil {
 		return
 	}
 	st, err := s.Load()
@@ -92,7 +93,7 @@ func (c *Coordinator) duties(v host.View) {
 	}
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
 	c.lanes(s, st)
-	c.fleet(v, s)
+	c.fleet(v, s, st)
 }
 
 // Worker makes the Loop of the worker on phase, and returns the controller its hidden session ticks it

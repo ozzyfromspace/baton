@@ -29,8 +29,8 @@ import (
 // dropped, its plan replaced, its phase gone from the plan) is ended, and retired (RetireWorker): its
 // uncommitted work is saved and its worktree removed. Its branch goes too, unless it holds commits that
 // never landed. A worker whose session ended with the host is suspended (Ended), and the next host for
-// the run resumes it in its worktree. All of this runs off the lead's tick, one step at a time, since git
-// and claude take a while to start.
+// the run resumes it in its worktree, or retires it when that host runs no workers. All of this runs off
+// the lead's tick, one step at a time, since git and claude take a while to start.
 
 // MaxResumes is how many times a worker's session is resumed after it ended unexpectedly. After that its
 // phase goes back to the scheduler, and its commits stay on its branch.
@@ -110,7 +110,8 @@ func (l Launch) env(e state.Worker, run, dir, checkout string) []string {
 		"BATON_ROLE=worker", "BATON_PHASE="+e.Phase, "BATON_RUN="+run, "BATON_WORKTREE="+e.Worktree, "BATON_CHECKOUT="+checkout)
 }
 
-// Fleet is what the coordinator needs to run workers. A coordinator without one runs none (workers: 0).
+// Fleet is what the coordinator needs to run workers. A coordinator without one runs none (workers: 0),
+// and retires those its run has on record.
 type Fleet struct {
 	Max      int     // workers at once (workers)
 	UsageMax float64 // no new worker above this percent of the five-hour allowance (worker_usage_max; 0: no check)
@@ -215,10 +216,11 @@ func rosterEntry(st *state.State, ref, session string) *state.Worker {
 }
 
 // fleet starts a step of the coordinator's work on the workers, unless one is still going, at most once a
-// second.
-func (c *Coordinator) fleet(v host.View, s *state.Store) {
+// second. A host with no Fleet steps only while its run st has workers on record, to retire them; with
+// none, it does nothing at all.
+func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
 	f := c.Fleet
-	if f == nil || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
+	if f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0) || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
 		return
 	}
 	if c.since.IsZero() {
@@ -226,7 +228,11 @@ func (c *Coordinator) fleet(v host.View, s *state.Store) {
 	}
 	c.fleetAt = v.Now
 	c.fleetWG.Add(1)
-	f.run(func() {
+	run := func(fn func()) { go fn() }
+	if f != nil {
+		run = f.run
+	}
+	run(func() {
 		defer c.fleetWG.Done()
 		defer c.fleetBusy.Store(false)
 		defer func() {
@@ -244,13 +250,27 @@ func (c *Coordinator) fleet(v host.View, s *state.Store) {
 
 // step looks over the run's workers once: the sessions this host runs, then the merge queue and the
 // answers to their questions, then the roster's workers no session runs, then whether a new one can
-// start.
+// start. With no Fleet, it only retires the roster's workers: workers are off in this host, and their
+// phases go back to the lead.
 func (c *Coordinator) step(now time.Time, s *state.Store) {
 	st, err := s.Load()
 	if err != nil {
 		return
 	}
 	pl, _ := s.LoadPlan() // none once the run was dropped
+	if c.Fleet == nil {
+		for _, e := range st.LiveWorkers() {
+			if e.RetiringBy(s.Instance, now) {
+				continue // another baton process is retiring it
+			}
+			why := unwanted(st, pl, &e)
+			if why == "" {
+				why = "workers are off in this session"
+			}
+			c.retire(now, s, e, why)
+		}
+		return
+	}
 	c.usage(now, s, st)
 	for _, w := range c.launched() {
 		c.watch(now, s, st, pl, w)

@@ -397,6 +397,42 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 	}
 }
 
+// A host with workers off (no Fleet) retires the workers its run has on record, and the lead takes their
+// phases up; with none on record, it does nothing at all, as before workers.
+func TestAHostWithoutWorkersRetiresTheRunsWorkers(t *testing.T) {
+	x := newCrew(t, 1)
+	w := x.suspended()
+	gittest.Write(t, w.Worktree, "draft.txt", "not committed\n")
+	x.lead.Update(func(st *state.State) error { // the lead finished what it could: only P1's worker's phase is left before P3
+		st.Phases["P0"].Status, st.Phases["P2"].Status, st.Current = state.PhaseDone, state.PhaseDone, ""
+		return nil
+	})
+	x.c = x.coordinator("next", 1)
+	x.c.Fleet = nil
+	x.tick(time.Second)
+	x.c.fleetWG.Wait()
+	st := x.state()
+	after := x.worker("P1")
+	if after.Status != state.WorkerFailed || after.Why != "workers are off in this session" || isDir(w.Worktree) || len(x.specs) != 1 {
+		t.Fatalf("entry %+v; worktree there %v; %d sessions", after, isDir(w.Worktree), len(x.specs))
+	}
+	if st.Current != "P1" || st.Run.Compaction.Status != state.CompactQueued {
+		t.Errorf("the lead's phase %q, compaction %+v", st.Current, st.Run.Compaction)
+	}
+	if ev := x.events(); !strings.Contains(ev, `"next":"P1"`) || !strings.Contains(strings.Join(st.Run.Announce, "\n"), "the worker on P1 ended: workers are off in this session") {
+		t.Errorf("events:\n%s", ev)
+	}
+
+	// Nothing on record: nothing runs.
+	y := newCrew(t, 1)
+	y.c.Fleet = nil
+	y.tick(time.Second)
+	y.c.fleetWG.Wait()
+	if !y.c.fleetAt.IsZero() || len(y.state().Workers) != 0 {
+		t.Errorf("a host without workers looked at them: %v", y.c.fleetAt)
+	}
+}
+
 func isFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && !fi.IsDir()
