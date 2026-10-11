@@ -112,6 +112,10 @@ func TestPickViewable(t *testing.T) {
 			"several runs have a worker on P1; name the one you mean: baton view a/P1, or baton view b/P1"},
 		{"no workers at all", nil, "P1", "no worker is working on P1: this project has no workers"},
 		{"not running", []viewable{{w: state.Worker{Phase: "P1", Ref: "a/P1"}}}, "P1", "P1's worker is not running"},
+		{"the one running, beside a run that ended", []viewable{{w: state.Worker{Phase: "P1", Ref: "a/P1"}}, running("b", "P1")}, "P1", "b/P1"},
+		{"the running two, beside a run that ended", []viewable{running("a", "P1"), {w: state.Worker{Phase: "P1", Ref: "b/P1"}}, running("c", "P1")}, "P1",
+			"several runs have a worker on P1; name the one you mean: baton view a/P1, or baton view c/P1"},
+		{"none of several running", []viewable{{w: state.Worker{Phase: "P1", Ref: "a/P1"}}, {w: state.Worker{Phase: "P1", Ref: "b/P1"}}}, "P1", "P1's worker is not running"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, err := pickViewable(tc.ws, tc.arg)
@@ -148,6 +152,30 @@ func TestAWorkerRunsOnlyUnderItsRunsLiveHost(t *testing.T) {
 			ws := viewables(p, s.now.Add(tc.later))
 			if len(ws) != 2 || ws[0].w.Phase != "P1" || (ws[0].host == "inst") != tc.running {
 				t.Errorf("got %+v", ws)
+			}
+		})
+	}
+}
+
+// The list names a worker by its phase alone unless another worker on that phase is running too: a run
+// that ended keeps its workers suspended, and its P1 is no reason to name the running P1 by its ref.
+func TestViewNamesAWorkerByItsPhaseWhileItIsTheOnlyOneRunning(t *testing.T) {
+	worker := func(run, phase, host string) viewable {
+		return viewable{w: state.Worker{Phase: phase, Ref: state.WorkerRef(run, phase), Status: state.WorkerWorking}, host: host}
+	}
+	for _, tc := range []struct {
+		name string
+		ws   []viewable
+		want string
+	}{
+		{"beside a run that ended", []viewable{worker("a", "P1", ""), worker("b", "P1", "inst-b")}, "  baton view P1\n"},
+		{"beside another running", []viewable{worker("a", "P1", "inst-a"), worker("b", "P1", "inst-b")}, "  baton view b/P1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			io, out, _ := testIO("", nil)
+			printViewables(io, tc.ws)
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("no %q in:\n%s", tc.want, out)
 			}
 		})
 	}

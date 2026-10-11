@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -111,12 +112,22 @@ func phaseTitles(proj *state.Project, run string) map[string]string {
 }
 
 // pickViewable finds the worker arg names, by its phase or, among runs with a worker on the same phase,
-// by its ref (run/phase), and makes sure a host runs it.
+// by its ref (run/phase), and makes sure a host runs it. Of several on the phase, the one running is
+// meant: a run that ended keeps its workers suspended until it is hosted again, and plans number their
+// phases alike.
 func pickViewable(ws []viewable, arg string) (viewable, error) {
 	var found []viewable
 	for _, v := range ws {
 		if v.w.Phase == arg || v.w.Ref == arg {
 			found = append(found, v)
+		}
+	}
+	if len(found) > 1 {
+		switch running := slices.DeleteFunc(slices.Clone(found), func(v viewable) bool { return v.host == "" }); len(running) {
+		case 0:
+			found = found[:1] // none can be shown, as for one
+		default:
+			found = running
 		}
 	}
 	switch {
@@ -147,9 +158,11 @@ func printViewables(io IO, ws []viewable) {
 	}
 	now := io.Now()
 	fmt.Fprintln(io.Out, "Workers:")
-	several := map[string]int{}
+	several := map[string]int{} // running workers by phase: a phase alone names the only one running
 	for _, v := range ws {
-		several[v.w.Phase]++
+		if v.host != "" {
+			several[v.w.Phase]++
+		}
 	}
 	for _, v := range ws {
 		name := v.w.Phase
