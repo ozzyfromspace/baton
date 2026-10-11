@@ -1,6 +1,6 @@
 // fakeclaude stands in for claude in the host's integration tests. It records its arguments, its
-// BATON_* environment (and CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS) and every byte it receives into
-// $FAKE_OUT, and exits with $FAKE_EXIT when it reads a 'Q'.
+// BATON_* environment (and CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS), its working directory and every byte
+// it receives into $FAKE_OUT, and exits with $FAKE_EXIT when it reads a 'Q'.
 //
 // With FAKE_HUP set it floods the screen instead, the way a busy claude does. FAKE_HUP=loop notices
 // SIGHUP only between writes, as claude does (its handler runs on the thread that writes), so it
@@ -37,7 +37,8 @@ func main() {
 			env[k] = v
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "env": env})
+	wd, _ := os.Getwd()
+	b, _ := json.Marshal(map[string]any{"args": os.Args[1:], "env": env, "dir": wd})
 	os.WriteFile(filepath.Join(out, "start.json"), b, 0o644)
 
 	if old, err := term.MakeRaw(0); err == nil {

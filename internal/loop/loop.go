@@ -119,6 +119,9 @@ type Loop struct {
 	// RunLimited is until when the run waits on the account's usage limit, for a worker's Loop, whose
 	// sub-run does not record it as the lead's run does (the coordinator's; nil for the lead).
 	RunLimited func() time.Time
+	// RestartHold says why the run's other sessions hold the lead's restart on a newer baton, or "" if
+	// nothing does (the coordinator's, for a lead with workers; nil: nothing does).
+	RestartHold func(now time.Time) string
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -146,6 +149,7 @@ type Loop struct {
 	relayAt    time.Time
 	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart    *restart       // the restart claude was ended for
+	restartFor string         // what the run's workers last held the restart for, as logged
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
@@ -305,7 +309,8 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // kind, monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
 // restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
 // about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
-// human reading its last answer is not interrupted.
+// human reading its last answer is not interrupted. The restart ends the run's workers too, so each of
+// them must be at such a point as well (workersIdle).
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
@@ -314,11 +319,30 @@ func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 	case state.CompactTyped, state.CompactActive:
 		return false
 	}
-	if st.Mode == state.ModeRunning {
-		return true
+	if st.Mode != state.ModeRunning {
+		if idle := latest(v.LastHumanKey, st.Run.LastStop, st.Run.LastActivity, st.Run.TurnStarted); v.Now.Sub(idle) < l.Timing.RestartIdle {
+			return false
+		}
 	}
-	idle := latest(v.LastHumanKey, st.Run.LastStop, st.Run.LastActivity, st.Run.TurnStarted)
-	return v.Now.Sub(idle) >= l.Timing.RestartIdle
+	return l.workersIdle(v)
+}
+
+// workersIdle reports that nothing of the run's workers holds the restart (RestartHold), and logs what
+// does, once for each thing that does. A running plan does not wait for them: it compacts as usual, and
+// the restart waits for the next safe point, while no new worker starts (Coordinator.pending).
+func (l *Loop) workersIdle(v host.View) bool {
+	why := ""
+	if l.RestartHold != nil {
+		why = l.RestartHold(v.Now)
+	}
+	if why != l.restartFor {
+		l.restartFor = why
+		if why != "" {
+			l.logf("loop: the restart on a newer baton waits: %s", why)
+			l.Store.Event("restart_held", map[string]any{"why": why})
+		}
+	}
+	return why == ""
 }
 
 // restartOn ends claude so the host can restart the session on the newer baton: the host's command

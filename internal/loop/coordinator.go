@@ -52,11 +52,21 @@ type Coordinator struct {
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
+	// pending says a newer baton waits for the lead's restart, which ends the workers: no new one starts.
+	// stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the host
+	// ends, and so do its workers' sessions, which Ended suspends.
+	pending, stopping atomic.Bool
 }
 
 // Tick is the lead's tick: its Loop, then the run's duties.
 func (c *Coordinator) Tick(v host.View, in host.Injector) {
+	if c.Fleet != nil && c.Lead.RestartHold == nil {
+		c.Lead.RestartHold = c.restartHold // a restart ends the workers' sessions too
+	}
 	guarded(c.Lead, v, "lead", &c.leadPanic, func() { c.Lead.Tick(v, in) })
+	if c.Lead.quit {
+		c.stopping.Store(true)
+	}
 	guarded(c.Lead, v, "run", &c.runPanic, func() { c.duties(v) })
 }
 
@@ -74,6 +84,7 @@ func (c *Coordinator) duties(v host.View) {
 	if err != nil || st.Owner != nil && !st.IsOwner(s.Instance, v.Now) {
 		return
 	}
+	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
 	c.lanes(s, st)
 	c.fleet(v, s)
 }

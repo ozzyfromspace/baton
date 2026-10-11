@@ -166,3 +166,103 @@ func TestNoNewerBatonNoRestart(t *testing.T) {
 		t.Fatal("restarted without a session to resume")
 	}
 }
+
+// With workers, an upgrade restart waits until every one of them is idle, since it ends their sessions
+// too. A running plan does not wait for that: the lead compacts as usual, and restarts at the next safe
+// point. From the moment a newer baton waits, no new worker starts. Once the restart is under way, a
+// worker's session ending is the host's end, not a crash: it is neither resumed nor retired.
+func TestARestartWaitsForTheWorkers(t *testing.T) {
+	x := newCrew(t, 2)
+	x.tick(time.Second)
+	x.started("P1")
+	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastActivity = true, x.now; return nil })
+	x.c.Lead.Version, x.c.Lead.Newer = "v0.5.0", func() string { return "v0.5.1" }
+	boundary := func(epoch int) {
+		x.lead.Update(func(st *state.State) error {
+			st.Run.SessionID = "sess-1"
+			st.Run.Compaction = state.Compaction{Epoch: epoch, Status: state.CompactQueued, Reason: "boundary", Queued: x.now}
+			return nil
+		})
+	}
+	boundary(1)
+	x.tick(time.Second)
+	if _, _, ok := x.c.Lead.Restart(); ok {
+		t.Fatal("restarted while a worker was mid-turn")
+	}
+	if st := x.state(); st.Run.Compaction.Status != state.CompactTyped {
+		t.Errorf("the plan waited for the restart: %+v", st.Run.Compaction)
+	}
+	if ev := x.events(); !strings.Contains(ev, `"kind":"restart_held"`) || !strings.Contains(ev, `"why":"the worker on P1 is at work"`) {
+		t.Errorf("events:\n%s", x.events())
+	}
+	x.tick(time.Second)
+	if len(x.specs) != 1 {
+		t.Errorf("a worker started while a restart waits: %d", len(x.specs))
+	}
+
+	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = false; return nil })
+	x.tick(workerQuiet)
+	boundary(2)
+	x.tick(time.Second)
+	if to, _, ok := x.c.Lead.Restart(); !ok || to != "v0.5.1" {
+		t.Fatal("did not restart once the worker was idle")
+	}
+	_, f := x.last()
+	f.exit(0)
+	x.tick(time.Second)
+	if w := x.worker("P1"); len(x.specs) != 1 || w.Status != state.WorkerWorking || w.Resumes != 0 {
+		t.Errorf("the worker's end was taken for a crash: %d sessions, %+v", len(x.specs), w)
+	}
+}
+
+// What a worker's session may be doing that an upgrade restart, which ends it, would lose.
+func TestWorkerBusy(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	launched := now.Add(-time.Hour)
+	idle := state.Runtime{TurnStarted: launched.Add(time.Minute), LastActivity: now.Add(-workerQuiet)}
+	for _, c := range []struct {
+		name string
+		set  func(*state.Runtime)
+		want string
+	}{
+		{"idle", nil, ""},
+		{"not started yet", func(r *state.Runtime) { r.TurnStarted = launched.Add(-time.Second) }, "has not started yet"},
+		{"mid-turn", func(r *state.Runtime) { r.TurnOpen = true }, "is at work"},
+		{"its screen not quiet yet", func(r *state.Runtime) { r.LastActivity = now.Add(-time.Second) }, "is at work"},
+		{"a dialog open", func(r *state.Runtime) { r.Dialogs.Open(state.Dialog{Tool: "Bash"}) }, "waits on a dialog"},
+		{"a background shell", func(r *state.Runtime) { r.Background = []state.Task{{ID: "b1", Type: "shell"}} }, "has background work running"},
+		{"a monitor", func(r *state.Runtime) {
+			r.Background, r.Monitors = []state.Task{{ID: "m1", Type: "shell"}}, []string{"m1"}
+		}, "has background work running"},
+		{"a session-scoped cron", func(r *state.Runtime) { r.Crons = 1 }, "has background work running"},
+		{"compacting", func(r *state.Runtime) { r.Compaction = state.Compaction{Status: state.CompactActive} }, "is compacting"},
+	} {
+		r := idle
+		if c.set != nil {
+			c.set(&r)
+		}
+		if got := workerBusy(r, now, launched); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Once the lead's claude is asked to end because the human leaves baton, the host is on its way out: no
+// worker starts any more, and a worker's session ending with it is suspended as the host ends, not
+// resumed as a crash.
+func TestLeavingBatonStartsNoMoreWorkers(t *testing.T) {
+	x := newCrew(t, 2)
+	x.tick(time.Second)
+	x.lead.Update(func(st *state.State) error { st.Run.ExitAt = x.now; return nil })
+	x.tick(time.Second)
+	if !x.c.Lead.quit {
+		t.Fatal("the lead did not leave")
+	}
+	_, f := x.last()
+	f.exit(0)
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if w := x.worker("P1"); len(x.specs) != 1 || w.Status != state.WorkerStarting || w.Resumes != 0 {
+		t.Errorf("%d sessions started; P1's worker %+v", len(x.specs), w)
+	}
+}

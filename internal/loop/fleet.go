@@ -283,8 +283,10 @@ func (c *Coordinator) step(now time.Time, s *state.Store) {
 // dialog, behind which nothing runs (spike 23), and a worker started then would meet the same dialog.
 func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) string {
 	switch {
-	case c.closing:
+	case c.closing || c.stopping.Load():
 		return "the baton session is ending"
+	case c.pending.Load():
+		return "baton restarts on a newer version first"
 	case st.Run.LastActivity.Before(c.since):
 		return "the lead's session has not started yet"
 	case c.off != "":
@@ -303,7 +305,9 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, st state.State, pl pl
 	e := rosterEntry(&st, w.entry.Ref, w.entry.Session)
 	select {
 	case <-w.sess.Done():
-		c.exited(now, s, w, e)
+		if !c.stopping.Load() { // or it ended with the host, and Ended suspends it
+			c.exited(now, s, w, e)
+		}
 		return
 	default:
 	}
@@ -495,7 +499,9 @@ func (c *Coordinator) launch(now time.Time, s *state.Store, e state.Worker, sub 
 		c.unregister(w)
 		return nil, err
 	}
+	c.mu.Lock() // the lead's tick reads them too (restartHold)
 	w.sess, w.entry, w.store, w.launched = h, e, sub, now
+	c.mu.Unlock()
 	c.Lead.logf("loop: %s: started its worker in %s", e.Phase, e.Worktree)
 	return w, nil
 }

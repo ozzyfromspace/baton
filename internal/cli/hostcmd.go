@@ -197,7 +197,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	code, err := sv.Run()
 	if to, session, ok := controller.Restart(); ok && err == nil {
 		// The workers' jobs go on, as the lead's do: the restarted host watches them, and resumes the workers.
-		for _, w := range coordinator.Ended("baton restarted") {
+		for _, w := range coordinator.Ended("baton restarted on baton " + to) {
 			proj.Unbind(w.Instance)
 		}
 		host.Release(proj, instance)
