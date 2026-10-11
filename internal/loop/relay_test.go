@@ -172,6 +172,12 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 			}
 		}, "Its question went away unanswered"},
 		{"paused", relayed, "Pause baton", state.ByHuman, 0, "waits for the human in the worker's session", nil, "The human paused the run"},
+		{"untimed, nobody answered", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "x", Untimed: "outward"},
+			"Wait for me", state.ByTimeout, 0, "waits for the human in the worker's session", func(t *testing.T, st state.State) {
+				if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.By != state.ByDeclined || d.WithoutHuman() {
+					t.Errorf("decision %+v", d)
+				}
+			}, "Nobody answered it: do not do what you proposed"},
 		{"own words", relayed, "use the staging clock", state.ByHuman, 0, "the human's own words", func(t *testing.T, st state.State) {
 			if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.Answer != "use the staging clock" {
 				t.Errorf("decision %+v", d)

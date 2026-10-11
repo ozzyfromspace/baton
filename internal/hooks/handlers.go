@@ -709,7 +709,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		// A worker's question comes first with a line the host typed (a human's prompt is theirs: the
 		// question comes with the next tool call, or at the stop).
 		if by == "baton" {
-			if r, q, fresh := relayToGive(st, c.Now, words(c, s).Timeout, true); r != nil {
+			if r, q, fresh := relayToGive(st, c.Now, words(c, s).Timeout); r != nil {
 				ask, asker = decide.RelayAsk(r.Phase, q.Call()), r.Phase
 				if fresh {
 					events = append(events, relayIssued(*r, "prompt"))
@@ -894,9 +894,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			// is the lead's to put to the human, and holds up nothing in the worker.) A worker's question
 			// the lead is to put to the human comes before everything else of baton's, and only then.
 			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
-				if r, q, fresh := relayToGive(st, c.Now, w.Timeout, false); fresh {
+				// Given once mid-turn: until it is asked, the model's calls are held with it (holdCall).
+				if r, q, fresh := relayToGive(st, c.Now, w.Timeout); fresh {
 					v = relayGiven(*r, q)
-				} else if st.RelayUnasked() == nil {
+				} else if r == nil {
 					dl = take(st, c.Now)
 					news = takeNews(st, s)
 					v = contextValves(st, valve.FromEnv(c.Env), w)

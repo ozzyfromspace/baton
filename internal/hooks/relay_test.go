@@ -55,6 +55,7 @@ func TestTheLeadIsGivenAWorkersQuestion(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, lead, _ := newWorker(t)
 			queue(lead, relayProposal)
+			lead.now = lead.now.Add(17 * time.Second) // the time the question names is rounded up to the minute
 			out := lead.fire(c.event, c.in)
 			st := lead.state()
 			r := st.RelayIssued()
@@ -94,6 +95,37 @@ func TestTheLeadIsGivenAWorkersQuestion(t *testing.T) {
 				t.Errorf("issued again: %+v", st.Relay)
 			}
 		})
+	}
+}
+
+// A block's question has no time in it: baton leaves it for the human in the worker's session one
+// escalation_timeout after it was given.
+func TestABlocksQuestionWaitsOneTimeout(t *testing.T) {
+	_, lead, _ := newWorker(t)
+	queue(lead, state.Relay{Kind: state.RelayBlocked, Since: lead.now, Because: "need a key"})
+	lead.now = lead.now.Add(17 * time.Second)
+	lead.fire("PostToolUse", bash("ls"))
+	st := lead.state()
+	if r := st.RelayIssued(); r == nil || !r.Deadline.Equal(lead.now.Add(5*time.Minute)) {
+		t.Fatalf("issued %+v", st.Relay)
+	}
+}
+
+// Results and baton's other messages wait while a worker's question the lead was given is not asked:
+// the question goes first.
+func TestResultsWaitForAWorkersQuestion(t *testing.T) {
+	_, lead, _ := newWorker(t)
+	queue(lead, relayProposal)
+	lead.fire("PostToolUse", bash("ls"))
+	lead.finished("P1", state.JobFailed)
+	if out := lead.fire("PostToolUse", bash("ls")); strings.Contains(feedback(out), "Job j1") {
+		t.Fatalf("a result went before the worker's question: %v", out)
+	}
+	q := relayAsk(lead)
+	lead.fire("PermissionRequest", q)
+	lead.fire("PostToolUse", answer(q, "Go ahead"))
+	if out := lead.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "Job j1") {
+		t.Fatalf("the result after the question: %v", out)
 	}
 }
 
@@ -183,6 +215,7 @@ func TestAWorkersQuestionAnswered(t *testing.T) {
 		{"wait for me", relayProposal, "Wait for me", false, state.ByHuman, "baton: the worker on P2 waits for you — answer it in its session: baton view P2", "nothing about it is yours to do", false},
 		{"pause", relayProposal, "Pause baton", false, state.ByHuman, "baton: paused — the human is driving", "baton is paused", true},
 		{"own words", relayProposal, "use the staging clock", false, state.ByHuman, "baton: your answer went to the worker on P2", "The human answered", false},
+		{"baton's key, the human's choice", relayProposal, "Wait for me", true, state.ByHuman, "baton: the worker on P2 waits for you", "The human answered", false},
 		{"a block, continue", state.Relay{Kind: state.RelayBlocked, Since: time.Unix(1, 0), Because: "need a key"}, "Continue", false, state.ByHuman,
 			"baton: the worker on P2 carries on", "The human answered", false},
 		{"a block nobody answered", state.Relay{Kind: state.RelayBlocked, Since: time.Unix(1, 0), Because: "need a key"}, "Wait for me", true, state.ByTimeout,
@@ -210,7 +243,7 @@ func TestAWorkersQuestionAnswered(t *testing.T) {
 			if (st.Mode == state.ModePaused) != c.paused {
 				t.Errorf("mode %s", st.Mode)
 			}
-			if humanAt := st.Run.HumanAt.Equal(lead.now); humanAt == c.auto {
+			if humanAt := st.Run.HumanAt.Equal(lead.now); humanAt != (c.by == state.ByHuman) {
 				t.Errorf("the human took part: %v", humanAt)
 			}
 			if !lead.logged("relay_answered", map[string]any{"phase": "P2", "answer": c.answer, "by": c.by}) {

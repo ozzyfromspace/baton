@@ -17,10 +17,10 @@ import (
 // applies it to the worker's sub-run. A worker's own hooks only queue its questions (worker.go).
 
 // relayToGive is the worker's question the lead's model is to be given now, and its exact question: the
-// front question, issued now if it is due (state.RelayDue), which starts its deadline; or, when again,
-// one it was given already and has not put to the human (a compaction, or an interrupted turn, may have
-// taken it away). fresh says it was issued now.
-func relayToGive(st *state.State, now time.Time, timeout time.Duration, again bool) (r *state.Relay, q decide.Question, fresh bool) {
+// front question, issued now if it is due (state.RelayDue), which starts its deadline; or one it was
+// given already and has not put to the human (a compaction, or an interrupted turn, may have taken it
+// away). fresh says it was issued now.
+func relayToGive(st *state.State, now time.Time, timeout time.Duration) (r *state.Relay, q decide.Question, fresh bool) {
 	if r = st.RelayDue(); r != nil {
 		deadline := now.Add(timeout) // when baton leaves it for the human in the worker's session
 		if r.Timed() {
@@ -30,7 +30,7 @@ func relayToGive(st *state.State, now time.Time, timeout time.Duration, again bo
 		state.IssueRelay(r, q.Text, deadline, now)
 		return r, q, true
 	}
-	if r = st.RelayUnasked(); r != nil && again {
+	if r = st.RelayUnasked(); r != nil {
 		return r, relayQuestion(*r), false
 	}
 	return nil, decide.Question{}, false
@@ -166,7 +166,7 @@ func relayVanished(st *state.State, now time.Time) []event {
 // worker's own session, and they are pushed about it: the lead's run does not stop for a worker's
 // question.
 func relayStop(st *state.State, d *decision, now time.Time, timeout time.Duration) {
-	r, q, fresh := relayToGive(st, now, timeout, true)
+	r, q, fresh := relayToGive(st, now, timeout)
 	if fresh {
 		e := relayIssued(*r, "stop")
 		d.emit(e.kind, e.fields)
