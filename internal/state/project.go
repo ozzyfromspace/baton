@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -571,8 +572,8 @@ const sweepAge = 10 * time.Minute
 // gone, and links to hosts that no longer drive their run. Hosts call it when they start.
 func (p *Project) Sweep() { p.Swept(false, nil) }
 
-// Swept is Sweep, saying what it removed, each as its path under the project's .baton directory
-// (runs/<run>, sessions/<session>, hosts/<instance>). With dry, it removes nothing, and says what Sweep
+// Swept is Sweep, saying what it removed, each as its path under the project's .baton directory, with
+// forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>). With dry, it removes nothing, and says what Sweep
 // would remove. keep (nil: none) names hosts whose links stay, though they do not drive their run now.
 func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 	var out []string
@@ -588,7 +589,7 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 			if exists(filepath.Join(dir, "plan.json")) || exists(filepath.Join(dir, "handoff.md")) || hasEntries(filepath.Join(dir, DraftsDirName)) {
 				continue
 			}
-			out, gone[r.ID] = append(out, filepath.Join(runsDir, r.ID)), true
+			out, gone[r.ID] = append(out, path.Join(runsDir, r.ID)), true
 			if !dry {
 				os.RemoveAll(dir)
 			}
@@ -607,7 +608,7 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 					}
 				}
 				if stale {
-					out = append(out, filepath.Join(sub, l.Name()))
+					out = append(out, path.Join(sub, l.Name()))
 					if !dry {
 						os.Remove(p.path(sub, l.Name()))
 					}
