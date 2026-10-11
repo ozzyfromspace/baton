@@ -310,20 +310,20 @@ func TestReviseKeepsWhatIsDone(t *testing.T) {
 	}
 
 	st := running()
-	if next := Revise(&st, revised("P0", "P1", "P1b", "P2")); next != "P1" || st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P0"].Status != PhaseDone || st.Phases["P1b"].Status != PhasePending {
+	if next := Revise(&st, revised("P0", "P1", "P1b", "P2"), t0); next != "P1" || st.BoundaryOwed || st.Phases["P1"].Status != PhaseActive || st.Phases["P0"].Status != PhaseDone || st.Phases["P1b"].Status != PhasePending {
 		t.Fatalf("P1 kept: %s %+v", next, st)
 	}
 	st = running()
-	if next := Revise(&st, revised("P0", "P1a", "P1", "P2")); next != "P1a" || !st.BoundaryOwed || st.Phases["P1"].Status != PhasePending {
+	if next := Revise(&st, revised("P0", "P1a", "P1", "P2"), t0); next != "P1a" || !st.BoundaryOwed || st.Phases["P1"].Status != PhasePending {
 		t.Fatalf("a phase inserted before the one under way: %s %+v", next, st)
 	}
 	st = running()
 	st.Mode = ModePaused
-	if next := Revise(&st, revised("P0", "P5")); next != "P5" || !st.BoundaryOwed || st.Mode != ModeRunning {
+	if next := Revise(&st, revised("P0", "P5"), t0); next != "P5" || !st.BoundaryOwed || st.Mode != ModeRunning {
 		t.Fatalf("P1 dropped: %s %+v", next, st)
 	}
 	st = running()
-	if next := Revise(&st, revised("P0")); next != "" || st.Mode != ModeComplete {
+	if next := Revise(&st, revised("P0"), t0); next != "" || st.Mode != ModeComplete {
 		t.Fatalf("nothing left: %s %+v", next, st)
 	}
 }

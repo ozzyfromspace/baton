@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -207,24 +208,87 @@ func TestReviseKeepsParkedAndVerifyingPhases(t *testing.T) {
 	}
 	withNew := graph("P0:", "P1:", "P2:", "P3:P1", "P4:")
 	st := running()
-	if next := Revise(&st, withNew); next != "P4" || !st.BoundaryOwed || st.Phases["P1"].Status != PhaseVerifying || st.Phases["P2"].Status != PhaseParked || st.Phases["P2"].Park.Notes != "half way" || st.Phases["P0"].Status != PhaseDone {
+	if next := Revise(&st, withNew, t0); next != "P4" || !st.BoundaryOwed || st.Phases["P1"].Status != PhaseVerifying || st.Phases["P2"].Status != PhaseParked || st.Phases["P2"].Park.Notes != "half way" || st.Phases["P0"].Status != PhaseDone {
 		t.Fatalf("revision adding P4: next %q state %+v", next, st)
 	}
 	st = running()
-	if next := Revise(&st, graph("P0:", "P1:", "P3:P1")); next != "" || st.Mode != ModeRunning || st.Current != "" || st.Phases["P2"] != nil {
+	if next := Revise(&st, graph("P0:", "P1:", "P3:P1"), t0); next != "" || st.Mode != ModeRunning || st.Current != "" || st.Phases["P2"] != nil {
 		t.Fatalf("revision dropping P2, with P3 waiting on P1's verification: next %q state %+v", next, st)
+	}
+	if j1, j2 := st.Job("j1"), st.Job("j2"); j1.Status != JobRunning || j2.Status != JobInterrupted || j2.Reason != "its phase is no longer in the plan" || !j2.Ended.Equal(t0) {
+		t.Fatalf("the jobs after P2 was dropped: %+v, %+v", *j1, *j2)
 	}
 
 	// The phase under way carries on when its dependencies are done, and starts over after a compaction
 	// when the revision makes it wait for a phase not done.
 	st = runState(p, map[string]string{"P0": PhaseDone, "P1": PhaseVerifying, "P2": PhaseActive}, nil)
 	st.Current = "P2"
-	if next := Revise(&st, p); next != "P2" || st.BoundaryOwed || st.Phases["P2"].Status != PhaseActive {
+	if next := Revise(&st, p, t0); next != "P2" || st.BoundaryOwed || st.Phases["P2"].Status != PhaseActive {
 		t.Fatalf("P2 kept: next %q state %+v", next, st)
 	}
 	st = runState(p, map[string]string{"P0": PhaseDone, "P1": PhaseVerifying, "P2": PhaseActive}, nil)
 	st.Current = "P2"
-	if next := Revise(&st, graph("P0:", "P1:", "P2:P1", "P3:P1", "P4:P0")); next != "P4" || !st.BoundaryOwed || st.Phases["P2"].Status != PhasePending {
+	if next := Revise(&st, graph("P0:", "P1:", "P2:P1", "P3:P1", "P4:P0"), t0); next != "P4" || !st.BoundaryOwed || st.Phases["P2"].Status != PhasePending {
 		t.Fatalf("P2 now waits for P1's verification: next %q state %+v", next, st)
+	}
+}
+
+func TestQueueJob(t *testing.T) {
+	var st State
+	q := func(phase string) (Job, *Job, []Job) {
+		return QueueJob(&st, Job{Phase: phase, Kind: JobVerify, Command: "make test"}, t0)
+	}
+	if j, old, dropped := q("P0"); j.ID != "j1" || j.Status != JobQueued || !j.Queued.Equal(t0) || old != nil || dropped != nil || len(st.Jobs) != 1 {
+		t.Fatalf("first job: %+v, replaced %v, dropped %v", j, old, dropped)
+	}
+	st.Jobs[0].Status = JobRunning
+	q("P1")
+	// A phase has one job at a time: a new one replaces it.
+	j, old, _ := q("P0")
+	if j.ID != "j3" || old == nil || old.ID != "j1" || old.Status != JobRunning {
+		t.Fatalf("the replacement %+v of %+v", j, old)
+	}
+	if j1 := st.Job("j1"); j1.Status != JobInterrupted || j1.Reason != "replaced by j3" || j1.Exit != -1 || !j1.Ended.Equal(t0) {
+		t.Errorf("the replaced job: %+v", *j1)
+	}
+	if j2 := st.Job("j2"); j2.Status != JobQueued {
+		t.Errorf("another phase's job: %+v", *j2)
+	}
+	if got := st.Unfinished(); len(got) != 2 || got[0].ID != "j2" || got[1].ID != "j3" {
+		t.Errorf("unfinished: %+v", got)
+	}
+
+	// The record keeps MaxJobs, dropping the oldest finished jobs and never one still to finish.
+	st = State{Jobs: []Job{{ID: "j1", Phase: "P0", Status: JobRunning}}}
+	for i := 2; i <= MaxJobs; i++ {
+		st.Jobs = append(st.Jobs, Job{ID: fmt.Sprintf("j%d", i), Phase: "P1", Status: JobPassed})
+	}
+	j, _, dropped := q("P2")
+	if j.ID != "j31" || len(st.Jobs) != MaxJobs || len(dropped) != 1 || dropped[0].ID != "j2" || st.Jobs[0].ID != "j1" {
+		t.Fatalf("job %s, dropped %+v, kept %d from %s", j.ID, dropped, len(st.Jobs), st.Jobs[0].ID)
+	}
+}
+
+// Job ids are never used twice in a run, whatever became of the plan the jobs ran for: a runner still
+// winding down must not take a later job for its own.
+func TestJobIdsOutliveThePlan(t *testing.T) {
+	p := graph("P0:", "P1:")
+	st := Attach(p, t0, Origin{})
+	QueueJob(&st, Job{Phase: "P0"}, t0)
+	st = Reattach(st, p, t0, Origin{})
+	if j, _, _ := QueueJob(&st, Job{Phase: "P0"}, t0); j.ID != "j2" {
+		t.Errorf("after a new plan: %s", j.ID)
+	}
+	st = AttachAtBoundary(st, p, t0)
+	if j, _, _ := QueueJob(&st, Job{Phase: "P0"}, t0); j.ID != "j3" {
+		t.Errorf("after a plan approved at a boundary: %s", j.ID)
+	}
+	Detach(&st)
+	if len(st.Jobs) != 0 {
+		t.Errorf("a dropped plan keeps its jobs: %+v", st.Jobs)
+	}
+	st = Reattach(st, p, t0, Origin{})
+	if j, _, _ := QueueJob(&st, Job{Phase: "P0"}, t0); j.ID != "j4" {
+		t.Errorf("after a drop: %s", j.ID)
 	}
 }

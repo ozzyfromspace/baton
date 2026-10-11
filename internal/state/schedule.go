@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -19,6 +20,7 @@ type Job struct {
 	Kind    string `json:"kind,omitempty"` // JobVerify or JobAwait
 	Command string `json:"command,omitempty"`
 	Commit  string `json:"commit,omitempty"` // the commit a verify job checks, in a lane
+	Notes   string `json:"notes,omitempty"`  // where the phase stood when the job was queued, in the model's words
 	Status  string `json:"status"`
 	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
 	Reason  string `json:"reason,omitempty"` // why, when the job ended without the command's own verdict
@@ -28,6 +30,7 @@ type Job struct {
 	PGID    int    `json:"pgid,omitempty"` // the process group of what the runner runs now (or ran last)
 
 	Queued    time.Time `json:"queued,omitzero"`
+	Spawned   time.Time `json:"spawned,omitzero"` // when the host started its runner
 	Started   time.Time `json:"started,omitzero"`
 	Ended     time.Time `json:"ended,omitzero"`
 	Heartbeat time.Time `json:"heartbeat,omitzero"` // the runner's, while the job runs
@@ -53,6 +56,65 @@ const (
 
 // Finished reports whether the job has a result.
 func (j Job) Finished() bool { return j.Status != JobQueued && j.Status != JobRunning }
+
+// MaxJobs is how many jobs a run keeps on record. Past it, the oldest finished jobs are dropped.
+const MaxJobs = 30
+
+// QueueJob queues j as its phase's job, numbered after every job the run has had. A phase has one job at
+// a time: one it already has queued or running is cancelled and replaced by j. It returns the job as
+// queued, the job it replaced (nil for none), and the finished jobs dropped from the record to keep it
+// within MaxJobs.
+func QueueJob(st *State, j Job, now time.Time) (queued Job, replaced *Job, dropped []Job) {
+	n := st.JobSeq
+	for _, o := range st.Jobs {
+		var k int
+		if _, err := fmt.Sscanf(o.ID, "j%d", &k); err == nil && k > n {
+			n = k
+		}
+	}
+	st.JobSeq = n + 1
+	j.ID, j.Status, j.Queued = fmt.Sprintf("j%d", st.JobSeq), JobQueued, now
+	if old := CancelJobs(st, func(o Job) bool { return o.Phase == j.Phase }, "replaced by "+j.ID, now); len(old) > 0 {
+		replaced = &old[0]
+	}
+	st.Jobs = append(st.Jobs, j)
+	for len(st.Jobs) > MaxJobs {
+		i := slices.IndexFunc(st.Jobs, Job.Finished)
+		if i < 0 {
+			break
+		}
+		dropped = append(dropped, st.Jobs[i])
+		st.Jobs = slices.Delete(st.Jobs, i, i+1)
+	}
+	return j, replaced, dropped
+}
+
+// CancelJobs cancels the jobs not finished yet that which picks, for reason: each is marked interrupted,
+// and its runner, which beats into the state, stops its command and brings its lane down. It returns them
+// as they were, with their runners' pids, for whoever must stop them sooner.
+func CancelJobs(st *State, which func(Job) bool, reason string, now time.Time) []Job {
+	var out []Job
+	for i := range st.Jobs {
+		j := &st.Jobs[i]
+		if j.Finished() || !which(*j) {
+			continue
+		}
+		out = append(out, *j)
+		j.Status, j.Exit, j.Reason, j.Ended = JobInterrupted, -1, reason, now
+	}
+	return out
+}
+
+// Unfinished lists the jobs queued or running.
+func (st State) Unfinished() []Job {
+	var out []Job
+	for _, j := range st.Jobs {
+		if !j.Finished() {
+			out = append(out, j)
+		}
+	}
+	return out
+}
 
 // Job returns the job with this id, or nil when there is none on record.
 func (st State) Job(id string) *Job {

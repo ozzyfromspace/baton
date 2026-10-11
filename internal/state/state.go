@@ -108,6 +108,9 @@ type State struct {
 	Waiting *Wait                  `json:"waiting,omitempty"`
 	// Jobs are the commands baton runs for the run's phases while the session works on, oldest first.
 	Jobs []Job `json:"jobs,omitempty"`
+	// JobSeq numbers jobs. It outlives the jobs, and the plan they ran for, so a runner still winding
+	// down can never take a later job for its own.
+	JobSeq int `json:"job_seq,omitempty"`
 	// BoundaryOwed: a phase finished and a compaction is owed before the next phase starts.
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
@@ -160,7 +163,9 @@ func Attach(p plan.Plan, now time.Time, o Origin) State {
 func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 	run := prev.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
-	return attachKeeping(prev.Owner, &run, p, now, o)
+	st := attachKeeping(prev.Owner, &run, p, now, o)
+	st.JobSeq = prev.JobSeq
+	return st
 }
 
 // AttachAtBoundary is Reattach for a plan whose first phase starts after a compaction, as if a phase
@@ -175,11 +180,11 @@ func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
 }
 
 // Revise moves the run onto a revision of its plan. Phases done, verifying or parked stay so (matched by
-// id). The phase under way carries on if the revision keeps it and its dependencies are done; otherwise
-// the run takes up the next phase after a compaction, as at a phase boundary. It returns the phase in
-// hand, or "" when there is none: the revision has nothing left to do (ModeComplete), or nothing that
-// can start until a job finishes.
-func Revise(st *State, p plan.Plan) string {
+// id), and the jobs of phases the revision leaves out are cancelled. The phase under way carries on if
+// the revision keeps it and its dependencies are done; otherwise the run takes up the next phase after a
+// compaction, as at a phase boundary. It returns the phase in hand, or "" when there is none: the
+// revision has nothing left to do (ModeComplete), or nothing that can start until a job finishes.
+func Revise(st *State, p plan.Plan, now time.Time) string {
 	old, cur := st.Phases, st.Current
 	st.Phases = map[string]*PhaseState{}
 	for _, ph := range p.Phases {
@@ -190,6 +195,7 @@ func Revise(st *State, p plan.Plan) string {
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 		}
 	}
+	CancelJobs(st, func(j Job) bool { return p.Index(j.Phase) < 0 }, "its phase is no longer in the plan", now)
 	st.Mode, st.Blocked, st.Waiting, st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = ModeRunning, nil, nil, false, false, false
 	st.Run.CompleteNotified = false // a finished plan with phases added runs again, and finishes again
 	st.Run.Progress()
@@ -231,9 +237,9 @@ func Detach(st *State) error {
 	}
 	run := st.Run
 	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
-	owner := st.Owner
+	owner, seq := st.Owner, st.JobSeq
 	*st = New()
-	st.Owner, st.Run = owner, run
+	st.Owner, st.Run, st.JobSeq = owner, run, seq
 	return nil
 }
 

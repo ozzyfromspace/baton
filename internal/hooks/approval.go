@@ -152,7 +152,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 			v.say = "baton: could not write the revised plan: " + err.Error()
 			return v
 		}
-		next := state.Revise(st, pl)
+		next := state.Revise(st, pl, c.Now)
 		v.also = []event{{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}}}
 		switch {
 		case next == "" && st.Mode == state.ModeRunning:

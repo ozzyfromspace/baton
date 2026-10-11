@@ -826,7 +826,7 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 	if _, err := s.Update(func(st *state.State) error {
 		added = state.Extend(st, pl)
 		st.PlanDrift = ""
-		next = state.Revise(st, pl)
+		next = state.Revise(st, pl, io.Now())
 		return nil
 	}); err != nil {
 		return fail(io, "%v", err)
