@@ -210,13 +210,7 @@ func (x *retirement) stopJobs() {
 }
 
 // worktrees is where baton keeps the workers' worktrees for the project, by its real path.
-func (x *retirement) worktrees() string {
-	home := x.Home
-	if real, err := filepath.EvalSymlinks(home); err == nil {
-		home = real
-	}
-	return filepath.Join(home, "worktrees", lane.Key(x.Run.Checkout))
-}
+func (x *retirement) worktrees() string { return worktreesOf(x.Home, x.Run.Checkout) }
 
 // removeWorktree removes the worker's worktree, unless it is kept or is not baton's to remove.
 func (x *retirement) removeWorktree() {
