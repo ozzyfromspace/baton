@@ -4,6 +4,83 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+Four real runs, replayed second by second, showed where a long plan's time goes: waiting on gates was 65%
+and 38% of the two big campaigns, and the model worked while a gate ran for 1.5 hours of 26.8. Most of the
+waiting sat inside a phase (run the gates, read the failures, fix, run them again), and most phases of
+those plans did not need each other. baton now keeps the wait off the critical path: the model hands a
+long gate to baton and works on, and when the wait is long and another phase can go ahead, the session
+switches to it and comes back when the result is in. Phases still run one at a time, in one session. The
+evidence is in [docs/research/parallel.md](docs/research/parallel.md).
+
+A session hosted by v0.3 stays on its version after you update (before 1.0, a minor release counts as a
+major one) and says so once: exit and run `baton --continue` to move it to v0.4.
+
+### Added
+- **Phases name what they wait for.** The first line under a phase's heading may say `After: P1, P3`,
+  `After: none` or `After: all` (every phase before it); without it, a phase follows the one before, so
+  plans written before v0.4 run as they did. Only earlier phases may be named. baton reads the lines
+  from the plan file at every stop, so they can change mid-run. Attaching or approving a plan prints each
+  phase's dependencies and the longest chain, and so does `baton status`. `/baton plan` writes the lines.
+- **`baton verify "<command>" --notes "…"`** hands a gate to baton, which runs it on `HEAD` in a lane
+  while the model keeps working. It needs git and the phase's work committed. **`baton await`** does the
+  same for something outside the project (a CI run, a deploy), from the working tree, with no git
+  needed. A job runs detached from the session, survives baton restarting itself, and is stopped after
+  `verify_timeout` (3h). Its result reaches the model with its next tool call, at its next stop, or with
+  a short line baton types to wake an idle session, and names the other phases that are red.
+- **Lanes.** A lane is a worktree of the project under `~/.baton/lanes/`, outside the checkout, reused
+  from job to job so ignored caches stay. A project may commit an executable `.baton-lane` (`up`, `run`,
+  `down`, `slots`) to install dependencies, start services and run up to 4 lanes at once; without one, a
+  gate runs with `sh -c` in the bare worktree, one at a time. A lane that can't run the gate (`up` failing
+  twice, exit 125 to 127) is reported as a lane error, never as a failed gate. Lanes come down when the
+  session ends, the run is dropped, or the plan is complete, and lanes left behind are swept.
+- **Done while the gate runs.** `baton done` on a phase whose gate still runs makes it verifying, and the
+  run moves on: the phase is done when the gate passes, and reopens with the result when it fails, ahead
+  of any phase not started. Phases that need it wait until it passes. `done` is refused over a red
+  verification unless `--despite-red "<why>"`, which counts as a decision made without you.
+- **Switching.** A phase that can't go on without its gate's result idles in place. Once the gate has run
+  for `switch_after` (5m, or at once for a command whose earlier runs took that long) and another phase
+  can start, the host sets the phase aside with its notes, compacts, and starts the other phase; the
+  phase set aside resumes, with its result, at the next boundary or `baton checkpoint`. A switch whose
+  gate ends before its compaction is typed is called off, and never happens with the phase's work
+  uncommitted.
+- **Long commands move to the background.** baton starts claude with
+  `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` set from `foreground_max` (2m, `off` to leave it to Claude
+  Code), unless you set it yourself, so a long command keeps running in the background and wakes the
+  session when it ends.
+- **Seeing it.** The status line shows the oldest job the run waits on (`P3 verifying 12m +1`).
+  `baton status` says why each phase not done is verifying or set aside, with its notes, and lists the
+  jobs with their logs and the lanes, and how to add a `.baton-lane`. A session that starts afresh is
+  told which phases are verifying or set aside. Every step is announced in the session and logged:
+  `job_queued`, `job_started`, `job_finished`, `phase_verifying`, `phase_parked`, `phase_switched`,
+  `phase_resumed`, `switch_cancelled`, `switch_held`, `results_delivered`, `lanes_down`. A phase done by
+  its verification says so in later briefs.
+
+### Changed
+- **A stop on the model's own background work** (a command Claude Code moved to the background, or a
+  background subagent) is refused once, to remind it to keep working on what does not depend on it and to
+  send a long or stateful gate to `baton verify`; after that the session may idle until the work wakes it.
+  The watchdog now holds until that work has run for an hour (it was 30 minutes from the last stop).
+- **A stop without a status** offers `baton await` where it offered a declared wait.
+- **The model is told that a question baton gives it to ask is not one of its own**, which it must not
+  ask while a plan runs: it asks it as given.
+
+### Removed
+- **`baton waiting` (breaking).** Its Stop row, the watchdog's hold (and `BATON_WAIT_GRACE`), and its
+  place in the status line and `baton status` are gone too. A long command now runs in the background by
+  itself; a wait on something outside the project goes to `baton await`.
+
+### Fixed
+- **A Monitor no longer counts as background work.** Claude Code reports one at Stop as a shell, so baton
+  took a session watching a Monitor for a busy one. baton now tells them apart by task id. A Monitor
+  still holds an update restart, since it ends with claude.
+- **Claude Code's idle compaction is off in hosted sessions** (`"idleCompaction": false` in the settings
+  baton passes to each session). Claude Code compacts a conversation of 200k tokens or more on its own
+  once it has been idle for most of an hour; baton decides when a hosted session compacts, and a session
+  may now idle on purpose while its gate runs.
+- **Phases stay in document order when the plan file changes.** baton put the finished phases first
+  when it re-read a plan, and ended a phase's section at the next phase in that list rather than the next
+  heading in the file, so a phase added above a finished one was misplaced.
+
 ## [0.3.7] - 2026-10-08
 
 ### Changed

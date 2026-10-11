@@ -1,6 +1,6 @@
 # Working on baton
 
-baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`, and how a run reaches the human (note, propose, blocked; snapshots; answering its own question) is in `docs/escalation.md`. The evidence behind them is in `docs/research/` (`spikes.md`, `reliability.md`, `escalation.md`, and `sessions.md` for plan approval and how runs map to sessions). Read them before changing how compaction, escalation, hooks, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
+baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a pseudo-terminal it owns. The design is in `docs/plan.md`, and how a run reaches the human (note, propose, blocked; snapshots; answering its own question) is in `docs/escalation.md`. The evidence behind them is in `docs/research/` (`spikes.md`, `reliability.md`, `escalation.md`, `sessions.md` for plan approval and how runs map to sessions, and `parallel.md` for the dependency graph, jobs, lanes and switching between phases). Read them before changing how compaction, escalation, hooks, jobs, or the host loop work: several obvious-looking alternatives were tested and **do not work** (e.g. changing `autoCompactWindow` mid-session, scheduling `/compact` with CronCreate).
 
 ## Non-negotiables
 
@@ -13,7 +13,7 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 ## Layout
 
 - `cmd/baton/` — entry point and subcommand router.
-- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, valve, statusline, notify, elevate, upgrade, skill). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id.
+- `internal/<pkg>/` — one package per concern (cli, config, host, pty, loop, hooks, decide, gitx, plan, state, brief, lane, valve, statusline, notify, elevate, upgrade, skill). `decide` owns the escalation policy and every model-facing sentence about it; `gitx.Usable` is the one test for whether git applies; `state.Project` maps each Claude Code session to its own run (`.baton/runs/<id>/`), and everything inside a session finds its run by session id; `lane` runs a job's command on a commit in a worktree outside the checkout (through the project's `.baton-lane`), started by the host as a detached `baton lane-run` so it outlives claude and a restart.
 - `plugin/` — the Claude Code plugin (skill, launchers, the Stop hook that finishes `/baton start`). Its `SKILL.md` is a stub that loads the instructions from the binary (`baton skill`, from `internal/skill/skill.md`), so edit those, not the stub; and never put `$ARGUMENTS` in the stub's inline command, which Claude Code substitutes before the shell runs it ([spike 18](spikes/18-skill-inject/)). `.claude-plugin/marketplace.json` at the repo root makes this repo its own marketplace.
 - `spikes/` — archived throwaway experiments. Not maintained; don't import from them.
 

@@ -2,6 +2,8 @@
 
 > Approved 2026-10-04. Phases are committed in order; `git log` tells the story. Research behind it: [`research/spikes.md`](research/spikes.md).
 >
+> **v0.4.0 keeps a run from waiting on its gates.** A plan may name what each phase waits for (`After: P1, P3`, `none`, `all`; without the line, the phase before), and the run takes up the next phase that can start. The model hands a long gate to baton: `baton verify` runs it on `HEAD` in a lane (a worktree outside the checkout, set up by the project's own `.baton-lane`), and `baton await` waits on something outside the project. A finished phase is reported done while its gate runs, and is done when the gate passes or reopens when it fails; a phase that can't go on without its result is set aside, and the host switches the session to another phase. Phases still run one at a time, in one session. `baton waiting` and the declared wait are gone: where this plan has them (the Stop table, P3's CLI, P9's watchdog), read `verify` and `await`, and a long command that moves to the background by itself (`foreground_max`). The design's evidence is in [`research/parallel.md`](research/parallel.md).
+>
 > **v0.3.7 folds resume into run.** `/baton run` resumes this session's paused or blocked plan, and attaches any other; `/baton resume` and `baton resume` are gone. Where this plan says resume, read run.
 >
 > **v0.3.2 renames two commands and moves the skill into the binary.** Elevation is now `/baton start` (in a shell, `baton start` starts a session) and `/baton stop` is `/baton drop`. The plugin's `SKILL.md` is a stub that loads its instructions from the binary (`baton skill`), so an update reaches every session's `/baton` at once. Where this plan says elevate, read start.

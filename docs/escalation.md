@@ -5,6 +5,13 @@ Written 2026-10-05, from a live incident on a 17-phase plan (the "quiet campaign
 it. The spikes in [`research/escalation.md`](research/escalation.md) settled its open question, and
 changed two of its central mechanisms. This version describes what baton does.
 
+**v0.4.0 removes the declared wait,** and its command with it: a long command moves to the background
+by itself and wakes the session when it ends, a long gate goes to `baton verify`, and a wait on something
+outside the project goes to `baton await`, whose result baton delivers like a gate's. A stop without a
+status now offers `await` alongside `done`, `propose` and `blocked`. `blocked` is unchanged, and still
+stops the whole run: the jobs baton runs keep going while it waits, and the run picks up once the human
+answers. The diagnosis below describes the statuses as they were at the time.
+
 It extends [`docs/research/reliability.md`](research/reliability.md), which asked *what can stall or
 loop a run*. That review looked for stalls caused by Claude Code's own non-determinism. This one is
 about a stall **baton's interface invited**: a run that halted over a recoverable problem, with the
@@ -221,8 +228,8 @@ surfaced in:
 - the brief after each compaction: the most recent ones, so later phases know about the unsigned commit;
 - the human's next message: the ones they have not been shown yet (section 3).
 
-The model cannot clear its own block. While a block or a held proposal waits for the human, `resume`,
-`done`, `checkpoint`, `verify`, `await` and `blocked` are refused until the human has taken part since:
+The model cannot clear its own block. While a block or a held proposal waits for the human, `run` (to
+resume), `done`, `checkpoint`, `verify`, `await` and `blocked` are refused until the human has taken part since:
 typed in the session, or answered one of baton's questions. If the model could silently clear its own
 blocked state, `blocked` would stop being a trustworthy signal.
 
