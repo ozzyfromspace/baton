@@ -70,6 +70,13 @@ func cmdNote(args []string, io IO) int {
 		return refused(io, s, "note", err)
 	}
 	s.Event("note", map[string]any{"id": d.ID, "phase": d.Phase, "what": d.What, "undo": d.Undo})
+	if up, err := s.ParentRun(); err == nil {
+		// Nobody watches a worker's session: the human reads its note in the lead's.
+		up.Update(func(st *state.State) error {
+			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: the worker on %s noted — %s (%s)", d.Phase, d.What, d.ID))
+			return nil
+		})
+	}
 	tally := fmt.Sprintf("%d %s without the human in %s", count, plural(count, "decision", "decisions"), d.Phase)
 	if most > 0 {
 		tally = fmt.Sprintf("%d of %d decisions without the human in %s", count, most, d.Phase)

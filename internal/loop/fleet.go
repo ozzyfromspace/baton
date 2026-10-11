@@ -536,6 +536,7 @@ func (c *Coordinator) later(now time.Time, s *state.Store, phase, why string) {
 	c.retryAt = now.Add(launchRetry)
 	c.Lead.logf("loop: %s: no worker for now: %s", phase, why)
 	s.Event("worker_deferred", map[string]any{"phase": phase, "why": why, "until": c.retryAt.UTC().Format(time.RFC3339)})
+	c.announce(s, fmt.Sprintf("baton: no worker on %s for now (%s) → baton tries again at %s", phase, why, c.retryAt.Local().Format("15:04")))
 }
 
 // subRun makes worker e's sub-run, linked to its session and instance: the run's plan narrowed to its

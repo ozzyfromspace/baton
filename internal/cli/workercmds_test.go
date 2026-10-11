@@ -429,3 +429,16 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 		t.Errorf("usage shown with no workers:\n%s", out)
 	}
 }
+
+// Nobody watches a worker's session: its note is announced in the lead's.
+func TestAWorkersNoteIsAnnouncedInTheLead(t *testing.T) {
+	w, lead := asWorker(t)
+	w.must("", "note", "used a fake clock", "--undo", "revert the commit")
+	if ann := strings.Join(lead.state().Run.Announce, "\n"); ann != "baton: the worker on P1 noted — used a fake clock (P1.d1)" {
+		t.Errorf("the lead's session is told %q", ann)
+	}
+	lead.must("", "note", "skipped the flaky test", "--undo", "run it again")
+	if ann := lead.state().Run.Announce; len(ann) != 1 {
+		t.Errorf("the lead's own note is announced by its hooks, not here: %q", ann)
+	}
+}

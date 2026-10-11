@@ -195,6 +195,10 @@ func TestARestartWaitsForTheWorkers(t *testing.T) {
 	if ev := x.events(); !strings.Contains(ev, `"kind":"restart_held"`) || !strings.Contains(ev, `"why":"the worker on P1 is at work"`) {
 		t.Errorf("events:\n%s", x.events())
 	}
+	const held = "baton: baton v0.5.1 is installed; this session restarts on it once the workers are idle (now the worker on P1 is at work)"
+	if ann := strings.Join(x.state().Run.Announce, "\n"); strings.Count(ann, "restarts on it once the workers are idle") != 1 || !strings.Contains(ann, held) {
+		t.Errorf("announced %q", ann)
+	}
 	x.tick(time.Second)
 	if len(x.specs) != 1 {
 		t.Errorf("a worker started while a restart waits: %d", len(x.specs))

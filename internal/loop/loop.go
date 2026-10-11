@@ -336,10 +336,15 @@ func (l *Loop) workersIdle(v host.View) bool {
 		why = l.RestartHold(v.Now)
 	}
 	if why != l.restartFor {
+		first := l.restartFor == ""
 		l.restartFor = why
 		if why != "" {
 			l.logf("loop: the restart on a newer baton waits: %s", why)
 			l.Store.Event("restart_held", map[string]any{"why": why})
+		}
+		if why != "" && first {
+			line := fmt.Sprintf("baton: baton %s is installed; this session restarts on it once the workers are idle (now %s)", l.Newer(), why)
+			l.update(func(st *state.State) { st.Run.Announce = append(st.Run.Announce, line) })
 		}
 	}
 	return why == ""

@@ -388,9 +388,13 @@ func TestAWorkerThatNeverStartsIsEnded(t *testing.T) {
 				return
 			}
 			// The phase went back, and a new worker takes it up a while later, under a session of its own.
+			retry := x.now.Add(launchRetry).Local().Format("15:04")
 			x.tick(time.Minute)
 			if len(x.specs) != 1 {
 				t.Fatal("a new worker started at once")
+			}
+			if ann := strings.Join(x.state().Run.Announce, "\n"); !strings.Contains(ann, "baton: no worker on P1 for now ("+c.why+") → baton tries again at "+retry) {
+				t.Errorf("announced %q", ann)
 			}
 			x.tick(launchRetry)
 			if len(x.specs) != 2 || x.worker("P1").Status != state.WorkerStarting || x.worker("P1").Session == w.Session {

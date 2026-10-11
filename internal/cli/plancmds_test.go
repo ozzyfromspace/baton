@@ -420,6 +420,22 @@ func TestExitLeavesARecordForTheShell(t *testing.T) {
 	if st := s.state(); st.Mode != state.ModePaused || st.Run.ExitAt.IsZero() {
 		t.Fatalf("state %+v", st)
 	}
+	if strings.Contains(out, "worker") {
+		t.Errorf("exit names workers the run has none of: %s", out)
+	}
+
+	// The run's workers stop with it, and the next session of the run resumes them.
+	s.set(func(x *state.State) {
+		x.Mode = state.ModeRunning
+		x.Workers = []state.Worker{{Phase: "P1", Status: state.WorkerWorking}, {Phase: "R1", Status: state.WorkerLanding}, {Phase: "P2", Status: state.WorkerLanded}}
+	})
+	if out := s.must("", "exit"); !strings.Contains(out, " The workers on P1, R1 stop with it, their work kept in their worktrees; the next baton session of this run resumes them.") {
+		t.Errorf("exit: %s", out)
+	}
+	s.set(func(x *state.State) { x.Workers = x.Workers[:1] })
+	if out := s.must("", "exit"); !strings.Contains(out, " The worker on P1 stops with it, its work kept in its worktree; the next baton session of this run resumes it.") {
+		t.Errorf("exit: %s", out)
+	}
 	io, _, _ := testIO("", s.env)
 	io.Now = func() time.Time { return s.now }
 	leftBaton(io, s.store())

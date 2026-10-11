@@ -109,8 +109,12 @@ func cmdExit(args []string, io IO) int {
 	}
 	paused := false
 	var jobs []state.Job
+	var workers []string
 	s.Update(func(st *state.State) error {
 		paused, jobs = state.Pause(st) == nil, st.Unfinished()
+		for _, w := range st.LiveWorkers() {
+			workers = append(workers, w.Phase)
+		}
 		st.Run.ExitAt, st.Run.SessionID = io.Now(), sid // the session leaving, whose record the host completes
 		return nil
 	})
@@ -121,6 +125,12 @@ func cmdExit(args []string, io IO) int {
 	}
 	if len(jobs) > 0 {
 		msg += fmt.Sprintf(" baton stops %s as claude stops: nothing would see %s.", jobLabels(jobs), plural(len(jobs), "its result", "their results"))
+	}
+	if len(workers) > 0 {
+		n := len(workers)
+		msg += fmt.Sprintf(" The %s on %s %s with it, %s work kept in %s %s; the next baton session of this run resumes %s.",
+			plural(n, "worker", "workers"), strings.Join(workers, ", "), plural(n, "stops", "stop"),
+			plural(n, "its", "their"), plural(n, "its", "their"), plural(n, "worktree", "worktrees"), plural(n, "it", "them"))
 	}
 	fmt.Fprintln(io.Out, msg)
 	return 0
