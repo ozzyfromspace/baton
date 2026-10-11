@@ -46,6 +46,8 @@ type Timing struct {
 	ClockJump      time.Duration // a gap between ticks this long means the machine slept
 	NoticeRetry    time.Duration // a notice that failed to send is retried after this
 	RestartIdle    time.Duration // with no plan running, a session idle this long may restart on a newer baton
+	JobStale       time.Duration // a running job whose runner has not beaten for this long is taken for dead
+	SpawnGrace     time.Duration // a runner gone this long after it was started, without taking up its job, never will
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -60,7 +62,8 @@ var DefaultTiming = Timing{
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, WaitGrace: time.Minute, BackgroundMax: 30 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
-	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, EscalationTimeout: config.DefaultEscalationTimeout,
+	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
+	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
 // MaxTries is how many times baton types /compact in one round before it gives up on the round.
@@ -92,6 +95,8 @@ type Loop struct {
 	// none; upgrade.Watch). A nil Newer never restarts.
 	Version string
 	Newer   func() string
+	// Runners runs the run's jobs (nil: jobs stay queued).
+	Runners Runners
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -109,6 +114,7 @@ type Loop struct {
 	aloneAt time.Time
 
 	owner    bool           // this session has owned the project
+	swept    bool           // the lanes were swept
 	quit     bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart  *restart       // the restart claude was ended for
 	halted   bool           // the run is halted, and this halt's snapshot was started
@@ -151,6 +157,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if l.quit {
 		return // claude is on its way out; nothing more may be typed into it
 	}
+	l.jobs(v, st)
 	if st.Mode != state.ModeRunning {
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
 			l.restartOn(v, st, in)
@@ -251,7 +258,8 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // restartable reports a safe point to restart the session: the moment is the human's and the model's
 // to lose nothing in. Nothing may be on its way (a turn, a dialog, a compaction), and nothing that lives
 // only inside this claude process may be running, because it would end with it: background work of any
-// kind, monitors, session-scoped wakeups. With a plan running, the safe point is a compaction baton is
+// kind, monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
+// restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
 // about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
 // human reading its last answer is not interrupted.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
