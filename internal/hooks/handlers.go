@@ -629,6 +629,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			if path := editedPath(c.Input, s.Root); path != "" {
 				st.Touched(path)
 			}
+			if tool == "Monitor" {
+				resp, _ := c.Input["tool_response"].(map[string]any)
+				st.Run.Watch(str(resp, "taskId"))
+			}
 		}
 		if str(c.Input, "agent_id") != "" {
 			return nil
@@ -863,7 +867,7 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 func recordStop(st *state.State, c Context) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
-	st.Run.Background = tasks(c.Input["background_tasks"])
+	st.Run.SetBackground(tasks(c.Input["background_tasks"]))
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0

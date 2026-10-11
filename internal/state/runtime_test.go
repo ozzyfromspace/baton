@@ -138,3 +138,32 @@ func TestProgressKeepsWhatTheHumanMustDecide(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code reports a Monitor at Stop as a shell (spike 19): baton tells the two apart by the task id
+// the Monitor's PostToolUse returned. A Monitor is never work, but it ends with claude.
+func TestMonitorsAreToldApartByID(t *testing.T) {
+	ids := func(ts []Task) []string {
+		var out []string
+		for _, x := range ts {
+			out = append(out, x.ID)
+		}
+		return out
+	}
+	var r Runtime
+	r.Watch("m1")
+	r.Watch("m1")
+	r.Watch("")
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}, {ID: "d", Type: "dream"}, {ID: "s", Type: "subagent"}})
+	if got := ids(r.BusyBackground()); !same(got, []string{"b1", "s"}) {
+		t.Errorf("busy = %v", got)
+	}
+	if got := ids(r.Watching()); !same(got, []string{"m1"}) {
+		t.Errorf("watching = %v", got)
+	}
+	// A Monitor armed in this turn is in the next Stop's list; one that ended is forgotten.
+	r.Watch("m2")
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m2", Type: "shell"}})
+	if !same(r.Monitors, []string{"m2"}) || !same(ids(r.BusyBackground()), []string{"b1"}) {
+		t.Errorf("monitors = %v, busy = %v", r.Monitors, ids(r.BusyBackground()))
+	}
+}

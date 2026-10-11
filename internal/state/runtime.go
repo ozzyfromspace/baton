@@ -1,6 +1,9 @@
 package state
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Runtime is what the hooks observe about the live session. The host's controller and the Stop
 // decision table read it; nothing in it is ever inferred from the model's prose.
@@ -37,6 +40,10 @@ type Runtime struct {
 	Subagents int `json:"subagents"`
 	// Background is the in-flight background work Claude Code reported at the last Stop.
 	Background []Task `json:"background,omitempty"`
+	// Monitors are the task ids of the Monitor watchers the session armed (PostToolUse(Monitor)
+	// tool_response.taskId), while they still run. Claude Code reports a Monitor at Stop as type "shell",
+	// like a background command, so its id is the only way to tell the two apart (spike 19).
+	Monitors []string `json:"monitors,omitempty"`
 	// Crons are session-scoped wakeups (CronCreate, ScheduleWakeup, /loop) reported at the last Stop.
 	Crons int `json:"crons"`
 
@@ -189,7 +196,7 @@ func (q DialogQueue) Only() (Dialog, bool) {
 // Task is one piece of in-flight background work.
 type Task struct {
 	ID          string `json:"id"`
-	Type        string `json:"type"` // shell, subagent, monitor, workflow, …
+	Type        string `json:"type"` // shell (a Monitor too), subagent, workflow, …
 	Status      string `json:"status"`
 	Description string `json:"description,omitempty"`
 }
@@ -313,17 +320,46 @@ func (r *Runtime) Progress() {
 var humanDecides = map[string]bool{"blocked": true, "decision": true, "review": true}
 
 // waitable are the background task types (as Claude Code reports them at Stop) that are the model's own
-// work and wake the session when they finish. Monitors watch indefinitely, and dream, auto-mode scan
-// and memory import are Claude Code's own housekeeping: none of those may make an idle session look busy.
+// work and wake the session when they finish. Dream, auto-mode scan and memory import are Claude Code's
+// own housekeeping, and Monitors (reported as "shell") watch indefinitely: none of those may make an idle
+// session look busy.
 var waitable = map[string]bool{"shell": true, "subagent": true, "workflow": true, "MCP task": true, "teammate": true, "cloud session": true}
 
 // BusyBackground reports background work that can still wake the session.
 func (r Runtime) BusyBackground() []Task {
 	var out []Task
 	for _, t := range r.Background {
-		if waitable[t.Type] {
+		if waitable[t.Type] && !slices.Contains(r.Monitors, t.ID) {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// Watching reports the Monitors still running. They are not work, but they live inside the claude
+// process and end with it.
+func (r Runtime) Watching() []Task {
+	var out []Task
+	for _, t := range r.Background {
+		if slices.Contains(r.Monitors, t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Watch records a Monitor the session armed.
+func (r *Runtime) Watch(id string) {
+	if id != "" && !slices.Contains(r.Monitors, id) {
+		r.Monitors = append(r.Monitors, id)
+	}
+}
+
+// SetBackground records the background work a Stop reported, and forgets the Monitors that have ended:
+// a Monitor's PostToolUse always comes before the Stop of its turn, so one missing from the list is gone.
+func (r *Runtime) SetBackground(tasks []Task) {
+	r.Background = tasks
+	r.Monitors = slices.DeleteFunc(r.Monitors, func(id string) bool {
+		return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id })
+	})
 }

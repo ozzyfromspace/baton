@@ -82,7 +82,8 @@ func TestStopDecisionTable(t *testing.T) {
 			}},
 		{name: "monitors alone are not busy", block: true, reason: "not reported done",
 			setup: func(st *state.State) {
-				st.Run.Background = []state.Task{{Type: "monitor", Status: "running"}}
+				st.Run.Background = []state.Task{{ID: "m1", Type: "shell", Status: "running", Description: "tail -F app.log"}}
+				st.Run.Monitors = []string{"m1"}
 			}},
 		{name: "a human-started turn still needs a status", setup: func(st *state.State) { st.Run.TurnBy = "human" },
 			block: true, reason: "answer it first"},

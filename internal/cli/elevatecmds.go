@@ -221,10 +221,8 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 	}
 	raw, _ := goio.ReadAll(goio.LimitReader(io.In, 1<<20))
 	var in struct {
-		SessionID       string `json:"session_id"`
-		BackgroundTasks []struct {
-			Type string `json:"type"`
-		} `json:"background_tasks"`
+		SessionID       string            `json:"session_id"`
+		BackgroundTasks []json.RawMessage `json:"background_tasks"`
 	}
 	if json.Unmarshal(raw, &in) != nil || in.SessionID == "" {
 		return 0
@@ -234,11 +232,12 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 	if !ok || !rec.Stopped.IsZero() || rec.Plain {
 		return 0
 	}
-	for _, t := range in.BackgroundTasks {
-		if t.Type != "monitor" {
-			say(io, "baton: starting baton waits until background work finishes (it would be stopped with claude)")
-			return 0
-		}
+	// Any background task holds it, a Monitor included: each would end with claude. A plain session has
+	// no baton hooks to record Monitors by id, and Claude Code reports one as type "shell" (spike 19), so
+	// this hook could not tell one apart anyway.
+	if len(in.BackgroundTasks) > 0 {
+		say(io, "baton: starting baton waits until background work finishes (it would be stopped with claude)")
+		return 0
 	}
 	rec.Stopped = io.Now()
 	if elevate.Save(root, rec) != nil {

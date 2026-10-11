@@ -255,13 +255,8 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
 // human reading its last answer is not interrupted.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
-	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 {
+	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
-	}
-	for _, t := range st.Run.Background {
-		if t.Type == "monitor" {
-			return false
-		}
 	}
 	switch st.Run.Compaction.Status {
 	case state.CompactTyped, state.CompactActive:

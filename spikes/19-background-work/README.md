@@ -8,6 +8,7 @@
 - `run.py q3`: SIGTERM claude while a background job runs (as baton's restart and elevation do), then
   `claude --resume`: does the job survive, and is the resumed session told?
 - `run.py q4`: do a Monitor watcher and a one-shot CronCreate survive `/compact`?
+- `run.py q5`: what does PostToolUse(Monitor) report, and does a Monitor that ends leave `background_tasks`?
 
 Each run uses `../common/scenario.py`, creates `work/<q>/` (a scratch git repo with `job.sh`), and logs hooks
 to `work/<q>/hooks-*.log` through `hooklog.py`. A run costs a few cents.
@@ -20,3 +21,4 @@ Results:
 | q1 | No hook fires when a background task completes. Signals: `UserPromptSubmit` whose prompt starts with `<task-notification>`; the task leaving `Stop.background_tasks`; `PostToolUse(Bash).tool_response.backgroundTaskId` at start. |
 | q3 | Lost. The job shares claude's process group and dies with it. On `--resume` the transcript gets a `stopped` notification, which does not wake the model. |
 | q4 | Both survive. A Monitor appears in `background_tasks` as `type: "shell"`, not `"monitor"`. |
+| q5 | `PostToolUse(Monitor).tool_response` is `{taskId, timeoutMs, persistent}`; `taskId` is the task's `id` at Stop. A Monitor whose command ends leaves `background_tasks` at the next Stop, and its end woke the model. |

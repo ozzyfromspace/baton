@@ -69,8 +69,10 @@ func TestARunningPlanDoesNotRestartMidPhase(t *testing.T) {
 // compaction goes ahead as usual: a restart never holds a plan up).
 func TestBackgroundWorkHoldsARestartButNotThePlan(t *testing.T) {
 	for name, set := range map[string]func(*state.State){
-		"a background shell":     func(st *state.State) { st.Run.Background = []state.Task{{Type: "shell"}} },
-		"a monitor":              func(st *state.State) { st.Run.Background = []state.Task{{Type: "monitor"}} },
+		"a background shell": func(st *state.State) { st.Run.Background = []state.Task{{Type: "shell"}} },
+		"a monitor": func(st *state.State) {
+			st.Run.Background, st.Run.Monitors = []state.Task{{ID: "m1", Type: "shell"}}, []string{"m1"}
+		},
 		"a session-scoped cron":  func(st *state.State) { st.Run.Crons = 1 },
 		"a background subagent ": func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent"}} },
 	} {

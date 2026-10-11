@@ -190,15 +190,25 @@ func TestTurnsDialogsSubagentsAndStops(t *testing.T) {
 	if n := f.state().Run.Subagents; n != 1 {
 		t.Fatalf("subagents = %d", n)
 	}
+	// Claude Code reports a Monitor at Stop as a shell; its PostToolUse names its task id.
+	f.fire("PostToolUse", map[string]any{"tool_name": "Monitor", "tool_input": map[string]any{"command": "tail -F app.log"},
+		"tool_response": map[string]any{"taskId": "2", "timeoutMs": 1800000, "persistent": false}})
 	f.fire("Stop", map[string]any{"stop_hook_active": false,
 		"background_tasks": []any{
 			map[string]any{"id": "1", "type": "shell", "status": "running", "description": "npm test"},
-			map[string]any{"id": "2", "type": "monitor", "status": "running"},
+			map[string]any{"id": "2", "type": "shell", "status": "running", "description": "tail -F app.log"},
 		},
 		"session_crons": []any{map[string]any{"id": "c"}}})
 	r := f.state().Run
-	if r.TurnOpen || len(r.Background) != 2 || len(r.BusyBackground()) != 1 || r.Crons != 1 {
+	if r.TurnOpen || len(r.Background) != 2 || len(r.BusyBackground()) != 1 || r.BusyBackground()[0].ID != "1" ||
+		len(r.Watching()) != 1 || r.Crons != 1 {
 		t.Fatalf("after stop: %+v", r)
+	}
+	// A Monitor that has ended leaves the list, and is forgotten.
+	f.fire("Stop", map[string]any{"stop_hook_active": false,
+		"background_tasks": []any{map[string]any{"id": "1", "type": "shell", "status": "running", "description": "npm test"}}})
+	if r := f.state().Run; len(r.Monitors) != 0 || len(r.BusyBackground()) != 1 {
+		t.Fatalf("after the monitor ended: %+v", r)
 	}
 }
 

@@ -298,3 +298,24 @@ func TestHostBinary(t *testing.T) {
 		}
 	}
 }
+
+// /baton start waits for background work in a plain session, a Monitor included: each would end with
+// claude, and Claude Code reports a Monitor as a shell (spike 19).
+func TestElevateStopWaitsForBackgroundWork(t *testing.T) {
+	home := t.TempDir()
+	if err := elevate.Save(home, elevate.Record{SessionID: "sess-1", TTY: "ttys998", Created: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []string{
+		`{"id":"m1","type":"shell","status":"running","description":"tail -F app.log"}`,
+		`{"id":"s1","type":"subagent","status":"running"}`,
+	} {
+		io, out, _ := testIO(`{"session_id":"sess-1","background_tasks":[`+task+`]}`, map[string]string{"BATON_HOME": home})
+		if code := cmdElevateStop(nil, io); code != 0 || !strings.Contains(out.String(), "waits until background work finishes") {
+			t.Errorf("%s: code %d, said %q", task, code, out.String())
+		}
+		if rec, _ := elevate.Load(home, "ttys998"); !rec.Stopped.IsZero() {
+			t.Fatalf("%s: claude was stopped", task)
+		}
+	}
+}

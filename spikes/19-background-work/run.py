@@ -155,5 +155,31 @@ def q4():
     dump(d, 'q4-cron')
     d.type('/exit'); d.enter(); time.sleep(4); d.close()
 
+def q5():
+    # What PostToolUse(Monitor) reports, persistent or not, and whether an ended Monitor leaves background_tasks.
+    d, work, log = start('q5')
+    n = count(log, 'Stop')
+    prompt(d, 'Spike test. Use the Monitor tool (load it with ToolSearch if needed) twice, then end your turn: '
+              '(1) a persistent monitor running `tail -n0 -F watch.log` with description "watch log"; '
+              '(2) a monitor that is not persistent running `sleep 20; echo SHORT_DONE` with description "short". '
+              'Then reply "armed" and end your turn. Do not sleep or poll.')
+    wait_stop(d, log, n, timeout=180, what='Stop after arming')
+    dump(d, 'q5-armed')
+    n = count(log, 'Stop')
+    d.note('waiting for the short monitor to end and wake the model')
+    d.wait(lambda: count(log, 'Stop') > n, 90, 'Stop after the short monitor ends')
+    d.wait_quiet(3, 20)
+    n = count(log, 'Stop')
+    prompt(d, 'Reply with the single word "ok" and end your turn.')
+    wait_stop(d, log, n, what='Stop after ok')
+    dump(d, 'q5-after')
+    for r in recs(log):
+        i = r['input']
+        if i.get('tool_name') == 'Monitor' and r['ev'] == 'PostToolUse':
+            print('PostToolUse(Monitor)', json.dumps(i.get('tool_input')), '->', json.dumps(i.get('tool_response')))
+        if r['ev'] == 'Stop':
+            print('Stop', r['hms'], json.dumps([(t.get('id'), t.get('type'), t.get('status'), t.get('description')) for t in i.get('background_tasks') or []]))
+    d.type('/exit'); d.enter(); time.sleep(4); d.close()
+
 if __name__ == '__main__':
-    {'q1': q1, 'q3': q3, 'q4': q4}[sys.argv[1]]()
+    {'q1': q1, 'q3': q3, 'q4': q4, 'q5': q5}[sys.argv[1]]()

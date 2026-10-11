@@ -145,6 +145,7 @@ How to build a lane is the project's knowledge, not baton's.
 | A hook for "background task finished" | ❌ none. Signals: `UserPromptSubmit` with a `<task-notification>` prompt; the task leaving `Stop.background_tasks`; `PostToolUse(Bash).tool_response.backgroundTaskId` at start |
 | Background job when claude is ended (SIGTERM) and resumed | ❌ killed with claude's process group; the resumed session gets a `stopped` notice that does not wake it |
 | Monitor and one-shot cron across `/compact` | ✅ both survive. A Monitor is reported in `background_tasks` as `type: "shell"` |
+| Telling a Monitor apart | `PostToolUse(Monitor).tool_response` is `{taskId, timeoutMs, persistent}`, and `taskId` is the task's `id` in `background_tasks`. A Monitor whose command ends leaves the list at the next Stop, and its end wakes the model |
 | Subagents | Auto-compact on their own; `isolation: "worktree"` creates a worktree and never merges back; at most 20 concurrent by default |
 | Workflow tool | Gated by policy, settings and a feature flag; callable only on the user's explicit opt-in, which a skill the user invokes can carry and a hook's `additionalContext` cannot |
 | Worker in a PTY nobody watches | ✅ a size change repaints the full visible screen in about 6 ms (a same-size SIGWINCH is ignored; Ctrl-L also works but is a keystroke); resizing mid-turn is harmless; 30 s unread did not stall it; about 271 MB and 0.3% CPU idle |
@@ -174,6 +175,7 @@ Found on the way:
 
 - **The monitor check never matches.** A Monitor is reported as `type: "shell"`, so `restartable`'s check for
   `"monitor"` (`internal/loop/loop.go`) never matches, and `BusyBackground` counts monitors as waitable work.
+  Fixed in v0.4: baton records each Monitor's `taskId` from PostToolUse and tells them apart by id.
 - **Haiku now has auto mode.** Haiku 5.5 runs in auto mode, contrary to the note in `CLAUDE.md`.
 - **Idle compaction is untested.** Claude Code has an `idleCompaction` setting (on by default); it may interact
   with baton's own compaction control.
