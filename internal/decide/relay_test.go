@@ -77,7 +77,7 @@ func TestRelayAnswersForTheWorker(t *testing.T) {
 		{RelayWaits("P3", "it is blocked: the key expired"), []string{"the agent on P3 waits for you (it is blocked: the key expired)", "/baton run asks you again"}},
 		{RelayWithdrawn("P3", "its agent is gone"), []string{"the agent on P3 needs no answer any more: its agent is gone"}},
 		{RelayPaused("P3"), []string{"paused", "the agent on P3 waits for you", "/baton run asks you again"}},
-		{RelayAgain("P3"), []string{"the agent on P3 waits for you", "asks you its question again"}},
+		{RelayAgain("P3"), []string{"the agent on P3 waits for the human", "asks them its question again", "nothing of it is yours to do"}},
 	} {
 		for _, w := range c.want {
 			if !strings.Contains(c.got, w) {

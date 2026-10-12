@@ -890,6 +890,9 @@ func cmdBlocked(args []string, io IO) int {
 	if err := guard(io, &st, "not recorded", true); err != nil {
 		return refused(io, s, "blocked", err)
 	}
+	if hosted(io) && st.Mode == state.ModeRunning && !st.BoundaryOwed && !st.InHand() { // with a boundary owed, the next phase is the lead's
+		return refused(io, s, "blocked", refusal{"no phase in hand", decide.NoPhase("not recorded")})
+	}
 	work := checkWork(s, st.Current)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {

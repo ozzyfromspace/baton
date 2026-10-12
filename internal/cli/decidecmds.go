@@ -140,6 +140,8 @@ func cmdPropose(args []string, io IO) int {
 			return refusal{"checkpoint due", "not recorded — " + decide.CheckpointOnResume(st.Current) + " If the proposal still applies after the compaction, make it then."}
 		case pending != nil:
 			return refusal{"proposal pending", pendingRefusal(*pending)}
+		case !st.InHand():
+			return refusal{"no phase in hand", decide.NoPhase("not recorded")}
 		}
 		var err error
 		d, err = state.AddProposal(st, d, io.Now())

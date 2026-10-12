@@ -141,7 +141,8 @@ func RelayPaused(phase string) string {
 	return "baton: paused — the human is driving; the agent on " + phase + " waits for you, and /baton run asks you again"
 }
 
-// RelayAgain tells the human that /baton run puts the question of the agent on phase to them again.
+// RelayAgain tells the human, through the lead's model, which reads it first, that /baton run puts the
+// question of the agent on phase to them again: nothing of it is the model's.
 func RelayAgain(phase string) string {
-	return "baton: the agent on " + phase + " waits for you — baton asks you its question again"
+	return "baton: the agent on " + phase + " waits for the human, and baton's mod asks them its question again; nothing of it is yours to do"
 }

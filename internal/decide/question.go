@@ -69,6 +69,13 @@ var ProposalOptions = []Option{
 	{"Go ahead", "Do what you proposed"},
 }
 
+// NoPhase turns down a proposal or a block of the lead's (verb: "not recorded") while it holds no phase:
+// every phase left is a phase agent's, or waits on one or on a job, and what the plan says of a phase
+// agent's phase is that agent's to do, not the lead's.
+func NoPhase(verb string) string {
+	return verb + " — no phase is in hand here: every phase left is a phase agent's, or waits for one or for a job, and nothing of a phase agent's is yours to do. End your turn; baton wakes you when there is something to do."
+}
+
 // AskFirst says to put a proposal to the human before anything else: until it is, nothing moves.
 func AskFirst(id, question string) string {
 	return fmt.Sprintf("put your proposal %s to the human first: %s", id, Question{question, ProposalOptions}.Call())

@@ -232,12 +232,12 @@ func TestRunAsksAgainWhatWaitsForTheHuman(t *testing.T) {
 		state.IssueRelay(r, "baton: the agent on P1 is blocked: need the signing key.", 3, "inst", lead.now.Add(5*time.Minute), lead.now)
 		state.AnswerRelay(r, state.ByTimeout, "Wait for me", lead.now)
 	})
-	if out := lead.must("", "run"); strings.Contains(out, "asks you its question again") {
+	if out := lead.must("", "run"); strings.Contains(out, "asks them its question again") {
 		t.Fatalf("asked again before its answer was applied:\n%s", out)
 	}
 	lead.set(func(st *state.State) { st.Relay[0].Applied = lead.now })
 	out := lead.must("", "run")
-	if !strings.Contains(out, "baton: the agent on P1 waits for you — baton asks you its question again") {
+	if !strings.Contains(out, "baton: the agent on P1 waits for the human, and baton's mod asks them its question again; nothing of it is yours to do") {
 		t.Fatalf("run:\n%s", out)
 	}
 	if r := lead.state().Relay[0]; r.Answered != nil || !r.Issued.IsZero() || r.Question != "" {
@@ -253,7 +253,7 @@ func TestRunAsksAgainWhatWaitsForTheHuman(t *testing.T) {
 		r.Applied = lead.now
 	})
 	w.set(func(st *state.State) { state.Resume(st) })
-	if out := lead.must("", "run"); strings.Contains(out, "asks you its question again") {
+	if out := lead.must("", "run"); strings.Contains(out, "asks them its question again") {
 		t.Errorf("asked again once settled:\n%s", out)
 	}
 }

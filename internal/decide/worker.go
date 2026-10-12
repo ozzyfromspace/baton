@@ -89,7 +89,7 @@ func AgentHeld(phase string) string {
 // AgentAfresh tells the human that a fresh phase agent takes phase up, as they asked (why: what became of
 // the one before it).
 func AgentAfresh(phase, why string) string {
-	return fmt.Sprintf("baton: a fresh phase agent takes %s up, from its notes and in its worktree (%s)", phase, why)
+	return fmt.Sprintf("baton: a fresh phase agent takes %s up, from its notes and in its worktree (%s); nothing of it is yours to do", phase, why)
 }
 
 // AgentWaits is the notice that the phase agent on phase waits for the human to answer a dialog of tool's

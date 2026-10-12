@@ -123,6 +123,8 @@ func TestProposalRefusals(t *testing.T) {
 		{"paused", func(s *session) { s.set(func(x *state.State) { state.Pause(x) }) }, ok, "not running the plan (mode: paused)", "not running"},
 		{"compaction owed", func(s *session) { s.set(func(x *state.State) { x.CheckpointOwed = true }) }, ok, "must compact the context first", "compaction owed"},
 		{"review due", func(s *session) { s.set(func(x *state.State) { x.ReviewDue = "P0" }) }, ok, "before they review them", "review due"},
+		{"no phase in hand", func(s *session) { s.set(func(x *state.State) { x.Phases["P0"].Status = state.PhaseDone }) }, ok,
+			"no phase is in hand here: every phase left is a phase agent's, or waits for one or for a job, and nothing of a phase agent's is yours to do", "no phase in hand"},
 		{"one not yet asked", func(s *session) { s.must("", ok...) }, ok, "not recorded — put your proposal d1 to the human first: call the AskUserQuestion tool", "proposal pending"},
 		{"one asked", func(s *session) {
 			s.must("", ok...)
@@ -238,6 +240,20 @@ func TestBlockedNeedsWhatWasTried(t *testing.T) {
 		t.Fatalf("blocked %+v", b)
 	}
 	if !s.logged("blocked", map[string]any{"reason": "need the prod key", "tried": "the vault and .env"}) {
+		t.Errorf("events: %s", s.events())
+	}
+}
+
+// A lead that holds no phase cannot block the run: what the plan says of the phases left is their phase
+// agents' to do, or waits on them.
+func TestBlockedNeedsAPhaseInHand(t *testing.T) {
+	s := attached(t)
+	s.set(func(x *state.State) { x.Phases["P0"].Status = state.PhaseDone })
+	why := s.fails("blocked", "need", "the", "prod", "key", "--tried", "the vault")
+	if !strings.Contains(why, "no phase is in hand here") || s.state().Blocked != nil {
+		t.Fatalf("refusal %q; blocked %+v", why, s.state().Blocked)
+	}
+	if !s.logged("refused", map[string]any{"command": "blocked", "why": "no phase in hand"}) {
 		t.Errorf("events: %s", s.events())
 	}
 }
