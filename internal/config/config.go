@@ -60,8 +60,8 @@ type Config struct {
 	// "2m" by default, or "off" to leave it to Claude Code (BATON_FOREGROUND_MAX, which may go down to 1s).
 	// baton passes it to claude as CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, unless that is set already.
 	ForegroundMax string `json:"foreground_max,omitempty"`
-	// Workers is how many hidden worker sessions may work on other phases of a plan beside the visible one,
-	// each in a git worktree of its own: "auto" (the default) leaves it to the plan and the machine
+	// Workers is how many phase agents may work on other phases of a plan beside the lead session, each in a
+	// git worktree of its own: "auto" (the default) leaves it to the plan and the machine
 	// (AutoWorkers), and a number from 0 to 8 caps it; 0 runs one phase at a time (BATON_WORKERS). It is
 	// kept as written, and read by WorkerCount: a value of the wrong kind is reported there, and never
 	// loses the settings after it in the file.
