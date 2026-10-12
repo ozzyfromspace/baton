@@ -1,8 +1,9 @@
 # Workers you can see: phases as subagents of the lead
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
-one spike, [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (eight scenarios; its README has the table and the
-harness).
+two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
+scenarios) and [`spikes/32-phase-agents`](../../spikes/32-phase-agents) (what baton's design for it assumes; fourteen).
+Each spike's README has its table and harness.
 
 ## The question
 
@@ -73,6 +74,54 @@ baton still in control, deterministically and with no model judgment, and its re
 - **A workflow agent cannot wait.** Hooks reach workflow agents too, but a workflow agent's turn is its whole life:
   one whose command went to the background ended its turn "waiting…", and that was its result.
 
+## What spike 32 found
+
+- **Where the mod spawns from decides what it sees.** A module never sees the events that come from inside its own
+  calls: Claude Code's re-entry skip. Called from a hook, only that hook is skipped. Called from a timer, which runs
+  outside any event, the whole module is. So of an agent the mod spawned from a timer, as a command poll would, it
+  sees only its `turn.complete` and its reports to the lead: not its tool calls, its settings events or its
+  compactions. Spawned inside a hook (a command's, or the band's render), it sees all of them. But the only hook
+  baton could trigger is the render, and the band is not drawn while a dialog or `/tasks` is open.
+- **A message waits for the agent's next tool round.** Sent while the agent runs a command, while it compacts, or
+  while it is idle (which resumes it), it was delivered after the command, after the compaction, or at once. None
+  was lost. `$.session.send` and the SendMessage tool behave alike; the first is the second underneath, and the
+  lead's `PreToolUse` sees it.
+- **A compaction's proof is in the loop's own transcript.** Over four compactions, the lead's boundary was written
+  154–175 ms after `PostCompact`. An agent's goes to its own `subagents/agent-<id>.jsonl`, never the lead's, so a
+  rewake waiting for the lead's boundary did not wake the lead for an agent's compaction. The mod's `classic.*` hooks
+  can add a field the settings hooks receive. But the mod's view of the compaction events has no agent id either, so
+  it could name the loop only from its own bookkeeping, which two compactions at once would confuse.
+- **One rewake carries the brief after any compaction of the lead.** Registered for every trigger, waiting for the
+  boundary, it reached an idle lead at once and a lead mid-turn at its next tool round, and the model followed it.
+  It reaches the mod as a `task-notification`, the same kind as an agent's report.
+- **The human's keys and agents.**
+  - Esc and Ctrl-C in the lead abort the lead's turn alone. A rewind that restores the conversation fires no hook
+    and leaves agents alone. With no code changes, the rewind menu's second option is "Summarize from here", which
+    compacts.
+  - **`/clear` ends every agent.** It kills their running commands. Afterwards an idle agent cannot be resumed, and
+    one that was running finishes its turn (its hooks now with the new session's id) and cannot be messaged again.
+  - Esc in an agent's transcript view interrupts the agent: a later message resumes it, and it takes the
+    interruption for a rejection of its task. x on its row stops it, and every later message is refused ("was
+    stopped by the user … only start a new agent for it if the user explicitly asks"). Both end with `aborted` and
+    no `SubagentStop`. A message typed to an agent raises no hook; it waits for the agent's next tool round.
+- **baton's question beside other dialogs.** `$.ui.ask` opens during a lead turn without stopping it. Opened while a
+  permission prompt is up, its hooks fire at once, but it waits behind the prompt, and a key goes to the prompt in
+  front. **In 2.1.296 a permission prompt's third option is "Yes, and switch to auto mode"**: the 3 baton's host
+  types at a deadline approved the command and turned auto mode on.
+- **Errors.** Claude Code retries an overload and a lone bad request inside the agent's turn. A usage limit ends the
+  turn at once: `turn.complete` `error`, `StopFailure` with the agent's `agent_id` and `rate_limit`, status `failed`.
+  A message after the limit resumes it.
+- **Ending one.** `TaskStop` from the mod ends a running agent (`aborted`), and a later message would resume it.
+- **Claude Code's own forks of an agent**, about every 30 s while it runs, fire hooks with ids of their own, an empty
+  `agent_type` and the agent's worktree as `cwd`, once a `PreToolUse` that never ran.
+- **Reloads, failures, the store.** A saved mod file reloads the module: timers restart, `$.store` keeps its values,
+  running agents go on. A hook that throws lets its event through. `$.store` is one file per plugin, shared by every
+  session that loads it.
+- **An agent's context** is in its transcript's last assistant entry (within a tool result of the compaction's
+  count), and it compacts where the lead does.
+- **Four agents for 20 minutes:** 156 turns and 151 messages without a failure, 152 reports dropped before the
+  lead's model, and claude's memory flat (286–445 MB).
+
 ## What it means for baton
 
 The control baton needs exists, and none of it is model judgment. A mod in baton's plugin does what only something
@@ -99,6 +148,24 @@ whole: the steps of the plan (the phases that may run at once), each phase's sta
 Unchanged: the plan and its graph, lanes and jobs, the merge queue and its rules, decisions and escalation, and the
 lead hosted in baton's PTY (crash recovery, the passthrough).
 
+### What spike 32 changes
+
+- **The mod spawns from its poll timer** and reports what it sees from there: each agent's turns, its reports to the
+  lead (which it drops), and the lead's own compactions. It needs no more.
+- **An agent's compaction is proven by its own transcript.** A new boundary in `subagents/agent-<id>.jsonl` is that
+  agent's and no one else's, as one in the lead's transcript is the lead's. The stamp is not used.
+- **Every delivery to an agent is a message, whenever it is due:** Claude Code holds it for the agent's next tool
+  round, so nothing waits for an agent's compaction.
+- **The host never types 3, or any option's key, into a dialog.** A phase agent's permission prompt now shows in the
+  lead's terminal beside baton's own question, so v0.8 settles a question's deadline without typing into it.
+- **`/clear` ends every phase agent.** baton starts each unfinished phase again, in its worktree, from its notes, and
+  links agents by id, not by session.
+- **An interrupted agent** (`aborted`) gets one message to go on, saying the phase continues. If Claude Code refuses
+  it as stopped by the user, the phase is the human's: baton sets it aside and says so.
+- **Hook events from Claude Code's forks of an agent** (an id baton did not spawn, in that agent's worktree) change
+  nothing, and never count for the lead.
+- **`$.store` is shared by every session**, so the mod keys what it keeps there by run.
+
 ### Why not workflows
 
 Workflows give the view the human asked for (groups of agents that run at once, then the ones after them), but not
@@ -110,12 +177,11 @@ which a mod may not make. baton can draw the same grouping in its own band or pa
 
 - **A mod is JavaScript that Claude Code runs.** baton's rule is no runtime dependencies for users: one static
   binary. A mod adds none (Claude Code is the runtime, as it is for the skill), but it is code baton ships in
-  another language, and an organization can turn user mods off (`allowManagedModsOnly`), where baton would need the
-  hidden-session workers still.
-- **Compaction hooks without `agent_id`.** baton must not take a phase agent's compaction for the lead's. The mod
-  knows; the settings hooks would need its word, or the `prompt_id` test. Worth reporting to Claude Code.
-- **Not yet seen:** how the agent panel, `/tasks` and baton's own pane look to a person (the spike's screens did not
-  render cleanly), typing into a phase agent's transcript, a usage limit in a background agent, many agents for
-  hours, and how a rewind or `/clear` in the lead treats its agents.
+  another language. The human accepted it on 2026-10-12. Where an organization turns user mods off
+  (`allowManagedModsOnly`), baton runs the plan serially in the lead.
+- **Compaction hooks without `agent_id`.** Answered for baton by the transcripts (spike 32), but worth reporting to
+  Claude Code: a settings hook cannot tell whose compaction it is.
+- **A deadline on baton's question** with no key typed: P4 of v0.8 decides how.
+- **Not yet seen:** phases that run for hours, and a real usage limit (spike 32 injected one).
 - **One process.** Every phase agent lives in the lead's claude: one crash takes them all down (and v0.7 brings them
   back), and they share its memory and its rate limits.
