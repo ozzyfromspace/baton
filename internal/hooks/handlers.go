@@ -246,6 +246,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		if baton, verdict := batonShell(str(ti, "command")); baton {
 			switch verdict {
 			case shellSimple:
+				if words, ok := asWords(str(ti, "command")); ok && str(c.Input, "agent_type") == state.PhaseAgent {
+					return h.gateAsWords(c, ti, words), nil
+				}
 				return permission("allow", "baton's own CLI"), nil
 			case shellSubstitution:
 				return permission("deny", NudgePrefix+" The shell would rewrite part of this baton command: backticks, $( ) and $NAME inside double quotes run as commands or expand. "+
@@ -528,6 +531,23 @@ func (h *handlers) steersAgent(c Context) (*state.Store, string) {
 		}
 	}
 	return nil, ""
+}
+
+// gateAsWords lets a phase agent's `baton verify` or `baton await` through with its gate given as words
+// (asWords: Claude Code's isolation guard, which reads the command after this hook, refuses the gate as one
+// quoted text), the rest of its input as it was, and logs the change in the agent's sub-run.
+func (h *handlers) gateAsWords(c Context, ti map[string]any, words string) Result {
+	in := map[string]any{}
+	for k, v := range ti {
+		in[k] = v
+	}
+	in["command"] = words
+	if s, err := h.d.Open(c); err == nil && s != nil {
+		s.Event("gate_as_words", map[string]any{"from": str(ti, "command"), "to": words})
+	}
+	r := permission("allow", "baton's own CLI, its gate given as words")
+	r.Output["hookSpecificOutput"].(map[string]any)["updatedInput"] = in
+	return r
 }
 
 // modCall reports a call baton's mod made in the lead's session (its tool_use_id says a plugin made it) to

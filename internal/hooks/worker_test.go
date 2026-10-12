@@ -643,3 +643,27 @@ func TestAPhaseAgentIsBriefedAgainAfterItsCompaction(t *testing.T) {
 		t.Errorf("events:\n%s", w.eventLog())
 	}
 }
+
+// A phase agent's gate given as one quoted text goes through as words after --, before Claude Code's
+// isolation guard reads it: nothing depends on how the agent wrote it. The rest of its input stays, and
+// the change is logged in its sub-run. The lead, not isolated, runs its command as written.
+func TestAPhaseAgentsGateIsGivenAsWords(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	fire := func(f *fixture) map[string]any {
+		out := f.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_use_id": "toolu_7",
+			"tool_input": map[string]any{"command": `baton verify 'sh check.sh' --notes 'committed'`, "description": "hand the gate over", "timeout": 60000}})
+		hso, _ := out["hookSpecificOutput"].(map[string]any)
+		return hso
+	}
+	hso := fire(w)
+	in, _ := hso["updatedInput"].(map[string]any)
+	if hso["permissionDecision"] != "allow" || in["command"] != `baton verify --notes committed -- sh check.sh` || in["description"] != "hand the gate over" || in["timeout"] != float64(60000) {
+		t.Errorf("a phase agent's gate: %v", hso)
+	}
+	if !w.logged("gate_as_words", map[string]any{"from": `baton verify 'sh check.sh' --notes 'committed'`, "to": `baton verify --notes committed -- sh check.sh`}) {
+		t.Errorf("events:\n%s", w.eventLog())
+	}
+	if hso := fire(lead); hso["permissionDecision"] != "allow" || hso["updatedInput"] != nil {
+		t.Errorf("the lead's gate: %v", hso)
+	}
+}

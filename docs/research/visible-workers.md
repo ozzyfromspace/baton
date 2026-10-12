@@ -152,8 +152,10 @@ Real phase agents on Claude Code 2.1.296 with Haiku, in baton's own e2e scenario
   a worktree, a Bash command whose argument is several words starting with a shell or git (`baton await 'sh
   hold.sh'`, `baton verify 'bash x.sh'`) is refused as "cannot be shown not to be git", after `PreToolUse`, as a
   `PostToolUseFailure`. The same command as words after `--` runs (`baton verify --notes '…' -- sh hold.sh`, also
-  `-- sh -c '…'`), and so does a quoted command that starts with anything else (`'make test'`). A phase agent
-  hands baton its gates that way.
+  `-- sh -c '…'`), and so does a quoted command that starts with anything else (`'make test'`). The guard reads
+  the command as a `PreToolUse` hook rewrote it (`updatedInput`): baton's own hook gives a phase agent's quoted
+  gate as words there, so nothing depends on how the agent writes it. A gate that names git is refused in either
+  form.
 - **An agent of a type the session does not offer cannot be resumed.** A message to a completed `baton:phase`
   agent failed ("Agent type 'baton:phase' is not offered in this session") while the mod hid the type
   (`agent.offer` → `isOffered: false`); spike 32's agents resumed because their type was offered. The type stays

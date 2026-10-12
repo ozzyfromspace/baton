@@ -634,7 +634,8 @@ func TestAPhaseAgentsPermissionPromptNeedsTheHuman(t *testing.T) {
 }
 
 // agentGatePlan: the phase agent's P1 commits, then waits on hold.sh, which the test releases; meanwhile the
-// lead finishes P0 and goes on to P2, after a compaction.
+// lead finishes P0 and goes on to P2, after a compaction. The wait is given as one quoted text, the form
+// Claude Code's isolation guard refuses, which baton rewrites.
 const agentGatePlan = `# Gate plan
 
 ## P0 — Say zero
@@ -646,7 +647,7 @@ Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand baton this wait, exactly: baton await --notes 'one.txt committed; report P1 done once the wait ends' -- sh hold.sh
+2. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
 3. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 
@@ -668,6 +669,11 @@ func TestAGateWakesAnIdlePhaseAgent(t *testing.T) {
 
 	if !s.Until("the phase agent's wait to start", 5*time.Minute, func() bool { return first(s.WorkerEvents("P1"), is("job_started")) >= 0 }) {
 		t.Fatalf("the phase agent never handed baton its wait:\n%s", eventLog(s))
+	}
+	// The plan gives the wait as one quoted text, which Claude Code's isolation guard refuses: baton gave
+	// it as words before the guard read it.
+	if first(s.WorkerEvents("P1"), is("gate_as_words", "to", "baton await --notes 'one.txt committed; report P1 done once the wait ends' -- sh hold.sh")) < 0 {
+		t.Errorf("the wait was not given as words:\n%s", eventLog(s))
 	}
 	if !s.Until("the lead to start P2", 5*time.Minute, func() bool { return first(s.Events(), is("phase_started", "phase", "P2")) >= 0 }) {
 		t.Fatalf("the lead never went on to P2:\n%s", eventLog(s))
