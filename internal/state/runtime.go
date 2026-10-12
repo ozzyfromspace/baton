@@ -103,6 +103,12 @@ type Runtime struct {
 	// turn has seen whether the prompt goes on from there: one that does not came after a rewind
 	// (docs/research/recovery.md).
 	Mark *Mark `json:"mark,omitempty"`
+	// Recoveries are the recent times the host brought the lead back after its claude exited by itself
+	// mid-plan, oldest first; the host forgets the old ones, and counts these against its cap. FreshFor
+	// is the phase it last started a fresh session for ("" for none in hand), when the conversation could
+	// not be resumed: once per phase. nil: none yet.
+	Recoveries []Recovery `json:"recoveries,omitempty"`
+	FreshFor   *string    `json:"fresh_for,omitempty"`
 }
 
 // Mark is where a session's transcript stood when a prompt was submitted (transcript.Mark): the file, its
@@ -111,6 +117,26 @@ type Mark struct {
 	Path   string `json:"path"`
 	Offset int64  `json:"offset"`
 	Leaf   string `json:"leaf"`
+}
+
+// Recovery is one time the host brought the lead back after its claude exited by itself mid-plan
+// (docs/research/recovery.md): it resumed the conversation, or, when that could not be done, started a
+// fresh session from the phase's brief.
+type Recovery struct {
+	At    time.Time `json:"at"`
+	Why   string    `json:"why"` // "claude exited with code 137"
+	Fresh bool      `json:"fresh,omitempty"`
+	// Told: the session it brought back has been told, once (the resumed model woken, the fresh one briefed).
+	Told bool `json:"told,omitempty"`
+}
+
+// Recovering is the latest recovery, if it is of the kind fresh says and the session it brought back has
+// not been told of it yet; nil otherwise.
+func (r *Runtime) Recovering(fresh bool) *Recovery {
+	if n := len(r.Recoveries); n > 0 && r.Recoveries[n-1].Fresh == fresh && !r.Recoveries[n-1].Told {
+		return &r.Recoveries[n-1]
+	}
+	return nil
 }
 
 // Restart is a host restarting its session on another version of baton (package upgrade).
@@ -347,6 +373,11 @@ type Approval struct {
 type Ended struct {
 	Reason string    `json:"reason"`
 	At     time.Time `json:"at"`
+}
+
+// Deliberate reports a session the human chose to end: /exit, /clear, /logout (SessionEnd's reasons).
+func (e *Ended) Deliberate() bool {
+	return e != nil && (e.Reason == "prompt_input_exit" || e.Reason == "clear" || e.Reason == "logout")
 }
 
 // Progress records that the plan moved or the human took part: escalations about the run standing

@@ -116,6 +116,52 @@ func TestARunHasOneDriver(t *testing.T) {
 	}
 }
 
+// A fresh session the host starts for a run whose conversation could not be resumed is linked to that
+// run first, under the project's lock: its first hook binds the run, not a new one of its own.
+func TestALinkedSessionBindsItsRun(t *testing.T) {
+	p, _ := newProject(t)
+	run := bind(t, p, Binding{Session: "crashed", Instance: "host-1"})
+	p.Unbind("host-1") // the host that ran it execs a new one
+	linked := make(chan error, 1)
+	p.withLock(func() error {
+		go func() { linked <- p.Link("fresh", "crashed") }()
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case err := <-linked:
+			t.Errorf("linked while the project was locked (%v)", err)
+		default:
+		}
+		return nil
+	})
+	if err := <-linked; err != nil {
+		t.Fatal(err)
+	}
+	if p.RunOf("fresh") != "crashed" {
+		t.Fatalf("the fresh session belongs to %q", p.RunOf("fresh"))
+	}
+	if s := bind(t, p, Binding{Session: "fresh", Instance: "host-2"}); s.Dir != run.Dir || ownerOf(t, run) != "host-2" || p.HostRun("host-2") != "crashed" {
+		t.Fatalf("the fresh session bound %s (owner %q, host's run %q), want %s", s.Dir, ownerOf(t, run), p.HostRun("host-2"), run.Dir)
+	}
+	if err := p.Link("fresh", "crashed"); err != nil {
+		t.Errorf("linking it again: %v", err)
+	}
+
+	bind(t, p, Binding{Session: "other", Instance: "host-3"})
+	for _, tc := range []struct{ name, session, run string }{
+		{"a run that does not exist", "new", "gone"},
+		{"a session of another run", "fresh", "other"},
+		{"a worker's sub-run", "new", "crashed/P3"},
+		{"no session", "", "crashed"},
+	} {
+		if err := p.Link(tc.session, tc.run); err == nil {
+			t.Errorf("%s: linked", tc.name)
+		}
+	}
+	if p.RunOf("new") != "" || p.RunOf("fresh") != "crashed" {
+		t.Errorf("a failed link changed the links: %q %q", p.RunOf("new"), p.RunOf("fresh"))
+	}
+}
+
 func TestAPlanAttachedFromAShellGoesToTheNextSession(t *testing.T) {
 	p, _ := newProject(t)
 	pend, err := p.Pending("")

@@ -91,8 +91,8 @@ func (l Launch) args(session string, resume bool, prompt string) []string {
 
 // env is the environment of worker e's session, a worker of run in the project whose .baton is dir and
 // whose checkout is checkout. Nothing in it names the lead's session or terminal (BATON_TTY,
-// BATON_PENDING), and it has no PWD: claude would take an inherited one for its working directory, the
-// checkout's, instead of the worktree's.
+// BATON_PENDING, BATON_RECOVER), and it has no PWD: claude would take an inherited one for its working
+// directory, the checkout's, instead of the worktree's.
 func (l Launch) env(e state.Worker, run, dir, checkout string) []string {
 	var env []string
 	for _, kv := range l.Env {
@@ -102,7 +102,7 @@ func (l Launch) env(e state.Worker, run, dir, checkout string) []string {
 	}
 	for _, kv := range l.BatonEnv {
 		switch k, _, _ := strings.Cut(kv, "="); k {
-		case "BATON_TTY", "BATON_PENDING", "BATON_HOST", "BATON_INSTANCE", "BATON_BIN", "BATON_VERSION", "BATON_DIR",
+		case "BATON_TTY", "BATON_PENDING", "BATON_RECOVER", "BATON_HOST", "BATON_INSTANCE", "BATON_BIN", "BATON_VERSION", "BATON_DIR",
 			"BATON_ROLE", "BATON_PHASE", "BATON_RUN", "BATON_WORKTREE", "BATON_CHECKOUT":
 		default:
 			env = append(env, kv)

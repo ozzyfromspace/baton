@@ -409,12 +409,25 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	var havePlan bool
 	var events []event
 	var restarted *state.Restart
-	var ann string
+	var fresh *state.Recovery
+	var ann, cleared string
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.Ended = nil
 		ann = announced(st)
 		if source == "startup" || source == "resume" {
 			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
+			if e := st.Run.Escalation; e != nil && e.Kind == "crashed" {
+				// claude runs again: the human resumed the session baton stopped bringing back.
+				st.Run.Escalation, cleared = nil, e.Kind
+			}
+		}
+		if source == "startup" && c.Env("BATON_RECOVER") != "" && s.Worker() == "" {
+			// The fresh session its host started, as the conversation could not be resumed: it is briefed, once.
+			if r := st.Run.Recovering(true); r != nil {
+				r.Told = true
+				rec := *r
+				fresh = &rec
+			}
 		}
 		// A new conversation (or one /clear started over) has nothing before its first turn; a resumed or
 		// compacted one has.
@@ -452,6 +465,12 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
 	}
+	if cleared != "" {
+		s.Event("escalation_cleared", map[string]any{"type": cleared})
+	}
+	if fresh != nil {
+		s.Event("lead_fresh", map[string]any{"why": fresh.Why, "phase": st.Current, "session": str(c.Input, "session_id")})
+	}
 	note := ""
 	if restarted != nil {
 		running := c.Env("BATON_VERSION")
@@ -474,6 +493,9 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	if !havePlan {
 		return Result{Output: map[string]any{"systemMessage": lines(ann, note+"baton: hosting this session (no plan attached — /baton plan or /baton run)")}}, nil
 	}
+	if fresh != nil && st.InHand() {
+		return h.freshStart(c, s, pl, st, lines(ann, note+"baton: hosting · "+progressLine(pl, st))), nil
+	}
 	if source == "clear" && st.InHand() {
 		return h.freshStart(c, s, pl, st, lines(ann, "baton: conversation cleared — "+phaseTitle(pl, st.Current)+" goes on, with its brief")), nil
 	}
@@ -490,11 +512,21 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 // SessionStart; a record older than that belongs to a restart that never happened.
 const restartWindow = 10 * time.Minute
 
-// sessionStartRewake runs in the background when a session resumes. After an elevation it wakes the model
-// with what it was about to do (BATON_PENDING, set by the relaunch), exactly once.
+// sessionStartRewake runs in the background when a session resumes. In a conversation its host resumed
+// after claude exited by itself mid-plan (BATON_RECOVER), it wakes the model to go on (recovered). After an
+// elevation it wakes the model with what it was about to do (BATON_PENDING, set by the relaunch). Either,
+// exactly once.
 func (h *handlers) sessionStartRewake(c Context) (Result, error) {
+	if str(c.Input, "source") != "resume" {
+		return Result{}, nil
+	}
+	if c.Env("BATON_RECOVER") != "" {
+		if r, done, err := h.recovered(c); done || err != nil {
+			return r, err
+		}
+	}
 	pending := strings.TrimSpace(c.Env("BATON_PENDING"))
-	if pending == "" || str(c.Input, "source") != "resume" {
+	if pending == "" {
 		return Result{}, nil
 	}
 	deliver := false
@@ -509,6 +541,32 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 	}
 	s.Event("pending_delivered", map[string]any{"pending": pending})
 	return Result{Rewake: NudgePrefix + " This session is now hosted by baton (same conversation). Continue with: " + pending}, nil
+}
+
+// recovered wakes the model of a conversation its host resumed after claude exited by itself mid-plan,
+// once: the turn under way was lost, and the phase in hand goes on (decide.Words.Recovered). With no
+// phase in hand nothing is to go on, and the host drives the run as before (a boundary's compaction, …).
+// done says the resume was handled.
+func (h *handlers) recovered(c Context) (res Result, done bool, err error) {
+	var r state.Recovery
+	phase := ""
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		if rec := st.Run.Recovering(false); rec != nil && s.Worker() == "" {
+			rec.Told, r = true, *rec
+			if st.InHand() {
+				phase = st.Current
+			}
+		}
+		return nil
+	})
+	if err != nil || r.At.IsZero() {
+		return Result{}, false, ok(err)
+	}
+	s.Event("lead_resumed", map[string]any{"why": r.Why, "phase": phase, "woken": phase != ""})
+	if phase == "" {
+		return Result{}, true, nil
+	}
+	return Result{Rewake: words(c, s).Recovered(phase, r.Why, false)}, true, nil
 }
 
 // Primer tells the model, at the start of a hosted session, how baton expects it to report progress, and
@@ -655,7 +713,7 @@ func (h *handlers) sessionEnd(c Context) (Result, error) {
 			st.Run.ClearedPlan = &state.Approval{File: st.Run.PlanFile, At: c.Now}
 		}
 		// A restart resumes the session, and the host ends and resumes its workers itself.
-		if st.Mode == state.ModeRunning && !deliberateEnd[reason] && st.Run.Restart == nil && s.Worker() == "" {
+		if st.Mode == state.ModeRunning && !st.Run.Ended.Deliberate() && st.Run.Restart == nil && s.Worker() == "" {
 			notice(st, "session_ended", "the session ended mid-plan ("+reason+")", c.Now)
 		}
 		return nil
@@ -675,9 +733,6 @@ func planOnScreen(st *state.State) bool {
 	}
 	return false
 }
-
-// deliberateEnd are session-end reasons that mean the human chose to end the session.
-var deliberateEnd = map[string]bool{"prompt_input_exit": true, "clear": true, "logout": true}
 
 // TurnSource classifies a submitted prompt: a rewake or nudge from baton, another task notification,
 // or the human.

@@ -321,6 +321,25 @@ func (p *Project) carryWorker(session, ref, instance string) (*Store, error) {
 	return s, err
 }
 
+// Link links session to run, a run of its own, so that the session's first hook binds it (Bind finds it
+// by RunOf) rather than a new run named after it: the host starts a fresh session, under an id it chose,
+// for a run whose conversation could not be resumed. It fails for a run that does not exist, and for a
+// session that belongs to another run.
+func (p *Project) Link(session, run string) error {
+	if !validID(session) || isWorker(run) {
+		return fmt.Errorf("cannot link session %q to run %q", session, run)
+	}
+	return p.withLock(func() error {
+		if !p.runExists(run) {
+			return fmt.Errorf("no run %q here", run)
+		}
+		if cur := p.RunOf(session); cur != "" && cur != run {
+			return fmt.Errorf("session %s belongs to run %s", session, cur)
+		}
+		return p.writeLink(run, sessionsDir, session)
+	})
+}
+
 // Lookup returns the run session (or else the host instance) belongs to, without binding anything.
 func (p *Project) Lookup(session, instance string) (*Store, bool) {
 	id := p.RunOf(session)

@@ -197,21 +197,37 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 				return s, nil
 			}}
 	}
+	leadEnv := slices.Clip(batonEnv)
+	if why := io.Env("BATON_RECOVER"); why != "" {
+		leadEnv = append(leadEnv, "BATON_RECOVER="+why) // this host brings the lead back: its session says so, once
+	}
 	sv = host.NewSupervisor(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
-		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
+		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator, ViewSocket: host.ViewSocket(instance),
 	})
+	started := io.Now()
 	exit, err := sv.Run()
 	code := exit.Code
-	if to, session, ok := controller.Restart(); ok && err == nil {
+	to, resumed, restarting := controller.Restart()
+	if restarting && err == nil {
 		// The workers' jobs go on, as the lead's do: the restarted host watches them, and resumes the workers.
 		for _, w := range coordinator.Ended("baton restarted on baton " + to) {
 			proj.Unbind(w.Instance)
 		}
 		host.Release(proj, instance)
 		controller.Flush()
-		return restartOn(io, to, session, args, logf)
+		return restartOn(io, to, resumed, args, logf)
+	}
+	stop := "" // set when baton stops bringing the lead back: the escalation
+	if err == nil {
+		// claude exited by itself mid-plan: the lead comes back, unless baton has brought it back often enough.
+		x := leadExit{Exit: exit, Restart: restarting, Recovering: io.Env("BATON_RECOVER"), CanExec: upgrade.CanRestart}
+		rc, handled, why := recoverLead(io, proj, instance, exe, args, x, started, coordinator, controller, logf)
+		if handled {
+			return rc
+		}
+		stop = why
 	}
 	defer host.Release(proj, instance)
 	// The workers ended with the lead: the next host for the run resumes them, and nothing would see
@@ -233,11 +249,21 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	if st, ok := proj.Lookup("", instance); ok && code != 0 && code != 130 && code != 143 { // not a deliberate Ctrl-C or termination
 		st.Update(func(s *state.State) error {
-			if s.Mode == state.ModeRunning && s.Run.Ended == nil {
-				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: fmt.Sprintf("claude exited with code %d mid-plan", code), At: io.Now()})
+			now := io.Now()
+			switch {
+			case stop != "":
+				// It has been brought back as often as it may be: the human resumes it.
+				s.Run.Notices = slices.DeleteFunc(s.Run.Notices, func(n state.Notice) bool { return n.Kind == "session_ended" })
+				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: stop, At: now})
+				s.Run.Escalation = &state.Escalation{Kind: "crashed", Reason: stop, Since: now, Watchdog: true, Pushed: true, LastPush: now}
+			case s.Mode == state.ModeRunning && s.Run.Ended == nil:
+				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: fmt.Sprintf("claude exited with code %d mid-plan", code), At: now})
 			}
 			return nil
 		})
+		if stop != "" {
+			st.Event("escalated", map[string]any{"type": "crashed", "reason": stop})
+		}
 	}
 	controller.Flush()
 	return code
@@ -274,7 +300,7 @@ func backgroundAfter(env []string, d time.Duration) []string {
 // after trying to resume the session on this binary instead (which then leaves `to` alone).
 func restartOn(io IO, to, session string, args []string, logf func(string, ...any)) int {
 	argv := append(append([]string{"baton"}, elevate.KeepUserArgs(args)...), "--resume", session)
-	env := os.Environ()
+	env := withoutVar(os.Environ(), "BATON_RECOVER") // the restarted session is not one baton brought back
 	path := upgrade.Bin(batonRoot(io), to)
 	v, err := upgrade.Probe(path)
 	if err == nil && v != to {
