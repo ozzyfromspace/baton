@@ -249,11 +249,11 @@ const MaxErrorRetries = 6
 func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state.StopError) {
 	if !transientErrors[e.Error] {
 		if esc := st.Run.Escalation; esc == nil || esc.Kind != "api_error" {
-			reason := fmt.Sprintf("the last turn failed with an API error baton cannot retry away (%s)", e.Error)
+			why := fmt.Sprintf("the last turn failed with an API error baton cannot retry away (%s)", e.Error)
 			if e.Details != "" {
-				reason += ": " + e.Details
+				why += ": " + e.Details
 			}
-			l.escalate("api_error", reason)
+			l.escalate("api_error", decide.CannotGoOn(st.Current, why, l.waitingOn(st), l.Workers))
 		}
 		return
 	}
@@ -286,6 +286,25 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 	l.errNudged = v.Now
 	l.Store.Event("error_retry", map[string]any{"error": e.Error, "retry": l.errRetries})
 	in.Type(fmt.Sprintf("[baton] The last turn ended with an API error (%s). Continue %s.", e.Error, st.Current), true)
+}
+
+// waitingOn is the phases left that need the lead's phase, directly or not: they cannot start while it
+// is stopped.
+func (l *Loop) waitingOn(st state.State) []string {
+	if st.Current == "" {
+		return nil
+	}
+	pl, err := l.Store.LoadPlan()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, id := range pl.Descendants(st.Current) {
+		if ps := st.Phases[id]; ps == nil || ps.Status != state.PhaseDone {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func latest(ts ...time.Time) time.Time {

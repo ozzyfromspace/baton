@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -205,11 +206,33 @@ func TestPermanentAPIErrorsAreReportedNotRetried(t *testing.T) {
 	if len(r.in.text) != 0 {
 		t.Fatalf("retried a permanent error: %q", r.in.text)
 	}
-	if e := r.state().Run.Escalation; e == nil || e.Kind != "api_error" || !strings.Contains(e.Reason, "please run /login") {
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "api_error" || !strings.Contains(e.Reason, "please run /login") ||
+		!strings.Contains(e.Reason, "Only you can decide how P1 goes on; nothing else runs until then") {
 		t.Fatalf("escalation %+v", e)
 	}
 	if r.push.kinds[0] != "api_error" {
 		t.Fatalf("pushes %v", r.push.kinds)
+	}
+}
+
+// With workers, the escalation for an error baton cannot retry says what goes on without the lead, and
+// which phases wait for its phase.
+func TestPermanentAPIErrorSaysWhatWaits(t *testing.T) {
+	r := newIdleRig(t)
+	r.ctl, r.loop.Workers = r.loop, true // the lead's Loop, as a coordinator with a fleet ticks it
+	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "a"}, {ID: "P1", Title: "b"},
+		{ID: "P2", Title: "c", After: []string{"P1"}}, {ID: "P3", Title: "d", After: []string{"P0"}}, {ID: "P4", Title: "e", After: []string{"P2"}}}}
+	if err := r.loop.Store.SavePlan(pl); err != nil {
+		t.Fatal(err)
+	}
+	r.set(func(st *state.State) {
+		st.Run.LastError = &state.StopError{Error: "invalid_request", At: r.now}
+	})
+	r.tick(10 * time.Second)
+	want := "P1 stopped: the last turn failed with an API error baton cannot retry away (invalid_request). Only you can decide how P1 goes on; " +
+		"meanwhile workers carry on with every phase that does not need P1. P2 and P4 wait for it."
+	if e := r.state().Run.Escalation; e == nil || e.Reason != want {
+		t.Fatalf("escalation %+v", e)
 	}
 }
 

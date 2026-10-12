@@ -184,6 +184,18 @@ func (p Plan) Ancestors(id string) []string {
 	return out
 }
 
+// Descendants returns every phase that waits for phase id, directly or through another, in document
+// order: everything that cannot start until id is done.
+func (p Plan) Descendants(id string) []string {
+	var out []string
+	for _, ph := range p.Phases {
+		if slices.Contains(p.Ancestors(ph.ID), id) {
+			out = append(out, ph.ID)
+		}
+	}
+	return out
+}
+
 // Dependents returns the phases that wait for phase id, in document order.
 func (p Plan) Dependents(id string) []string {
 	var out []string

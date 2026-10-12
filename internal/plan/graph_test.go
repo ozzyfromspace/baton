@@ -242,6 +242,26 @@ func TestAncestors(t *testing.T) {
 	}
 }
 
+func TestDescendants(t *testing.T) {
+	none := []string{}
+	for _, c := range []struct {
+		name string
+		p    Plan
+		id   string
+		want string
+	}{
+		{"a chain", graph(nil, nil, nil, nil), "P1", "P2 P3"},
+		{"a diamond", graph(none, []string{"P0"}, []string{"P0"}, []string{"P1", "P2"}), "P1", "P3"},
+		{"one branch of two", graph(none, none, []string{"P1"}, []string{"P0"}, []string{"P2"}), "P1", "P2 P4"},
+		{"the last phase", graph(nil, nil), "P1", ""},
+		{"an unknown phase", graph(none), "P9", ""},
+	} {
+		if got := strings.Join(c.p.Descendants(c.id), " "); got != c.want {
+			t.Errorf("%s: Descendants(%s) = %q, want %q", c.name, c.id, got, c.want)
+		}
+	}
+}
+
 func TestLongestChain(t *testing.T) {
 	none := []string{}
 	for _, c := range []struct {
