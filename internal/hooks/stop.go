@@ -193,7 +193,11 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 	case st.CheckpointOwed:
 		queueCompaction(st, "checkpoint", now)
 		st.Run.StopBlocks = 0
-		d.say(fmt.Sprintf("baton: checkpoint → compacting, then %s continues", cur))
+		if w.Worker {
+			d.say(fmt.Sprintf("baton: the agent on %s checkpointed → a fresh agent continues it from its notes", st.Current))
+		} else {
+			d.say(fmt.Sprintf("baton: checkpoint → compacting, then %s continues", cur))
+		}
 		d.emit("compact_queued", map[string]any{"reason": "checkpoint", "epoch": st.Run.Compaction.Epoch})
 	case st.CheckpointDue:
 		// The human resumed the run after the conversation grew while it was paused, and the model stopped

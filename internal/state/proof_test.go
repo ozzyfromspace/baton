@@ -239,3 +239,123 @@ func TestTheModsReport(t *testing.T) {
 		t.Error("a later compaction's report was dropped")
 	}
 }
+
+// agentBoundary is a compact boundary as Claude Code writes it to a phase agent's own transcript, every
+// entry of which is a sidechain's.
+func agentBoundary(id string, at time.Time) string {
+	return fmt.Sprintf(`{"isSidechain":true,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","postTokens":9000},"uuid":%q,"timestamp":%q}`+"\n",
+		id, at.UTC().Format(time.RFC3339Nano))
+}
+
+const agentLine = `{"isSidechain":true,"type":"user","uuid":"u1"}` + "\n"
+
+// checkpointing is a phase's sub-run whose agent a1 checkpointed and stopped: its stop queued the
+// compaction a checkpoint owes, which nothing types into an agent.
+func checkpointing(t *testing.T, path string) State {
+	st := New()
+	st.Mode, st.Current = ModeRunning, "P2"
+	st.Phases["P2"] = &PhaseState{Status: PhaseWorking}
+	st.Run.Briefed, st.Run.Transcript, st.Run.Proven = "a1", path, &Mark{Path: path, Offset: int64(len(agentLine))}
+	if err := SetCheckpoint(&st); err != nil {
+		t.Fatal(err)
+	}
+	st.Run.Compaction = Compaction{Status: CompactQueued, Reason: "checkpoint", Epoch: 1}
+	st.Run.Context = &ContextUse{Tokens: 150_000, WindowSize: 200_000}
+	st.Run.ContextNudged = true
+	return st
+}
+
+// A phase agent's compaction is proven only by a boundary in its own transcript, past its sub-run's mark,
+// and counts for the agent briefed there alone; the lead's proofs move nothing in a sub-run, and an
+// agent's nothing of the lead's.
+func TestAPhaseAgentsCompactionIsProvenInItsOwnTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-a1.jsonl")
+	os.WriteFile(path, []byte(agentLine+agentBoundary("b1", t0)), 0o644)
+	lead := filepath.Join(t.TempDir(), "sess.jsonl")
+	os.WriteFile(lead, []byte(userLine+boundaryLine("b2", "auto", t0)), 0o644)
+
+	st := checkpointing(t, path)
+	p, _, ok := AgentBoundary(st, 0)
+	if !ok {
+		t.Fatal("no proof in the agent's own transcript")
+	}
+	for _, c := range []struct {
+		name string
+		mut  func(st *State)
+	}{
+		{"another agent briefed now", func(st *State) { st.Run.Briefed = "a2" }},
+		{"a mark past it", func(st *State) { st.Run.Proven = &Mark{Path: path, Offset: 1 << 10} }},
+		{"a mark in another transcript", func(st *State) { st.Run.Proven = &Mark{Path: lead} }},
+	} {
+		x := checkpointing(t, path)
+		c.mut(&x)
+		if _, ok := AgentCompacted(&x, p, t0); ok || !x.CheckpointOwed {
+			t.Errorf("%s: counted", c.name)
+		}
+	}
+	// The lead's proofs, and a new agent's, are not a compaction of this agent's conversation.
+	leadProof, _, _ := Boundary(lead, &Mark{Path: lead}, 0)
+	for name, q := range map[string]Proof{"the lead's boundary": leadProof, "the mod's report": Reported(true, "auto", t0), "a new agent": Started("a1", t0)} {
+		x := checkpointing(t, path)
+		if _, ok := AgentCompacted(&x, q, t0); ok || !x.CheckpointOwed || x.Run.Compaction.Status != CompactQueued {
+			t.Errorf("%s: counted for the agent", name)
+		}
+	}
+	// And an agent's proofs move nothing of the lead's.
+	for name, q := range map[string]Proof{"its boundary": p, "a new agent": Started("a1", t0)} {
+		x := underway(t)
+		before := x.Run.Compaction
+		if Report(&x, q, t0) {
+			t.Errorf("%s: reported for the lead", name)
+		}
+		if _, ok := Compacted(&x, q, t0, Origin{}); ok || x.Run.Compaction != before {
+			t.Errorf("%s: counted for the lead", name)
+		}
+	}
+	if _, _, ok := AgentBoundary(State{Run: Runtime{Briefed: "a1", Transcript: lead, Proven: &Mark{Path: lead}}}, 0); ok {
+		t.Error("the lead's boundary, read as an agent's own transcript")
+	}
+
+	// Its own: counted once, ending the checkpoint it owed (its conversation goes on from a summary).
+	checkpoint, ok := AgentCompacted(&st, p, t0)
+	if !ok || !checkpoint || st.CheckpointOwed || st.Run.Compaction.Status != CompactDone || st.Run.Proven.Offset != int64(len(agentLine)+len(agentBoundary("b1", t0))) {
+		t.Fatalf("counted %v, checkpoint %v: %+v, owed %v", ok, checkpoint, st.Run.Compaction, st.CheckpointOwed)
+	}
+	if _, ok := AgentCompacted(&st, p, t0); ok {
+		t.Error("counted twice")
+	}
+	if _, _, ok := AgentBoundary(st, 0); ok {
+		t.Error("proven again past the mark")
+	}
+}
+
+// A new agent on a phase is a new conversation: a checkpoint the agent before it owed is over, it is the
+// agent briefed from then on, and nothing the sub-run knew of the context before it is its own.
+func TestANewAgentEndsTheCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent-a2.jsonl")
+	os.WriteFile(path, []byte(agentLine), 0o644)
+	st := checkpointing(t, filepath.Join(dir, "agent-a1.jsonl"))
+	if Fresh(&st, Started("a1", t0), path, t0) || !st.CheckpointOwed {
+		t.Fatal("the agent briefed already ended its own checkpoint")
+	}
+	for name, q := range map[string]Proof{"the mod's report": Reported(true, "manual", t0), "a boundary": {agent: "a2", over: true, path: path, end: 9}} {
+		if x := checkpointing(t, path); Fresh(&x, q, path, t0) || !x.CheckpointOwed || x.Run.Briefed != "a1" {
+			t.Errorf("%s: taken for a new agent", name)
+		}
+	}
+	if !Fresh(&st, Started("a2", t0), path, t0) {
+		t.Fatal("a checkpoint was owed")
+	}
+	if st.CheckpointOwed || st.Run.Compaction.Status != CompactDone || st.Run.Briefed != "a2" || st.Run.Transcript != path ||
+		st.Run.Proven == nil || *st.Run.Proven != (Mark{Path: path, Offset: int64(len(agentLine))}) || st.Run.Context != nil || st.Run.ContextNudged {
+		t.Fatalf("after a new agent: owed %v, %+v, briefed %q, %q, %+v, %+v", st.CheckpointOwed, st.Run.Compaction, st.Run.Briefed, st.Run.Transcript, st.Run.Proven, st.Run.Context)
+	}
+	// One whose transcript is not written yet is marked at its start.
+	x := checkpointing(t, path)
+	gone := filepath.Join(dir, "agent-a3.jsonl")
+	Fresh(&x, Started("a3", t0), gone, t0)
+	if m := x.Run.Proven; m == nil || m.Path != gone || m.Offset != 0 {
+		t.Errorf("marked %+v", m)
+	}
+}

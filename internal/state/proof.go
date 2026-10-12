@@ -3,15 +3,17 @@ package state
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/transcript"
 )
 
 // A loop is the lead's conversation, or one phase agent's. baton changes what it knows about a loop's
-// compaction only on a Proof naming that loop, and only two things make one
-// (docs/research/visible-workers.md): the mod's report of a compaction of the lead (Reported), and a
-// compact boundary written to the loop's own transcript past baton's mark (Boundary). The compaction hooks
+// compaction only on a Proof naming that loop, and only these make one (docs/research/visible-workers.md):
+// the mod's report of a compaction of the lead (Reported); a compact boundary written to the loop's own
+// transcript past baton's mark (Boundary for the lead's, AgentBoundary for a phase agent's); and, for a
+// phase agent, the first start of a new agent on its phase, whose conversation is new (Started). The compaction hooks
 // (PreCompact, SessionStart(compact), PostCompact) fire for a phase agent's compaction too, with no agent
 // id and the lead's transcript, so they cannot make one: a Proof's fields are unexported, and every
 // function that moves Runtime.Compaction past typed, clears an owed compaction, starts a phase after one,
@@ -46,6 +48,84 @@ func Boundary(path string, mark *Mark, from int64) (Proof, int64, bool) {
 		return Proof{}, next, false
 	}
 	return Proof{over: true, trigger: b.Trigger, at: b.Time, path: path, start: b.Start, end: b.End}, next, true
+}
+
+// AgentBoundary reads the own transcript of the agent briefed in a phase's sub-run st (Runtime.Transcript)
+// for a compaction of its conversation baton has not counted: a compact boundary past the sub-run's mark
+// (Runtime.Proven), read from from on when that is further. It returns the proof, which names that agent,
+// if there is one, and where to look on from.
+func AgentBoundary(st State, from int64) (Proof, int64, bool) {
+	agent, path, mark := st.Run.Briefed, st.Run.Transcript, st.Run.Proven
+	if agent == "" || path == "" || mark == nil || mark.Path != path {
+		return Proof{}, from, false
+	}
+	b, next, err := transcript.Compacted(path, max(from, mark.Offset), true)
+	if err != nil || b == nil {
+		return Proof{}, next, false
+	}
+	return Proof{agent: agent, over: true, trigger: b.Trigger, at: b.Time, path: path, start: b.Start, end: b.End}, next, true
+}
+
+// Started is the proof that a phase agent's first start on its phase gives (its SubagentStart, routed to
+// the phase's sub-run by its own id): its conversation is a new one, which no context before it reaches.
+func Started(agent string, at time.Time) Proof { return Proof{agent: agent, over: true, at: at} }
+
+// Fresh records in a phase's sub-run st that a new agent took the phase up (p, from Started), whose own
+// transcript is at path: it is the agent briefed there from now on, its transcript is marked where it
+// stands (its compactions come after), and nothing the sub-run knew of the context before it is its own.
+// A checkpoint the agent before it owed is over, since its notes carry the phase on in this conversation;
+// Fresh reports whether one was. It changes nothing for any other proof, or for the agent briefed already.
+func Fresh(st *State, p Proof, path string, now time.Time) (checkpoint bool) {
+	if !p.over || p.agent == "" || p.path != "" || p.mod || p.agent == st.Run.Briefed {
+		return false
+	}
+	checkpoint = st.CheckpointOwed
+	endCheckpoint(st, now)
+	st.Run.Briefed, st.Run.Transcript, st.Run.Proven, st.Run.Briefing = p.agent, path, markEnd(path), nil
+	st.Run.Context, st.Run.ContextNudged, st.Run.ContextNudgedAt, st.Run.ContextWarned, st.Run.WarnOwed = nil, false, 0, false, false
+	return checkpoint
+}
+
+// AgentCompacted records in a phase's sub-run st a compaction of its agent's conversation that p proves
+// (AgentBoundary): the sub-run's mark moves past it, and the context question is moot. One while the agent
+// owes a checkpoint is that checkpoint, as the lead's would be: its conversation goes on from a summary
+// and its notes. It reports whether it was, and false, changing nothing, for any other proof: the lead's,
+// another agent's, or a boundary counted already.
+func AgentCompacted(st *State, p Proof, now time.Time) (checkpoint, ok bool) {
+	m := st.Run.Proven
+	if !p.over || p.agent == "" || p.agent != st.Run.Briefed || p.path == "" || m == nil || m.Path != p.path || p.end <= m.Offset {
+		return false, false
+	}
+	st.Run.Proven = &Mark{Path: p.path, Offset: p.end}
+	st.Run.WarnOwed, st.Run.History = false, true
+	checkpoint = st.CheckpointOwed
+	endCheckpoint(st, now)
+	return checkpoint, true
+}
+
+// endCheckpoint ends a checkpoint a phase agent owes, by a new conversation or a compaction proven of it:
+// the compaction its stop queued for it, which nothing types into an agent, is done.
+func endCheckpoint(st *State, now time.Time) {
+	st.CheckpointOwed, st.CheckpointAsked = false, false
+	if c := &st.Run.Compaction; c.InFlight() && c.Reason == "checkpoint" {
+		c.Status, c.ByBaton, c.Finished = CompactDone, true, now
+	}
+}
+
+// markEnd marks the transcript at path where it ends now (nil for none, or one baton cannot read); one not
+// written yet is marked at its start.
+func markEnd(path string) *Mark {
+	if path == "" {
+		return nil
+	}
+	fi, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return &Mark{Path: path}
+	case err != nil:
+		return nil
+	}
+	return &Mark{Path: path, Offset: fi.Size()}
 }
 
 // ModReport is the mod's report of a compaction of the lead over, kept for the rewake (Report).

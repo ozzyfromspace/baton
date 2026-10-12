@@ -484,8 +484,8 @@ func (c *Coordinator) turned(s *state.Store, r bridge.Report) {
 	}
 }
 
-// watch looks at the agent of w: whether the run still counts on it, whether it has started in time, and
-// whether one baton is ending has stopped.
+// watch looks at the agent of w: whether the run still counts on it, whether it checkpointed, whether it
+// has started in time, and whether one baton is ending has stopped.
 func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st state.State, pl plan.Plan, w *worker) {
 	e := st.Entry(w.entry)
 	switch why := unwanted(st, pl, e); {
@@ -496,12 +496,33 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 	case why != "":
 		c.end(now, s, b, w, why)
 	case e.Status == state.WorkerSuspended:
-		c.afresh(now, s, b, w, *e) // its agent is gone for good, or the human asked for a fresh one
+		c.afresh(now, s, b, w, *e) // its agent is gone for good, it checkpointed, or the human asked for a fresh one
+	case c.checkpointed(w):
+		c.setEntry(s, w.entry, func(x *state.Worker) {
+			if x.Live() {
+				x.Status, x.Since, x.Why = state.WorkerSuspended, now, decide.AgentCheckpointed
+			}
+		})
+		w.store.Event("agent_checkpointed", map[string]any{"agent": w.entry.AgentID})
 	case w.spawn != 0 && now.Sub(w.launched) > c.Lead.Timing.AgentStart:
 		// Taken back, the spawn cannot start an agent any more: its worktree would be refused.
 		b.Void(s.Instance, w.spawn)
 		c.spawnAcked(now, s, b, w, bridge.Report{Interrupted: true, Error: fmt.Sprintf("the mod did not start it within %s", c.Lead.Timing.AgentStart)})
 	}
+}
+
+// checkpointed reports that w's agent checkpointed and ended its turn: its stop queued the compaction a
+// checkpoint owes (hooks), which nothing types into an agent. Its phase goes on in a fresh agent instead,
+// from its notes, in its worktree (afresh, then respawn), whose start ends the checkpoint (state.Fresh).
+// An agent a message is on its way to is let be until the mod has run it: the message would start it
+// again.
+func (c *Coordinator) checkpointed(w *worker) bool {
+	if w.agent.in == nil || w.sending != 0 || w.ending != "" {
+		return false
+	}
+	st, err := w.store.Load()
+	comp := st.Run.Compaction
+	return err == nil && st.Mode == state.ModeRunning && st.CheckpointOwed && comp.Status == state.CompactQueued && comp.Reason == "checkpoint" && !st.Run.TurnOpen
 }
 
 // end ends w's agent, for why: a spawn still open is taken back (bridge.Void), and an agent is stopped

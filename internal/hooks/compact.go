@@ -218,10 +218,11 @@ func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
 }
 
 // takeBriefing takes the brief a compaction owes the model, to give it with a tool call or a prompt of the
-// session's main agent (one baton's rewake has not given yet, or one that never wakes the model).
+// loop's own (one baton's rewake has not given yet, or one that never wakes the model), or as a phase agent
+// starts again: never with a hook of a subagent of the loop's model (Context.Agent).
 func takeBriefing(c Context, st *state.State) *state.Briefing {
 	b := st.Run.Briefing
-	if b == nil || str(c.Input, "agent_id") != "" {
+	if b == nil || c.Agent != "" {
 		return nil
 	}
 	st.Run.Briefing = nil

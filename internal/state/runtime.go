@@ -66,6 +66,10 @@ type Runtime struct {
 	// starts an idle agent again with its conversation, and it is not briefed again; another agent on the
 	// phase is.
 	Briefed string `json:"briefed,omitempty"`
+	// Transcript is, in a phase's sub-run, the briefed agent's own transcript (subagents/agent-<id>.jsonl
+	// beside the lead's): its hooks carry the lead's transcript_path, so its context and its compactions
+	// are read there, by its loop (Fresh, AgentBoundary).
+	Transcript string `json:"transcript,omitempty"`
 
 	// StopBlocks counts consecutive Stops baton refused because the model reported no status.
 	StopBlocks int `json:"stop_blocks"`

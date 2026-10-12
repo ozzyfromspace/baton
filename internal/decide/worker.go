@@ -31,6 +31,28 @@ func WorkerTakesUp(phase string) string {
 	return fmt.Sprintf("An agent before you worked on %s and ended before it was finished: you take the phase up where it stands, in the same worktree.", phase)
 }
 
+// WorkerCheckpointed tells the agent briefed for phase that the agent before it checkpointed: it recorded
+// where the phase stands and ended, so that the phase goes on with a fresh context.
+func WorkerCheckpointed(phase string) string {
+	return fmt.Sprintf("The agent before you on %s checkpointed: it recorded where the phase stands and ended, so that you go on with a fresh context, in the same worktree.", phase)
+}
+
+// CheckpointNow is the "Now:" line of the brief of an agent that goes on from the checkpoint of the agent
+// before it (title: "P3 — Title").
+func CheckpointNow(title string) string {
+	return fmt.Sprintf("Now: continue %s from where the agent before you left off (see its notes below and the repository's state).", title)
+}
+
+// AgentBriefAgain is the message that wakes the phase agent on phase, idle, for the brief baton gives it
+// again after its context was compacted: its start hands the brief over.
+func AgentBriefAgain(phase string) string {
+	return fmt.Sprintf("[baton] Your context was compacted, so baton gives you the brief of %s again: read it, then go on with the phase from where it stands.", phase)
+}
+
+// AgentCheckpointed is why a phase agent's phase is taken up again by a fresh agent, after its
+// checkpoint: for the human, and the roster.
+const AgentCheckpointed = "its agent checkpointed, and a fresh one goes on from its notes"
+
 // AgentIsBatons is why a model may not message or stop the phase agent on phase (tool, the call it made):
 // baton starts, messages and ends its phase agents itself, and nothing a model does keeps one working.
 func AgentIsBatons(tool, phase string) string {

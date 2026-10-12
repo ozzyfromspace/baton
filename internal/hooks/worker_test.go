@@ -535,3 +535,85 @@ func must(b []byte, err error) []byte {
 	}
 	return b
 }
+
+// A phase agent's context is its own transcript's, which its start records with a mark; past the
+// checkpoint line it is nudged to checkpoint, which ends it: its calls are held, its stop goes through,
+// and the next agent on its phase, a new conversation, ends the checkpoint and goes on from its notes.
+func TestAPhaseAgentsCheckpointIsAFreshAgent(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	own := filepath.Join(strings.TrimSuffix(lead.leadTranscript(), ".jsonl"), "subagents", "agent-agent-p2.jsonl")
+	if st := w.state(); st.Run.Transcript != own || st.Run.Proven == nil || *st.Run.Proven != (state.Mark{Path: own}) {
+		t.Fatalf("its transcript %q, marked %+v", st.Run.Transcript, st.Run.Proven)
+	}
+
+	w.set(func(st *state.State) { st.Run.Context = &state.ContextUse{Tokens: 130_000, WindowSize: 200_000} })
+	tell := feedback(w.fire("PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "go test"}}))
+	if !strings.Contains(tell, "Checkpoint due") || !strings.Contains(tell, "baton starts a fresh agent on this phase") || strings.Contains(tell, "compacts the context") {
+		t.Errorf("the nudge: %s", tell)
+	}
+
+	w.set(func(st *state.State) { state.SetCheckpoint(st) })
+	if why := denyReason(w.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}})); !strings.Contains(why, "you checkpointed, and a fresh agent continues this phase") {
+		t.Errorf("a call after the checkpoint: %q", why)
+	}
+	out := w.fire("SubagentStop", map[string]any{"stop_hook_active": false})
+	if out["decision"] == "block" || !strings.Contains(say(out), "the agent on P2 checkpointed → a fresh agent continues it from its notes") {
+		t.Errorf("its stop: %v", out)
+	}
+	if c := w.state().Run.Compaction; c.Status != state.CompactQueued || c.Reason != "checkpoint" {
+		t.Fatalf("its compaction: %+v", c)
+	}
+
+	w.now = w.now.Add(time.Minute)
+	p, _ := state.OpenProject(w.dir, w.clock)
+	p.LinkAgent(lead.store.Ref, "P2", "agent-p2b")
+	b := additionalContext(w.fire("SubagentStart", map[string]any{"agent_id": "agent-p2b", "agent_type": state.PhaseAgent}))
+	for _, want := range []string{decide.WorkerCheckpointed("P2"), decide.CheckpointNow("P2 — Third")} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the fresh agent's brief lacks %q:\n%s", want, b)
+		}
+	}
+	st := w.state()
+	if st.CheckpointOwed || st.Run.Compaction.Status != state.CompactDone || st.Run.Briefed != "agent-p2b" || st.Run.Context != nil ||
+		st.Run.Transcript != filepath.Join(filepath.Dir(own), "agent-agent-p2b.jsonl") {
+		t.Errorf("after the fresh agent: owed %v, %+v, briefed %q, %+v, %q", st.CheckpointOwed, st.Run.Compaction, st.Run.Briefed, st.Run.Context, st.Run.Transcript)
+	}
+	if !w.logged("checkpoint_over", map[string]any{"phase": "P2", "agent": "agent-p2b"}) {
+		t.Errorf("events:\n%s", w.eventLog())
+	}
+	if lead.state().Run.Compaction.Status != "" || lead.state().CheckpointOwed {
+		t.Errorf("the lead's run was touched: %+v", lead.state().Run.Compaction)
+	}
+}
+
+// After a compaction of its own, a phase agent is given its brief again, once: with its next tool call,
+// or as a message starts it again; never with a hook of a subagent its model started.
+func TestAPhaseAgentIsBriefedAgainAfterItsCompaction(t *testing.T) {
+	w, _, tree := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	owe := func() {
+		w.set(func(st *state.State) { st.Run.Briefing = &state.Briefing{Kind: "auto", Phase: "P2", At: w.now} })
+	}
+	owe()
+	sub := byAgent(map[string]any{"tool_name": "Read", "tool_input": map[string]any{"file_path": "a.go"}, "cwd": tree}, "sub-1")
+	sub["agent_type"] = "Explore"
+	w.fire("PostToolUse", sub)
+	if w.state().Run.Briefing == nil {
+		t.Fatal("given with a hook of its model's subagent")
+	}
+	tell := feedback(w.fire("PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "go test"}}))
+	if !strings.Contains(tell, "Claude Code compacted the context automatically") || !strings.Contains(tell, "You are a worker on P2") || w.state().Run.Briefing != nil {
+		t.Errorf("at its tool call: %s", tell)
+	}
+	owe()
+	if b := additionalContext(w.fire("SubagentStart", map[string]any{})); !strings.Contains(b, "Claude Code compacted the context automatically") || w.state().Run.Briefing != nil {
+		t.Errorf("as it starts again: %s", b)
+	}
+	if out := w.fire("SubagentStart", map[string]any{}); out != nil {
+		t.Errorf("given twice: %v", out)
+	}
+	if strings.Count(w.eventLog(), `"via":"resume"`) != 1 {
+		t.Errorf("events:\n%s", w.eventLog())
+	}
+}

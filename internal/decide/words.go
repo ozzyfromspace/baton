@@ -94,9 +94,34 @@ func (w Words) Reporting() string {
 		"A command that runs long moves to the background by itself and wakes you when it ends: keep working on what does not depend on it, and with nothing left to do, end your turn. " +
 		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
 		unattended +
-		"In a long phase, at a safe point (" + safePoint + "), `baton checkpoint --notes \"<where you are>\"` compacts mid-phase. " +
+		"In a long phase, at a safe point (" + safePoint + "), `baton checkpoint --notes \"<where you are>\"` " + w.checkpoints() + ". " +
 		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
 		pause)
+}
+
+// checkpoints is what a checkpoint does: the lead's compacts its context mid-phase, and a phase agent's
+// ends it, for a fresh agent that goes on from its notes.
+func (w Words) checkpoints() string {
+	if w.Worker {
+		return "ends you mid-phase, and a fresh agent continues the phase from your notes"
+	}
+	return "compacts mid-phase"
+}
+
+// CheckpointThen is what follows a checkpoint, for the model asked to make one.
+func (w Words) CheckpointThen() string {
+	if w.Worker {
+		return "baton starts a fresh agent on this phase, in this worktree, and it continues the phase from your notes"
+	}
+	return "baton compacts the context and you continue this phase from your notes"
+}
+
+// CheckpointHold is why a call is held once the model has checkpointed (it ends its turn, endTurn).
+func (w Words) CheckpointHold() string {
+	if w.Worker {
+		return "you checkpointed, and a fresh agent continues this phase from your notes"
+	}
+	return "you asked for a checkpoint and baton must compact the context first"
 }
 
 // proposeThen is what follows a proposal, for a stop that reported nothing.

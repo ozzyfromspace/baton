@@ -298,7 +298,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			if st.Mode != state.ModeRunning || c.Agent != "" || isBatonCommand(c.Input) {
 				return
 			}
-			hold = holdCall(st, own)
+			hold = holdCall(st, own, words(c, s))
 		}
 		if holds(); refuseWorker == "" && refuseHere == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
 			// The call runs, in the lead's checkout: no worker's work lands there until it has ended, and
@@ -363,7 +363,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 // holdCall is why the main agent's call may not run while a plan runs, because something else must
 // happen first (the turn must end, the human must be asked), or "" if it may. own says the call asks the
 // human baton's own question.
-func holdCall(st *state.State, own bool) string {
+func holdCall(st *state.State, own bool, w decide.Words) string {
 	p := st.OwnProposal()
 	switch {
 	case st.BoundaryOwed && !started(st):
@@ -371,7 +371,7 @@ func holdCall(st *state.State, own bool) string {
 	case st.BoundaryOwed:
 		return endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
 	case st.CheckpointOwed:
-		return endTurn("you asked for a checkpoint and baton must compact the context first")
+		return endTurn(w.CheckpointHold())
 	case st.CheckpointDue:
 		return NudgePrefix + " Not yet. " + decide.CheckpointOnResume(st.Current)
 	case own:
@@ -1276,13 +1276,14 @@ type valveAction struct {
 	say, tell string
 }
 
-// contextValves runs the two mid-phase valves after a main-agent tool call. Past the checkpoint line,
-// the model is asked to checkpoint at its next safe point, and asked again for every further tenth of
-// the limit. Past the warning line (never in a worker), the model is asked to
-// put a fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its
-// own. Each fires once, and re-arms only after the context falls a tenth of the window below its line,
-// so a compaction that leaves the context high cannot start a loop. Subagents are never asked: they
-// cannot end the main session's turn.
+// contextValves runs the two mid-phase valves after a tool call of the loop's own: the lead's, or a phase
+// agent's in its sub-run, whose context its loop reads from its own transcript (loop.Agent). Past the
+// checkpoint line, the model is asked to checkpoint at its next safe point, and asked again for every
+// further tenth of the limit. Past the warning line (never in a phase agent), the model is asked to put a
+// fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its own. Each
+// fires once, and re-arms only after the context falls a tenth of the window below its line, so a
+// compaction that leaves the context high cannot start a loop. A subagent of the loop's model is never
+// asked: it cannot end its loop's turn.
 func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveAction {
 	cu := st.Run.Context
 	if cu == nil {
@@ -1305,7 +1306,7 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 	pct := 100 * float64(used) / float64(lim.Window)
 	switch {
 	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned && !w.Worker:
-		// Nobody watches a worker's session to answer the question: it is nudged to checkpoint instead.
+		// A phase agent asks the human nothing of its own: it is nudged to checkpoint instead.
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
 		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
 		q := warnQuestion(used, lim, vs.WarnTimeout)
@@ -1325,8 +1326,8 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "checkpoint": lim.Checkpoint, "limit": lim.Window},
 			say:    fmt.Sprintf("baton: context at %s of %s → checkpoint at the next safe point", valve.Tokens(used), valve.Tokens(lim.Window)),
 			tell: fmt.Sprintf("%s Checkpoint due: the context holds %s tokens, %.0f%% of its %s limit. %s, then run "+
-				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: baton compacts the context and you continue this phase from your notes. "+
-				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window), w.FinishStep()),
+				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: %s. "+
+				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window), w.FinishStep(), w.CheckpointThen()),
 		}
 	}
 	return valveAction{}

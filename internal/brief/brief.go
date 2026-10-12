@@ -47,8 +47,9 @@ type Input struct {
 	// the phases its phase builds on (Needs, from the run's plan).
 	Tree, Branch string
 	Needs        []string
-	// Again: the worker's brief is for an agent taking up its phase where an agent before it left it.
-	Again bool
+	// Again: the worker's brief is for an agent taking up its phase where an agent before it left it;
+	// Checkpointed: the agent before it checkpointed, and it goes on from its notes.
+	Again, Checkpointed bool
 	// Decisions is the run's decisions, its workers' too (Store.Decisions); nil: the state's own.
 	Decisions []state.Decision
 }
@@ -68,6 +69,8 @@ func Write(in Input) string {
 		running = decide.WorkerRole(pl.Title, pl.File, st.Current, in.Tree)
 	}
 	switch {
+	case in.Kind == Worker && in.Again && in.Checkpointed:
+		fmt.Fprintf(&b, "[baton] %s %s\n\n", decide.WorkerIntro(pl.Title, pl.File, st.Current, in.Tree, in.Branch), decide.WorkerCheckpointed(st.Current))
 	case in.Kind == Worker && in.Again:
 		fmt.Fprintf(&b, "[baton] %s %s\n\n", decide.WorkerIntro(pl.Title, pl.File, st.Current, in.Tree, in.Branch), decide.WorkerTakesUp(st.Current))
 	case in.Kind == Worker:
@@ -128,6 +131,8 @@ func Write(in Input) string {
 		park = ps.Park
 	}
 	switch {
+	case in.Kind == Worker && in.Again && in.Checkpointed:
+		b.WriteString(decide.CheckpointNow(title) + "\n\n")
 	case in.Kind == Worker && in.Again:
 		b.WriteString(in.Words.FreshNow(title) + "\n\n")
 	case in.Kind == Boundary || in.Kind == Switch || in.Kind == Worker:

@@ -198,7 +198,7 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 		return "", "the worktree hook failed"
 	}
 	x.agents = append(x.agents, started{phase: c.Phase, id: agent, tree: tree})
-	x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree})
+	x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree, "transcript_path": x.leadTranscript()})
 	call["tool_response"] = map[string]any{"agentId": agent, "status": "async_launched"}
 	x.hook("PostToolUse", call)
 	return agent, ""
@@ -214,7 +214,7 @@ func (x *crew) resume(agent string) {
 		if st, err := x.sub(a.phase).Load(); err != nil || st.Run.TurnOpen {
 			return
 		}
-		_, out := x.hook("SubagentStart", map[string]any{"agent_id": a.id, "agent_type": state.PhaseAgent, "cwd": a.tree})
+		_, out := x.hook("SubagentStart", map[string]any{"agent_id": a.id, "agent_type": state.PhaseAgent, "cwd": a.tree, "transcript_path": x.leadTranscript()})
 		x.resumes = append(x.resumes, out)
 	}
 }
@@ -236,6 +236,30 @@ func (x *crew) hook(event string, input map[string]any) (int, string) {
 		x.t.Fatalf("%s failed open: %s", event, errb.String())
 	}
 	return code, strings.TrimSpace(out.String())
+}
+
+// leadTranscript is where the lead's transcript is: each agent's own is beside it, in
+// sess-1/subagents/agent-<id>.jsonl (spike 32).
+func (x *crew) leadTranscript() string { return filepath.Join(x.home, "sess-1.jsonl") }
+
+// transcript is the own transcript of the latest agent on phase.
+func (x *crew) transcript(phase string) string {
+	return filepath.Join(x.home, "sess-1", "subagents", "agent-"+x.agent(phase).id+".jsonl")
+}
+
+// says appends lines to the own transcript of the latest agent on phase, as Claude Code writes it.
+func (x *crew) says(phase string, lines ...string) {
+	x.t.Helper()
+	path := x.transcript(phase)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	defer f.Close()
+	for _, l := range lines {
+		f.WriteString(l + "\n")
+	}
 }
 
 // stops fires the SubagentStop of the latest agent on phase, as its turn ends, and returns its output.
