@@ -60,7 +60,7 @@ type Hidden interface {
 // Launch is how the host starts claude. A worker's session is started the same way as the lead's, with
 // the lead's own flags, in its worktree and with an environment of its own.
 type Launch struct {
-	Args        []string // the lead's flags a worker keeps (elevate.KeepWorkerArgs): its model, permissions, plugins
+	Args        []string // the lead's flags a worker keeps (elevate.KeepUserArgs): its model, permissions, plugins
 	Autocompact string   // passed as --autocompact ("" for none)
 	Settings    string   // baton's hooks and status line, passed as --settings (host.SettingsJSON)
 	Env         []string // the lead's base environment: any BATON_* in it, and its working directory, are dropped

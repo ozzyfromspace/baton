@@ -130,9 +130,25 @@ var userFlags = map[string]bool{
 // session-selection flags are dropped: the relaunch resumes this session explicitly.
 func KeepArgs(argv []string) []string { return keepArgs(argv, keepFlags) }
 
-// KeepUserArgs is KeepArgs for the claude arguments a human gave baton, kept when baton restarts the
-// session on a newer version of itself.
-func KeepUserArgs(argv []string) []string { return keepArgs(argv, keepFlags, userFlags) }
+// KeepUserArgs is KeepArgs for the claude arguments a human gave baton. They are kept when baton restarts
+// the session on a newer version of itself or brings a crashed one back, and given to each worker it starts
+// beside the session. Unlike KeepArgs, they keep the human's permission rules (each flag with every rule
+// after it), so a session baton starts for them is allowed, and denied, what theirs was.
+func KeepUserArgs(argv []string) []string {
+	var rules []string
+	for i := 0; i < len(argv) && argv[i] != "--"; i++ {
+		name, _, hasEq := strings.Cut(argv[i], "=")
+		if !ruleFlags[name] {
+			continue
+		}
+		rules = append(rules, argv[i])
+		for !hasEq && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+			i++
+			rules = append(rules, argv[i])
+		}
+	}
+	return append(keepArgs(argv, keepFlags, userFlags), rules...)
+}
 
 // ruleFlags are the permission rules given on claude's command line. Each takes every argument after it,
 // up to the next flag.
@@ -154,25 +170,6 @@ func PermissionMode(argv []string) string {
 		}
 	}
 	return mode
-}
-
-// KeepWorkerArgs is KeepUserArgs for a worker baton starts beside the session (package loop): it keeps
-// the session's permission rules too, so that the worker is asked for no more permissions than the
-// session it works beside.
-func KeepWorkerArgs(argv []string) []string {
-	var rules []string
-	for i := 0; i < len(argv) && argv[i] != "--"; i++ {
-		name, _, hasEq := strings.Cut(argv[i], "=")
-		if !ruleFlags[name] {
-			continue
-		}
-		rules = append(rules, argv[i])
-		for !hasEq && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
-			i++
-			rules = append(rules, argv[i])
-		}
-	}
-	return append(KeepUserArgs(argv), rules...)
 }
 
 func keepArgs(argv []string, sets ...map[string]bool) []string {
