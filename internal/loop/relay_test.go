@@ -145,6 +145,26 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 	}
 }
 
+// A held answer the agent could not be given yet (it waits while its phase is held) gives way to the next
+// answer to the same question: asked again, the human chose Go ahead, and the agent is told only that.
+func TestALaterAnswerReplacesOneNotGivenYet(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	st := subRun(t, relayed, now.Add(-time.Minute))
+	held := relayed
+	state.AnswerRelay(&held, state.ByHuman, "Wait for me", now)
+	if got := applyRelay(&st, held, 0, now); got != "waits for the human" {
+		t.Fatalf("held: %q", got)
+	}
+	again := relayed
+	state.AnswerRelay(&again, state.ByHuman, "Go ahead", now.Add(time.Minute))
+	if got := applyRelay(&st, again, 0, now.Add(time.Minute)); got != "goes ahead" {
+		t.Fatalf("asked again: %q", got)
+	}
+	if mail := st.Mail(); len(mail) != 1 || !strings.Contains(mail[0].Text, "The human chose Go ahead on your proposal P3.d1") {
+		t.Errorf("told %+v", mail)
+	}
+}
+
 // relayCrew is a crew whose phase agent on P1 is at work, idle, with a proposal for baton to put to the
 // human.
 func relayCrew(t *testing.T) *crew {

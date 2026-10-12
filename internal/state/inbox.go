@@ -1,6 +1,9 @@
 package state
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Message is something baton has for the session's model that no hook could tell it when it happened,
 // such as why a worker's work could not land. It reaches the model once, with whichever comes first: the
@@ -12,6 +15,9 @@ type Message struct {
 	// Phase is the phase it is about, if only that one: once the run has moved on to another, it is
 	// dropped untold.
 	Phase string `json:"phase,omitempty"`
+	// About names what it answers (a question's Relay.Key): a newer message about it replaces one not
+	// given yet, which would only contradict it.
+	About string `json:"about,omitempty"`
 }
 
 // Message kinds.
@@ -21,9 +27,12 @@ const (
 	MessageRewind = "rewind" // the human rewound the conversation past what baton recorded, which stands
 )
 
-// Tell leaves m for the session's model.
+// Tell leaves m for the session's model, in place of a message about the same thing not given yet.
 func Tell(st *State, m Message, now time.Time) {
 	m.At = now
+	if m.About != "" {
+		st.Inbox = slices.DeleteFunc(st.Inbox, func(o Message) bool { return o.About == m.About })
+	}
 	st.Inbox = append(st.Inbox, m)
 }
 

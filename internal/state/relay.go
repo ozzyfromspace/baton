@@ -67,6 +67,11 @@ func (r Relay) Same(o Relay) bool {
 	return r.Phase == o.Phase && r.Kind == o.Kind && r.Decision == o.Decision && r.Since.Equal(o.Since)
 }
 
+// Key names the question r is, the same each time it is asked (AskAgain).
+func (r Relay) Key() string {
+	return r.Phase + " " + r.Kind + " " + r.Decision + " " + r.Since.UTC().Format(time.RFC3339Nano)
+}
+
 // Timed reports a proposal that goes ahead if nobody answers it.
 func (r Relay) Timed() bool { return r.Kind == RelayProposal && r.Untimed == "" }
 

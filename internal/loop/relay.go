@@ -256,7 +256,9 @@ func applyRelay(st *state.State, r state.Relay, maxAuto int, now time.Time) stri
 	}
 	a, phase := *r.Answered, r.Phase
 	outcome := decide.RelayOutcome(r, a.Answer)
-	tell := func(text string) { state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: text}, now) }
+	tell := func(text string) {
+		state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: text, About: r.Key()}, now)
+	}
 	held := func(what string) string {
 		text := decide.RelayWaits(phase, what)
 		if n := len(st.Run.Notices); n == 0 || st.Run.Notices[n-1].Text != text { // once, if applied twice
