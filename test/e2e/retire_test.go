@@ -254,7 +254,9 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 		t.Errorf("the kept branch %s lost its commit: %s", kept, log)
 	}
 	spawns := filter(ev, is("worker_spawned", "phase", "P1"))
-	if len(spawns) != 2 || spawns[1]["branch"] != branch || slices.IndexFunc(ev, func(e map[string]any) bool { return e["kind"] == "worker_spawned" && e["command"] == spawns[1]["command"] }) < ended {
+	if len(spawns) != 2 || spawns[1]["branch"] != branch || slices.IndexFunc(ev, func(e map[string]any) bool {
+		return e["kind"] == "worker_spawned" && e["command"] == spawns[1]["command"]
+	}) < ended {
 		t.Errorf("the new plan's P1 agent did not start after the old one was retired: %v", spawns)
 	}
 	if landed := filter(ev, is("landed", "phase", "P1")); len(landed) != 1 || first(ev, is("landed", "phase", "P1")) < ended {
