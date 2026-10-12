@@ -39,13 +39,23 @@ type crew struct {
 	leadIdle bool            // the lead's hooks do not run
 	machine  machine.Reading // what the machine reads (roomy, unless the test says otherwise)
 
-	// The mod: what it ran, the agents it started, the ones it stopped, and how it fails, if it does.
+	// The mod: what it ran, the agents it started, the ones it stopped, the messages it sent and what an
+	// idle agent that a message started again was given (its SubagentStart's output), and how it fails,
+	// if it does.
 	ran      map[int]bool
 	agents   []started
 	stopped  []string
+	sent     []sent
+	resumes  []string
 	modOff   bool   // it runs nothing: no spawn is acked
 	unplaced bool   // a spawn's agent starts without its worktree hook (somewhere else)
 	spawnErr string // the spawn's Agent call fails with this
+	sendErr  string // a message's SendMessage call fails with this
+}
+
+// sent is a message the crew's mod sent: to whom, and what it said.
+type sent struct {
+	agent, text string
 }
 
 // started is an agent the crew's mod started: its phase, its id, and where its worktree hook put it.
@@ -152,6 +162,14 @@ func (x *crew) runMod() {
 		case bridge.Stop:
 			x.stopped = append(x.stopped, c.Agent)
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
+		case bridge.Send:
+			x.sent = append(x.sent, sent{agent: c.Agent, text: c.Text})
+			if x.sendErr != "" {
+				x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, Error: x.sendErr})
+				continue
+			}
+			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
+			x.resume(c.Agent)
 		default:
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
 		}
@@ -184,6 +202,21 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 	call["tool_response"] = map[string]any{"agentId": agent, "status": "async_launched"}
 	x.hook("PostToolUse", call)
 	return agent, ""
+}
+
+// resume starts agent again, as a message does an idle agent (its SubagentStart fires again); a busy
+// one takes the message at its next tool round.
+func (x *crew) resume(agent string) {
+	for _, a := range x.agents {
+		if a.id != agent || a.tree == "" {
+			continue
+		}
+		if st, err := x.sub(a.phase).Load(); err != nil || st.Run.TurnOpen {
+			return
+		}
+		_, out := x.hook("SubagentStart", map[string]any{"agent_id": a.id, "agent_type": state.PhaseAgent, "cwd": a.tree})
+		x.resumes = append(x.resumes, out)
+	}
 }
 
 // hook fires event in the lead's session, with input, through baton's real handlers, and returns its exit

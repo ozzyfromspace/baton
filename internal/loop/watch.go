@@ -116,6 +116,7 @@ func backgroundSince(busy []state.Task, lastStop time.Time) time.Time {
 // watchDialog tells the human when Claude Code has been waiting on them (a permission prompt or a
 // question) for a while. It is a notice, not an escalation: the session is fine, it needs an answer.
 // It is repeated on the same schedule as escalation reminders, since the run waits until it is answered.
+// A phase agent's prompt shows in the lead's terminal, and its notice names the phase that waits.
 func (l *Loop) watchDialog(v host.View, st state.State) {
 	d, waiting := st.Run.Dialogs.Front()
 	if !waiting {
@@ -143,10 +144,30 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 	}
 	l.dialogNotified = d.Since.Add(due[n-1])
 	text := "waiting for your answer (" + d.Tool + ")"
+	if phase := agentPhase(st, d.Agent); phase != "" {
+		text = decide.AgentWaits(phase, d.Tool)
+	}
 	l.update(func(st *state.State) {
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: text, At: v.Now})
 	})
-	l.Store.Event("dialog_waiting", map[string]any{"tool": d.Tool, "count": n})
+	fields := map[string]any{"tool": d.Tool, "count": n}
+	if phase := agentPhase(st, d.Agent); phase != "" {
+		fields["phase"] = phase
+	}
+	l.Store.Event("dialog_waiting", fields)
+}
+
+// agentPhase is the phase of the run's phase agent agent ("" for none, and for the lead's own).
+func agentPhase(st state.State, agent string) string {
+	if agent == "" {
+		return ""
+	}
+	for _, w := range st.LiveWorkers() {
+		if w.AgentID == agent {
+			return w.Phase
+		}
+	}
+	return ""
 }
 
 // answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context

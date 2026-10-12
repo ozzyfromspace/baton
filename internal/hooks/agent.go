@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"strings"
+
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -44,13 +46,21 @@ func (h *handlers) spawned(c Context) (Result, error) {
 // agentStart is SubagentStart for the phase agent of s, the sub-run OpenRun opened for it: a turn of its
 // own begins. The first time this agent starts, it is briefed: a worker's brief, with its phase started,
 // or, for an agent that takes up a phase another agent left unfinished, told so and to check what is done
-// first. A message that starts it again, idle, finds it briefed: it keeps its conversation.
+// first. A message that starts it again, idle, finds it briefed: it keeps its conversation, and is given
+// what baton has for it (its results, baton's messages), as the prompt's hook gives them to the lead: the
+// message that woke it (loop.line) only says they come.
 func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
 	brief, started := false, false
+	var dl delivery
+	var n news
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.TurnBy = true, c.Now, "baton"
-		if st.Run.Briefed == s.Agent || st.Mode == state.ModeIdle {
+		if st.Mode == state.ModeIdle {
+			return nil
+		}
+		if st.Run.Briefed == s.Agent {
+			dl, n = take(st, c.Now), takeNews(st, s)
 			return nil
 		}
 		st.Run.Briefed, brief = s.Agent, true
@@ -60,8 +70,11 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 		}
 		return nil
 	})
-	if err != nil || !brief {
+	if err != nil {
 		return Result{}, ok(err)
+	}
+	if !brief {
+		return resumed(s, dl, n), nil
 	}
 	pl, err := s.LoadPlan()
 	if err != nil {
@@ -74,6 +87,23 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	return Result{Output: map[string]any{
 		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
 	}}, nil
+}
+
+// resumed is what a phase agent started again by a message is given: its results and baton's messages.
+func resumed(s *state.Store, dl delivery, n news) Result {
+	if !dl.any() && !n.any() {
+		return Result{}
+	}
+	text := strings.TrimSpace(n.text + "\n\n" + dl.text(s))
+	if dl.any() {
+		dl.event(s, "resume")
+	}
+	if n.any() {
+		n.event(s, "resume")
+	}
+	return Result{Output: map[string]any{
+		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
+	}}
 }
 
 // agentStop is SubagentStop for the phase agent of s: its stop is decided by the Stop table, for its sub-run,

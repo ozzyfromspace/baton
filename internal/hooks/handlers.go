@@ -226,6 +226,11 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		h.spawning(c)
 		return Result{}, nil
 	}
+	if s, phase := h.steersAgent(c); phase != "" {
+		tool := str(c.Input, "tool_name")
+		s.Event("refused", map[string]any{"tool": tool, "why": "a phase agent", "phase": phase})
+		return permission("deny", decide.AgentIsBatons(tool, phase)), nil
+	}
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
 		if baton, verdict := batonShell(str(ti, "command")); baton {
@@ -477,6 +482,42 @@ func permission(decision, reason string) Result {
 			"permissionDecisionReason": reason,
 		},
 	}}
+}
+
+// steersAgent is the phase of the phase agent a model's call would message or stop ("" for none), and the
+// run it belongs to: baton's agents are the host's to steer (through its mod), never a model's, the
+// lead's or an agent's.
+func (h *handlers) steersAgent(c Context) (*state.Store, string) {
+	ti, _ := c.Input["tool_input"].(map[string]any)
+	var target string
+	switch str(c.Input, "tool_name") {
+	case "SendMessage":
+		target = str(ti, "to")
+	case "TaskStop":
+		target = str(ti, "task_id")
+	}
+	if target == "" {
+		return nil, ""
+	}
+	s, err := h.d.Open(c)
+	if err != nil {
+		return nil, ""
+	}
+	if s.Worker() != "" {
+		if s, err = s.ParentRun(); err != nil {
+			return nil, ""
+		}
+	}
+	st, err := s.Load()
+	if err != nil {
+		return nil, ""
+	}
+	for _, w := range st.LiveWorkers() {
+		if w.AgentID != "" && (w.AgentID == target || w.Phase == target) {
+			return s, w.Phase
+		}
+	}
+	return nil, ""
 }
 
 // modCall reports a call baton's mod made in the lead's session (its tool_use_id says a plugin made it) to

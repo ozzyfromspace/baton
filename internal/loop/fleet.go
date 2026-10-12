@@ -393,10 +393,13 @@ func (c *Coordinator) reports(now time.Time, s *state.Store, b *bridge.Bridge) {
 		switch r.Kind {
 		case bridge.Ack:
 			for _, w := range c.launched() {
-				if r.Command == w.spawn {
+				switch r.Command {
+				case w.spawn:
 					c.spawnAcked(now, s, b, w, r)
-				} else if r.Command == w.stop {
+				case w.stop:
 					w.stop = 0
+				case w.sending:
+					c.sendAcked(s, w, r)
 				}
 			}
 		case bridge.Turn:
@@ -423,6 +426,7 @@ func (c *Coordinator) spawnAcked(now time.Time, s *state.Store, b *bridge.Bridge
 	case placed != "" && (r.Interrupted || r.OK && r.Agent == placed):
 		b.Track(placed, w.phase) // an interrupted spawn's ack made it none of baton's agents
 		w.entry.AgentID = placed
+		w.agent.in = line{c, s, w} // its loop reaches it from now on
 		c.setEntry(s, w.entry, func(x *state.Worker) {
 			x.Status, x.Since = state.WorkerWorking, now
 			if x.Started.IsZero() {
@@ -484,6 +488,7 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 // (finish).
 func (c *Coordinator) end(now time.Time, s *state.Store, b *bridge.Bridge, w *worker, why string) {
 	w.ending, w.endAt = why, now
+	w.agent.in = nil // nothing more is sent to it
 	c.Lead.logf("loop: %s: ending its phase agent: %s", w.phase, why)
 	if w.spawn != 0 {
 		b.Void(s.Instance, w.spawn)

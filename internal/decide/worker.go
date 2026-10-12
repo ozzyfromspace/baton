@@ -31,6 +31,19 @@ func WorkerTakesUp(phase string) string {
 	return fmt.Sprintf("An agent before you worked on %s and ended before it was finished: you take the phase up where it stands, in the same worktree.", phase)
 }
 
+// AgentIsBatons is why a model may not message or stop the phase agent on phase (tool, the call it made):
+// baton starts, messages and ends its phase agents itself, and nothing a model does keeps one working.
+func AgentIsBatons(tool, phase string) string {
+	return fmt.Sprintf("[baton] Not run: %s is for baton alone with the agent on %s, one of baton's phase agents. baton starts it, gives it what it needs and ends it itself, "+
+		"and lands its work once %s is done. Leave the agent and %s to baton, and go on with your own work.", tool, phase, phase, phase)
+}
+
+// AgentWaits is the notice that the phase agent on phase waits for the human to answer a dialog of tool's
+// (a permission prompt, mostly), in the lead's terminal.
+func AgentWaits(phase, tool string) string {
+	return fmt.Sprintf("the phase agent on %s waits for your answer (%s), in the lead's terminal", phase, tool)
+}
+
 // WorkerRole reminds a worker, after a compaction, which phase it works on and where.
 func WorkerRole(title, file, phase, tree string) string {
 	return fmt.Sprintf("You are a worker on %s of the plan %q (%s), in a git worktree of your own (%s): the lead session and any other workers work on the other phases elsewhere.",

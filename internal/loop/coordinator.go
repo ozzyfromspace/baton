@@ -114,7 +114,7 @@ func (c *Coordinator) duties(v host.View) {
 // worker is a phase agent this host asked baton's mod to start in the lead's claude: its roster entry, its
 // sub-run, and its loop (Agent). spawn is the bridge's command starting it until the mod has acked it, issued
 // at launched; ending is why baton is ending it ("" while it is not), since endAt, and stop the command
-// stopping it, until acked.
+// stopping it, until acked. sending is the message to the agent not acked yet, sent at sentAt (line.go).
 type worker struct {
 	phase    string
 	entry    state.Worker
@@ -125,6 +125,8 @@ type worker struct {
 	ending   string
 	endAt    time.Time
 	stop     int
+	sending  int
+	sentAt   time.Time
 }
 
 // guarded runs fn, a part of a session's tick, so that a panic in it is logged, in l's log and at most

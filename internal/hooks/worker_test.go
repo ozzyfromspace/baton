@@ -458,3 +458,42 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 		t.Errorf("said %q", msg)
 	}
 }
+
+// baton's phase agents are the host's to steer: neither the lead's model nor an agent's may message one or
+// stop it (its id or its name, the phase), while baton's mod may, and so may a model with an agent of its
+// own.
+func TestAModelMayNotSteerAPhaseAgent(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	deny := func(f *fixture, tool string, in map[string]any) string {
+		out := f.fire("PreToolUse", map[string]any{"tool_name": tool, "tool_use_id": "toolu_9", "tool_input": in})
+		hso, _ := out["hookSpecificOutput"].(map[string]any)
+		if hso["permissionDecision"] != "deny" {
+			return ""
+		}
+		return hso["permissionDecisionReason"].(string)
+	}
+	for _, c := range []struct {
+		name string
+		f    *fixture
+		tool string
+		in   map[string]any
+	}{
+		{"the lead messages it", lead, "SendMessage", map[string]any{"to": "agent-p2", "message": "stop"}},
+		{"the lead messages it by its name", lead, "SendMessage", map[string]any{"to": "P2", "message": "stop"}},
+		{"the lead stops it", lead, "TaskStop", map[string]any{"task_id": "agent-p2"}},
+		{"it messages itself", w, "SendMessage", map[string]any{"to": "agent-p2", "message": "hi"}},
+	} {
+		if why := deny(c.f, c.tool, c.in); why != decide.AgentIsBatons(c.tool, "P2") {
+			t.Errorf("%s: %q", c.name, why)
+		}
+	}
+	if !lead.logged("refused", map[string]any{"tool": "TaskStop", "phase": "P2"}) {
+		t.Errorf("no refusal logged:\n%s", lead.eventLog())
+	}
+	if why := deny(lead, "SendMessage", map[string]any{"to": "a-helper", "message": "go on"}); why != "" {
+		t.Errorf("an agent of the model's own: %q", why)
+	}
+	if out := lead.fire("PreToolUse", map[string]any{"tool_name": "SendMessage", "tool_use_id": "toolu_plugin_3", "tool_input": map[string]any{"to": "agent-p2", "message": "go on"}}); len(out) != 0 {
+		t.Errorf("baton's mod: %v", out)
+	}
+}
