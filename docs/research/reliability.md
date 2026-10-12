@@ -1,5 +1,12 @@
 # Reliability review: what can stall or loop a run
 
+**In short:** which Claude Code behaviours could stall or loop an unattended run, and the "nothing waits forever"
+rework they led to: every gate baton waits on expires (a stale turn, a screen that keeps redrawing, background work, a
+draft), escalations clear themselves or are pushed again, a failed compaction is retried, API errors are classified,
+and the 90% context question goes ahead with "Keep going" after 20 minutes. Its "only `SessionStart(compact)` proves
+a compaction" became v0.8's proof ([`visible-workers.md`](visible-workers.md)), and its declared waits became v0.4's
+jobs ([`parallel.md`](parallel.md)).
+
 Measured and read on 2026-10-04 against Claude Code 2.1.289 (macOS, arm64), with [`spikes/15-gates-and-signals`](../../spikes/15-gates-and-signals) and the 2.1.289 binary. This is the evidence behind the "nothing waits forever" rework of the host loop and hooks.
 
 The question was which non-deterministic behaviors could stall an unattended run silently, loop and burn tokens, or otherwise waste hours.

@@ -1,5 +1,12 @@
 # Parallel worker sessions
 
+**Superseded in v0.8** by [`visible-workers.md`](visible-workers.md): the hidden worker sessions described here,
+with their pseudo-terminals, launches and `baton view`, are gone, and each phase beside the lead runs as a background
+agent of the lead's own session. What still holds: landing work under a live session (spike 25: `git merge --ff-only`
+after a rebase, never `update-ref` or `--autostash`, and the lead told what moved), hook feedback as the channel a
+model follows (spike 24), and the machine readings and leftovers behind `workers: auto` and `baton clean` (spikes 27
+and 28).
+
 Measured 2026-10-11 against **Claude Code 2.1.296** (macOS, arm64, git 2.50.1), mostly with Haiku and with Sonnet
 where Haiku set no clear bar. Four spikes: [`spikes/23-worker-start`](../../spikes/23-worker-start),
 [`24-relay`](../../spikes/24-relay), [`25-moving-branch`](../../spikes/25-moving-branch) and

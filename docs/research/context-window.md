@@ -1,5 +1,10 @@
 # Measuring the context (status line input and `--autocompact`)
 
+**In short:** the status line's `current_usage` is the exact context size, and `context_window_size` is the
+model's window, not baton's cap. Claude Code compacts on its own 33k tokens below `min(window, --autocompact cap)`.
+baton's checkpoint (60%) and its question to the human (90%) are tokens against that limit, moved earlier when a small
+window would put them after Claude Code's own compaction.
+
 Measured 2026-10-04 against Claude Code 2.1.289 on macOS (arm64), with [`spikes/14-context-window`](../../spikes/14-context-window). The thresholds come from reading the 2.1.289 binary.
 
 baton's context valves need two numbers the model cannot be trusted with: how big the context is, and where Claude Code will compact it on its own.

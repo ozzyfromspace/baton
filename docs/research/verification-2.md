@@ -1,5 +1,11 @@
 # Verification round 2 (P1)
 
+**In short:** the v0.1 plan's assumptions held on Claude Code 2.1.289. Hooks passed with `--settings` merge with
+the project's; the compaction brief lands before the rewake; a rewake turn arrives as a `<task-notification>` prompt;
+a `/compact` typed while the model is busy is queued; permission prompts and questions both fire `PermissionRequest`;
+the plugin's `bin/` is on the Bash tool's PATH; a Go hook starts in under 4 ms; and in auto mode an allow rule for
+`baton` holds where the classifier alone does not.
+
 Measured 2026-10-04 against Claude Code 2.1.289 on macOS (arm64). These runs checked the assumptions the v0.1 plan depends on before any baton code was written. Scripts are in [`/spikes`](../../spikes) (09–13). They are driven by `spikes/common/scenario.py`, a scripted PTY driver, and `spikes/common/hooklog.py`, a hook that logs every event's full input.
 
 ## Results

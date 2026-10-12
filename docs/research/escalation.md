@@ -1,8 +1,15 @@
 # Letting a run decide without the human (escalation spikes)
 
+**In short:** the evidence behind graduated escalation, now in [`design.md`](../design.md). Dialogs queue, and a
+digit typed into the wrong one can approve a command, so baton answers its own question only when it is the only
+dialog open, with the default at option 3 (since v0.8, where baton's mod runs, nothing types into a dialog at all).
+Replaying the signing incident, a question with a fallback still blocked 4 times in 4, and an action-first `propose`
+finished the plan 4 times in 4. A late answer works from baton's record alone, and a snapshot saves uncommitted work
+without touching anything else.
+
 Measured 2026-10-05 against Claude Code 2.1.289 on macOS (arm64), with
 [`spikes/16-escalation`](../../spikes/16-escalation). This is the evidence behind
-[`docs/escalation.md`](../escalation.md) as implemented in v0.2.
+[`docs/design.md`](../design.md) as implemented in v0.2.
 
 The design note left one question that gated everything else: **may baton answer its own
 `AskUserQuestion`?** A timed ask needs someone to answer it when nobody else does. That only works if

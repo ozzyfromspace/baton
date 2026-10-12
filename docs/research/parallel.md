@@ -1,5 +1,11 @@
 # Running phases concurrently, and never waiting on a gate
 
+**In short:** in four real runs, most of the wall clock went on waiting for gates (65% and 38% of the two long
+campaigns), with the model idle. Replayed against their real dependency graphs, two sessions that never wait, with
+two verification lanes, would have finished 1.44× and up to 2.24× faster; a third session adds about 1%, a chain
+gains about 10%, and re-verifying every merge can cancel the gain. This is why v0.4 hands long gates to baton (lanes,
+`verify`, `await`, switching between phases), and why v0.5 works on phases at once.
+
 Measured 2026-10-10 from four real baton runs, with three spikes against **Claude Code 2.1.296** (macOS, arm64):
 [`spikes/19-background-work`](../../spikes/19-background-work), [`20-tool-steering`](../../spikes/20-tool-steering),
 [`21-attach`](../../spikes/21-attach) and [`22-run-timelines`](../../spikes/22-run-timelines). Two of the runs are

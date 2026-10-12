@@ -1,5 +1,11 @@
 # What can trigger and resume a compaction? (spike findings)
 
+**In short:** only a keystroke in an interactive session (or a message on a headless session's stdin) starts a
+compaction; changing `autoCompactWindow` mid-session and a scheduled `/compact` do not. So baton owns the terminal: a
+PTY passthrough that types `/compact`, a `SessionStart(compact)` brief, an `asyncRewake` hook that wakes the model,
+and a Stop hook that refuses a stop without a status. The context is measured from the status line, never from what
+the model sees.
+
 Measured on 2026-10-04 against **Claude Code 2.1.289** (macOS, arm64). Scripts are in [`/spikes`](../../spikes). Most runs used `--model haiku`. Interactive runs drove a real `claude` TUI through a pseudo-terminal.
 
 ## The question

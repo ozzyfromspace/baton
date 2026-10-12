@@ -1,5 +1,12 @@
 # Workers you can see: phases as subagents of the lead
 
+**In short:** since v0.8, each phase beside the lead runs as a background subagent of the lead's own session, which
+Claude Code shows in its agent panel. A mod in baton's plugin spawns and messages the agents, asks the human and drops
+the agents' reports, on the host's say-so; baton's hooks, told apart by `agent_id`, brief and hold them. An agent's
+compaction hooks look like the lead's, so only a proof (the mod's report, or a loop's own transcript) moves a
+compaction. Every delivery to an agent is a message, `/clear` ends every agent, and nothing types into a dialog where
+the mod runs. Workflows were ruled out: a workflow agent cannot wait.
+
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
 scenarios) and [`spikes/32-phase-agents`](../../spikes/32-phase-agents) (what baton's design for it assumes; fourteen).

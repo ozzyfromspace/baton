@@ -1,5 +1,10 @@
 # Recovering a run: refusals, rewinds and crashes
 
+**In short:** a refused turn is told apart only by the transcript (Claude Code reports `invalid_request`), stays
+refused, and a fresh start from the brief can be refused too, so baton never retries one: the human rewinds or clears.
+A rewind fires no hook, but shows in the transcript's parent links by the turn's next hook, and cannot cross a
+compaction. A killed claude resumes with `--resume`, unless its transcript is gone. These led to v0.7's recovery.
+
 Measured 2026-10-11 and 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64), with Haiku, and from a real hosted
 run: a 21-phase plan hardening a web project's own code, with workers on, where the lead's turn was refused by the
 model's safeguards. Two spikes: [`spikes/29-rewind`](../../spikes/29-rewind) and

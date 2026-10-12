@@ -1,5 +1,10 @@
 # Plan approval and session identity
 
+**In short:** an approved plan shows as `PostToolUse(ExitPlanMode)` with the plan file's path (a plan sent back fires
+nothing), and a "clear context" approval as a `SessionEnd`/`SessionStart` pair with a new session id. `/clear` gives a
+new session id, `--resume` keeps it, and two sessions in one directory never share one. So baton attaches a plan
+itself on approval, keeps one run per session, carries it through `/clear`, and follows the plan file by its hash.
+
 Measured 2026-10-07 against Claude Code 2.1.292 on macOS (arm64), with `--model haiku` and [`spikes/17-sessions`](../../spikes/17-sessions). Every hook event's full input was logged (`hooklog.py`), and a scripted terminal (`common/scenario.py`) entered plan mode, approved or sent back a plan, cleared and resumed sessions.
 
 Two questions decided v0.3:
