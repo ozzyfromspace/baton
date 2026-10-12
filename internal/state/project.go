@@ -392,6 +392,26 @@ func (p *Project) WorktreeOf(run, dir string) string {
 	return ""
 }
 
+// PhaseAt returns the sub-run of the phase whose worktree holds dir, among the workers of the run session
+// (or else the host instance) belongs to, writing as that phase's worker instance (WorkerInstance of
+// instance). A phase agent shares the lead's session and its environment: where it works is what says
+// which phase it is, as its worktree is the phase's alone.
+func (p *Project) PhaseAt(session, instance, dir string) (*Store, bool) {
+	run := p.RunOf(session)
+	if run == "" {
+		run = p.HostRun(instance)
+	}
+	if run == "" || isWorker(run) || instance == "" {
+		return nil, false
+	}
+	phase := p.WorktreeOf(run, dir)
+	if phase == "" {
+		return nil, false
+	}
+	s, err := p.Run(WorkerRef(run, phase), WorkerInstance(instance, phase))
+	return s, err == nil
+}
+
 // Lookup returns the run session (or else the host instance) belongs to, without binding anything.
 func (p *Project) Lookup(session, instance string) (*Store, bool) {
 	id := p.RunOf(session)

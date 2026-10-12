@@ -525,3 +525,25 @@ func TestAttachSaysHowManyWorkersRun(t *testing.T) {
 		})
 	}
 }
+
+// A phase agent shares the lead's session and its environment, so the baton command in one is its phase's
+// by where it runs: inside the phase's worktree it is the phase's (its decisions, its done), and refused
+// what belongs to the lead; anywhere else it is the lead's.
+func TestTheBatonCommandInAPhaseAgentIsItsPhases(t *testing.T) {
+	w, lead := asWorker(t)
+	tree := w.store().Root
+	os.MkdirAll(filepath.Join(tree, "pkg"), 0o755)
+	t.Chdir(filepath.Join(tree, "pkg"))
+	lead.mustFail("baton pause belongs to the lead session. Carry on with P1", "pause")
+	lead.must("", "note", "used a fake clock", "--undo", "revert the commit")
+	lead.must("", "done", "P1", "--notes", "P1 is done.")
+	if ws, ls := w.state(), lead.state(); ws.Mode != state.ModeComplete || len(ws.Decisions) != 1 || ws.Decisions[0].ID != "P1.d1" ||
+		len(ls.Decisions) != 0 || ls.Mode != state.ModeRunning || ls.Current != "P0" {
+		t.Errorf("the phase's run %s %+v; the lead's %s on %s %+v", ws.Mode, ws.Decisions, ls.Mode, ls.Current, ls.Decisions)
+	}
+	t.Chdir(filepath.Dir(lead.env["BATON_DIR"]))
+	lead.must("", "note", "the lead's own", "--undo", "nothing")
+	if ls := lead.state(); len(ls.Decisions) != 1 || ls.Decisions[0].ID != "d1" {
+		t.Errorf("the lead's decisions %+v", ls.Decisions)
+	}
+}

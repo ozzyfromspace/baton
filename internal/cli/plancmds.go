@@ -59,6 +59,9 @@ func store(io IO) (*state.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s, ok := inPhase(io, p); ok {
+		return s, nil
+	}
 	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
 	if s, ok := p.Lookup(sid, inst); ok {
 		return s, nil
@@ -79,11 +82,28 @@ func attachTo(io IO) (*state.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s, ok := inPhase(io, p); ok {
+		return s, nil
+	}
 	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
 	if sid != "" || inst != "" {
 		return p.Bind(state.Binding{Session: sid, Instance: inst, Worker: worker(io)})
 	}
 	return p.Pending("")
+}
+
+// inPhase is the sub-run of the phase agent a command runs in, if it runs in one: hosted, in the lead's
+// session, inside one of the worktrees of its run's phases (state.Project.PhaseAt). A phase agent shares
+// the lead's session and environment; only where it works says that a command is the agent's.
+func inPhase(io IO, p *state.Project) (*state.Store, bool) {
+	if !hosted(io) || io.Env("BATON_ROLE") == "worker" {
+		return nil, false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, false
+	}
+	return p.PhaseAt(io.Env("CLAUDE_CODE_SESSION_ID"), io.Env("BATON_INSTANCE"), cwd)
 }
 
 func fail(io IO, format string, a ...any) int {
@@ -93,8 +113,22 @@ func fail(io IO, format string, a ...any) int {
 
 func hosted(io IO) bool { return io.Env("BATON_HOST") == "1" }
 
-// worker reports whether a command runs in a worker's session, which works on one phase of its run.
-func worker(io IO) bool { return hosted(io) && io.Env("BATON_ROLE") == "worker" }
+// worker reports whether a command runs for a worker, which works on one phase of its run: in a worker's
+// session, or in a phase agent (inPhase).
+func worker(io IO) bool {
+	if !hosted(io) {
+		return false
+	}
+	if io.Env("BATON_ROLE") == "worker" {
+		return true
+	}
+	p, err := project(io)
+	if err != nil {
+		return false
+	}
+	_, ok := inPhase(io, p)
+	return ok
+}
 
 func cmdAttach(args []string, io IO) int {
 	p, err := parseArgs(args, []string{"spec"}, []string{"suggest", "suggested", "replace"})
