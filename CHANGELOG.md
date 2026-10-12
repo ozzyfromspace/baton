@@ -4,6 +4,69 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-12
+
+v0.7's workers were hidden sessions, each in a pseudo-terminal of baton's own: easy for baton to drive, and
+hard to follow. You couldn't tell how many ran, on which phases, or whether the run was moving at all. Now
+each phase beside your session runs as a Claude Code background agent of that session, in the terminal
+you're already watching: a row per phase agent in the agent panel, its transcript a keystroke away, its
+prompts and questions in place, and baton's band above the prompt with the whole run. The experiments
+behind it are in [docs/research/visible-workers.md](docs/research/visible-workers.md).
+
+A session hosted by v0.7 stays on its version after you update (before 1.0, a minor release counts as a
+major one) and says so once: exit and run `baton --continue` to move it to v0.8.
+
+### Added
+- **Phase agents.** Each phase that can go ahead beside your session runs as a background agent of it, in a
+  git worktree and on a branch of its own, started, messaged and stopped by baton's mod on the host's
+  say-so. Each gets your session's guarantees from baton's hooks, never from a model's memory: a brief as
+  it starts, a stop without a status refused, gate results and answers delivered as messages, its context
+  read from its own transcript and its checkpoint taken as a fresh agent, a refused, failed or interrupted
+  turn handled by the host, and a return after a crash or a `/clear`. Its reports go to baton, not to your
+  session's model.
+- **baton's mod** (`plugin/hooks/baton.js`): JavaScript that Claude Code runs in your session, a thin
+  executor that decides and words nothing. Where Claude Code doesn't load it (an organization that allows
+  only managed mods, or an older Claude Code), the plan runs one phase at a time in your session, and baton
+  says so.
+- **The band**, one line above the prompt with the plan's step and each phase:
+  `◆ baton · step 2/4 · P3 ⚙ 12m · P4 verifying 3m · P5 waits on P3 · lead: waiting on j4`.
+- **`/baton board`**, `/baton-board` (which opens while Claude works) and `baton board` (`--band`,
+  `--width`, `--json`): every step and phase with how it stands, its agent, job and landing, and what your
+  session is doing.
+- **A phase agent's question comes to you in Claude Code's own dialog**, without stopping your session's
+  turn, and your answer goes to the agent. Wait for me leaves only that phase waiting, until `/baton run`
+  asks you again.
+- **A phase added mid-run is taken up at once** when your session holds no phase, rather than after a
+  running job ends.
+- `baton verify` and `baton await` also take a gate as its words after `--`
+  (`baton verify --notes "…" -- make test`). A phase agent gives its gates that way, and baton rewrites a
+  quoted one into it, since Claude Code's worktree guard refuses a quoted command that starts with a shell.
+
+### Changed
+- **A compaction counts only on proof.** A phase agent's compaction fires the same hooks as your session's,
+  with nothing to tell them apart, so those hooks now change nothing. The proof is the mod's report of your
+  session's compaction, or a new boundary in a conversation's own transcript, and the brief after a
+  compaction comes with the wake-up, for every kind of compaction.
+- **Where baton's mod runs, baton's questions are settled at their deadline with no key typed.** In Claude
+  Code 2.1.296 a permission prompt's third option is "Yes, and switch to auto mode", so the `3` baton typed
+  could have approved a command that was in front of its question. Without the mod, the typed `3` stays,
+  only while baton's question is the only dialog open.
+- **A phase agent's permission prompt shows in your terminal,** the band shows `P3 needs you`, and baton
+  pushes if it waits.
+- **The status line** keeps your session's segment; the phase agents are on the band.
+- **baton makes every worktree Claude Code asks for in a hosted session:** phase agents' under
+  `~/.baton/worktrees/`, and a model's own isolated subagents' as Claude Code would make them, but without
+  `.worktreeinclude`, `worktree.symlinkDirectories` or `worktree.sparsePaths`.
+- **A model's own call to baton's agent type is refused,** as its messages to baton's agents and its stops
+  of them are: only baton starts, steers and ends phase agents.
+- **The docs are much shorter.** The README is about a quarter of its length, and
+  [docs/design.md](docs/design.md) replaces docs/plan.md and docs/escalation.md. Each research note opens
+  with a summary.
+
+### Removed
+- **The hidden worker sessions:** baton no longer launches a claude of its own for a phase, and
+  `baton view` and `/baton view` are gone.
+
 ## [0.7.0] - 2026-10-12
 
 v0.6 ran a plan unattended until something stopped the lead in a way baton couldn't retry. A turn the
@@ -472,7 +535,7 @@ A run no longer stops for something it can work around. When something goes wron
 it did, proposes a way forward that goes ahead unless you object in time, or blocks, saying what it
 tried. Whenever the run does halt, baton saves any uncommitted work, and every decision made without you
 is recorded with its undo. The same replay now finishes the plan. The design and the experiments behind it
-are in [docs/escalation.md](docs/escalation.md).
+are in [docs/design.md](docs/design.md).
 
 ### Security
 - **baton could type into a dialog that wasn't its own.** v0.1.1 answered its context question (the 90%
@@ -683,7 +746,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ozzyfromspace/baton/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ozzyfromspace/baton/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ozzyfromspace/baton/compare/v0.4.0...v0.5.0
