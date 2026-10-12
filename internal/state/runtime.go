@@ -60,6 +60,16 @@ type Runtime struct {
 	IdleNudges int `json:"idle_nudges,omitempty"`
 
 	Compaction Compaction `json:"compaction"`
+	// ModReports is when baton's mod last reported a compaction of the lead begun (Report). Where the mod
+	// runs, it reports each one as it begins, so a /compact baton typed that it says nothing of soon did
+	// not take; where it does not (this claude has not shown it yet), only the compaction's proof can say.
+	ModReports time.Time `json:"mod_reports,omitzero"`
+	// Proven is where the lead's transcript stood when baton last knew of every compaction in it: a compact
+	// boundary past it is a compaction baton has not counted yet (Boundary). nil until a hook of the lead's
+	// own marks it (Remark).
+	Proven *Mark `json:"proven,omitempty"`
+	// Briefing is the brief a compaction proven over owes the model, until it is given (Compacted).
+	Briefing *Briefing `json:"briefing,omitempty"`
 	// Notices are messages for the human that the host sends out of band (push and desktop), then clears.
 	Notices []Notice `json:"notices,omitempty"`
 	// Announce are lines for the human about what the host did on its own, such as a verification it
@@ -109,6 +119,19 @@ type Runtime struct {
 	// not be resumed: once per phase. nil: none yet.
 	Recoveries []Recovery `json:"recoveries,omitempty"`
 	FreshFor   *string    `json:"fresh_for,omitempty"`
+}
+
+// Briefing is a brief baton owes the model after a compaction: of its kind (the brief package's: boundary,
+// switch, resume, checkpoint, auto), for phase, with the finished job a resumed phase was set aside for
+// (Job). Wake says the compaction was baton's: the rewake wakes the model with the brief. Any other is
+// given with the next tool call or prompt, since the conversation goes on by itself (or the human goes on
+// with it).
+type Briefing struct {
+	Kind  string    `json:"kind"`
+	Phase string    `json:"phase"`
+	Job   string    `json:"job,omitempty"`
+	Wake  bool      `json:"wake,omitempty"`
+	At    time.Time `json:"at"`
 }
 
 // Mark is where a session's transcript stood when a prompt was submitted (transcript.Mark): the file, its
@@ -258,9 +281,9 @@ type Task struct {
 // Compaction statuses, in order.
 const (
 	CompactQueued = "queued" // baton decided to compact; the host types /compact when it is safe
-	CompactTyped  = "typed"  // the host typed it; waiting for PreCompact
-	CompactActive = "active" // PreCompact fired: Claude Code is summarizing
-	CompactDone   = "done"   // PostCompact fired
+	CompactTyped  = "typed"  // the host typed it; waiting for proof it has begun (the mod's) or is over
+	CompactActive = "active" // proven begun: Claude Code is summarizing
+	CompactDone   = "done"   // proven over
 	CompactFailed = "failed" // no acknowledgement or completion in time; escalated
 	// CompactCancelled: a switch called off before its compaction was typed, as the job it was for ended.
 	CompactCancelled = "cancelled"
@@ -280,8 +303,8 @@ type Compaction struct {
 	// it was the one baton requested.
 	Trigger string `json:"trigger,omitempty"`
 	ByBaton bool   `json:"by_baton,omitempty"`
-	// Rewoken is the last epoch whose completion woke the model, so each compaction wakes it once.
-	Rewoken int `json:"rewoken,omitempty"`
+	// Reported is the mod's report of the lead's compaction over, kept for the rewake (state.Report).
+	Reported *ModReport `json:"reported,omitempty"`
 	// Nudged is when baton typed a reminder because the model did not resume after this compaction.
 	Nudged time.Time `json:"nudged,omitzero"`
 	// FailedAt and Rounds: when baton last gave up on this compaction, and how many times it started
@@ -294,7 +317,7 @@ type Compaction struct {
 
 // Queue asks the host to compact, for reason ("boundary", "checkpoint" or "switch"), as a new epoch.
 func (c *Compaction) Queue(reason string, now time.Time) {
-	*c = Compaction{Epoch: c.Epoch + 1, Status: CompactQueued, Reason: reason, Queued: now, Rewoken: c.Rewoken}
+	*c = Compaction{Epoch: c.Epoch + 1, Status: CompactQueued, Reason: reason, Queued: now}
 }
 
 // StartsPhase reports a compaction after which another phase is taken up: a boundary, or a switch.

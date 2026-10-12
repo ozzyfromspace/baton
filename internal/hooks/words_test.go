@@ -52,7 +52,7 @@ func TestTheWordingFitsTheProject(t *testing.T) {
 				st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactActive, Reason: "boundary", ByBaton: true}
 				return err
 			})
-			said["brief"] = additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
+			_, said["brief"] = f.compacted("manual")
 
 			for name, text := range said {
 				commit := strings.Contains(strings.ToLower(text), "commit")

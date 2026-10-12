@@ -30,8 +30,8 @@ type Timing struct {
 	Quiet          time.Duration // the screen must be still this long before baton types
 	QuietMax       time.Duration // a screen that never settles (a status line redrawn every second) is ignored after this
 	HandsOff       time.Duration // and the human must not have typed for this long
-	AckTimeout     time.Duration // PreCompact must fire this soon after typing /compact
-	CompactTimeout time.Duration // PostCompact must fire this soon after PreCompact
+	AckTimeout     time.Duration // a compaction must show it began (a hook, or the mod's report) this soon after typing /compact
+	CompactTimeout time.Duration // and its proof must come this soon after it began
 	FailedRetry    time.Duration // a failed compaction is tried again after this, then 3× longer each round
 	ResumeNudge    time.Duration // no turn this long after a compaction: type a reminder
 	ResumeEscalate time.Duration // still nothing this long after the reminder: bring the human in
@@ -230,7 +230,15 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 		l.typeCompact(v, st, in)
 	case state.CompactTyped:
-		if v.Now.Sub(l.since(comp.Typed)) > l.Timing.AckTimeout {
+		switch since := v.Now.Sub(l.since(comp.Typed)); {
+		case st.Run.ModReports.IsZero():
+			// Nothing reports a compaction as it begins (the mod moves it to active at once where it runs):
+			// only its proof says it happened, when it is over. Typing /compact again before then could
+			// queue a second.
+			if since > l.Timing.CompactTimeout {
+				l.fail(comp, fmt.Sprintf("no proof came within %s that the compaction happened", l.Timing.CompactTimeout))
+			}
+		case since > l.Timing.AckTimeout:
 			if comp.Tries < MaxTries {
 				l.update(func(st *state.State) { st.Run.Compaction.Status = state.CompactQueued })
 				l.Store.Event("compact_retry", map[string]any{"epoch": comp.Epoch, "tries": comp.Tries})

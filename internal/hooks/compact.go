@@ -1,151 +1,258 @@
 package hooks
 
 import (
-	"fmt"
 	"os"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/brief"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// afterCompaction runs for SessionStart with source "compact": it starts the next phase if this was a
-// boundary or a switch, and injects the brief, which says which it was. Claude Code runs this before PostCompact, so the brief is
-// in place before the rewake wakes the model (docs/research/verification-2.md). A phase resumed after its
-// job finished gets the job's result in its brief. ann is what the host left for the human.
-func (h *handlers) afterCompaction(c Context, s *state.Store, ann string) (Result, error) {
-	pl, err := s.LoadPlan()
+// A phase agent's compaction fires PreCompact, SessionStart(compact) and PostCompact as the lead's does,
+// with no agent_id and the lead's transcript_path (spike 31), so none of them can say whose compaction it
+// is. They move nothing: what baton knows of a compaction changes only on a proof (state.Proof), and the
+// rewake is where the lead's is found, counted, and briefed (docs/research/visible-workers.md).
+
+// compactionHook reports a hook a compaction fires: PreCompact, SessionStart(compact), PostCompact, and the
+// rewake registered beside PostCompact.
+func compactionHook(c Context) bool {
+	switch c.Event {
+	case "PreCompact", "PostCompact", "PostCompactRewake":
+		return true
+	case "SessionStart":
+		return str(c.Input, "source") == "compact"
+	}
+	return false
+}
+
+// compactSeen is all PreCompact, SessionStart(compact) and PostCompact do: they log compact_seen, with the
+// prompt_id that tells one loop's hooks from another's, for a run this host drives.
+func (h *handlers) compactSeen(c Context) (Result, error) {
+	s, err := h.d.Open(c)
 	if err != nil {
+		return Result{}, ok(err)
+	}
+	if st, err := s.Load(); err != nil || !st.IsOwner(s.Instance, c.Now) {
 		return Result{}, nil
 	}
+	fields := map[string]any{"hook": c.Event, "prompt_id": str(c.Input, "prompt_id")}
+	if t := str(c.Input, "trigger"); t != "" {
+		fields["trigger"] = t
+	}
+	if c.Event == "SessionStart" {
+		fields["source"] = "compact"
+	}
+	s.Event("compact_seen", fields)
+	return Result{}, nil
+}
+
+// rewakeWait bounds how long the rewake waits for proof that the lead compacted: the lead's boundary is
+// written within a fifth of a second of PostCompact (spike 32), and a phase agent's compaction, which fires
+// the same hooks, gives none. rewakePoll is how often it looks.
+var rewakeWait, rewakePoll = 30 * time.Second, 100 * time.Millisecond
+
+// sleep waits between looks (a variable, so a test need not wait).
+var sleep = time.Sleep
+
+// postCompactRewake runs in the background after every PostCompact ("asyncRewake"), the lead's or a phase
+// agent's alike. It is the one path that counts a compaction of the lead, and only on proof: a compact
+// boundary in the lead's transcript past baton's mark (state.Boundary), waited for up to rewakeWait, or
+// the mod's report of the compaction (state.Kept) when the transcript cannot say. A compaction baton asked
+// for (or owed) wakes the model with its brief, exactly once; any other leaves its brief for the model's
+// next tool call or prompt, since the conversation goes on by itself (or the human goes on with it). With
+// no proof, nothing changes, and a compaction baton still owes is the watchdog's (compaction_failed).
+func (h *handlers) postCompactRewake(c Context) (Result, error) {
+	s, err := h.d.Open(c)
+	if err != nil {
+		return Result{}, ok(err)
+	}
+	path := str(c.Input, "transcript_path")
+	var from int64
+	for waited := time.Duration(0); ; waited += rewakePoll {
+		st, err := s.Load()
+		if err != nil || !st.IsOwner(s.Instance, c.Now) {
+			return Result{}, nil
+		}
+		if b := st.Run.Briefing; b != nil && b.Wake {
+			return h.wake(c, s)
+		}
+		p, next, found := state.Boundary(path, st.Run.Proven, from)
+		from = next
+		if !found && (waited >= rewakeWait || !readable(st, path)) {
+			p, found = state.Kept(st)
+		}
+		if found {
+			// Counted here, or by another rewake an instant before (it then wakes the model, if anyone does).
+			counted, wake, err := h.prove(c, s, p)
+			switch {
+			case err != nil:
+				return Result{}, ok(err)
+			case wake:
+				return h.wake(c, s)
+			case counted:
+				return Result{}, nil
+			}
+		}
+		if waited >= rewakeWait {
+			return Result{}, nil
+		}
+		sleep(rewakePoll)
+	}
+}
+
+// readable reports a lead's transcript baton can read for proof: it has a mark in it, and it is there.
+func readable(st state.State, path string) bool {
+	if m := st.Run.Proven; m == nil || m.Path != path {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// prove counts the compaction of the lead that p proves (state.Compacted), owes its brief, and logs what it
+// did. It reports whether it counted it, and whether the brief it owes wakes the model: the compaction was
+// baton's.
+func (h *handlers) prove(c Context, s *state.Store, p state.Proof) (counted, wake bool, err error) {
+	pl, _ := s.LoadPlan()
 	// What the repository looks like as the next phase starts (read before taking the lock: git can be
 	// slow). Only a boundary starts a phase.
 	var origin state.Origin
 	if cur, err := s.Load(); err == nil && cur.BoundaryOwed {
 		origin = state.OriginOf(s.Root)
 	}
-	kind := ""
-	var result *state.Job // the job a resumed phase was set aside for, now finished
-	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		st.Run.WarnOwed = false // the context the question was about is gone
-		if st.Mode != state.ModeRunning {
+	var a state.After
+	var applied bool
+	var owed *state.Briefing
+	var park *state.Park
+	st, err := s.Update(func(st *state.State) error {
+		if !st.IsOwner(s.Instance, c.Now) {
+			return errNotOwner
+		}
+		if a, applied = state.Compacted(st, p, c.Now, origin); !applied || st.Mode != state.ModeRunning {
 			return nil
 		}
-		comp := &st.Run.Compaction
-		ours := comp.ByBaton && comp.Status == state.CompactActive
-		if !ours && (st.BoundaryOwed || st.CheckpointOwed) {
-			// Claude Code compacted on its own while a compaction was owed: that one counts.
-			adoptOwed(st, c.Now)
-			comp.Trigger, ours = "auto", true
+		st.Run.LastActivity = c.Now
+		owed = &state.Briefing{Kind: briefKind(a), Phase: st.Current, Wake: a.Reason != "", At: c.Now}
+		if a.Result != nil {
+			owed.Job = a.Result.ID
 		}
-		switch {
-		case ours && comp.StartsPhase() && st.BoundaryOwed:
-			kind = brief.Boundary
-			if comp.Reason == "switch" {
-				kind = brief.Switch
-			}
-			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
-				kind = brief.Resume
-				if j := st.Job(parkJob(ps.Park)); j != nil && j.Finished() {
-					if j.Delivered.IsZero() {
-						j.Delivered = c.Now
-					}
-					x := *j
-					result = &x
-				}
-			}
-			state.Start(st, c.Now, origin)
-		case ours && comp.Reason == "checkpoint":
-			kind = brief.Checkpoint
-			st.CheckpointOwed = false
-		default:
-			// Mid-phase auto-compaction: the turn continues by itself, and nothing of baton's is pending.
-			kind = brief.Auto
-			if !ours {
-				comp.ByBaton, comp.Trigger = false, "auto"
-			}
+		if ps := st.Phases[st.Current]; ps != nil {
+			park = ps.Park
 		}
+		st.Run.Briefing = owed
+		msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
+		switch owed.Kind {
+		case brief.Boundary, brief.Switch:
+			msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
+		case brief.Resume:
+			msg = "baton: " + phaseTitle(pl, st.Current) + " resumes now, from where it was set aside"
+		}
+		st.Run.Announce = append(st.Run.Announce, msg)
 		return nil
 	})
-	if err != nil || kind == "" {
-		return Result{}, ok(err)
+	if err != nil || !applied {
+		return false, false, err
 	}
-	doc, _ := os.ReadFile(pl.File)
-	handoff, _ := os.ReadFile(s.HandoffPath())
-	in := brief.Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s), Decisions: s.Decisions(st)}
-	if s.Worker() != "" {
-		in.Tree, in.Needs = s.Root, builtOn(s, st.Current)
+	if a.Unseen {
+		s.Event("compact_started", map[string]any{"trigger": a.Trigger, "by_baton": a.ByBaton, "epoch": a.Epoch, "reason": st.Run.Compaction.Reason, "proof": a.Proof})
 	}
-	if result != nil {
-		in.Result = jobResult(s, *result, nil)
-	}
-	text := brief.Write(in)
-	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
-	switch kind {
-	case brief.Boundary, brief.Switch:
-		msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
+	s.Event("compact_finished", map[string]any{"trigger": a.Trigger, "by_baton": a.ByBaton, "epoch": a.Epoch, "proof": a.Proof})
+	switch {
+	case owed == nil:
+	case owed.Kind == brief.Boundary || owed.Kind == brief.Switch:
 		s.Event("phase_started", map[string]any{"phase": st.Current})
-	case brief.Resume:
-		msg = "baton: " + phaseTitle(pl, st.Current) + " resumes now, from where it was set aside"
+	case owed.Kind == brief.Resume:
 		resumed := map[string]any{"phase": st.Current}
-		if pk := st.Phases[st.Current].Park; pk != nil {
-			resumed["reason"] = pk.Reason
+		if park != nil {
+			resumed["reason"] = park.Reason
 		}
 		s.Event("phase_resumed", resumed)
 	}
-	if result != nil {
-		delivery{jobs: []state.Job{*result}}.event(s, "brief")
-	}
-	s.Event("brief", map[string]any{"type": kind, "phase": st.Current, "chars": len(text)})
-	return Result{Output: map[string]any{
-		"systemMessage": lines(ann, msg),
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "SessionStart",
-			"additionalContext": text,
-		},
-	}}, nil
+	return true, owed != nil && owed.Wake, nil
 }
 
-// postCompactRewake runs in the background after a manual compaction ("asyncRewake"). If baton asked
-// for that compaction, it wakes the idle model exactly once per compaction.
-func (h *handlers) postCompactRewake(c Context) (Result, error) {
-	s, err := h.d.Open(c)
-	if err != nil {
-		return Result{}, err
+// briefKind is the kind of brief a proven compaction owes (brief.Write).
+func briefKind(a state.After) string {
+	switch {
+	case a.Started && a.Resumed:
+		return brief.Resume
+	case a.Started && a.Reason == "switch":
+		return brief.Switch
+	case a.Started:
+		return brief.Boundary
+	case a.Reason == "checkpoint":
+		return brief.Checkpoint
 	}
-	pl, _ := s.LoadPlan()
-	var msg string
-	var epoch int
-	_, _, err = h.update(c, func(st *state.State, _ *state.Store) error {
-		comp := &st.Run.Compaction
-		if !comp.ByBaton || comp.Epoch <= comp.Rewoken || st.Mode != state.ModeRunning {
-			return nil
+	return brief.Auto
+}
+
+// wake takes the brief a compaction baton asked for owes the model (Runtime.Briefing) and wakes the model
+// with it, under the line that says what to do now: exactly once, whichever rewake (or prompt, or tool
+// call) takes it first. A plan no longer running is owed nothing.
+func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
+	var b *state.Briefing
+	st, err := s.Update(func(st *state.State) error {
+		if !st.IsOwner(s.Instance, c.Now) {
+			return errNotOwner
 		}
-		if comp.Status != state.CompactActive && comp.Status != state.CompactDone && comp.Status != state.CompactFailed {
-			return nil // (Failed: PostCompact, running alongside, is promoting a late finish to Done)
-		}
-		comp.Rewoken, epoch = comp.Epoch, comp.Epoch
-		if comp.StartsPhase() {
-			verb := "Begin"
-			if st.Resumed() {
-				verb = "Resume"
+		if x := st.Run.Briefing; x != nil && x.Wake {
+			st.Run.Briefing = nil
+			if st.Mode == state.ModeRunning {
+				b = x
 			}
-			msg = fmt.Sprintf("%s Context compacted. %s %s now — the brief above has your instructions.", NudgePrefix, verb, phaseTitle(pl, st.Current))
-		} else {
-			msg = fmt.Sprintf("%s Context compacted at your checkpoint. Continue %s.", NudgePrefix, phaseTitle(pl, st.Current))
 		}
 		return nil
 	})
-	if err != nil || msg == "" {
+	if err != nil || b == nil {
 		return Result{}, ok(err)
 	}
-	s.Event("rewake", map[string]any{"epoch": epoch})
-	return Result{Rewake: msg}, nil
+	pl, _ := s.LoadPlan()
+	text := h.briefed(c, s, st, *b, "rewake")
+	line := decide.Compacted(phaseTitle(pl, b.Phase), b.Kind != brief.Checkpoint, b.Kind == brief.Resume)
+	s.Event("rewake", map[string]any{"epoch": st.Run.Compaction.Epoch})
+	if text != "" {
+		line = text + "\n\n" + line
+	}
+	return Result{Rewake: line}, nil
 }
 
-// parkJob is the job a park waits for ("" for none).
-func parkJob(pk *state.Park) string {
-	if pk == nil {
+// takeBriefing takes the brief a compaction owes the model, to give it with a tool call or a prompt of the
+// session's main agent (one baton's rewake has not given yet, or one that never wakes the model).
+func takeBriefing(c Context, st *state.State) *state.Briefing {
+	b := st.Run.Briefing
+	if b == nil || str(c.Input, "agent_id") != "" {
+		return nil
+	}
+	st.Run.Briefing = nil
+	if st.Mode != state.ModeRunning {
+		return nil
+	}
+	return b
+}
+
+// briefed writes the brief b owes, as the state st stands, and logs that it was given (via the rewake, a
+// tool call or a prompt), with the job result it carries.
+func (h *handlers) briefed(c Context, s *state.Store, st state.State, b state.Briefing, via string) string {
+	pl, err := s.LoadPlan()
+	if err != nil {
 		return ""
 	}
-	return pk.Job
+	doc, _ := os.ReadFile(pl.File)
+	handoff, _ := os.ReadFile(s.HandoffPath())
+	in := brief.Input{Kind: b.Kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s), Decisions: s.Decisions(st)}
+	if s.Worker() != "" {
+		in.Tree, in.Needs = s.Root, builtOn(s, st.Current)
+	}
+	var result *state.Job
+	if j := st.Job(b.Job); b.Job != "" && j != nil {
+		result = j
+		in.Result = jobResult(s, *j, nil)
+	}
+	text := brief.Write(in)
+	if result != nil {
+		delivery{jobs: []state.Job{*result}}.event(s, "brief")
+	}
+	s.Event("brief", map[string]any{"type": b.Kind, "phase": b.Phase, "chars": len(text), "via": via})
+	return text
 }

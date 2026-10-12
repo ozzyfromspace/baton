@@ -99,8 +99,8 @@ func Handlers(d Deps) map[string]Handler {
 		"SubagentStop":       h.subagentStop,
 		"Stop":               h.stop,
 		"StopFailure":        h.stopFailure,
-		"PreCompact":         h.preCompact,
-		"PostCompact":        h.postCompact,
+		"PreCompact":         h.compactSeen,
+		"PostCompact":        h.compactSeen,
 		"PostCompactRewake":  h.postCompactRewake,
 		"SessionStartRewake": h.sessionStartRewake,
 	}
@@ -132,8 +132,9 @@ type handlers struct{ d Deps }
 
 // update applies fn to the state of the hook's run (its loop's: OpenRun) if this host drives it;
 // otherwise (the same conversation resumed in another terminal while the first still runs it) the hook is
-// dormant. Only a session's main agent says what the session is (its id, its permission mode): a
-// subagent's hook, a phase agent's among them, carries the lead's session.
+// dormant. Only a session's main agent says what the session is (its id, its permission mode) and where its
+// transcript stands (state.Remark): a subagent's hook, a phase agent's among them, carries the lead's
+// session and transcript, and a compaction hook may be any loop's.
 func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
 	s, err := h.d.Open(c)
 	if err != nil {
@@ -153,6 +154,9 @@ func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) er
 			}
 			if pm := str(c.Input, "permission_mode"); pm != "" {
 				st.Run.PermissionMode = pm
+			}
+			if !compactionHook(c) {
+				state.Remark(st, str(c.Input, "transcript_path"), c.Now)
 			}
 		}
 		rewind = noticeRewind(c, st, s)
@@ -501,6 +505,9 @@ func (h *handlers) activity(c Context) (Result, error) {
 
 func (h *handlers) sessionStart(c Context) (Result, error) {
 	source := str(c.Input, "source")
+	if source == "compact" {
+		return h.compactSeen(c)
+	}
 	var pl plan.Plan
 	var havePlan bool
 	var events []event
@@ -511,7 +518,8 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		st.Run.Ended = nil
 		ann = announced(st)
 		if source == "startup" || source == "resume" {
-			st.Run.ExitAt = time.Time{} // a session started anew is not on its way out of baton
+			st.Run.ExitAt = time.Time{}     // a session started anew is not on its way out of baton
+			st.Run.ModReports = time.Time{} // and its claude has yet to show it runs baton's mod
 			if e := st.Run.Escalation; e != nil && e.Kind == "crashed" {
 				// claude runs again: the human resumed the session baton stopped bringing back.
 				st.Run.Escalation, cleared = nil, e.Kind
@@ -525,8 +533,8 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 				fresh = &rec
 			}
 		}
-		// A new conversation (or one /clear started over) has nothing before its first turn; a resumed or
-		// compacted one has.
+		// A new conversation (or one /clear started over) has nothing before its first turn; a resumed one
+		// has.
 		st.Run.History = source != "startup" && source != "clear"
 		if source == "clear" {
 			// The conversation that grew while baton was paused is gone: there is nothing to checkpoint.
@@ -543,14 +551,12 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 			}
 			st.Run.Restart = nil
 		}
-		if source != "compact" {
-			st.Run.TurnOpen, st.Run.Subagents, st.Run.Tools, st.Run.Mark = false, 0, nil, nil
-			st.Run.Dialogs.Clear()
-			events, _ = vanished(st, c.Now, false)
-		}
+		st.Run.TurnOpen, st.Run.Subagents, st.Run.Tools, st.Run.Mark = false, 0, nil, nil
+		st.Run.Dialogs.Clear()
+		events, _ = vanished(st, c.Now, false)
 		return nil
 	})
-	if err == errNotOwner && source != "compact" {
+	if err == errNotOwner {
 		return Result{Output: map[string]any{"systemMessage": "baton: another baton terminal is running this conversation's plan; " +
 			"this one leaves it alone until that one exits"}}, nil
 	}
@@ -579,9 +585,6 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	}
 	if p, err := s.LoadPlan(); err == nil && st.Mode != state.ModeIdle {
 		pl, havePlan = p, true
-	}
-	if source == "compact" {
-		return h.afterCompaction(c, s, ann)
 	}
 	if s.Worker() != "" && source == "startup" && havePlan {
 		return h.workerStart(c, s, pl, ann)
@@ -856,9 +859,11 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	var dl delivery
 	var news news
 	var ask, asker string
-	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+	var owed *state.Briefing
+	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
-		st.Run.ToolsEnded("") // a prompt starts a turn: no call of the last one runs
+		owed = takeBriefing(c, st) // a compaction's brief not given yet comes first
+		st.Run.ToolsEnded("")      // a prompt starts a turn: no call of the last one runs
 		st.Run.Mark = nil
 		if st.Mode == state.ModeRunning {
 			st.Run.Mark = mark
@@ -915,6 +920,9 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		return Result{}, ok(err)
 	}
 	s.Event("turn_started", map[string]any{"by": by})
+	if owed != nil {
+		tell = strings.TrimSpace(h.briefed(c, s, st, *owed, "prompt") + "\n\n" + tell)
+	}
 	s.ToldWorkers(told)
 	var says []string
 	if ann != "" {
@@ -1061,7 +1069,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var notes, ann string
 	var dl delivery
 	var news news
-	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+	var owed *state.Briefing
+	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.ToolEnded(str(c.Input, "tool_use_id"), c.Agent, tool)
 		closed, _ := st.Run.Dialogs.CloseExact(c.Agent, tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" {
@@ -1077,6 +1086,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			return nil
 		}
 		if c.Event == "PostToolUse" {
+			owed = takeBriefing(c, st) // a compaction's brief the conversation went on without
 			w := words(c, s)
 			switch {
 			case tool == "ExitPlanMode" && s.Worker() != "":
@@ -1125,7 +1135,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() {
+	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil {
 		return Result{}, nil
 	}
 	tell := v.tell
@@ -1136,6 +1146,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	if news.any() {
 		tell = strings.TrimSpace(news.text + "\n\n" + tell)
 		news.event(s, "tool")
+	}
+	if owed != nil {
+		tell = strings.TrimSpace(h.briefed(c, s, st, *owed, "tool") + "\n\n" + tell)
 	}
 	out := map[string]any{}
 	if msg := lines(ann, notes, dl.says(), v.say); msg != "" {
@@ -1429,86 +1442,6 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		for _, e := range events {
 			s.Event(e.kind, e.fields)
 		}
-	}
-	return Result{}, ok(err)
-}
-
-// preCompact acknowledges a manual compaction: the one baton typed, or one the human typed while a
-// compaction is owed (which satisfies it, so baton never compacts twice in a row).
-//
-// An automatic PreCompact proves nothing yet. Claude Code precomputes its summary in the background,
-// from about 80% of the window, and fires PreCompact then; the compaction itself may come much later or
-// never (docs/research/context-window.md). Treating it as the owed compaction would leave baton expecting
-// a compaction that is not happening. Only SessionStart(compact) proves one happened, so an
-// automatic compaction is adopted there (afterCompaction).
-func (h *handlers) preCompact(c Context) (Result, error) {
-	trigger := str(c.Input, "trigger")
-	var cp state.Compaction
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if trigger != "manual" {
-			cp = st.Run.Compaction
-			return nil
-		}
-		comp := &st.Run.Compaction
-		switch {
-		case comp.Status == state.CompactQueued || comp.Status == state.CompactTyped:
-			comp.ByBaton = true
-		case st.BoundaryOwed || st.CheckpointOwed:
-			adoptOwed(st, c.Now)
-		default:
-			comp.ByBaton = false
-		}
-		if comp.ByBaton {
-			comp.Status = state.CompactActive
-		}
-		comp.Trigger, comp.Started = trigger, c.Now
-		cp = *comp
-		return nil
-	})
-	if err != nil {
-		return Result{}, ok(err)
-	}
-	if trigger != "manual" {
-		s.Event("precompact_auto", map[string]any{"owed": cp.Status})
-		return Result{}, nil
-	}
-	s.Event("compact_started", map[string]any{"trigger": trigger, "by_baton": cp.ByBaton, "epoch": cp.Epoch, "reason": cp.Reason})
-	return Result{}, nil
-}
-
-// adoptOwed makes a compaction baton did not type count as the one it owes: a new epoch, underway.
-func adoptOwed(st *state.State, now time.Time) {
-	comp := &st.Run.Compaction
-	if !comp.InFlight() {
-		comp.Epoch++
-	}
-	comp.ByBaton, comp.Reason, comp.Status, comp.Started, comp.Tries = true, reasonOwed(st), state.CompactActive, now, 0
-}
-
-func reasonOwed(st *state.State) string {
-	if st.BoundaryOwed {
-		return "boundary"
-	}
-	return "checkpoint"
-}
-
-func (h *handlers) postCompact(c Context) (Result, error) {
-	var cp state.Compaction
-	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		comp := &st.Run.Compaction
-		if comp.ByBaton && (comp.Status == state.CompactActive || comp.Status == state.CompactFailed) {
-			// Failed means baton gave up waiting; a compaction that finished late still counts.
-			comp.Status = state.CompactDone
-			if e := st.Run.Escalation; e != nil && e.Kind == "compaction_failed" {
-				st.Run.Escalation = nil
-			}
-		}
-		comp.Finished = c.Now
-		cp = *comp
-		return nil
-	})
-	if err == nil {
-		s.Event("compact_finished", map[string]any{"trigger": cp.Trigger, "by_baton": cp.ByBaton, "epoch": cp.Epoch})
 	}
 	return Result{}, ok(err)
 }

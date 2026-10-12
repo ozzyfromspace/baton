@@ -407,15 +407,14 @@ func TestTheRewindCheckFailsOpen(t *testing.T) {
 // model.
 func TestASummaryFromTheRewindMenuKeepsTheBrief(t *testing.T) {
 	f := newFixture(t, true)
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	out := f.fire("SessionStart", map[string]any{"source": "compact"})
+	if code, _ := f.compacted("manual"); code != 0 {
+		t.Error("woke the model after a compaction the human started")
+	}
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "go on"})
 	if ctx := additionalContext(out); !strings.Contains(ctx, "continue P0 — First") || !strings.Contains(ctx, "Phase P0, from the plan") {
 		t.Errorf("the brief:\n%s", ctx)
 	}
-	if !f.logged("brief", map[string]any{"type": "auto", "phase": "P0"}) {
+	if !f.logged("brief", map[string]any{"type": "auto", "phase": "P0", "via": "prompt"}) {
 		t.Errorf("no auto brief:\n%s", f.eventLog())
-	}
-	if code, _ := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 0 {
-		t.Error("woke the model after a compaction the human started")
 	}
 }

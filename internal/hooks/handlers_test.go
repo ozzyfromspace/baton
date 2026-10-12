@@ -26,6 +26,8 @@ type fixture struct {
 	vars  map[string]string // extra environment for the hooks
 	// machine is what the machine reads (roomy, unless the test says otherwise).
 	machine machine.Reading
+	// tp is the session's transcript, which a hook names unless its input names another (leadTranscript).
+	tp string
 }
 
 // roomy is a machine with room for workers: 14 CPUs and 48 GiB, little load. With workers: auto, it
@@ -84,6 +86,9 @@ func (f *fixture) fireAs(instance, event string, input map[string]any) map[strin
 	input["hook_event_name"] = event
 	if _, ok := input["session_id"]; !ok {
 		input["session_id"] = f.sid
+	}
+	if _, ok := input["transcript_path"]; !ok {
+		input["transcript_path"] = f.leadTranscript()
 	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
@@ -288,29 +293,42 @@ func TestTurnsDialogsSubagentsAndStops(t *testing.T) {
 
 func TestCompactionLifecycle(t *testing.T) {
 	f := newFixture(t, true)
-	// A compaction nobody asked for (the human typed /compact with nothing owed) is not baton's.
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	if c := f.state().Run.Compaction; c.ByBaton || c.Trigger != "manual" {
-		t.Fatalf("unrequested: %+v", c)
+	// A compaction nobody asked for (the human typed /compact with nothing owed) is not baton's: it wakes
+	// nothing, and its brief waits for the next prompt.
+	if code, msg := f.compacted("manual"); code != 0 || msg != "" {
+		t.Fatalf("unrequested: woke %d %q", code, msg)
 	}
-	// baton queued one and typed it: the manual PreCompact acknowledges it.
-	f.store.Update(func(st *state.State) error {
-		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactTyped, Reason: "boundary"}
-		return nil
+	if st := f.state(); st.Run.Compaction.ByBaton || st.Run.Compaction.Trigger != "manual" || st.Run.Briefing == nil || st.Run.Briefing.Wake || st.Run.Briefing.Kind != "auto" {
+		t.Fatalf("unrequested: %+v %+v", st.Run.Compaction, st.Run.Briefing)
+	}
+	if ctx := additionalContext(f.fire("UserPromptSubmit", map[string]any{"prompt": "go on"})); !strings.Contains(ctx, "compacted the context automatically") {
+		t.Fatalf("the prompt was not briefed:\n%s", ctx)
+	}
+	// baton queued one and typed it; the mod reports it begun, which makes it underway at once, and the
+	// proof that it is over does the rest.
+	f.set(func(st *state.State) {
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactTyped, Reason: "checkpoint", Queued: f.now}
+		st.CheckpointOwed = true
+		state.Report(st, state.Reported(false, "manual", f.now), f.now)
 	})
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
 	if c := f.state().Run.Compaction; !c.ByBaton || c.Status != state.CompactActive || c.Epoch != 1 {
 		t.Fatalf("acknowledged: %+v", c)
 	}
-	f.fire("PostCompact", map[string]any{"trigger": "manual"})
-	if c := f.state().Run.Compaction; c.Status != state.CompactDone {
-		t.Fatalf("finished: %+v", c)
+	if code, msg := f.compacted("manual"); code != 2 || !strings.HasSuffix(msg, "[baton] Context compacted at your checkpoint. Continue P0 (First).") {
+		t.Fatalf("rewake: %d %q", code, msg)
 	}
-	// An automatic PreCompact while a boundary is owed is only Claude Code precomputing a summary: it
-	// must not pass for the owed compaction, or baton would wait for one that is not happening.
-	f.store.Update(func(st *state.State) error { st.BoundaryOwed = true; st.Run.Compaction.Reason = ""; return nil })
-	f.fire("PreCompact", map[string]any{"trigger": "auto"})
-	if c := f.state().Run.Compaction; c.Epoch != 1 || c.Status != state.CompactDone {
+	if st := f.state(); st.Run.Compaction.Status != state.CompactDone || st.CheckpointOwed {
+		t.Fatalf("finished: %+v", st.Run.Compaction)
+	}
+	// The mod's report of an automatic compaction begun, while a boundary is owed, is only Claude Code
+	// precomputing a summary: it must not pass for the owed compaction, or baton would wait for one that is
+	// not happening.
+	var changed bool
+	f.set(func(st *state.State) {
+		st.BoundaryOwed, st.Run.Compaction.Reason = true, ""
+		changed = state.Report(st, state.Reported(false, "auto", f.now), f.now)
+	})
+	if c := f.state().Run.Compaction; changed || c.Epoch != 1 || c.Status != state.CompactDone {
 		t.Fatalf("auto precompute taken for a compaction: %+v", c)
 	}
 	// The Stop then queues the owed compaction as usual.
@@ -318,9 +336,9 @@ func TestCompactionLifecycle(t *testing.T) {
 	if c := f.state().Run.Compaction; c.Status != state.CompactQueued || c.Epoch != 2 || c.Reason != "boundary" {
 		t.Fatalf("not queued after the precompute: %+v", c)
 	}
-	events, _ := os.ReadFile(filepath.Join(f.store.Dir, "events.jsonl"))
-	if strings.Count(string(events), `"kind":"compact_started"`) != 2 || !strings.Contains(string(events), `"kind":"compact_finished"`) ||
-		!strings.Contains(string(events), `"kind":"precompact_auto"`) {
+	events := f.eventLog()
+	if strings.Count(events, `"kind":"compact_seen"`) != 6 || strings.Count(events, `"kind":"compact_finished"`) != 2 ||
+		strings.Count(events, `"kind":"compact_started"`) != 1 || strings.Count(events, `"kind":"rewake"`) != 1 {
 		t.Fatalf("events: %s", events)
 	}
 }
@@ -331,12 +349,10 @@ func TestAutoCompactionSatisfiesAnOwedBoundary(t *testing.T) {
 	f := newFixture(t, true)
 	pl, _ := f.store.LoadPlan()
 	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
-	f.fire("PreCompact", map[string]any{"trigger": "auto"})
-	ctx := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
-	if !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") {
-		t.Fatalf("brief:\n%s", ctx)
+	code, msg := f.compacted("auto")
+	if code != 2 || !strings.Contains(msg, "Now: P1 — Second. Begin it now.") || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
+		t.Fatalf("rewake %d:\n%s", code, msg)
 	}
-	f.fire("PostCompact", map[string]any{"trigger": "auto"})
 	st := f.state()
 	if st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive || st.Run.Compaction.Status != state.CompactDone || !st.Run.Compaction.ByBaton {
 		t.Fatalf("boundary not satisfied: %+v", st)
@@ -351,16 +367,17 @@ func TestAutoCompactionSatisfiesAnOwedBoundary(t *testing.T) {
 func TestAutoCompactionAfterABatonOneIsNotBatons(t *testing.T) {
 	f := newFixture(t, true)
 	f.store.Update(func(st *state.State) error {
-		st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactDone, Reason: "checkpoint", ByBaton: true, Rewoken: 3}
+		st.Run.Compaction = state.Compaction{Epoch: 3, Status: state.CompactDone, Reason: "checkpoint", ByBaton: true}
 		return nil
 	})
-	f.fire("PreCompact", map[string]any{"trigger": "auto"})
-	if ctx := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"})); !strings.Contains(ctx, "compacted the context automatically") {
-		t.Fatalf("brief:\n%s", ctx)
+	if code, _ := f.compacted("auto"); code != 0 {
+		t.Fatal("woke the model for Claude Code's own compaction")
 	}
-	f.fire("PostCompact", map[string]any{"trigger": "auto"})
 	if c := f.state().Run.Compaction; c.ByBaton || c.Trigger != "auto" {
 		t.Fatalf("auto compaction taken for baton's: %+v", c)
+	}
+	if ctx := feedback(f.fire("PostToolUse", bash("ls"))); !strings.Contains(ctx, "compacted the context automatically") {
+		t.Fatalf("brief:\n%s", ctx)
 	}
 }
 
@@ -545,9 +562,9 @@ func TestAnUnaskedContextQuestionHoldsTheStopOnce(t *testing.T) {
 			f.fire("PermissionRequest", call)
 			f.fire("PostToolUseFailure", call)
 		}, false},
-		{"compacted since", func(f *fixture, _ string) {
-			f.fire("SessionStart", map[string]any{"source": "compact"})
-		}, false},
+		{"compacted since", func(f *fixture, _ string) { f.compacted("auto") }, false},
+		// A phase agent's compaction fires the same hooks, and leaves the lead's question owed.
+		{"a phase agent compacted since", func(f *fixture, _ string) { f.agentCompacted() }, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, true)

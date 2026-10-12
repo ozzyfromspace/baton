@@ -269,7 +269,7 @@ func Detach(st *State) error {
 		return errors.New("no plan is attached, so there is nothing to drop")
 	}
 	run := st.Run
-	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch, Rewoken: st.Run.Compaction.Rewoken}, 0, nil
+	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: st.Run.Compaction.Epoch}, 0, nil
 	owner, seq, prefix, gen, workers, branch := st.Owner, st.JobSeq, st.IDPrefix, st.Generation, st.Workers, st.RunBranch
 	*st = New()
 	st.Owner, st.Run, st.JobSeq, st.IDPrefix, st.Generation, st.Workers, st.RunBranch = owner, run, seq, prefix, gen, workers, branch

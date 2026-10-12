@@ -196,8 +196,7 @@ func TestAResumedPhaseGetsItsResultInTheBrief(t *testing.T) {
 	})
 	f.fire("Stop", map[string]any{})
 	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	ctx := additional(f.fire("SessionStart", map[string]any{"source": "compact"}))
+	_, ctx := f.compacted("manual")
 	if !strings.Contains(ctx, "The result of the job P0 was set aside for:\n\n"+resultHead) || !strings.Contains(ctx, "--- FAIL: TestRanking") {
 		t.Fatalf("brief:\n%s", ctx)
 	}

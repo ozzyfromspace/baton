@@ -160,8 +160,11 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 	}
 }
 
+// Where baton's mod runs, it reports a compaction as it begins: one baton typed that it says nothing of
+// within AckTimeout did not take, and baton types it again.
 func TestRetryOnceThenEscalate(t *testing.T) {
 	r := newRig(t)
+	r.set(func(st *state.State) { st.Run.ModReports = r.now })
 	r.tick(time.Second) // types
 	r.tick(DefaultTiming.AckTimeout + time.Second)
 	if c := r.state().Run.Compaction; c.Status != state.CompactQueued {
@@ -194,6 +197,28 @@ func TestRetryOnceThenEscalate(t *testing.T) {
 	r.tick(2 * time.Second)
 	if e := r.state().Run.Escalation; e != nil {
 		t.Fatalf("escalation outlived its cause: %+v", e)
+	}
+}
+
+// Where nothing reports a compaction as it begins (no mod), baton waits for its proof instead of typing
+// /compact again, which could queue a second one; with no proof in time, it escalates, and tries again.
+func TestSerialCompactionWaitsForItsProof(t *testing.T) {
+	r := newRig(t)
+	r.tick(time.Second) // types
+	r.run(DefaultTiming.CompactTimeout - time.Minute)
+	if c := r.state().Run.Compaction; c.Status != state.CompactTyped || len(r.in.text) != 1 || r.state().Run.Escalation != nil {
+		t.Fatalf("did not wait: %+v typed %q", c, r.in.text)
+	}
+	r.run(2 * time.Minute)
+	st := r.state()
+	if st.Run.Compaction.Status != state.CompactFailed || st.Run.Escalation == nil || st.Run.Escalation.Kind != "compaction_failed" ||
+		!strings.Contains(st.Run.Escalation.Reason, "no proof came within 10m0s that the compaction happened") {
+		t.Fatalf("no escalation: %+v", st.Run)
+	}
+	r.run(DefaultTiming.FailedRetry)
+	r.tick(time.Second)
+	if c := r.state().Run.Compaction; c.Rounds != 1 || len(r.in.text) != 2 {
+		t.Fatalf("no new round: %+v typed %q", c, r.in.text)
 	}
 }
 

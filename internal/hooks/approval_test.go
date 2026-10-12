@@ -55,8 +55,7 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 		t.Fatalf("stop said %q", msg)
 	}
 	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	brief := additionalContext(f.fire("SessionStart", map[string]any{"source": "compact"}))
+	_, brief := f.compacted("manual")
 	for _, want := range []string{`The plan "The next campaign"`, "was attached, and the conversation before it compacted", "Now: P0 — Instruments. Begin it now.", "Be careful.", "Measure first."} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("brief lacks %q:\n%s", want, brief)

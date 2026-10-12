@@ -297,6 +297,9 @@ func (f *fixture) fireCode(event string, input map[string]any) (int, string) {
 	if _, ok := input["session_id"]; !ok {
 		input["session_id"] = f.sid
 	}
+	if _, ok := input["transcript_path"]; !ok {
+		input["transcript_path"] = f.leadTranscript()
+	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
 	h := Handlers(Deps{Open: OpenRun(f.clock)})
@@ -313,24 +316,21 @@ func TestBoundarySequenceThroughTheHooks(t *testing.T) {
 	if out["decision"] == "block" || f.state().Run.Compaction.Status != state.CompactQueued {
 		t.Fatalf("stop: %v %+v", out, f.state().Run.Compaction)
 	}
-	// The host types /compact and records it; then Claude Code runs the compaction hooks.
+	// The host types /compact and records it; then Claude Code compacts, and the rewake finds the proof.
 	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	brief := f.fire("SessionStart", map[string]any{"source": "compact"})
-	ctx := brief["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
-	if !strings.Contains(ctx, "Now: P1 — Second. Begin it now.") || !strings.Contains(ctx, "Do b.") {
-		t.Fatalf("brief:\n%s", ctx)
+	code, msg := f.compacted("manual")
+	if code != 2 || !strings.Contains(msg, "Now: P1 — Second. Begin it now.") || !strings.Contains(msg, "Do b.") ||
+		!strings.HasSuffix(msg, "\n\n[baton] Context compacted. Begin P1 (Second) now — the brief above has your instructions.") {
+		t.Fatalf("rewake: code %d\n%s", code, msg)
 	}
-	if st := f.state(); st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive {
+	if st := f.state(); st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive || st.Run.Briefing != nil {
 		t.Fatalf("P1 not started: %+v", st)
-	}
-	f.fire("PostCompact", map[string]any{"trigger": "manual"})
-	code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"})
-	if code != 2 || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
-		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 	if code, _ := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 0 {
 		t.Fatal("rewoke twice for one compaction")
+	}
+	if !f.logged("brief", map[string]any{"type": "boundary", "phase": "P1", "via": "rewake"}) || !f.logged("phase_started", map[string]any{"phase": "P1"}) {
+		t.Errorf("events: %v", f.events())
 	}
 	// The next stop with nothing owed and no status is refused, not compacted again.
 	if out := f.fire("Stop", map[string]any{}); out["decision"] != "block" {
@@ -352,14 +352,12 @@ func TestResumeSequenceThroughTheHooks(t *testing.T) {
 	}
 	f.fire("Stop", map[string]any{})
 	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	out := f.fire("SessionStart", map[string]any{"source": "compact"})
-	ctx := out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
-	if !strings.Contains(ctx, "Now: resume P0 — First. It was finished, but its verification failed") || !strings.Contains(ctx, "a.go done in 1a2b3c4.") {
-		t.Fatalf("brief:\n%s", ctx)
+	code, msg := f.compacted("manual")
+	if !strings.Contains(msg, "Now: resume P0 — First. It was finished, but its verification failed") || !strings.Contains(msg, "a.go done in 1a2b3c4.") {
+		t.Fatalf("brief:\n%s", msg)
 	}
-	if out["systemMessage"] != "baton: P0 (First) resumes now, from where it was set aside" {
-		t.Errorf("announced %q", out["systemMessage"])
+	if ann := f.state().Run.Announce; len(ann) != 1 || ann[0] != "baton: P0 (First) resumes now, from where it was set aside" {
+		t.Errorf("announced %q", ann)
 	}
 	if st := f.state(); st.BoundaryOwed || st.Phases["P0"].Status != state.PhaseActive || !st.Resumed() {
 		t.Fatalf("P0 not resumed: %+v", st.Phases["P0"])
@@ -367,8 +365,7 @@ func TestResumeSequenceThroughTheHooks(t *testing.T) {
 	if log := f.eventLog(); !strings.Contains(log, `"kind":"phase_resumed"`) || !strings.Contains(log, `"reason":"red"`) || strings.Contains(log, `"kind":"phase_started"`) {
 		t.Errorf("events:\n%s", log)
 	}
-	f.fire("PostCompact", map[string]any{"trigger": "manual"})
-	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "[baton] Context compacted. Resume P0 (First) now") {
+	if code != 2 || !strings.Contains(msg, "[baton] Context compacted. Resume P0 (First) now") {
 		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 }
@@ -381,8 +378,7 @@ func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {
 		f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
 		f.fire("Stop", map[string]any{})
 		f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-		f.fire("PreCompact", map[string]any{"trigger": "manual"})
-		f.fire("SessionStart", map[string]any{"source": "compact"})
+		f.compacted("manual")
 		return f.state().Phases["P1"]
 	}
 	gittest.Isolate(t)
@@ -405,16 +401,25 @@ func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {
 	}
 }
 
+// Claude Code's own compaction mid-phase wakes nothing: the turn goes on by itself, and its brief comes
+// with the next tool call (or the next prompt), once.
 func TestAutoCompactionGetsAContinueBriefAndNoRewake(t *testing.T) {
 	f := newFixture(t, true)
-	f.fire("PreCompact", map[string]any{"trigger": "auto"})
-	brief := f.fire("SessionStart", map[string]any{"source": "compact"})
-	ctx := brief["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
-	if !strings.Contains(ctx, "compacted the context automatically") || !strings.Contains(ctx, "continue P0 — First") {
+	if code, msg := f.compacted("auto"); code != 0 || msg != "" {
+		t.Fatalf("rewoke after an auto-compaction, which continues by itself: %d %q", code, msg)
+	}
+	out := f.fire("PostToolUse", bash("ls"))
+	if ctx := feedback(out); !strings.Contains(ctx, "compacted the context automatically") || !strings.Contains(ctx, "continue P0 — First") {
 		t.Fatalf("brief:\n%s", ctx)
 	}
-	if code, _ := f.fireCode("PostCompactRewake", map[string]any{"trigger": "auto"}); code != 0 {
-		t.Fatal("rewoke after an auto-compaction, which continues by itself")
+	if said(out) != "baton: context compacted — continuing P0 (First)" {
+		t.Errorf("said %q", said(out))
+	}
+	if out := f.fire("PostToolUse", bash("ls")); out != nil {
+		t.Fatalf("briefed twice: %v", out)
+	}
+	if !f.logged("brief", map[string]any{"type": "auto", "phase": "P0", "via": "tool"}) {
+		t.Errorf("events: %v", f.events())
 	}
 }
 
@@ -430,12 +435,9 @@ func TestSwitchSequenceThroughTheHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.store.SavePlan(pl)
-	compact := func() map[string]any {
+	compact := func() (int, string) {
 		f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
-		f.fire("PreCompact", map[string]any{"trigger": "manual"})
-		out := f.fire("SessionStart", map[string]any{"source": "compact"})
-		f.fire("PostCompact", map[string]any{"trigger": "manual"})
-		return out
+		return f.compacted("manual")
 	}
 	f.store.Update(func(st *state.State) error {
 		*st = state.Reattach(*st, pl, f.now, state.Origin{})
@@ -445,15 +447,15 @@ func TestSwitchSequenceThroughTheHooks(t *testing.T) {
 		}
 		return nil
 	})
-	out := compact()
-	if ctx := additional(out); !strings.Contains(ctx, "[baton] The context was compacted to switch phases: P0 waits on its job j1, so baton set P0 aside and takes it up again once the job ends.") ||
-		!strings.Contains(ctx, "Now: P1 — Second. Begin it now.") || !strings.Contains(ctx, "⏸ P0 — First (parked)") || strings.Contains(ctx, "phase boundary") {
-		t.Fatalf("brief:\n%s", ctx)
+	code, msg := compact()
+	if !strings.Contains(msg, "[baton] The context was compacted to switch phases: P0 waits on its job j1, so baton set P0 aside and takes it up again once the job ends.") ||
+		!strings.Contains(msg, "Now: P1 — Second. Begin it now.") || !strings.Contains(msg, "⏸ P0 — First (parked)") || strings.Contains(msg, "phase boundary") {
+		t.Fatalf("brief:\n%s", msg)
 	}
-	if ev := f.eventLog(); !strings.Contains(ev, `"kind":"brief","phase":"P1"`) || !strings.Contains(ev, `"type":"switch"`) || !strings.Contains(ev, `"kind":"phase_started","phase":"P1"`) {
-		t.Errorf("events:\n%s", ev)
+	if !f.logged("brief", map[string]any{"type": "switch", "phase": "P1"}) || !f.logged("phase_started", map[string]any{"phase": "P1"}) {
+		t.Errorf("events: %v", f.events())
 	}
-	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
+	if code != 2 || !strings.Contains(msg, "[baton] Context compacted. Begin P1 (Second) now") {
 		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 
@@ -467,14 +469,14 @@ func TestSwitchSequenceThroughTheHooks(t *testing.T) {
 	if out := f.fire("Stop", map[string]any{}); !strings.Contains(said(out), "compacting, then P0 (First)") {
 		t.Fatalf("stop: %v", out)
 	}
-	out = compact()
-	ctx := additional(out)
+	f.now = f.now.Add(time.Minute) // the second compaction comes later
+	code, msg = compact()
 	for _, want := range []string{"Now: resume P0 — First from where it stood", "a.go done; make test checks it", "The result of the job P0 was set aside for:\n\n[baton] Job j1 (P0) passed"} {
-		if !strings.Contains(ctx, want) {
-			t.Errorf("brief lacks %q:\n%s", want, ctx)
+		if !strings.Contains(msg, want) {
+			t.Errorf("brief lacks %q:\n%s", want, msg)
 		}
 	}
-	if code, msg := f.fireCode("PostCompactRewake", map[string]any{"trigger": "manual"}); code != 2 || !strings.Contains(msg, "Resume P0 (First) now") {
+	if code != 2 || !strings.Contains(msg, "Resume P0 (First) now") {
 		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 }

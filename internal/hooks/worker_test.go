@@ -149,8 +149,7 @@ func TestAWorkersBriefAfterACheckpoint(t *testing.T) {
 	w.set(func(st *state.State) { st.CheckpointOwed = true })
 	w.fire("Stop", map[string]any{})
 	w.set(func(st *state.State) { st.Run.Compaction.Status = state.CompactTyped })
-	w.fire("PreCompact", map[string]any{"trigger": "manual"})
-	brief := additionalContext(w.fire("SessionStart", map[string]any{"source": "compact"}))
+	_, brief := w.compacted("manual")
 	for _, want := range []string{"compacted at your checkpoint", `You are a worker on P2 of the plan "Demo"`, "in a git worktree of your own (" + tree + ")",
 		"Overlay done.", "baton then lands your work on the run's branch"} {
 		if !strings.Contains(brief, want) {
@@ -482,8 +481,8 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 		t.Errorf("the worker was handed:\n%s", ctx)
 	}
 
-	lead.fire("PreCompact", map[string]any{"trigger": "auto"})
-	if ctx := additionalContext(lead.fire("SessionStart", map[string]any{"source": "compact"})); !strings.Contains(ctx, "- P2.d1 (P2, ") {
+	lead.compacted("auto")
+	if ctx := additionalContext(lead.fire("UserPromptSubmit", map[string]any{"prompt": "and now?"})); !strings.Contains(ctx, "- P2.d1 (P2, ") {
 		t.Errorf("the lead's brief after a compaction:\n%s", ctx)
 	}
 

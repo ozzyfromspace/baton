@@ -16,7 +16,8 @@ var hookEvents = []string{
 // rewakeHooks run in the background ("asyncRewake") and may wake the idle model by exiting 2. They are
 // separate from the synchronous hooks for the same events.
 var rewakeHooks = []struct{ event, matcher, name string }{
-	{"PostCompact", "manual", "PostCompactRewake"}, // auto-compaction happens mid-turn and continues by itself
+	// Every compaction's, whoever's: it waits for proof that the lead compacted, and then gives the brief.
+	{"PostCompact", "", "PostCompactRewake"},
 	{"SessionStart", "resume", "SessionStartRewake"},
 }
 

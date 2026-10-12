@@ -1,0 +1,263 @@
+package state
+
+import (
+	"errors"
+	"io/fs"
+	"time"
+
+	"github.com/ozzyfromspace/baton/internal/transcript"
+)
+
+// A loop is the lead's conversation, or one phase agent's. baton changes what it knows about a loop's
+// compaction only on a Proof naming that loop, and only two things make one
+// (docs/research/visible-workers.md): the mod's report of a compaction of the lead (Reported), and a
+// compact boundary written to the loop's own transcript past baton's mark (Boundary). The compaction hooks
+// (PreCompact, SessionStart(compact), PostCompact) fire for a phase agent's compaction too, with no agent
+// id and the lead's transcript, so they cannot make one: a Proof's fields are unexported, and every
+// function that moves Runtime.Compaction past typed, clears an owed compaction, starts a phase after one,
+// clears WarnOwed or owes a brief for one takes a Proof (Report, Compacted).
+type Proof struct {
+	agent   string    // the phase agent whose conversation compacted ("" for the lead's)
+	mod     bool      // the mod's report; otherwise a boundary in the transcript
+	over    bool      // the compaction is over (a boundary always is); otherwise it has begun
+	trigger string    // "manual" or "auto"
+	at      time.Time // when the mod reported it, or Claude Code wrote the boundary
+	path    string    // a boundary's transcript,
+	start   int64     // and where its line starts
+	end     int64     // and ends
+}
+
+// Reported is the proof the mod's report gives of a compaction of the lead, started by trigger: begun, or
+// over (over), reported at at. The mod sees the lead's compactions alone (spike 32).
+func Reported(over bool, trigger string, at time.Time) Proof {
+	return Proof{mod: true, over: over, trigger: trigger, at: at}
+}
+
+// Boundary reads the lead's transcript at path for a compaction baton has not counted: a compact boundary
+// written past mark (Runtime.Proven), read from from on when that is further (where an earlier look
+// stopped). It returns the proof if there is one, and where to look on from. A transcript baton has no mark
+// in, or one it cannot read, proves nothing.
+func Boundary(path string, mark *Mark, from int64) (Proof, int64, bool) {
+	if mark == nil || path == "" || mark.Path != path {
+		return Proof{}, from, false
+	}
+	b, next, err := transcript.Compacted(path, max(from, mark.Offset))
+	if err != nil || b == nil {
+		return Proof{}, next, false
+	}
+	return Proof{over: true, trigger: b.Trigger, at: b.Time, path: path, start: b.Start, end: b.End}, next, true
+}
+
+// ModReport is the mod's report of a compaction of the lead over, kept for the rewake (Report).
+type ModReport struct {
+	At      time.Time `json:"at"`
+	Trigger string    `json:"trigger,omitempty"`
+}
+
+// sameCompaction is how soon after a compaction was proven over a report of one over is that compaction's,
+// late: the lead does not compact twice in so short a time.
+const sameCompaction = 30 * time.Second
+
+// Report records the mod's report of a compaction of the lead (p, from Reported), and reports whether it
+// changed anything. One begun by the human's or baton's /compact moves the compaction baton typed (or is
+// about to) to under way at once, or makes one baton owes count as underway, as PreCompact once did; an
+// automatic one proves nothing yet, since Claude Code prepares its summary well before it compacts, if it
+// does (docs/research/context-window.md). One over is kept for the rewake, which counts it only when the
+// lead's transcript cannot say (Compacted).
+func Report(st *State, p Proof, now time.Time) bool {
+	if !p.mod || p.agent != "" {
+		return false
+	}
+	comp := &st.Run.Compaction
+	if p.over {
+		if !comp.Finished.IsZero() && p.at.Sub(comp.Finished) < sameCompaction && !p.at.Before(comp.Finished) {
+			return false // the compaction the transcript proved already
+		}
+		comp.Reported = &ModReport{At: p.at, Trigger: p.trigger}
+		return true
+	}
+	st.Run.ModReports = now
+	if p.trigger != "manual" {
+		return false
+	}
+	switch {
+	case comp.Status == CompactQueued || comp.Status == CompactTyped:
+		comp.ByBaton = true
+	case st.BoundaryOwed || st.CheckpointOwed:
+		adoptOwed(st, now)
+	default:
+		comp.ByBaton = false
+	}
+	if comp.ByBaton {
+		comp.Status = CompactActive
+	}
+	comp.Trigger, comp.Started = p.trigger, now
+	return true
+}
+
+// Kept is the proof the mod's report of a compaction over gives (Report), while it is kept for the rewake.
+func Kept(st State) (Proof, bool) {
+	r := st.Run.Compaction.Reported
+	if r == nil {
+		return Proof{}, false
+	}
+	return Reported(true, r.Trigger, r.At), true
+}
+
+// After is what a compaction of the lead proven over did (Compacted).
+type After struct {
+	Epoch   int
+	Trigger string
+	// ByBaton: the compaction baton asked for, or one it owed and Claude Code or the human made.
+	ByBaton bool
+	// Reason is what baton's compaction was for ("boundary", "switch" or "checkpoint"), when it did that:
+	// "" for a compaction that only compacted, which the conversation goes on from by itself.
+	Reason string
+	// Started: the phase after a boundary or a switch started; Resumed: it was set aside unfinished, and
+	// Result is the finished job it was set aside for (delivered with its brief).
+	Started, Resumed bool
+	Result           *Job
+	// Unseen: nothing proved it had begun, so it is logged as begun when it is proven over.
+	Unseen bool
+	Proof  string // what proved it: "transcript" or "mod"
+}
+
+// Compacted records a compaction of the lead that p proves over, and does what it means for the run, as
+// SessionStart(compact) and PostCompact once did. The compaction baton asked for is done, and so is one
+// it owed that the human or Claude Code made instead; after a boundary or a switch the next phase starts
+// (o is the repository as it does), after a checkpoint the checkpoint is over. Any compaction ends the
+// context question (WarnOwed), and means the conversation has turns before the next one. A boundary
+// older than the compaction baton queued proves only that the conversation compacted then.
+//
+// It reports false, changing nothing, for a proof of anything else: a compaction begun, a phase agent's,
+// a boundary baton counted already (its mark is past it, Proven), or a report it no longer keeps.
+func Compacted(st *State, p Proof, now time.Time, o Origin) (After, bool) {
+	comp := &st.Run.Compaction
+	if !p.over || p.agent != "" {
+		return After{}, false
+	}
+	a := After{Proof: "transcript"}
+	if p.mod {
+		if r := comp.Reported; r == nil || !r.At.Equal(p.at) {
+			return After{}, false
+		}
+		// The transcript could not say: its mark is no use now, and the lead's next hook makes another.
+		st.Run.Proven, a.Proof = nil, "mod"
+	} else {
+		if m := st.Run.Proven; m == nil || m.Path != p.path || p.end <= m.Offset {
+			return After{}, false
+		}
+		st.Run.Proven = &Mark{Path: p.path, Offset: p.end}
+	}
+	comp.Reported = nil
+	// A compaction from before baton queued its own is not that one: what baton asked for is still to come.
+	early := !p.at.IsZero() && !comp.Queued.IsZero() && p.at.Before(comp.Queued)
+	ours := !early && (comp.InFlight() || comp.Status == CompactFailed && (st.BoundaryOwed || st.CheckpointOwed))
+	a.Unseen = comp.Status != CompactActive
+	if !ours && !early && st.Mode == ModeRunning && (st.BoundaryOwed || st.CheckpointOwed) {
+		// Claude Code (or the human) compacted while a compaction was owed: that one counts.
+		adoptOwed(st, now)
+		ours = true
+	}
+	st.Run.WarnOwed = false // the context the question was about is gone
+	st.Run.History = true
+	a.Epoch, a.Trigger, a.ByBaton = comp.Epoch, p.trigger, ours
+	if !ours && comp.InFlight() {
+		return a, true // baton's own compaction is still to come, and this is not it
+	}
+	if ours {
+		if comp.Status == CompactFailed {
+			// baton gave up waiting; a compaction that finished late still counts.
+			if e := st.Run.Escalation; e != nil && e.Kind == "compaction_failed" {
+				st.Run.Escalation = nil
+			}
+		}
+		comp.Status = CompactDone
+	}
+	if a.Unseen {
+		comp.Started = now
+	}
+	comp.ByBaton, comp.Trigger, comp.Finished = ours, p.trigger, now
+	if st.Mode != ModeRunning || !ours {
+		return a, true
+	}
+	switch {
+	case comp.StartsPhase() && st.BoundaryOwed:
+		a.Reason, a.Started = comp.Reason, true
+		if ps := st.Phases[st.Current]; ps != nil && ps.Status == PhaseParked {
+			a.Resumed = true
+			if j := st.Job(parkedOn(ps.Park)); j != nil && j.Finished() {
+				if j.Delivered.IsZero() {
+					j.Delivered = now
+				}
+				x := *j
+				a.Result = &x
+			}
+		}
+		Start(st, now, o)
+	case comp.Reason == "checkpoint":
+		a.Reason = "checkpoint"
+		st.CheckpointOwed = false
+	}
+	return a, true
+}
+
+// adoptOwed makes a compaction baton did not type count as the one it owes: a new epoch, underway.
+func adoptOwed(st *State, now time.Time) {
+	comp := &st.Run.Compaction
+	if !comp.InFlight() {
+		comp.Epoch++
+	}
+	reason := "checkpoint"
+	if st.BoundaryOwed {
+		reason = "boundary"
+	}
+	comp.ByBaton, comp.Reason, comp.Status, comp.Started, comp.Tries = true, reason, CompactActive, now, 0
+}
+
+// parkedOn is the job a park waits for ("" for none).
+func parkedOn(pk *Park) string {
+	if pk == nil {
+		return ""
+	}
+	return pk.Job
+}
+
+// recentBoundary is how long a compact boundary may wait in the lead's transcript for a rewake to count it:
+// the rewake looks within a fraction of a second of the compaction, and waits half a minute at most.
+const recentBoundary = time.Minute
+
+// Remark marks the lead's transcript at path where it ends now (Runtime.Proven), on a hook of the lead's
+// own that is not a compaction's: a compact boundary written before it is one baton has counted, or one
+// that came while baton was not looking (its rewake never ran), which proves nothing about what baton owes
+// now. It never moves a mark past a boundary written in the last recentBoundary, which a rewake may be
+// about to count, nor past a line still being written. A transcript baton has no mark in yet (a session
+// started, a /clear, a compaction the mod's report proved) is marked at its end; one not written yet at
+// its start; one baton cannot read is left as it was.
+func Remark(st *State, path string, now time.Time) {
+	if path == "" {
+		return
+	}
+	m := st.Run.Proven
+	if m != nil && m.Path != path {
+		m = nil
+	}
+	var from int64
+	if m != nil {
+		from = m.Offset
+	}
+	b, next, err := transcript.Compacted(path, from)
+	if errors.Is(err, transcript.ErrShrunk) {
+		m = nil // another file than the one marked
+		b, next, err = transcript.Compacted(path, 0)
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		st.Run.Proven = &Mark{Path: path}
+	case err != nil:
+	case m != nil && b != nil && now.Sub(b.Time) < recentBoundary:
+		st.Run.Proven = &Mark{Path: path, Offset: b.Start}
+	default:
+		st.Run.Proven = &Mark{Path: path, Offset: next}
+	}
+}
