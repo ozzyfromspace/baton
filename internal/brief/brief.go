@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -159,8 +160,15 @@ func Write(in Input) string {
 	switch notes := strings.TrimSpace(in.Handoff); {
 	case notes == "":
 	case in.Words.Worker:
-		if notes = notesOf(notes, in.Needs); notes != "" {
-			fmt.Fprintf(&b, "Notes left by the phases %s builds on (most recent last):\n\n%s\n\n", st.Current, tail(notes, maxNotes))
+		if needs := notesOf(notes, in.Needs); needs != "" {
+			fmt.Fprintf(&b, "Notes left by the phases %s builds on (most recent last):\n\n%s\n\n", st.Current, tail(needs, maxNotes))
+		}
+		var started time.Time
+		if ps := st.Phases[st.Current]; ps != nil {
+			started = ps.StartedAt
+		}
+		if own := notesSince(notes, st.Current, started); own != "" {
+			fmt.Fprintf(&b, "Notes %s left so far (most recent last):\n\n%s\n\n", st.Current, tail(own, maxNotes))
 		}
 	default:
 		fmt.Fprintf(&b, "Notes left by earlier phases (most recent last):\n\n%s\n\n", tail(notes, maxNotes))
@@ -206,6 +214,30 @@ func notesOf(handoff string, ids []string) string {
 	var out []string
 	for i, sec := range sections {
 		if id, _, _ := strings.Cut(sec, " "); latest[id] == i && slices.Contains(ids, id) {
+			out = append(out, "## "+strings.TrimSpace(sec))
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
+// notesSince picks, from the notes phases left, those phase left since it started (its checkpoints, and
+// its done notes if its verification reopened it), in the order it left them: a plan run before may have
+// had a phase of the same id, whose notes are older. A heading's time is the minute the notes were left,
+// read in since's location (both are the local time where baton runs).
+func notesSince(handoff, phase string, since time.Time) string {
+	if since.IsZero() {
+		return ""
+	}
+	from := since.Truncate(time.Minute)
+	var out []string
+	for _, sec := range strings.Split("\n"+strings.TrimSpace(handoff), "\n## ")[1:] {
+		head, _, _ := strings.Cut(sec, "\n")
+		id, _, _ := strings.Cut(head, " ")
+		_, at, ok := strings.Cut(head, " — ")
+		if id != phase || !ok {
+			continue
+		}
+		if t, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(at), since.Location()); err == nil && !t.Before(from) {
 			out = append(out, "## "+strings.TrimSpace(sec))
 		}
 	}

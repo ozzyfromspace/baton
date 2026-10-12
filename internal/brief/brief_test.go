@@ -402,3 +402,39 @@ func TestAWorkersFreshBrief(t *testing.T) {
 		t.Errorf("the brief reads as the lead's:\n%s", b)
 	}
 }
+
+// A worker's notes go to its run's handoff with everyone's. Its briefs quote those of the phases it
+// builds on, and those it left on its own phase since it started: a checkpoint's, or its done notes if
+// its verification reopened it. An older plan's phase of the same id left notes before that.
+func TestAWorkerIsGivenTheNotesItLeft(t *testing.T) {
+	pl, doc, st := worker(t) // R1 started at 12:05
+	notes := handoff + "## R1 — 2026-10-03 10:00\n\nAn older plan's R1.\n\n## R1 (checkpoint) — 2026-10-04 12:20\n\nHalf the roster, in 9e8d7c6.\n"
+	for _, kind := range []string{Checkpoint, Fresh, Worker} {
+		b := Write(Input{Kind: kind, Plan: pl, Doc: doc, State: st, Handoff: notes, Words: decide.Words{Git: true, Worker: true}, Tree: "/wt/R1", Needs: []string{"P0"}})
+		if !strings.Contains(b, "Notes R1 left so far (most recent last):\n\n## R1 (checkpoint) — 2026-10-04 12:20\n\nHalf the roster, in 9e8d7c6.\n\n") ||
+			strings.Contains(b, "An older plan's R1") || !strings.Contains(b, "Overlay done in abc123.") {
+			t.Errorf("%s: the worker's brief:\n%s", kind, b)
+		}
+	}
+}
+
+func TestNotesSince(t *testing.T) {
+	notes := "## P2 — 2026-10-03 09:00\n\nolder\n\n## P1 — 2026-10-04 12:10\n\nnot P2's\n\n## P2 (checkpoint) — 2026-10-04 12:05\n\nsame minute\n\n" +
+		"## P2 — 2026-10-04 13:00\n\ndone, then reopened\n\n## P2 — not a time\n\nunreadable\n"
+	since := time.Date(2026, 10, 4, 12, 5, 30, 0, time.UTC)
+	for _, c := range []struct {
+		phase string
+		since time.Time
+		want  string
+	}{
+		{"P2", since, "## P2 (checkpoint) — 2026-10-04 12:05\n\nsame minute\n\n## P2 — 2026-10-04 13:00\n\ndone, then reopened"},
+		{"P2", since.Add(time.Hour), ""},
+		{"P2", time.Time{}, ""}, // not started
+		{"P1", since, "## P1 — 2026-10-04 12:10\n\nnot P2's"},
+		{"P3", since, ""},
+	} {
+		if got := notesSince(notes, c.phase, c.since); got != c.want {
+			t.Errorf("notesSince(%s, %v) = %q, want %q", c.phase, c.since, got, c.want)
+		}
+	}
+}
