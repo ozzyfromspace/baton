@@ -170,83 +170,44 @@ func TestNoNewerBatonNoRestart(t *testing.T) {
 	}
 }
 
-// With workers, an upgrade restart waits until every one of them is idle, since it ends their agents
-// too. A running plan does not wait for that: the lead compacts as usual, and restarts at the next safe
-// point. From the moment a newer baton waits, no new worker starts.
-func TestARestartWaitsForTheWorkers(t *testing.T) {
+// A restart on a newer baton ends the phase agents' claude too, so it waits while one of them runs (the
+// lead's background work lists it); a running plan does not wait for that: the lead compacts as usual,
+// and restarts at the next safe point. From the moment a newer baton waits, no new phase agent starts.
+func TestARestartWaitsForThePhaseAgents(t *testing.T) {
 	x := newCrew(t, 2)
 	x.tick(time.Second)
-	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastActivity = true, x.now; return nil })
 	x.c.Lead.Version, x.c.Lead.Newer = "v0.5.0", func() string { return "v0.5.1" }
-	boundary := func(epoch int) {
+	boundary := func(epoch int, running bool) {
 		x.lead.Update(func(st *state.State) error {
 			st.Run.SessionID = "sess-1"
 			st.Run.Compaction = state.Compaction{Epoch: epoch, Status: state.CompactQueued, Reason: "boundary", Queued: x.now}
+			st.Run.Background = nil
+			if running {
+				st.Run.Background = []state.Task{{ID: "agent-p1", Type: "subagent", AgentType: state.PhaseAgent}}
+			}
 			return nil
 		})
 	}
-	boundary(1)
+	boundary(1, true)
 	x.tick(time.Second)
 	if _, _, ok := x.c.Lead.Restart(); ok {
-		t.Fatal("restarted while a worker was mid-turn")
+		t.Fatal("restarted while a phase agent ran")
 	}
 	if st := x.state(); st.Run.Compaction.Status != state.CompactTyped {
 		t.Errorf("the plan waited for the restart: %+v", st.Run.Compaction)
 	}
-	if ev := x.events(); !strings.Contains(ev, `"kind":"restart_held"`) || !strings.Contains(ev, `"why":"the worker on P1 is at work"`) {
-		t.Errorf("events:\n%s", x.events())
-	}
-	const held = "baton: baton v0.5.1 is installed; this session restarts on it once the workers are idle (now the worker on P1 is at work)"
-	if ann := strings.Join(x.state().Run.Announce, "\n"); strings.Count(ann, "restarts on it once the workers are idle") != 1 || !strings.Contains(ann, held) {
-		t.Errorf("announced %q", ann)
-	}
 	x.tick(time.Second)
 	if len(x.spawns()) != 1 {
-		t.Errorf("a worker started while a restart waits: %d", len(x.spawns()))
+		t.Errorf("a phase agent started while a restart waits: %d", len(x.spawns()))
 	}
-
-	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = false; return nil })
-	x.tick(workerQuiet)
-	boundary(2)
+	boundary(2, false)
 	x.tick(time.Second)
 	if to, _, ok := x.c.Lead.Restart(); !ok || to != "v0.5.1" {
-		t.Fatal("did not restart once the worker was idle")
+		t.Fatal("did not restart once no phase agent ran")
 	}
 	x.tick(time.Second)
 	if w := x.worker("P1"); len(x.spawns()) != 1 || w.Status != state.WorkerWorking {
 		t.Errorf("%d spawns; P1's worker %+v", len(x.spawns()), w)
-	}
-}
-
-// What a worker's session may be doing that an upgrade restart, which ends it, would lose.
-func TestWorkerBusy(t *testing.T) {
-	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	launched := now.Add(-time.Hour)
-	idle := state.Runtime{TurnStarted: launched.Add(time.Minute), LastActivity: now.Add(-workerQuiet)}
-	for _, c := range []struct {
-		name string
-		set  func(*state.Runtime)
-		want string
-	}{
-		{"idle", nil, ""},
-		{"not started yet", func(r *state.Runtime) { r.TurnStarted = launched.Add(-time.Second) }, "has not started yet"},
-		{"mid-turn", func(r *state.Runtime) { r.TurnOpen = true }, "is at work"},
-		{"its screen not quiet yet", func(r *state.Runtime) { r.LastActivity = now.Add(-time.Second) }, "is at work"},
-		{"a dialog open", func(r *state.Runtime) { r.Dialogs.Open(state.Dialog{Tool: "Bash"}) }, "waits on a dialog"},
-		{"a background shell", func(r *state.Runtime) { r.Background = []state.Task{{ID: "b1", Type: "shell"}} }, "has background work running"},
-		{"a monitor", func(r *state.Runtime) {
-			r.Background, r.Monitors = []state.Task{{ID: "m1", Type: "shell"}}, []string{"m1"}
-		}, "has background work running"},
-		{"a session-scoped cron", func(r *state.Runtime) { r.Crons = 1 }, "has background work running"},
-		{"compacting", func(r *state.Runtime) { r.Compaction = state.Compaction{Status: state.CompactActive} }, "is compacting"},
-	} {
-		r := idle
-		if c.set != nil {
-			c.set(&r)
-		}
-		if got := workerBusy(r, now, launched); got != c.want {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-		}
 	}
 }
 

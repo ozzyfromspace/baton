@@ -94,35 +94,3 @@ func TestAClearedConversationGetsItsPhasesBrief(t *testing.T) {
 		})
 	}
 }
-
-// A worker's conversation cleared mid-phase (the human typed /clear in it, through baton view) gets a
-// worker's primer and brief: its phase, its worktree, the notes of the phases it builds on and its own.
-func TestAClearedWorkerGetsItsPhasesBrief(t *testing.T) {
-	w, lead, tree := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
-	w.store.AppendHandoff("P2 (checkpoint)", "Half of c, in 9e8d7c6.")
-	out := w.fire("SessionStart", map[string]any{"source": "clear", "session_id": "wsess-2"})
-	if out["systemMessage"] != "baton: conversation cleared — P2 (Third) goes on, with its brief" {
-		t.Errorf("systemMessage: %v", out["systemMessage"])
-	}
-	ctx := additionalContext(out)
-	for _, want := range []string{
-		"This session is hosted by baton, as a worker for the attached plan \"Demo\": it works on P2 alone",
-		"[baton] This conversation started without the phase's context",
-		"You are a worker on P2 of the plan \"Demo\" (", "in a git worktree of your own (" + tree + ")",
-		"Now: continue P2 — Third. Some of it may be done already: check what is (`git log`, `git status`",
-		"Be kind.", "Do c.",
-		"Notes left by the phases P2 builds on (most recent last):\n\n## P0 — ", "Overlay done.",
-		"Notes P2 left so far (most recent last):\n\n## P2 (checkpoint) — ", "Half of c, in 9e8d7c6.",
-	} {
-		if !strings.Contains(ctx, want) {
-			t.Errorf("the context lacks %q:\n%s", want, ctx)
-		}
-	}
-	if strings.Contains(ctx, "Not for P2.") || strings.Contains(ctx, "You are running the plan") {
-		t.Errorf("the worker was given the lead's brief:\n%s", ctx)
-	}
-	if !w.logged("brief", map[string]any{"type": "fresh", "phase": "P2"}) || lead.logged("brief", map[string]any{"type": "fresh"}) {
-		t.Errorf("the brief event is not the worker's alone:\nworker:\n%s\nlead:\n%s", w.eventLog(), lead.eventLog())
-	}
-}

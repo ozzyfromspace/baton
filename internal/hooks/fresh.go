@@ -35,11 +35,7 @@ func freshContext(c Context, s *state.Store, pl plan.Plan, st state.State) (text
 	}
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
-	in := brief.Input{Kind: brief.Fresh, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: w, Decisions: s.Decisions(st)}
-	if s.Worker() != "" {
-		in.Tree, in.Needs = s.Root, builtOn(s, st.Current)
-	}
-	b := brief.Write(in)
+	b := brief.Write(brief.Input{Kind: brief.Fresh, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: w, Decisions: s.Decisions(st)})
 	// The brief lists the run's decisions: the primer leaves them to it.
 	return strings.TrimSpace(Primer(pl, st, w, nil)) + "\n\n" + b, len(b)
 }

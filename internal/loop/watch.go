@@ -143,9 +143,6 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 	}
 	l.dialogNotified = d.Since.Add(due[n-1])
 	text := "waiting for your answer (" + d.Tool + ")"
-	if l.Role == RoleWorker {
-		text += " in the worker's session: baton view " + st.Current
-	}
 	l.update(func(st *state.State) {
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "dialog", Text: text, At: v.Now})
 	})
@@ -306,11 +303,11 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 	in.Type(fmt.Sprintf("[baton] The last turn ended with an API error (%s). Continue %s.", e.Error, st.Current), true)
 }
 
-// stopped describes this session, stopped, for the escalation that says so: its phase, whether it is a
+// stopped describes this loop, stopped, for the escalation that says so: its phase, whether it is a
 // worker's, whether the run has workers, and the phases left that need its phase, directly or not, which
 // cannot start while it is stopped. A worker's plan is narrowed to its phase, so those come from its run's.
 func (l *Loop) stopped(st state.State) decide.Stop {
-	s := decide.Stop{Phase: st.Current, Worker: l.Role == RoleWorker, Workers: l.Workers}
+	s := decide.Stop{Phase: st.Current, Worker: l.Store.Worker() != "", Workers: l.Workers}
 	if st.Current == "" {
 		return s
 	}

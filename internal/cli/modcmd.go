@@ -68,11 +68,8 @@ func safeModReport(io IO) (r modReply) {
 }
 
 func recordModReport(io IO) modReply {
-	switch {
-	case !hosted(io):
+	if !hosted(io) {
 		return modReply{Why: "this session is not hosted by baton"}
-	case worker(io):
-		return modReply{Why: "a worker's session starts no phase agents"}
 	}
 	data, rerr := goio.ReadAll(goio.LimitReader(io.In, maxReport+1))
 	var rep bridge.Report

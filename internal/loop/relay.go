@@ -25,7 +25,7 @@ const MaxRelayLines = 2
 // and reports whether it typed.
 func (l *Loop) relayLine(v host.View, st state.State, in host.Injector) bool {
 	r := st.RelayToAsk()
-	if l.Role != RoleLead || r == nil {
+	if l.Store.Worker() != "" || r == nil {
 		return false
 	}
 	key := fmt.Sprintf("%s/%s/%s@%s", r.Phase, r.Kind, r.Decision, r.Queued.Format(time.RFC3339Nano))
@@ -59,7 +59,7 @@ func (l *Loop) relayLine(v host.View, st state.State, in host.Injector) bool {
 // a question that went unanswered: the worker's phase waits for the human there, and they are pushed
 // about it. A question on the lead's screen stays, for the human to answer there.
 func (l *Loop) leaveRelays(now time.Time) {
-	if l.Role != RoleLead {
+	if l.Store.Worker() != "" {
 		return
 	}
 	var left []state.Relay

@@ -33,10 +33,9 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// rig runs a Supervisor against fakeclaude with pipes standing in for the user's terminal.
+// rig runs a host against fakeclaude with pipes standing in for the user's terminal.
 type rig struct {
 	t        *testing.T
-	sv       *Supervisor
 	out      string // fakeclaude's record directory
 	stdinW   *os.File
 	stdoutR  *os.File // the user's screen: closing it is closing the terminal
@@ -77,10 +76,10 @@ func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {
 	if cfgMod != nil {
 		cfgMod(&cfg)
 	}
-	r.proj, r.sv = cfg.Project, NewSupervisor(cfg)
+	r.proj = cfg.Project
 	go func() {
 		defer close(r.done)
-		exit, err := r.sv.Run()
+		exit, err := Run(cfg)
 		r.code, r.by, r.err = exit.Code, exit.By, err
 		stdoutW.Close()
 	}()
@@ -175,8 +174,7 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 // baton ending the lead itself (Quit: a restart, or the human leaving baton) is told apart from claude
 // exiting by itself, which is what the host recovers from.
 func TestTheLeadSaysWhatEndedIt(t *testing.T) {
-	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond })
-	r.sv.Lead().Quit()
+	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond; c.Controller = quitter{} })
 	select {
 	case <-r.done:
 	case <-time.After(5 * time.Second):
@@ -186,6 +184,11 @@ func TestTheLeadSaysWhatEndedIt(t *testing.T) {
 		t.Errorf("the lead ended with %d by %q, want %d by %q", r.code, r.by, 128+int(syscall.SIGTERM), EndedQuit)
 	}
 }
+
+// quitter ends claude at its first tick, as a restart does.
+type quitter struct{}
+
+func (quitter) Tick(_ View, in Injector) { in.Quit() }
 
 type recordingController struct {
 	mu    sync.Mutex
@@ -351,6 +354,38 @@ func TestASessionEndsWhenItsTerminalIsGone(t *testing.T) {
 			}
 			if b, _ := os.ReadFile(filepath.Join(store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"terminal_gone"`) {
 				t.Errorf("no terminal_gone event in:\n%s", b)
+			}
+		})
+	}
+}
+
+// A hang-up or a termination signal ends the lead.
+func TestSignalsEndTheLead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sig  syscall.Signal
+		env  []string
+		want int    // the lead's exit code
+		by   string // and what ended it
+	}{
+		{"SIGHUP", syscall.SIGHUP, []string{"FAKE_HUP=loop"}, 129, EndedHangup},
+		{"SIGTERM", syscall.SIGTERM, nil, 128 + int(syscall.SIGTERM), EndedSignal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond }, tc.env...)
+			// Registered here too, so a signal that arrives before the host's own handler cannot end the
+			// test binary.
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, tc.sig)
+			defer signal.Stop(ch)
+			syscall.Kill(os.Getpid(), tc.sig)
+			select {
+			case <-r.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the host outlived the signal")
+			}
+			if r.code != tc.want || r.by != tc.by {
+				t.Errorf("the lead ended with %d by %q, want %d by %q", r.code, r.by, tc.want, tc.by)
 			}
 		})
 	}

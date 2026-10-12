@@ -25,7 +25,7 @@ type Agent struct {
 // newAgent is the loop of the agent on phase, whose sub-run is sub, with the lead's settings.
 func (c *Coordinator) newAgent(phase string, sub *state.Store) *Agent {
 	lead := c.Lead
-	return &Agent{Phase: phase, Store: sub, loop: &Loop{Role: RoleWorker, Store: sub, Notify: lead.Notify, Project: lead.Project + " · " + phase,
+	return &Agent{Phase: phase, Store: sub, loop: &Loop{Store: sub, Notify: lead.Notify, Project: lead.Project + " · " + phase,
 		Timing: lead.Timing, Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
 		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }, owner: true}}
 }

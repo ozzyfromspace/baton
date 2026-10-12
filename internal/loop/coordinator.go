@@ -84,9 +84,6 @@ type Coordinator struct {
 
 // Tick is the lead's tick: its Loop, then the run's duties.
 func (c *Coordinator) Tick(v host.View, in host.Injector) {
-	if c.Fleet != nil && c.Lead.RestartHold == nil {
-		c.Lead.RestartHold = c.restartHold // a restart ends the phase agents too
-	}
 	c.Lead.Workers = c.Fleet != nil
 	guarded(c.Lead, v, "lead", &c.leadPanic, func() { c.Lead.Tick(v, in) })
 	if c.Lead.quit {

@@ -187,13 +187,12 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if why := io.Env("BATON_RECOVER"); why != "" {
 		leadEnv = append(leadEnv, "BATON_RECOVER="+why) // this host brings the lead back: its session says so, once
 	}
-	sv := host.NewSupervisor(host.Config{
+	started := io.Now()
+	exit, err := host.Run(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
-		Controller: coordinator, ViewSocket: host.ViewSocket(instance),
+		Controller: coordinator,
 	})
-	started := io.Now()
-	exit, err := sv.Run()
 	code := exit.Code
 	to, resumed, restarting := controller.Restart()
 	if restarting && err == nil {

@@ -47,7 +47,6 @@ const (
 	pendingFile = "pending"
 	workersDir  = "workers"
 	treeFile    = "worktree" // in a worker's sub-run: the worktree it works in
-	sessionFile = "session"  // in a worker's sub-run: its session's id
 )
 
 // OpenProject returns the project whose state lives in dir, creating the directory if needed.
@@ -115,11 +114,7 @@ func (p *Project) Run(ref, instance string) (*Store, error) {
 	if tree == "" {
 		return nil, fmt.Errorf("no worker %q here", ref)
 	}
-	s, err := p.open(dir, tree, ref, run, instance)
-	if err == nil {
-		s.Session = readLine(filepath.Join(dir, sessionFile))
-	}
-	return s, err
+	return p.open(dir, tree, ref, run, instance)
 }
 
 func (p *Project) open(dir, root, ref, parent, instance string) (*Store, error) {
@@ -205,16 +200,14 @@ type Binding struct {
 	// Carry: the session just replaced the host's previous one in the same conversation (/clear, or a
 	// plan approved with "clear context"), so it continues that session's run.
 	Carry bool
-	// Worker: the session is a worker's (BATON_ROLE=worker), which its host linked to its sub-run before
-	// starting it (NewWorker).
-	Worker bool
 }
 
 // ErrNoSession means a run was asked for with neither a session nor a host to find it by.
 var ErrNoSession = errors.New("no Claude Code session to find a run for")
 
-// ErrNotLinked means a worker's session has no sub-run linked to it.
-var ErrNotLinked = errors.New("this worker's session has no run linked to it")
+// ErrNotLinked means a session or a host is linked to a worker's sub-run, as an older baton's worker
+// sessions were: a session binds a run of its own, and a worker's sub-run is its phase agent's alone.
+var ErrNotLinked = errors.New("this session belongs to a worker of an older baton")
 
 // Bind returns the run b's session belongs to, creating or adopting one if it has none, and makes the
 // host instance (if any) its driver unless another live host drives it already. A run driven by
@@ -222,26 +215,15 @@ var ErrNotLinked = errors.New("this worker's session has no run linked to it")
 // it, until that host goes away and this one takes over.
 //
 // A new session takes, in order: the run its host carries over (b.Carry), a run attached outside any
-// session (pending, hosted sessions only), or a new run of its own.
-//
-// A worker's sub-run is only ever found: its host links it before the worker starts and drives it, so
-// Bind never creates, adopts or claims one, and a worker's session never gets any other run. The one link
-// it adds is a worker's /clear (b.Carry), which keeps the sub-run the worker's host instance drives.
+// session (pending, hosted sessions only), or a new run of its own. Bind never binds a worker's sub-run:
+// its phase agent's hooks find it by the agent (LinkAgent).
 func (p *Project) Bind(b Binding) (*Store, error) {
 	if b.Session != "" && !validID(b.Session) {
 		return nil, fmt.Errorf("unusable session id %q", b.Session)
 	}
 	id, host := p.RunOf(b.Session), p.HostRun(b.Instance)
-	if b.Session == "" && isWorker(host) {
-		id = host
-	}
-	switch {
-	case isWorker(id):
-		return p.Run(id, b.Instance)
-	case b.Carry && b.Session != "" && isWorker(host):
-		return p.carryWorker(b.Session, host, b.Instance)
-	case b.Worker || isWorker(host):
-		return nil, ErrNotLinked // a worker's instance never binds anything else
+	if isWorker(id) || isWorker(host) {
+		return nil, ErrNotLinked
 	}
 	// The common case, every hook of a session already bound to its host, takes no lock.
 	if id != "" && (b.Instance == "" || host == id) {
@@ -251,9 +233,7 @@ func (p *Project) Bind(b Binding) (*Store, error) {
 	err := p.withLock(func() error {
 		id := p.RunOf(b.Session)
 		if id == "" && b.Carry {
-			if id = p.HostRun(b.Instance); isWorker(id) {
-				id = ""
-			}
+			id = p.HostRun(b.Instance)
 		}
 		if id == "" && b.Session != "" && b.Instance != "" {
 			if pend := p.readLink(pendingFile); p.runExists(pend) {
@@ -269,11 +249,10 @@ func (p *Project) Bind(b Binding) (*Store, error) {
 		if id == "" {
 			id = b.Session
 		}
-		var err error
-		if isWorker(id) { // linked as a worker's since the check above
-			s, err = p.Run(id, b.Instance)
-			return err
+		if isWorker(id) {
+			return ErrNotLinked // linked since the check above
 		}
+		var err error
 		if s, err = p.Run(id, b.Instance); err != nil {
 			return err
 		}
@@ -296,29 +275,6 @@ func (p *Project) Bind(b Binding) (*Store, error) {
 			}
 		}
 		return p.writeLink(id, hostsDir, b.Instance)
-	})
-	return s, err
-}
-
-// carryWorker links session, which /clear started in the conversation of the worker whose host instance
-// drives the sub-run ref, to that sub-run: a worker's conversation keeps its sub-run, as a lead's keeps its
-// run. The worker's roster entry keeps the session its host started it with.
-func (p *Project) carryWorker(session, ref, instance string) (*Store, error) {
-	var s *Store
-	err := p.withLock(func() error {
-		if p.HostRun(instance) != ref || p.RunOf(session) != "" && p.RunOf(session) != ref {
-			return ErrNotLinked
-		}
-		run, phase, _ := splitRef(ref)
-		if err := writeAtomic(filepath.Join(p.refDir(run, phase), sessionFile), []byte(session+"\n")); err != nil {
-			return err
-		}
-		if err := p.writeLink(ref, sessionsDir, session); err != nil {
-			return err
-		}
-		var err error
-		s, err = p.Run(ref, instance)
-		return err
 	})
 	return s, err
 }

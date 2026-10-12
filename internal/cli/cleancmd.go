@@ -6,19 +6,16 @@ import (
 	"fmt"
 	goio "io"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/gitx"
-	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/procs"
@@ -26,8 +23,7 @@ import (
 )
 
 // baton clean ends what no live session uses, in the project of the working directory, what baton's
-// home holds for its checkout (lanes, workers' worktrees) and this user's view sockets, and says what it
-// did. Nothing a run that is not abandoned owns is touched (state.Abandoned): such runs are named and left
+// home holds for its checkout (lanes, workers' worktrees), and says what it did. Nothing a run that is not abandoned owns is touched (state.Abandoned): such runs are named and left
 // alone. Each step is idempotent, and every step is planned from one look at the project before any is
 // taken, so a dry run (--dry-run) reports the same actions, and a second run says there is nothing to
 // clean. The steps, in order:
@@ -41,7 +37,7 @@ import (
 //  6. processes that sessions which are gone left running (spike 28): those working under baton's home
 //     are stopped, the others listed with the command to stop each;
 //  7. records of runs and sessions that are gone, and temporary files that interrupted writes left;
-//  8. view sockets no host listens on, and elevation records older than a day.
+//  8. elevation records older than a day.
 //
 // What it keeps is listed, with the command to remove each.
 
@@ -54,7 +50,6 @@ const (
 	tempAge     = 10 * time.Minute
 	elevateAge  = 24 * time.Hour
 	stopGrace   = 5 * time.Second
-	socketDial  = 500 * time.Millisecond
 	cleanGitCap = 30 * time.Second
 )
 
@@ -85,7 +80,6 @@ type cleaner struct {
 	dry      bool
 	instance string // the host instance it runs under, recorded on events ("" from a shell)
 	self     string // the run of the session it runs in ("" from a shell)
-	sockets  string // where hosts listen for viewers
 	// parent and group are this process's parent and process group: the command line that runs baton
 	// clean, which it never lists.
 	parent, group int
@@ -114,7 +108,7 @@ func newCleaner(io IO, dir string) (*cleaner, error) {
 			return nil, fmt.Errorf("cannot use %s: %v", dir, err)
 		}
 	}
-	c := &cleaner{proj: proj, home: batonRoot(io), now: io.Now(), quiet: abandonAfter(io), instance: instance(io), sockets: filepath.Dir(host.ViewSocket("x")),
+	c := &cleaner{proj: proj, home: batonRoot(io), now: io.Now(), quiet: abandonAfter(io), instance: instance(io),
 		procs: procs.List, stop: func(pids []int) []int { return procs.Stop(pids, stopGrace) },
 		isRunner: lane.IsRunner, terminate: lane.Terminate, alive: lane.Alive, parent: os.Getppid(), group: procs.Group()}
 	if hosted(io) {
@@ -853,31 +847,11 @@ func removeAll(paths []string) string {
 	return "removed"
 }
 
-// machine: step 8, view sockets no host listens on, and old elevation records.
+// machine: step 8, old elevation records.
 func (c *cleaner) machine() {
-	var dead []string
-	entries, _ := os.ReadDir(c.sockets)
-	for _, e := range entries {
-		path := filepath.Join(c.sockets, e.Name())
-		if e.Type()&fs.ModeSocket == 0 {
-			continue
-		}
-		conn, err := net.DialTimeout("unix", path, socketDial)
-		if err == nil {
-			conn.Close()
-			continue
-		}
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			dead = append(dead, path)
-		}
-	}
-	if len(dead) > 0 {
-		c.add(&cleanAction{what: count(len(dead), "view socket", "view sockets") + " no host listens on (" + strings.Join(names(dead), ", ") + " in " + c.sockets + ")",
-			plan: "would remove " + them(len(dead)), do: func() string { return removeAll(dead) }})
-	}
 	var old []string
 	dir := elevate.Dir(c.home)
-	entries, _ = os.ReadDir(dir)
+	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") && !strings.HasSuffix(e.Name(), ".json.tmp") {
 			continue

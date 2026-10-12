@@ -9,7 +9,6 @@ Explain briefly:
 - `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
 - `/baton start`: hand this session to baton (same conversation); `/baton plan` and `/baton run` do it when they need to.
 - `/baton status`: where the run stands.
-- `/baton view`: the run's workers, hidden sessions that work on other phases beside this one; watching one takes another terminal (`baton view P3`).
 - `/baton pause`: take the wheel; `/baton run` gives it back.
 - `/baton drop`: drop the run; its plan is set aside, and baton does nothing more until the next plan.
 - `/baton clean`: end what no live session uses: workers, jobs, lanes, worktrees, leftover files (`--dry-run` only says what it would end).
@@ -19,15 +18,11 @@ Explain briefly:
 - `/baton setup`: check this machine and say what is left to set up.
 - `/baton update`: update baton to the latest release (`--check` only looks).
 
-Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start workers: hidden sessions, each on another phase that can go ahead, in a git worktree of its own, as many as the plan and the machine have room for. baton lands their work on this session's branch when they finish.
+Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start phase agents: background agents of this session, each on another phase that can go ahead, in a git worktree of its own, as many as the plan and the machine have room for. Claude Code lists them in the agent panel below the prompt, where each one's transcript opens. baton lands their work on this session's branch when they finish.
 
 ## status
 
 Run `baton status` and show its output verbatim.
-
-## view
-
-Run `baton view` with no argument and show its output verbatim: it lists the run's workers, each a hidden session that works on another phase of the plan in a worktree of its own. Watching one takes over the terminal it runs in, so it cannot run in this session: tell the user to run `baton view <phase>` (for example `baton view P3`) in another terminal, in this project. They see the worker's screen live and can type into it, for example to answer a permission prompt it waits on; `Ctrl-]` leaves, and the worker carries on.
 
 ## drafts
 
@@ -153,7 +148,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 - Run each of these as a plain command on its own. Inside double quotes, the shell runs backticks and `$( )` as commands and expands `$NAME`, so keep those out of notes, or use single quotes.
 - A command that runs long moves to the background by itself (after 2 minutes, unless the human set `foreground_max`), and wakes you when it ends; so does a background subagent. Keep working on what does not depend on it. The first time you stop while such work runs, baton refuses the stop once to remind you of that; with nothing left to do, end your turn again, and that stop is allowed. A gate run that way in the checkout is invalidated by your own edits, so a long or stateful gate goes to `baton verify` instead. If background work runs on for an hour, baton reminds you to check on it.
 - Don't ask the human questions (AskUserQuestion) of your own while a plan runs: nobody may be there, and the run would wait. Decide and carry on, or use `baton propose`. (baton refuses such questions unless the human started the turn.) A question baton gives you to put to the human is the exception, a worker's question included: ask it exactly as given. baton gives a worker's answer to the worker; nothing about it is yours to do.
-- baton may run workers beside you: hidden sessions, each on another phase of the plan in a worktree and on a branch of its own. Leave the phases they have alone. baton lands each one's work on your branch by itself, and the phases that need it wait until then.
+- baton may run phase agents beside you: background agents of this session that baton starts, each on another phase of the plan in a worktree and on a branch of its own. Leave the phases they have alone, and leave the agents to baton: it starts, messages and stops them, and their reports are for baton, not for you. baton lands each one's work on your branch by itself, and the phases that need it wait until then.
 - When baton lands a worker's work, it tells you which commits and files moved under you. Read those files again before you edit them, and never amend, reset, rebase or revert commits you did not make (baton refuses to amend, reset or rebase over them).
 - If the model's safeguards stop one of your responses (Claude Code notes it, and lets you go on once), never rephrase, split up or disguise the work to get past them. Go on with what stays clear of it; if the phase cannot go on without it, run `baton blocked "<what the safeguards stopped>" --tried "<what you did instead>"` and end your turn: the human decides how the phase goes on. When they refuse a turn outright, it ends, and baton tells the human; baton never retries it.
 - Never type `/compact` yourself. baton does that at the right moment.

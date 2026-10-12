@@ -69,14 +69,14 @@ func register(name, summary string, run func([]string, IO) int) {
 	commands[name] = command{summary: summary, run: run}
 }
 
-// leadOnly is a command for the lead session of a run alone. A worker's session, which works on one phase
-// of the run in a worktree of its own, is refused it, and told to carry on with its phase.
+// leadOnly is a command for the lead session of a run alone. A phase agent, which works on one phase of
+// the run in a worktree of its own, is refused it, and told to carry on with its phase.
 func leadOnly(name string, run func([]string, IO) int) func([]string, IO) int {
 	return func(args []string, io IO) int {
 		if !worker(io) {
 			return run(args, io)
 		}
-		phase := io.Env("BATON_PHASE")
+		phase := ""
 		if s, err := store(io); err == nil && s.Worker() != "" {
 			phase = s.Worker()
 			s.Event("refused", map[string]any{"command": name, "why": "worker"})

@@ -179,11 +179,9 @@ func StartProgram(t *testing.T, dir string, env []string, prog string, args ...s
 		}
 	}
 	// Tests never notify the developer, and run one session at a time, as before v0.5, unless a scenario
-	// starts workers itself. A worker's screen is kept in its sub-run as it ends (screen.log), since no
-	// test sees it otherwise.
+	// starts workers itself.
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=",
-		"BATON_SCREEN_DUMP=1")
+		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=")
 	cmd.Env = append(cmd.Env, env...) // later entries win
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {

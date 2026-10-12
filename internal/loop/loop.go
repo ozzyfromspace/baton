@@ -89,21 +89,9 @@ var Reminders = []time.Duration{30 * time.Minute, 2 * time.Hour, 6 * time.Hour}
 // It is only sent when the human has no draft (a gate), so it never erases their text.
 const clearLine = "\x15\x15\x15\x15\x15\x15"
 
-// Role is what a session's Loop may do beyond its own phase.
-type Role int
-
-const (
-	// RoleLead is the session in the human's terminal: it may leave baton, set a phase aside for another,
-	// and restart on a newer baton.
-	RoleLead Role = iota
-	// RoleWorker is a hidden session on one phase of the run, in a worktree of its own. It never leaves,
-	// switches or restarts: the run's coordinator ends it, and it has no other phase to switch to.
-	RoleWorker
-)
-
-// Loop implements host.Controller.
+// Loop implements host.Controller, for the lead session. (A phase agent's loop, Agent, keeps one for the
+// duties it shares with the lead: its jobs, their settling, its notices and the snapshot of a halt.)
 type Loop struct {
-	Role    Role
 	Store   *state.Store
 	Notify  notify.Notifier
 	Project string
@@ -117,12 +105,9 @@ type Loop struct {
 	Newer   func() string
 	// Runners runs the session's jobs (nil: jobs stay queued).
 	Runners Runners
-	// RunLimited is until when the run waits on the account's usage limit, for a worker's Loop, whose
+	// RunLimited is until when the run waits on the account's usage limit, for a phase agent's Loop, whose
 	// sub-run does not record it as the lead's run does (the coordinator's; nil for the lead).
 	RunLimited func() time.Time
-	// RestartHold says why the run's other sessions hold the lead's restart on a newer baton, or "" if
-	// nothing does (the coordinator's, for a lead with workers; nil: nothing does).
-	RestartHold func(now time.Time) string
 	// Workers says the run has workers beside the lead (the coordinator's Fleet): while the lead is
 	// stopped, the phases that do not need its phase go on.
 	Workers bool
@@ -153,7 +138,6 @@ type Loop struct {
 	relayAt    time.Time
 	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart    *restart       // the restart claude was ended for
-	restartFor string         // what the run's workers last held the restart for, as logged
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
@@ -187,7 +171,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
-	if !st.Run.ExitAt.IsZero() && l.Role == RoleLead {
+	if !st.Run.ExitAt.IsZero() {
 		l.leave(v, st, in)
 		return
 	}
@@ -214,9 +198,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.wished = false
 	l.resolve(v, st)
 	l.remind(v, st)
-	if l.Role == RoleLead {
-		st = l.switching(v, st)
-	}
+	st = l.switching(v, st)
 	l.clearDraft(v, st, in)
 
 	comp := st.Run.Compaction
@@ -312,7 +294,7 @@ func (l *Loop) Restart() (to, session string, ok bool) {
 
 // upgradeDue reports a newer baton to restart the lead on, for a session baton knows the conversation of.
 func (l *Loop) upgradeDue(v host.View, st state.State) bool {
-	return l.Role == RoleLead && l.Newer != nil && st.Run.SessionID != "" && l.Newer() != ""
+	return l.Newer != nil && st.Run.SessionID != "" && l.Newer() != ""
 }
 
 // restartable reports a safe point to restart the session: the moment is the human's and the model's
@@ -321,8 +303,8 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // kind (baton's phase agents too), monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
 // restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
 // about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
-// human reading its last answer is not interrupted. The restart ends the run's workers too, so each of
-// them must be at such a point as well (workersIdle).
+// human reading its last answer is not interrupted. While a newer baton waits, no phase agent starts
+// (Coordinator.pending); one that is idle when the restart comes is taken up again after it.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
@@ -336,30 +318,7 @@ func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 			return false
 		}
 	}
-	return l.workersIdle(v)
-}
-
-// workersIdle reports that nothing of the run's workers holds the restart (RestartHold), and logs what
-// does, once for each thing that does. A running plan does not wait for them: it compacts as usual, and
-// the restart waits for the next safe point, while no new worker starts (Coordinator.pending).
-func (l *Loop) workersIdle(v host.View) bool {
-	why := ""
-	if l.RestartHold != nil {
-		why = l.RestartHold(v.Now)
-	}
-	if why != l.restartFor {
-		first := l.restartFor == ""
-		l.restartFor = why
-		if why != "" {
-			l.logf("loop: the restart on a newer baton waits: %s", why)
-			l.Store.Event("restart_held", map[string]any{"why": why})
-		}
-		if why != "" && first {
-			line := fmt.Sprintf("baton: baton %s is installed; this session restarts on it once the workers are idle (now %s)", l.Newer(), why)
-			l.update(func(st *state.State) { st.Run.Announce = append(st.Run.Announce, line) })
-		}
-	}
-	return why == ""
+	return true
 }
 
 // restartOn ends claude so the host can restart the session on the newer baton: the host's command

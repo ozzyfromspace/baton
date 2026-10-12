@@ -10,7 +10,7 @@ import (
 // hangupSignals end a session whose terminal is gone; Windows can only kill.
 var hangupSignals = []os.Signal{os.Kill}
 
-// quitSignals end a session the human is leaving baton from, or one baton ends.
+// quitSignals end a session the human is leaving baton from, or one baton restarts.
 var quitSignals = []os.Signal{os.Kill}
 
 var killSignal = os.Kill
@@ -23,9 +23,6 @@ type signalHandlers struct {
 
 // forwardSignals is a no-op until the ConPTY host lands.
 func forwardSignals(signalHandlers) func() { return func() {} }
-
-// OnResize is a no-op until the ConPTY host lands.
-func OnResize(func()) func() { return func() {} }
 
 func killTree(p *os.Process) { p.Kill() }
 

@@ -373,8 +373,8 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 
 	tree, _ := filepath.EvalSymlinks(w.Root)
 	switch {
-	case w.Ref != "lead/P1" || w.Parent != "lead" || w.Worker() != "P1" || w.Session != "":
-		t.Errorf("ref %q parent %q worker %q session %q", w.Ref, w.Parent, w.Worker(), w.Session)
+	case w.Ref != "lead/P1" || w.Parent != "lead" || w.Worker() != "P1":
+		t.Errorf("ref %q parent %q worker %q", w.Ref, w.Parent, w.Worker())
 	case w.Dir != filepath.Join(lead.Dir, "workers", "P1"):
 		t.Errorf("dir %s", w.Dir)
 	case w.Root != tree || w.Root == p.Root:

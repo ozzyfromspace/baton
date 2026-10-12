@@ -36,7 +36,6 @@ type Store struct {
 	Project  string // the project's .baton directory
 	Ref      string // the run's ref (see Project)
 	Parent   string // a worker's sub-run: the ref of the run it works for ("" otherwise)
-	Session  string // a worker's sub-run: its session's id, recorded on events
 	// Agent is the phase agent whose hook opened its sub-run (LinkAgent): that agent's hooks are the
 	// sub-run's own, while the lead's screen, where its dialogs show, is the parent run's.
 	Agent    string
@@ -204,9 +203,6 @@ func (s *Store) Event(kind string, fields map[string]any) error {
 	}
 	if w := s.Worker(); w != "" {
 		rec["worker"] = w
-		if s.Session != "" {
-			rec["session"] = s.Session
-		}
 		if s.Agent != "" {
 			rec["agent"] = s.Agent
 		}

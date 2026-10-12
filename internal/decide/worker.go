@@ -31,12 +31,6 @@ func WorkerTakesUp(phase string) string {
 	return fmt.Sprintf("An agent before you worked on %s and ended before it was finished: you take the phase up where it stands, in the same worktree.", phase)
 }
 
-// WorkerHosted opens the primer of a worker's session that resumed: what it is.
-func WorkerHosted(title, phase string) string {
-	return fmt.Sprintf("This session is hosted by baton, as a worker for the attached plan %q: it works on %s alone, in a git worktree of its own, "+
-		"while the lead session and any other workers work on other phases elsewhere. ", title, phase)
-}
-
 // WorkerRole reminds a worker, after a compaction, which phase it works on and where.
 func WorkerRole(title, file, phase, tree string) string {
 	return fmt.Sprintf("You are a worker on %s of the plan %q (%s), in a git worktree of your own (%s): the lead session and any other workers work on the other phases elsewhere.",

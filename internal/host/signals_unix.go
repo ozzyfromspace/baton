@@ -16,7 +16,7 @@ import (
 // hangupSignals end a session whose terminal is gone, in order, HangupGrace apart.
 var hangupSignals = []os.Signal{syscall.SIGHUP, syscall.SIGTERM, syscall.SIGKILL}
 
-// quitSignals end a session the human is leaving baton from, or one baton ends.
+// quitSignals end a session the human is leaving baton from, or one baton restarts.
 var quitSignals = []os.Signal{syscall.SIGTERM, syscall.SIGKILL}
 
 // killSignal is the last of them, which takes claude's children with it (killTree).
@@ -32,7 +32,7 @@ type signalHandlers struct {
 
 // forwardSignals hands the signals baton gets to h until the function it returns is called. SIGWINCH
 // keeps the lead's terminal size in step with the human's. SIGHUP means baton's own terminal is gone,
-// and the termination signals are for claude: either way the sessions end.
+// and the termination signals are for claude: either way the session ends.
 func forwardSignals(h signalHandlers) func() {
 	ch := make(chan os.Signal, 8)
 	signal.Notify(ch, syscall.SIGWINCH, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT)
@@ -51,25 +51,6 @@ func forwardSignals(h signalHandlers) func() {
 				default:
 					h.forward(s)
 				}
-			}
-		}
-	}()
-	return func() { signal.Stop(ch); close(done) }
-}
-
-// OnResize calls fn each time the terminal baton runs in is resized, until the function it returns is
-// called: baton view keeps the session it shows at its terminal's size.
-func OnResize(fn func()) func() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGWINCH)
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ch:
-				fn()
 			}
 		}
 	}()

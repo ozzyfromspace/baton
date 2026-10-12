@@ -134,8 +134,7 @@ func TestABadModReportIsLetGo(t *testing.T) {
 	}
 }
 
-// The mod does nothing where baton does not want it: in a session baton does not host, in a worker's,
-// with no run yet or in a claude whose host does not own the run (it tries again), and as a mod of
+// The mod does nothing where baton does not want it: in a session baton does not host, with no run yet or in a claude whose host does not own the run (it tries again), and as a mod of
 // another baton, which is recorded as refused.
 func TestTheModIsDormantUnlessBatonWantsIt(t *testing.T) {
 	m := newModRun(t)
@@ -146,7 +145,6 @@ func TestTheModIsDormantUnlessBatonWantsIt(t *testing.T) {
 		why   string
 	}{
 		{"not hosted", map[string]string{"BATON_DIR": m.dir, "BATON_INSTANCE": "i"}, false, "not hosted"},
-		{"a worker's session", map[string]string{"BATON_HOST": "1", "BATON_DIR": m.dir, "BATON_INSTANCE": "i", "BATON_ROLE": "worker"}, false, "worker"},
 		{"no run yet", map[string]string{"BATON_HOST": "1", "BATON_DIR": m.dir, "BATON_INSTANCE": "k"}, true, "no run yet"},
 	} {
 		saved := m.env

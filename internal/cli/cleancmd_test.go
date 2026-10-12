@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,11 +30,11 @@ import (
 //     baton wiped it); job j1's pid now belongs to another program, j2's is still its runner;
 //   - run-live is live, and run-recent ended a minute ago: everything of theirs survives;
 //   - a stray worktree of a run that is gone, a lane nobody holds (and one up by run-live's host),
-//     temporary files, view sockets, terminal records, and processes in the injected table.
+//     temporary files, terminal records, and processes in the injected table.
 type cleanRig struct {
 	t                    *testing.T
 	now                  time.Time
-	repo, home, sockets  string
+	repo, home           string
 	proj                 *state.Project
 	pl                   plan.Plan
 	worker, orphan       string // run-a's worktrees on P1 and P2
@@ -44,7 +43,6 @@ type cleanRig struct {
 	table                []procs.Proc
 	stopped, terminated  []int
 	runners              map[int]bool
-	deadSock, liveSock   string
 	oldRecord, newRecord string
 	oldTemps, newTemp    []string
 }
@@ -115,27 +113,6 @@ func newCleanRig(t *testing.T) *cleanRig {
 	}
 	x.newTemp = []string{filepath.Join(x.proj.Dir, "runs", "run-live", ".state.json.tmp-456")}
 	x.file(x.newTemp[0], x.now)
-
-	// View sockets: one whose host is gone, one a host listens on (hosts listen for viewers on Unix only).
-	var errs error
-	if x.sockets, errs = os.MkdirTemp("", "bc"); errs != nil {
-		t.Fatal(errs)
-	}
-	t.Cleanup(func() { os.RemoveAll(x.sockets) })
-	if runtime.GOOS != "windows" {
-		x.deadSock, x.liveSock = filepath.Join(x.sockets, "dead.sock"), filepath.Join(x.sockets, "live.sock")
-		dead, err := net.Listen("unix", x.deadSock)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dead.(*net.UnixListener).SetUnlinkOnClose(false)
-		dead.Close()
-		live, err := net.Listen("unix", x.liveSock)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { live.Close() })
-	}
 
 	// Terminal records: one from two days ago, one from today.
 	x.oldRecord, x.newRecord = filepath.Join(x.home, "elevate", "ttys001.json"), filepath.Join(x.home, "elevate", "ttys002.json")
@@ -237,7 +214,7 @@ func (x *cleanRig) cleaner(dry bool, env map[string]string) *cleaner {
 	if err != nil {
 		x.t.Fatal(err)
 	}
-	c.dry, c.sockets, c.parent, c.group = dry, x.sockets, 6100, 6100
+	c.dry, c.parent, c.group = dry, 6100, 6100
 	c.procs = func() ([]procs.Proc, error) {
 		return slices.DeleteFunc(slices.Clone(x.table), func(p procs.Proc) bool { return slices.Contains(x.stopped, p.PID) }), nil
 	}
@@ -297,8 +274,8 @@ func whats(c *cleaner) []string {
 }
 
 // baton clean ends what no live session uses, and nothing else: run-a's worker, its orphaned sub-run,
-// its jobs and its leftover processes, the stray worktree, the lane nobody holds, old temporary files,
-// the dead socket and the old record. Everything of the live run and of the run that ended a minute ago
+// its jobs and its leftover processes, the stray worktree, the lane nobody holds, old temporary files
+// and the old record. Everything of the live run and of the run that ended a minute ago
 // survives.
 func TestCleanEndsWhatNoLiveSessionUses(t *testing.T) {
 	x := newCleanRig(t)
@@ -320,7 +297,6 @@ func TestCleanEndsWhatNoLiveSessionUses(t *testing.T) {
 		{"only the runner still a runner is told to stop", reflect.DeepEqual(x.terminated, []int{4343})},
 		{"the lane nobody holds is removed, the one up by a live host stays", !exists(pool.LaneDir(1)) && exists(pool.LaneDir(2))},
 		{"old temporary files are removed, the one being written stays", !exists(x.oldTemps[0]) && !exists(x.oldTemps[1]) && exists(x.newTemp[0])},
-		{"the dead socket is removed, the live one stays", x.deadSock == "" || !exists(x.deadSock) && exists(x.liveSock)},
 		{"the old terminal record is removed, today's stays", !exists(x.oldRecord) && exists(x.newRecord)},
 		{"only the process under baton's home is stopped", reflect.DeepEqual(x.stopped, []int{5001})},
 		{"run-live's worker, worktree and job survive", live.Workers[0].Status == state.WorkerWorking && exists(x.live) && live.Jobs[0].Status == state.JobRunning},
@@ -371,9 +347,6 @@ func TestCleanEndsWhatNoLiveSessionUses(t *testing.T) {
 	if len(c.notes) > 0 {
 		t.Errorf("notes: %q", c.notes)
 	}
-	if want := "1 view socket no host listens on (dead.sock in " + x.sockets + "): removed"; x.deadSock != "" && !strings.Contains(out, want) {
-		t.Errorf("no %q in the report:\n%s", want, out)
-	}
 
 	// The second time, there is nothing left to clean.
 	x.terminated = nil
@@ -386,7 +359,7 @@ func TestCleanEndsWhatNoLiveSessionUses(t *testing.T) {
 // worktree git has: what a dry run must not change.
 func (x *cleanRig) fingerprint() string {
 	var b strings.Builder
-	for _, dir := range []string{x.repo, x.home, x.sockets} {
+	for _, dir := range []string{x.repo, x.home} {
 		filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -428,11 +401,7 @@ func TestCleanDryRun(t *testing.T) {
 			t.Errorf("no %q in the dry run's report:\n%s", want, out)
 		}
 	}
-	want := 10
-	if x.deadSock == "" { // no view sockets on Windows
-		want = 9
-	}
-	if len(dry.actions) < want {
+	if len(dry.actions) < 9 {
 		t.Fatalf("a dry run planned %d actions:\n%s", len(dry.actions), out)
 	}
 	_, done := x.clean(false)
@@ -471,10 +440,12 @@ func TestCleanInASession(t *testing.T) {
 		t.Errorf("the report:\n%s", out.String())
 	}
 
-	io, stdout, stderr := testIO("", map[string]string{"BATON_HOST": "1", "BATON_DIR": x.proj.Dir, "BATON_ROLE": "worker", "BATON_PHASE": "P1",
-		"BATON_INSTANCE": "host-live-P1", "CLAUDE_CODE_SESSION_ID": "run-live-P1", "BATON_HOME": x.home})
+	// In run-live's phase agent on P1, which works in P1's worktree.
+	io, stdout, stderr := testIO("", map[string]string{"BATON_HOST": "1", "BATON_DIR": x.proj.Dir,
+		"BATON_INSTANCE": "host-live", "CLAUDE_CODE_SESSION_ID": "run-live", "BATON_HOME": x.home})
+	io.Dir = x.live
 	if code := Main([]string{"clean"}, io); code == 0 || !strings.Contains(stderr.String(), "baton clean belongs to the lead session") || stdout.Len() > 0 {
-		t.Errorf("a worker's baton clean: exit %d\n%s%s", code, stdout, stderr)
+		t.Errorf("a phase agent's baton clean: exit %d\n%s%s", code, stdout, stderr)
 	}
 	if code := Main([]string{"clean", "now"}, io); code == 0 {
 		t.Error("baton clean took an argument")

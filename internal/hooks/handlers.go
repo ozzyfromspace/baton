@@ -72,7 +72,6 @@ func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 			Session:  session,
 			Instance: instance,
 			Carry:    c.Event == "SessionStart" && str(c.Input, "source") == "clear",
-			Worker:   c.Env("BATON_ROLE") == "worker",
 		})
 	}
 }
@@ -588,9 +587,6 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	if p, err := s.LoadPlan(); err == nil && st.Mode != state.ModeIdle {
 		pl, havePlan = p, true
 	}
-	if s.Worker() != "" && source == "startup" && havePlan {
-		return h.workerStart(c, s, pl, ann)
-	}
 	if !havePlan {
 		return Result{Output: map[string]any{"systemMessage": lines(ann, note+"baton: hosting this session (no plan attached — /baton plan or /baton run)")}}, nil
 	}
@@ -675,11 +671,7 @@ func (h *handlers) recovered(c Context) (res Result, done bool, err error) {
 // a /clear or a restart the model has none of it in context, and the human may ask about it.
 func Primer(pl plan.Plan, st state.State, w decide.Words, all []state.Decision) string {
 	var b strings.Builder
-	if w.Worker {
-		b.WriteString(decide.WorkerHosted(pl.Title, st.Current))
-	} else {
-		fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
-	}
+	fmt.Fprintf(&b, "This session is hosted by baton, which runs the attached plan %q phase by phase and compacts the context between phases. ", pl.Title)
 	switch st.Mode {
 	case state.ModeComplete:
 		b.WriteString("Every phase of the plan is done.")

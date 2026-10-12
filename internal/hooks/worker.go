@@ -11,40 +11,10 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// A worker is a session of its own on one phase of a run, in a git worktree of its own (state.NewWorker
-// links it to its sub-run before it starts). Its hooks are the lead's, with these differences: it starts
-// its phase from a brief of its own, it never touches the project's checkout and never plans, its work
-// lands on the run's branch once it is done, and its questions are queued for the lead session to put
-// to the human (state.Store.Relay) instead of asked in a session nobody watches.
-
-// workerStart starts a worker's phase as its session starts: the phase becomes active from the state of
-// the worktree now, and the worker gets its brief, which the prompt it was launched with tells it to
-// follow. A session started anew on a phase already under way gets the brief again.
-func (h *handlers) workerStart(c Context, s *state.Store, pl plan.Plan, ann string) (Result, error) {
-	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
-	started := false
-	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if ps := st.Phases[st.Current]; st.Mode == state.ModeRunning && (ps == nil || ps.Status == state.PhasePending) {
-			state.Start(st, c.Now, origin)
-			started = true
-		}
-		return nil
-	})
-	if err != nil {
-		return Result{}, ok(err)
-	}
-	if started {
-		s.Event("phase_started", map[string]any{"phase": st.Current})
-	}
-	text := h.workerBrief(c, s, pl, st, false)
-	return Result{Output: map[string]any{
-		"systemMessage": lines(ann, "baton: worker on "+phaseTitle(pl, st.Current)+" — it starts now, with its brief"),
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "SessionStart",
-			"additionalContext": text,
-		},
-	}}, nil
-}
+// A worker is one phase of a run worked on by a phase agent (agent.go), in a git worktree of its own. Its
+// hooks are the lead's, with these differences: it starts its phase from a brief of its own, it never
+// touches the project's checkout and never plans, its work lands on the run's branch once it is done, and
+// its questions are queued for the human (state.Store.Relay) instead of asked by its own model.
 
 // workerBrief is the brief a worker starts its phase from, in its sub-run s, and logs it.
 func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state.State, again bool) string {

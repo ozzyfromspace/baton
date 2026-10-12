@@ -1,8 +1,7 @@
 // Package host runs claude inside a pseudo-terminal that baton owns, passing every byte between the
 // user's terminal and claude untouched. Owning the terminal is what lets baton type /compact itself:
 // in an interactive Claude Code session, only a keystroke can start a compaction (see
-// docs/research/spikes.md). Beside that session, the lead, a host can run hidden ones (Supervisor.Spawn):
-// workers whose screens nobody sees, which baton drains and types into the same way.
+// docs/research/spikes.md).
 package host
 
 import (
@@ -19,8 +18,7 @@ import (
 // TickInterval is how often the controller runs.
 const TickInterval = 250 * time.Millisecond
 
-// Config describes a host: its lead session, and what its hidden sessions share with it (Spec says the
-// rest).
+// Config describes a host and its session.
 type Config struct {
 	Claude   string   // claude executable
 	Args     []string // the user's claude arguments
@@ -45,8 +43,6 @@ type Config struct {
 	TypeDelay, EnterDelay time.Duration
 	// HangupGrace is how long claude gets to exit after each step of ending it (5s).
 	HangupGrace time.Duration
-	// ViewSocket is where viewers attach to the hidden sessions (baton view, ViewSocket); "" takes none.
-	ViewSocket string
 }
 
 // View is what a session's controller knows about it on each tick.

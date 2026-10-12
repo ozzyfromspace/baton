@@ -68,7 +68,7 @@ func store(io IO) (*state.Store, error) {
 	}
 	switch {
 	case inst != "" && sid != "":
-		return p.Bind(state.Binding{Session: sid, Instance: inst, Worker: worker(io)}) // hosted, before any hook bound it
+		return p.Bind(state.Binding{Session: sid, Instance: inst}) // hosted, before any hook bound it
 	case sid != "" || inst != "":
 		return nil, state.ErrNoPlan
 	}
@@ -87,7 +87,7 @@ func attachTo(io IO) (*state.Store, error) {
 	}
 	sid, inst := io.Env("CLAUDE_CODE_SESSION_ID"), instance(io)
 	if sid != "" || inst != "" {
-		return p.Bind(state.Binding{Session: sid, Instance: inst, Worker: worker(io)})
+		return p.Bind(state.Binding{Session: sid, Instance: inst})
 	}
 	return p.Pending("")
 }
@@ -96,7 +96,7 @@ func attachTo(io IO) (*state.Store, error) {
 // session, inside one of the worktrees of its run's phases (state.Project.PhaseAt). A phase agent shares
 // the lead's session and environment; only where it works says that a command is the agent's.
 func inPhase(io IO, p *state.Project) (*state.Store, bool) {
-	if !hosted(io) || io.Env("BATON_ROLE") == "worker" {
+	if !hosted(io) {
 		return nil, false
 	}
 	cwd, err := io.wd()
@@ -113,14 +113,11 @@ func fail(io IO, format string, a ...any) int {
 
 func hosted(io IO) bool { return io.Env("BATON_HOST") == "1" }
 
-// worker reports whether a command runs for a worker, which works on one phase of its run: in a worker's
-// session, or in a phase agent (inPhase).
+// worker reports whether a command runs for a worker, which works on one phase of its run: in a phase
+// agent (inPhase).
 func worker(io IO) bool {
 	if !hosted(io) {
 		return false
-	}
-	if io.Env("BATON_ROLE") == "worker" {
-		return true
 	}
 	p, err := project(io)
 	if err != nil {
