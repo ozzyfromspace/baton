@@ -562,7 +562,7 @@ func TestAHeldQuestionIsAskedAgain(t *testing.T) {
 	s.Type("/baton run")
 	waitSequence(t, s, 3*time.Minute,
 		is("relay_again", "phase", "P1"),
-		is("relay_issued", "phase", "P1", "again", "true"),
+		is("relay_issued", "phase", "P1"), // a fresh ask: "again" marks one the mod lost
 	)
 	opens := count(s.Events(), is("dialog_open", "tool", "AskUserQuestion", "dialog", "relay"))
 	if !s.Until("the question again", 2*time.Minute, func() bool {
@@ -696,11 +696,14 @@ func TestAGateWakesAnIdlePhaseAgent(t *testing.T) {
 	none(t, s, "controller_panic", "worker_resumed", "escalated")
 }
 
-// bigFile is n's file of about 25k tokens, for an agent to read.
+// bigFile is n's file of about 3.5k tokens, for an agent to read: small enough that several fit between two
+// compactions. Claude Code keeps a recent stretch of the conversation through a compaction (about 50k
+// tokens of the agent's, against a 100k window that compacts at about 67k), and ends a turn whose context
+// refills within three turns of each of three compactions in a row ("Autocompact is thrashing").
 func bigFile(n int) string {
 	words := strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa")
 	var b strings.Builder
-	for j := 0; j < 1500; j++ {
+	for j := 0; j < 100; j++ {
 		for k := 0; k < 12; k++ {
 			b.WriteString(words[(j+k)%16] + " ")
 		}
@@ -724,7 +727,7 @@ After: none
 After: none
 
 1. Run exactly this command with the Bash tool: sh wait.sh read — it waits a while, then says so.
-2. Use the Read tool to read big1.txt, then big2.txt, then big3.txt, then big4.txt, one at a time and in full.
+2. Use the Read tool to read the files big1.txt to big16.txt in order, one file per Read call, one call at a time, each in full.
 3. Write the single word read into a new file named read.txt. Commit it: git add read.txt, then git commit -m 'feat: read'. Then report P1 done: baton done P1 --notes 'read them'
 
 ## P2 — Count
@@ -746,7 +749,7 @@ Run echo three, then report P3 done: baton done P3 --notes 'said three'
 // prompt is answered, the lead compacts, proven by its own transcript, and P3 starts.
 func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
 	files := map[string]string{"wait.sh": signalScript}
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 16; i++ {
 		files[fmt.Sprintf("big%d.txt", i)] = bigFile(i)
 	}
 	dir := projectWith(t, files)
@@ -959,8 +962,8 @@ After: none
 
 // The human runs /clear in the lead while its phase agent waits: /clear ends every agent of the session,
 // and none can be started again. baton takes P1 up with a fresh agent in its worktree, told to take the
-// phase up where it stands; the lead's fresh conversation gets its own phase's brief. Both finish once the
-// wait ends, and P1's work lands.
+// phase up where it stands; the lead's fresh conversation gets its own phase's brief, if it still holds it
+// (it may have reported P0 done while its wait runs). Both finish once the wait ends, and P1's work lands.
 func TestAClearGivesThePhaseAFreshAgent(t *testing.T) {
 	dir := listPlanProject(t)
 	Attach(t, dir, clearPlan)
@@ -974,11 +977,14 @@ func TestAClearGivesThePhaseAFreshAgent(t *testing.T) {
 	started := s.WaitEvent("worker_started", time.Minute)
 	s.WaitQuiet(5*time.Second, time.Minute)
 
+	held := first(s.Events(), is("phase_verifying", "phase", "P0")) < 0 // the lead may report P0 done while its wait runs
 	s.Type("/clear")
-	waitSequence(t, s, time.Minute,
-		is("session_start", "source", "clear"),
-		is("brief", "type", "fresh", "phase", "P0"),
-	)
+	if held {
+		waitSequence(t, s, time.Minute,
+			is("session_start", "source", "clear"),
+			is("brief", "type", "fresh", "phase", "P0"),
+		)
+	}
 	waitSequence(t, s, 3*time.Minute,
 		is("session_start", "source", "clear"),
 		is("worker_ended", "phase", "P1", "suspended", "true"),

@@ -36,24 +36,27 @@ func TestProposalGoesAheadWhenNobodyAnswers(t *testing.T) {
 	}{{"the mod settles it", true}, {"with no mod, the host types its answer", false}} {
 		t.Run(c.name, func(t *testing.T) {
 			var args []string
-			settled := func(e map[string]any) bool {
-				return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "3"
-			}
-			if !c.mod {
-				args = []string{"--plugin-dir", noModPlugin(t)}
-			} else {
-				settled = is("mod_deadline", "answer", "Go ahead")
-			}
-			s, dir := startProposal(t, "20s", args...)
-			waitSequence(t, s, 5*time.Minute,
+			steps := []func(map[string]any) bool{
 				func(e map[string]any) bool { return e["kind"] == "proposed" && e["id"] == "d1" },
 				func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "proposal" },
 				func(e map[string]any) bool { return e["kind"] == "proposal_asked" && e["id"] == "d1" },
-				settled,
-				func(e map[string]any) bool {
-					return e["kind"] == "proposal_resolved" && e["by"] == "timeout" && e["answer"] == "Go ahead"
-				},
-			)
+			}
+			if !c.mod {
+				args = []string{"--plugin-dir", noModPlugin(t)}
+				steps = append(steps, func(e map[string]any) bool {
+					return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "3"
+				})
+			}
+			// Where the mod settles it, baton records the answer before the mod's report of it (mod_deadline),
+			// so that a failure in between has the mod send it again.
+			steps = append(steps, func(e map[string]any) bool {
+				return e["kind"] == "proposal_resolved" && e["by"] == "timeout" && e["answer"] == "Go ahead"
+			})
+			s, dir := startProposal(t, "20s", args...)
+			waitSequence(t, s, 5*time.Minute, steps...)
+			if c.mod && !s.Until("the mod's report", time.Minute, func() bool { return first(s.Events(), is("mod_deadline", "answer", "Go ahead")) >= 0 }) {
+				t.Errorf("the mod did not report the deadline:\n%s", eventLog(s))
+			}
 			greeting := filepath.Join(dir, "greeting.txt")
 			if !s.Until("greeting.txt", 2*time.Minute, func() bool { _, err := os.Stat(greeting); return err == nil }) {
 				t.Fatalf("the model did not do what it proposed; events: %v", s.Events())

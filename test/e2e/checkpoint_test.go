@@ -84,10 +84,14 @@ func TestContextQuestionTimesOut(t *testing.T) {
 	waitSequence(t, s, 5*time.Minute,
 		kind("context_warning"),
 		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "context_warning" },
-		is("mod_deadline", "answer", "Keep going"),
 		func(e map[string]any) bool {
 			return e["kind"] == "answered" && e["answer"] == "Keep going" && e["by"] == "timeout" && e["via"] == "mod"
 		},
 	)
+	// baton records the answer before the mod's report of it, so that a failure in between has the mod
+	// send it again.
+	if !s.Until("the mod's report", time.Minute, func() bool { return first(s.Events(), is("mod_deadline", "answer", "Keep going")) >= 0 }) {
+		t.Errorf("the mod did not report the deadline:\n%s", eventLog(s))
+	}
 	none(t, s, "auto_answered")
 }
