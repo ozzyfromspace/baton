@@ -609,7 +609,8 @@ func TestAPhaseAgentsCheckpointIsAFreshAgent(t *testing.T) {
 }
 
 // After a compaction of its own, a phase agent is given its brief again, once: with its next tool call,
-// or as a message starts it again; never with a hook of a subagent its model started.
+// or as it stops; never as a message starts it again (Claude Code gives a resumed agent nothing of its
+// SubagentStart), nor with a hook of a subagent its model started.
 func TestAPhaseAgentIsBriefedAgainAfterItsCompaction(t *testing.T) {
 	w, _, tree := newWorker(t)
 	w.fire("SubagentStart", map[string]any{})
@@ -628,13 +629,17 @@ func TestAPhaseAgentIsBriefedAgainAfterItsCompaction(t *testing.T) {
 		t.Errorf("at its tool call: %s", tell)
 	}
 	owe()
-	if b := additionalContext(w.fire("SubagentStart", map[string]any{})); !strings.Contains(b, "Claude Code compacted the context automatically") || w.state().Run.Briefing != nil {
-		t.Errorf("as it starts again: %s", b)
+	if out := w.fire("SubagentStart", map[string]any{}); out != nil || w.state().Run.Briefing == nil {
+		t.Errorf("given as it starts again: %v", out)
 	}
-	if out := w.fire("SubagentStart", map[string]any{}); out != nil {
+	out := w.fire("SubagentStop", map[string]any{"stop_hook_active": false})
+	if reason, _ := out["reason"].(string); out["decision"] != "block" || !strings.Contains(reason, "Claude Code compacted the context automatically") || w.state().Run.Briefing != nil {
+		t.Errorf("as it stops: %v", out)
+	}
+	if out := w.fire("SubagentStop", map[string]any{"stop_hook_active": true}); strings.Contains(fmt.Sprint(out), "compacted the context") {
 		t.Errorf("given twice: %v", out)
 	}
-	if strings.Count(w.eventLog(), `"via":"resume"`) != 1 {
+	if strings.Count(w.eventLog(), `"via":"stop"`) != 1 || strings.Contains(w.eventLog(), `"via":"resume"`) {
 		t.Errorf("events:\n%s", w.eventLog())
 	}
 }

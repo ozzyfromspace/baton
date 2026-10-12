@@ -93,6 +93,22 @@ func MailTyped(kinds []string) string {
 	return "[baton] baton has a message for you, attached."
 }
 
+// AgentMail is the message that wakes an idle phase agent for the messages baton has for it, which come
+// with its next tool call, or as it ends the turn: Claude Code gives a resumed agent nothing of baton's
+// hooks as it starts.
+func AgentMail(kinds []string) string {
+	const comes = " baton gives it to you with your next tool call, or as you end this turn."
+	for _, k := range kinds {
+		switch k {
+		case state.MessageLand:
+			return "[baton] Your work did not land yet: baton's message says why and what to do." + comes
+		case state.MessageAnswer:
+			return "[baton] Your question has its answer." + comes
+		}
+	}
+	return "[baton] baton has a message for you." + comes
+}
+
 // LandedRewriteRefused is why the lead may not run cmd: it would rewrite commits that landed from the
 // run's workers (phases), which the lead did not make.
 func LandedRewriteRefused(cmd string, phases, commits []string) string {

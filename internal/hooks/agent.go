@@ -1,8 +1,6 @@
 package hooks
 
 import (
-	"strings"
-
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -80,23 +78,16 @@ func (h *handlers) spawned(c Context) (Result, error) {
 // first; after the agent before it checkpointed, to go on from its notes (state.Fresh, the proof that its
 // conversation is new). Its own transcript is recorded there, where its loop reads its context and its
 // compactions. A message that starts it again, idle, finds it briefed: it keeps its conversation, and is
-// given what baton has for it (its brief again, after a compaction of its own; its results, baton's
-// messages), as the prompt's hook gives them to the lead: the message that woke it (loop.line) only says
-// they come.
+// given nothing here, since Claude Code gives a resumed agent nothing of SubagentStart's context (P7). What
+// baton has for it (its brief again, after a compaction of its own; its results, baton's messages) comes
+// with its next tool call or its stop, and the message that woke it (loop.line) says so.
 func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
 	path := agentTranscript(c.Input)
 	brief, started, checkpointed := false, false, false
-	var dl delivery
-	var n news
-	var owed *state.Briefing
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.TurnBy = true, c.Now, "baton"
-		if st.Mode == state.ModeIdle {
-			return nil
-		}
-		if st.Run.Briefed == s.Agent {
-			owed, dl, n = takeBriefing(c, st), take(st, c.Now), takeNews(st, s)
+		if st.Mode == state.ModeIdle || st.Run.Briefed == s.Agent {
 			return nil
 		}
 		checkpointed, brief = state.Fresh(st, state.Started(s.Agent, c.Now), path, c.Now), true
@@ -110,11 +101,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 		return Result{}, ok(err)
 	}
 	if !brief {
-		again := ""
-		if owed != nil {
-			again = h.briefed(c, s, st, *owed, "resume")
-		}
-		return resumed(s, again, dl, n), nil
+		return Result{}, nil
 	}
 	if checkpointed {
 		s.Event("checkpoint_over", map[string]any{"phase": st.Current, "agent": s.Agent, "by": "a fresh agent"})
@@ -130,24 +117,6 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	return Result{Output: map[string]any{
 		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
 	}}, nil
-}
-
-// resumed is what a phase agent started again by a message is given: its brief again (again, after a
-// compaction of its own), its results and baton's messages.
-func resumed(s *state.Store, again string, dl delivery, n news) Result {
-	if again == "" && !dl.any() && !n.any() {
-		return Result{}
-	}
-	text := strings.TrimSpace(again + "\n\n" + n.text + "\n\n" + dl.text(s))
-	if dl.any() {
-		dl.event(s, "resume")
-	}
-	if n.any() {
-		n.event(s, "resume")
-	}
-	return Result{Output: map[string]any{
-		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
-	}}
 }
 
 // agentStop is SubagentStop for the phase agent of s: its stop is decided by the Stop table, for its sub-run,

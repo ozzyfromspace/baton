@@ -67,8 +67,8 @@ func (x *crew) subLogged(phase, kind string, fields map[string]any) bool {
 }
 
 // An idle phase agent's result is not lost on it: the agent's loop sends it a message saying the result
-// has come, which starts it again, and its SubagentStart gives it the result, once. Nothing is sent
-// again: the result was given.
+// has come, which starts it again, and it is given the result as it ends that turn (Claude Code gives a
+// resumed agent nothing of its SubagentStart), once. Nothing is sent again: the result was given.
 func TestAnIdleAgentIsWokenForItsResult(t *testing.T) {
 	x := newCrew(t, 1)
 	x.atWork("P1")
@@ -83,11 +83,14 @@ func TestAnIdleAgentIsWokenForItsResult(t *testing.T) {
 	if len(x.sent) != 1 || x.sent[0].agent != a.id || !strings.Contains(x.sent[0].text, "[baton] Job "+id+" (P1) finished") {
 		t.Fatalf("sent %+v", x.sent)
 	}
-	if len(x.resumes) != 1 || !strings.Contains(x.resumes[0], id) {
-		t.Fatalf("the agent started again with %q", x.resumes)
+	if len(x.resumes) != 1 || !strings.Contains(x.sent[0].text, "with your next tool call, or as you end this turn") {
+		t.Fatalf("the agent started again %d times, with %q", len(x.resumes), x.sent[0].text)
+	}
+	if got := x.endTurn("P1"); !strings.Contains(got, id) {
+		t.Fatalf("its stop gave it %q", got)
 	}
 	st, _ := x.sub("P1").Load()
-	if st.Job(id).Delivered.IsZero() || !x.subLogged("P1", "results_delivered", map[string]any{"via": "resume"}) {
+	if st.Job(id).Delivered.IsZero() || !x.subLogged("P1", "results_delivered", map[string]any{"via": "stop"}) {
 		t.Errorf("the result was not given: %+v\n%s", st.Job(id), x.subEvents("P1"))
 	}
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastStop = false, x.now; return nil })
@@ -154,8 +157,11 @@ func TestAMessageTheModDoesNotAckIsSentAgain(t *testing.T) {
 	}
 	x.modOff = false
 	x.tick(time.Second)
-	if len(x.sent) != 1 || len(x.resumes) != 1 || !strings.Contains(x.resumes[0], id) {
-		t.Errorf("sent %+v; the agent was given %q", x.sent, x.resumes)
+	if len(x.sent) != 1 || len(x.resumes) != 1 {
+		t.Errorf("sent %+v; the agent started again %d times", x.sent, len(x.resumes))
+	}
+	if got := x.endTurn("P1"); !strings.Contains(got, id) {
+		t.Errorf("its stop gave it %q", got)
 	}
 }
 

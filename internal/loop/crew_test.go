@@ -218,8 +218,9 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 	return agent, ""
 }
 
-// resume starts agent again, as a message does an idle agent (its SubagentStart fires again); a busy
-// one takes the message at its next tool round.
+// resume starts agent again, as a message does an idle agent: its SubagentStart fires again, whose context
+// Claude Code does not give a resumed agent (P7), so it must give nothing. A busy one takes the message at
+// its next tool round.
 func (x *crew) resume(agent string) {
 	for _, a := range x.agents {
 		if a.id != agent || a.tree == "" {
@@ -229,8 +230,22 @@ func (x *crew) resume(agent string) {
 			return
 		}
 		_, out := x.hook("SubagentStart", map[string]any{"agent_id": a.id, "agent_type": state.PhaseAgent, "cwd": a.tree, "transcript_path": x.leadTranscript()})
-		x.resumes = append(x.resumes, out)
+		if out != "" {
+			x.t.Errorf("a resumed agent's start gives what Claude Code drops: %s", out)
+		}
+		x.resumes = append(x.resumes, a.id)
 	}
+}
+
+// endTurn ends the turn of the latest agent on phase, as an agent that read the message that started it
+// again does, and returns what its stop gave it (the reason it was refused with).
+func (x *crew) endTurn(phase string) string {
+	a := x.agent(phase)
+	_, out := x.hook("SubagentStop", map[string]any{"agent_id": a.id, "agent_type": state.PhaseAgent, "cwd": a.tree,
+		"transcript_path": x.leadTranscript(), "stop_hook_active": false})
+	var said struct{ Reason string }
+	json.Unmarshal([]byte(out), &said)
+	return said.Reason
 }
 
 // hook fires event in the lead's session, with input, through baton's real handlers, and returns its exit

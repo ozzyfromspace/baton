@@ -271,9 +271,13 @@ func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 	if !x.has("worker_deferred", `"held":"conflicts"`, `"phase":"P2"`) {
 		t.Errorf("events:\n%s", x.events())
 	}
-	// The conflict went back to the idle agent in a message, which started it again with baton's.
-	if len(x.sent) != 1 || !strings.Contains(x.sent[0].text, "Your work did not land yet") || len(x.resumes) != 1 || !strings.Contains(x.resumes[0], "a.txt") {
-		t.Errorf("sent %+v; the agent was given %q", x.sent, x.resumes)
+	// The conflict went back to the idle agent in a message, which started it again; baton's message came
+	// as it ended that turn.
+	if len(x.sent) != 1 || !strings.Contains(x.sent[0].text, "Your work did not land yet") || len(x.resumes) != 1 {
+		t.Errorf("sent %+v; the agent started again %d times", x.sent, len(x.resumes))
+	}
+	if got := x.endTurn("P1"); !strings.Contains(got, "a.txt") {
+		t.Errorf("its stop gave it %q", got)
 	}
 
 	// The worker resolves it, and lands: the hold is over.

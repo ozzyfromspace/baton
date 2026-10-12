@@ -159,6 +159,11 @@ Real phase agents on Claude Code 2.1.296 with Haiku, in baton's own e2e scenario
   (`agent.offer` → `isOffered: false`); spike 32's agents resumed because their type was offered. The type stays
   offered, and baton's `PreToolUse` refuses a model's own call to it, as it refuses a model's message to one of
   baton's agents.
+- **A resumed agent is given nothing of `SubagentStart`.** When a message starts an idle agent again, its
+  `SubagentStart` hook runs, but Claude Code does not put the hook's `additionalContext` in front of the model (an
+  agent's first start gets it): an answer baton gave there never reached the agent, which said so and waited.
+  What baton has for a resumed agent comes with its next tool call (`PostToolUse`) or its stop (`SubagentStop`,
+  refused with it), and the message that wakes it says so.
 
 ## What it means for baton
 

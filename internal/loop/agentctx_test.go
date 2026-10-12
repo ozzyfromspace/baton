@@ -70,7 +70,7 @@ func TestAnAgentsContextIsReadFromItsOwnTranscript(t *testing.T) {
 }
 
 // A compaction of a phase agent's own is proven by its transcript, and owes it its brief again: an idle
-// agent is woken for it once, and given it as it starts. The lead's run is untouched.
+// agent is woken for it once, and given it as it ends that turn. The lead's run is untouched.
 func TestAnAgentsCompactionBriefsItAgain(t *testing.T) {
 	x := newCrew(t, 1)
 	x.atWork("P1")
@@ -85,8 +85,11 @@ func TestAnAgentsCompactionBriefsItAgain(t *testing.T) {
 	if !slices.ContainsFunc(x.sent, func(s sent) bool { return s.text == decide.AgentBriefAgain("P1") }) {
 		t.Fatalf("not woken for its brief: %+v", x.sent)
 	}
-	if len(x.resumes) == 0 || !strings.Contains(x.resumes[len(x.resumes)-1], "Claude Code compacted the context automatically") {
-		t.Fatalf("its brief: %v", x.resumes)
+	if len(x.resumes) == 0 {
+		t.Fatal("not started again")
+	}
+	if got := x.endTurn("P1"); !strings.Contains(got, "Claude Code compacted the context automatically") {
+		t.Fatalf("its brief: %q", got)
 	}
 	if st, _ := x.sub("P1").Load(); st.Run.Briefing != nil {
 		t.Errorf("still owed: %+v", st.Run.Briefing)

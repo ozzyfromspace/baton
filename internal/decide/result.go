@@ -144,6 +144,19 @@ func FinishedAside(st state.State, j state.Job) string {
 // JobsFinished is the line baton types to wake an idle model when jobs it handed over have finished; the
 // results come with it.
 func JobsFinished(jobs []state.Job) string {
+	return fmt.Sprintf("[baton] %s finished; %s attached.", jobsNamed(jobs), plural(len(jobs), "its result is", "their results are"))
+}
+
+// AgentJobsFinished is the message that wakes an idle phase agent for the results of jobs. Claude Code
+// gives a resumed agent nothing of baton's hooks as it starts, so they come with its next tool call, or as
+// it ends the turn.
+func AgentJobsFinished(jobs []state.Job) string {
+	return fmt.Sprintf("[baton] %s finished. baton gives you %s with your next tool call, or as you end this turn.",
+		jobsNamed(jobs), plural(len(jobs), "its result", "their results"))
+}
+
+// jobsNamed names jobs and their phases: "Job j4 (P3)", "Jobs j4, j5 (P3, P1)".
+func jobsNamed(jobs []state.Job) string {
 	ids, phases := make([]string, len(jobs)), map[string]bool{}
 	var ph []string
 	for i, j := range jobs {
@@ -153,8 +166,7 @@ func JobsFinished(jobs []state.Job) string {
 			ph = append(ph, j.Phase)
 		}
 	}
-	return fmt.Sprintf("[baton] %s %s (%s) finished; %s attached.", plural(len(jobs), "Job", "Jobs"), strings.Join(ids, ", "),
-		strings.Join(ph, ", "), plural(len(jobs), "its result is", "their results are"))
+	return fmt.Sprintf("%s %s (%s)", plural(len(jobs), "Job", "Jobs"), strings.Join(ids, ", "), strings.Join(ph, ", "))
 }
 
 // PlanComplete is what the model does once the plan is complete; decisions counts those the run made

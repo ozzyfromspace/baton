@@ -69,6 +69,10 @@ func TestJobsFinished(t *testing.T) {
 	if got := JobsFinished([]state.Job{{ID: "j4", Phase: "P3"}, {ID: "j5", Phase: "P3"}, {ID: "j6", Phase: "P1"}}); got != "[baton] Jobs j4, j5, j6 (P3, P1) finished; their results are attached." {
 		t.Errorf("three: %q", got)
 	}
+	// A phase agent started again is given nothing as it starts: the result comes after.
+	if got := AgentJobsFinished([]state.Job{{ID: "P3.j4", Phase: "P3"}}); got != "[baton] Job P3.j4 (P3) finished. baton gives you its result with your next tool call, or as you end this turn." {
+		t.Errorf("an agent's: %q", got)
+	}
 }
 
 func TestFinishedAside(t *testing.T) {

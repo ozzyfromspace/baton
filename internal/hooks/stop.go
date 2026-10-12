@@ -25,7 +25,13 @@ func (h *handlers) stop(c Context) (Result, error) {
 	pl, _ := s.LoadPlan()
 	var d decision
 	var ann string
-	_, _, err = h.update(c, func(st *state.State, s *state.Store) error {
+	var owed *state.Briefing
+	_, st, err := h.update(c, func(st *state.State, s *state.Store) error {
+		if s.Agent != "" {
+			// A phase agent's brief again, after a compaction of its own, not given with a tool call yet:
+			// a resumed agent is given nothing as it starts, so its stop is where it comes.
+			owed = takeBriefing(c, st)
+		}
 		recordStop(st, c)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
@@ -79,6 +85,12 @@ func (h *handlers) stop(c Context) (Result, error) {
 		d.out()["reason"] = d.deliver.text(s)
 		msg = lines(msg, d.deliver.says())
 		d.deliver.event(s, "stop")
+	}
+	if owed != nil {
+		if again := h.briefed(c, s, st, *owed, "stop"); again != "" {
+			reason, _ := d.out()["reason"].(string)
+			d.refuse(strings.TrimSpace(again + "\n\n" + reason))
+		}
 	}
 	if msg = lines(ann, msg); msg != "" {
 		d.say(msg)
