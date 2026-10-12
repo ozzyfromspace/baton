@@ -141,6 +141,25 @@ baton still in control, deterministically and with no model judgment, and its re
   reaches baton through the mod's report. A question asked from the render is never asked while a permission prompt
   or any other dialog is open: the band is not drawn then.
 
+## What the end-to-end runs found (P7)
+
+Real phase agents on Claude Code 2.1.296 with Haiku, in baton's own e2e scenarios:
+
+- **A hook's `prompt_id` is the session's latest prompt, not the call's.** The lead's first prompt landed between
+  the mod's spawn and its `WorktreeCreate`, so prompt ids cannot tell a phase's worktree from one the model's own
+  agent asks for; baton tells them apart by which Agent calls are open (`Runtime.AgentCalls`).
+- **The worktree-isolation guard refuses shell text handed to a program it does not know.** In an agent isolated in
+  a worktree, a Bash command whose argument is several words starting with a shell or git (`baton await 'sh
+  hold.sh'`, `baton verify 'bash x.sh'`) is refused as "cannot be shown not to be git", after `PreToolUse`, as a
+  `PostToolUseFailure`. The same command as words after `--` runs (`baton verify --notes '…' -- sh hold.sh`, also
+  `-- sh -c '…'`), and so does a quoted command that starts with anything else (`'make test'`). A phase agent
+  hands baton its gates that way.
+- **An agent of a type the session does not offer cannot be resumed.** A message to a completed `baton:phase`
+  agent failed ("Agent type 'baton:phase' is not offered in this session") while the mod hid the type
+  (`agent.offer` → `isOffered: false`); spike 32's agents resumed because their type was offered. The type stays
+  offered, and baton's `PreToolUse` refuses a model's own call to it, as it refuses a model's message to one of
+  baton's agents.
+
 ## What it means for baton
 
 The control baton needs exists, and none of it is model judgment. A mod in baton's plugin does what only something
