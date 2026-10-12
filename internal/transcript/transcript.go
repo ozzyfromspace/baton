@@ -36,6 +36,9 @@ type Entry struct {
 	HookEvent  string
 	// Tools are the tool calls of an assistant entry.
 	Tools []Tool
+	// Context is the context an assistant entry's request had, in tokens (Context), or what a compact
+	// boundary left; 0 for any other entry.
+	Context int
 }
 
 // Tool is a tool call the model made.
@@ -111,18 +114,25 @@ func read(f *os.File, from, to int64) ([]Entry, error) {
 	return out, nil
 }
 
+// A subagent's own transcript (subagents/agent-<id>.jsonl, beside its session's) holds its conversation
+// alone, and Claude Code marks every entry of it as a sidechain's; in a session's transcript, a sidechain
+// entry is some subagent's, never the session's own (spike 32). So which entries are the conversation's
+// own depends on which transcript is read: agent says it is a subagent's own.
+func own(e Entry, agent bool) bool { return e.Sidechain == agent }
+
 // LastRefusal is the refusal that ended the last turn of the entries, oldest first: one with no prompt or
-// reply of the model's after it. nil if the last turn did not end in one.
+// reply of the model's after it. nil if the last turn did not end in one. agent: the entries are a
+// subagent's own transcript's.
 //
 // Claude Code goes on once by itself when the safeguards stop a response ("continuing once with that
 // noted"), and that response carries stop_reason "refusal" too; only when it will not go on does it write
 // the two entries read here: a system entry model_refusal_no_fallback, and a synthetic assistant message
 // marked isApiErrorMessage. Either one is enough.
-func LastRefusal(entries []Entry) *Refusal {
+func LastRefusal(entries []Entry, agent bool) *Refusal {
 	var r *Refusal
 	for _, e := range entries {
 		switch {
-		case e.Sidechain:
+		case !own(e, agent):
 		case e.Refusal != nil:
 			if r == nil {
 				r = &Refusal{}
@@ -140,14 +150,39 @@ func LastRefusal(entries []Entry) *Refusal {
 	return r
 }
 
-// Refused reads the end of the transcript at path for a refusal that ended its last turn (LastRefusal).
-func Refused(path string) (*Refusal, error) {
+// Refused reads the end of the transcript at path for a refusal that ended its last turn (LastRefusal);
+// agent: it is a subagent's own.
+func Refused(path string, agent bool) (*Refusal, error) {
 	entries, err := Tail(path, TailBytes)
 	if err != nil {
 		return nil, err
 	}
-	return LastRefusal(entries), nil
+	return LastRefusal(entries, agent), nil
 }
+
+// Context is how many tokens the conversation of the transcript at path holds, as it last said, and when it
+// said so: the input of its last reply (the request's input_tokens, cache_read_input_tokens and
+// cache_creation_input_tokens: the context the model had, spike 32), or what a compaction since left it
+// (a compact boundary's postTokens). 0 when the end of the transcript says neither. agent: the transcript
+// is a subagent's own.
+func Context(path string, agent bool) (tokens int, at time.Time, err error) {
+	for _, n := range []int64{TailBytes, contextBytes} {
+		entries, err := Tail(path, n)
+		if err != nil {
+			return 0, time.Time{}, err
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if e := entries[i]; own(e, agent) && e.Context > 0 {
+				return e.Context, e.Time, nil
+			}
+		}
+	}
+	return 0, time.Time{}, nil
+}
+
+// contextBytes is how much of a transcript Context reads when its last TailBytes hold no reply: a tool's
+// result can be that large.
+const contextBytes = 4 << 20
 
 // line is the JSON of a transcript entry, as far as baton reads it. message and attachment stay raw: their
 // shapes differ between entry types, and one baton does not expect must not lose it the rest of the line.
@@ -172,7 +207,8 @@ type line struct {
 
 // compactMetadata is the part of a compact boundary's compactMetadata baton reads.
 type compactMetadata struct {
-	Trigger string `json:"trigger"`
+	Trigger    string `json:"trigger"`
+	PostTokens int    `json:"postTokens"`
 }
 
 // attachment is the part of an attachment entry's attachment baton reads.
@@ -189,6 +225,11 @@ type message struct {
 		Explanation string `json:"explanation"`
 	} `json:"stop_details"`
 	Content json.RawMessage `json:"content"`
+	Usage   struct {
+		Input         int `json:"input_tokens"`
+		CacheRead     int `json:"cache_read_input_tokens"`
+		CacheCreation int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
 }
 
 // block is a content block of an assistant message, as far as baton reads a tool call's.
@@ -223,8 +264,11 @@ func parse(raw []byte) (Entry, bool) {
 		}
 	}
 	if l.Type != "assistant" {
-		if l.Type == "system" && l.Subtype == "model_refusal_no_fallback" {
+		switch {
+		case l.Type == "system" && l.Subtype == "model_refusal_no_fallback":
 			e.Refusal = &Refusal{Category: l.RefusalCategory, Explanation: l.RefusalWhy}
+		case l.Type == "system" && l.Subtype == "compact_boundary":
+			e.Context = l.CompactMetadata.PostTokens
 		}
 		return e, true
 	}
@@ -232,6 +276,7 @@ func parse(raw []byte) (Entry, bool) {
 	if json.Unmarshal(l.Message, &m) != nil {
 		return e, true
 	}
+	e.Context = m.Usage.Input + m.Usage.CacheRead + m.Usage.CacheCreation
 	if l.IsAPIErrorMessage && m.StopReason == "refusal" {
 		e.Refusal = &Refusal{Category: m.StopDetails.Category, Explanation: m.StopDetails.Explanation}
 	}

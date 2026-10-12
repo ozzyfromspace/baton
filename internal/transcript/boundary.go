@@ -27,11 +27,12 @@ type Boundary struct {
 const boundaryBytes = 4 << 20
 
 // Compacted reads the transcript at path from offset from on (from its last boundaryBytes, if that is
-// less) for the conversation's compact boundaries, and returns the last one, or nil for none. A line from
+// less) for the conversation's compact boundaries, and returns the last one, or nil for none; agent says
+// the transcript is a subagent's own. A line from
 // starts inside is skipped, and so is one not yet ended by a newline: next is where the lines it read end,
 // so a caller looking again for a boundary still being written reads on from there. ErrShrunk means the
 // file is shorter than from: not the transcript the offset was taken in.
-func Compacted(path string, from int64) (b *Boundary, next int64, err error) {
+func Compacted(path string, from int64, agent bool) (b *Boundary, next int64, err error) {
 	f, size, err := open(path)
 	if err != nil {
 		return nil, from, err
@@ -64,7 +65,7 @@ func Compacted(path string, from int64) (b *Boundary, next int64, err error) {
 		}
 		line := data[:i]
 		if bytes.Contains(line, []byte(`"compact_boundary"`)) {
-			if e, ok := parse(line); ok && e.Type == "system" && e.Subtype == "compact_boundary" && !e.Sidechain {
+			if e, ok := parse(line); ok && e.Type == "system" && e.Subtype == "compact_boundary" && own(e, agent) {
 				b = &Boundary{UUID: e.UUID, Trigger: e.Trigger, Time: e.Time, Start: at, End: at + int64(i) + 1}
 			}
 		}

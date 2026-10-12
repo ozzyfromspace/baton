@@ -499,9 +499,10 @@ func TestAModelMayNotSteerAPhaseAgent(t *testing.T) {
 }
 
 // A phase agent's refused turn is told apart in its own transcript (subagents/agent-<id>.jsonl beside
-// the lead's, or the one its input names), never the lead's, and recorded in its sub-run.
+// the lead's, or the one its input names), every entry of which is a sidechain's, never the lead's, and
+// recorded in its sub-run.
 func TestAPhaseAgentsRefusalIsReadFromItsOwnTranscript(t *testing.T) {
-	refused, err := os.ReadFile(filepath.Join("..", "transcript", "testdata", "refused.jsonl"))
+	refused, err := os.ReadFile(filepath.Join("..", "transcript", "testdata", "agent-refused.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

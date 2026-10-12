@@ -12,28 +12,34 @@ import (
 func TestRefused(t *testing.T) {
 	cyber := &Refusal{Category: "cyber", Explanation: "This request triggered restrictions."}
 	for _, c := range []struct {
-		file string
-		want *Refusal
+		file  string
+		agent bool // a subagent's own transcript, every entry of it a sidechain's
+		want  *Refusal
 	}{
 		// Claude Code went on once by itself, the safeguards stopped that too, and it would not go on.
-		{"refused.jsonl", cyber},
-		{"refused-system.jsonl", cyber},
-		{"refused-assistant.jsonl", cyber},
+		{"refused.jsonl", false, cyber},
+		{"refused-system.jsonl", false, cyber},
+		{"refused-assistant.jsonl", false, cyber},
 		// The API sends null for a category it does not name.
-		{"refused-unnamed.jsonl", &Refusal{Explanation: "This request triggered restrictions."}},
+		{"refused-unnamed.jsonl", false, &Refusal{Explanation: "This request triggered restrictions."}},
 		// A turn after the refusal ended some other way.
-		{"refused-then-prompt.jsonl", nil},
+		{"refused-then-prompt.jsonl", false, nil},
 		// So did one whose prompt the transcript did not mark (no promptSource): the model replied since.
-		{"refused-then-reply.jsonl", nil},
+		{"refused-then-reply.jsonl", false, nil},
 		// The safeguards stopped a response, and the turn went on after Claude Code's own retry.
-		{"continued.jsonl", nil},
+		{"continued.jsonl", false, nil},
 		// A last line cut off is skipped; the refusal before it still counts.
-		{"cut.jsonl", cyber},
+		{"cut.jsonl", false, cyber},
 		// A subagent's entries say nothing about the main turn.
-		{"subagent.jsonl", nil},
+		{"subagent.jsonl", false, nil},
+		// A phase agent's own transcript, every entry of it a sidechain's: its refusal is its own, and its
+		// entries are some subagent's, not the session's, read as a session's transcript.
+		{"agent-refused.jsonl", true, cyber},
+		{"agent-refused.jsonl", false, nil},
+		{"refused.jsonl", true, nil},
 	} {
 		t.Run(c.file, func(t *testing.T) {
-			got, err := Refused(filepath.Join("testdata", c.file))
+			got, err := Refused(filepath.Join("testdata", c.file), c.agent)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,12 +51,45 @@ func TestRefused(t *testing.T) {
 }
 
 func TestRefusedOnAMissingTranscript(t *testing.T) {
-	got, err := Refused(filepath.Join(t.TempDir(), "gone.jsonl"))
+	got, err := Refused(filepath.Join(t.TempDir(), "gone.jsonl"), false)
 	if got != nil || err == nil {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	if got, err := Refused(""); got != nil || err == nil {
+	if got, err := Refused("", true); got != nil || err == nil {
 		t.Fatalf("no path: got %+v, %v", got, err)
+	}
+}
+
+// A conversation's context is the input of its last reply, or what a compaction since left it.
+func TestContext(t *testing.T) {
+	for _, c := range []struct {
+		file   string
+		agent  bool
+		tokens int
+		at     string
+	}{
+		{"agent-context.jsonl", true, 241129, "12:01:00.5"}, // the last reply's, written once per content block
+		{"agent-compacted.jsonl", true, 14586, "12:02:00"},  // the compaction's since
+		{"agent-after.jsonl", true, 44462, "12:02:30"},
+		{"agent-context.jsonl", false, 0, ""}, // a subagent's entries, read as a session's transcript
+		{"refused.jsonl", false, 0, ""},       // replies with no usage
+	} {
+		t.Run(c.file, func(t *testing.T) {
+			tokens, at, err := Context(filepath.Join("testdata", c.file), c.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if !at.IsZero() {
+				want = at.UTC().Format("15:04:05.9")
+			}
+			if tokens != c.tokens || want != c.at {
+				t.Fatalf("%d at %q, want %d at %q", tokens, want, c.tokens, c.at)
+			}
+		})
+	}
+	if _, _, err := Context(filepath.Join(t.TempDir(), "gone.jsonl"), true); err == nil {
+		t.Fatal("no error for a transcript that is not there")
 	}
 }
 

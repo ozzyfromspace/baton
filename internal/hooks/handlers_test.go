@@ -425,8 +425,8 @@ func TestStopFailureTellsARefusalApart(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.panics {
-				defer func(r func(string) (*transcript.Refusal, error)) { readRefusal = r }(readRefusal)
-				readRefusal = func(string) (*transcript.Refusal, error) { panic("boom") }
+				defer func(r func(string, bool) (*transcript.Refusal, error)) { readRefusal = r }(readRefusal)
+				readRefusal = func(string, bool) (*transcript.Refusal, error) { panic("boom") }
 			}
 			f := newFixture(t, true)
 			in := map[string]any{"error": c.err, "error_details": "bad request"}

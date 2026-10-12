@@ -1453,15 +1453,16 @@ func recordStop(st *state.State, c Context) {
 // fail).
 var readRefusal = transcript.Refused
 
-// refusalIn is the refusal that ended the last turn of the transcript at path, or nil. Reading is best
-// effort: whatever goes wrong, even a panic, leaves the failure as Claude Code reported it.
-func refusalIn(path string) (r *transcript.Refusal) {
+// refusalIn is the refusal that ended the last turn of the transcript at path (agent: a phase agent's
+// own), or nil. Reading is best effort: whatever goes wrong, even a panic, leaves the failure as Claude
+// Code reported it.
+func refusalIn(path string, agent bool) (r *transcript.Refusal) {
 	defer func() {
 		if recover() != nil {
 			r = nil
 		}
 	}()
-	r, _ = readRefusal(path)
+	r, _ = readRefusal(path, agent)
 	return r
 }
 
@@ -1474,11 +1475,11 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
 		// the loop's own transcript says which it was (docs/research/recovery.md): the lead's, or a phase
 		// agent's.
-		tp := str(c.Input, "transcript_path")
-		if str(c.Input, "agent_id") != "" {
+		tp, agent := str(c.Input, "transcript_path"), str(c.Input, "agent_id") != ""
+		if agent {
 			tp = agentTranscript(c.Input)
 		}
-		if r := refusalIn(tp); r != nil {
+		if r := refusalIn(tp, agent); r != nil {
 			e.Error, e.Category, e.Details = state.ErrRefusal, r.Category, r.Explanation
 		}
 	}

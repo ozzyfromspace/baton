@@ -41,7 +41,7 @@ func Boundary(path string, mark *Mark, from int64) (Proof, int64, bool) {
 	if mark == nil || path == "" || mark.Path != path {
 		return Proof{}, from, false
 	}
-	b, next, err := transcript.Compacted(path, max(from, mark.Offset))
+	b, next, err := transcript.Compacted(path, max(from, mark.Offset), false)
 	if err != nil || b == nil {
 		return Proof{}, next, false
 	}
@@ -246,10 +246,10 @@ func Remark(st *State, path string, now time.Time) {
 	if m != nil {
 		from = m.Offset
 	}
-	b, next, err := transcript.Compacted(path, from)
+	b, next, err := transcript.Compacted(path, from, false)
 	if errors.Is(err, transcript.ErrShrunk) {
 		m = nil // another file than the one marked
-		b, next, err = transcript.Compacted(path, 0)
+		b, next, err = transcript.Compacted(path, 0, false)
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
