@@ -18,6 +18,7 @@ spikes/**/.elev/
 spikes/**/.claude/settings.local.json
 # Claude Code writes these beside a mod it loads (they point at its generated, self-ignored types/)
 spikes/**/mod/tsconfig.json
+plugin/tsconfig.json
 
 # Never commit strings extracted from the Claude Code binary
 cc-strings.txt

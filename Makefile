@@ -7,7 +7,7 @@ TARGETS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64 windows/amd64
 
 SHA256  := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 
-.PHONY: build test vet e2e cross release-prep verify-release clean
+.PHONY: build test vet mod-test e2e cross release-prep verify-release clean
 
 build:
 	CGO_ENABLED=0 $(GO) build $(FLAGS) -o dist/baton ./cmd/baton
@@ -17,6 +17,11 @@ test:
 
 vet:
 	$(GO) vet ./...
+
+# baton's mod (plugin/hooks/baton.js) validated and tested under Claude Code's own test kit; needs claude,
+# costs nothing (no model is called).
+mod-test:
+	test/mod/run.sh
 
 # Real-claude end-to-end scenarios; each run costs a few cents.
 e2e: build

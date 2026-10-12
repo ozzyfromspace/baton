@@ -1,5 +1,5 @@
 {
-  "description": "baton: finish an elevation. In a plain claude session that ran `baton elevate`, stop claude cleanly once the turn ends so the shell relaunches the same conversation under baton. Sessions hosted by baton get their hooks from baton itself.",
+  "description": "baton: finish an elevation, and run baton's mod. In a plain claude session that ran `baton elevate`, stop claude cleanly once the turn ends so the shell relaunches the same conversation under baton. In a session baton hosts, the mod (baton.js) starts and steers the phase agents that work beside the lead, on baton's say-so; elsewhere it does nothing. Sessions hosted by baton get their other hooks from baton itself.",
   "hooks": {
     "Stop": [
       {
@@ -13,5 +13,6 @@
         ]
       }
     ]
-  }
+  },
+  "modules": ["./baton.js"]
 }
