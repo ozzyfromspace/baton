@@ -331,3 +331,23 @@ func TestElevateStopWaitsForBackgroundWork(t *testing.T) {
 		}
 	}
 }
+
+// The host reads the machine as it is, for the room another phase agent needs, unless a test gives it
+// the load to read (BATON_TEST_LOAD); its memory is read as it is all the same.
+func TestATestGivesTheHostItsLoad(t *testing.T) {
+	for _, c := range []struct {
+		env  string
+		want float64
+	}{{"", roomy.Load1}, {"0", 0}, {"20.5", 20.5}, {"busy", roomy.Load1}, {"-1", roomy.Load1}} {
+		io := IO{Env: func(k string) string {
+			if k == "BATON_TEST_LOAD" {
+				return c.env
+			}
+			return ""
+		}, Machine: func() machine.Reading { return roomy }}
+		got := machineFor(io)()
+		if got.Load1 != c.want || got.MemAvailablePct != roomy.MemAvailablePct || !got.Known {
+			t.Errorf("BATON_TEST_LOAD=%q: %+v", c.env, got)
+		}
+	}
+}

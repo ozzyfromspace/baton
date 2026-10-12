@@ -181,7 +181,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io)}
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
-		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Machine: io.Machine}
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Machine: machineFor(io)}
 	}
 	leadEnv := slices.Clip(batonEnv)
 	if why := io.Env("BATON_RECOVER"); why != "" {

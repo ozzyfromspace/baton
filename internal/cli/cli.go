@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,21 @@ func (io IO) reading() machine.Reading {
 		return machine.Read()
 	}
 	return io.Machine()
+}
+
+// machineFor is how the host reads the machine for the room another phase agent needs (IO.Machine), with
+// the load a test gives it (BATON_TEST_LOAD): an end-to-end scenario must not wait on whatever else the
+// machine it runs on is doing. Its memory is read as it is.
+func machineFor(io IO) func() machine.Reading {
+	load, err := strconv.ParseFloat(io.Env("BATON_TEST_LOAD"), 64)
+	if err != nil || load < 0 {
+		return io.reading
+	}
+	return func() machine.Reading {
+		m := io.reading()
+		m.Load1 = load
+		return m
+	}
 }
 
 type command struct {
