@@ -14,6 +14,13 @@ const PhaseAgentDescription = "A phase of a plan baton runs, in a git worktree o
 const PhaseAgentPrompt = "You work on one phase of a plan that baton runs, in a git worktree of your own, beside the lead session and any other phase agents. " +
 	"baton gives you your brief when you start, and its messages as you go: follow them, work only in your worktree, and report through the baton command as the brief says."
 
+// BoardCommand is the line of baton's board command (/baton-board) in Claude Code's list of commands. It
+// opens the board while Claude works; /baton board, the skill's, waits for the turn to end.
+const BoardCommand = "baton's board: the plan step by step, each phase and the lead (opens while Claude works)"
+
+// BoardTitle is the title of the board's pane.
+const BoardTitle = "baton"
+
 // ReportKept is the line the human reads in the lead's transcript when baton's mod keeps a report of the
 // agent on phase from the lead's model: baton takes the agent's reports, and tells the lead what it needs.
 func ReportKept(phase string) string {

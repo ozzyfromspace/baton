@@ -33,11 +33,20 @@ type modReply struct {
 	Why     string `json:"why,omitempty"`
 	Ignored string `json:"ignored,omitempty"`
 	// A hello's: the run, the bridge's directory the mod polls, the number of the mod's last report
-	// recorded (its next follows it), and the agent type it registers for phases.
+	// recorded (its next follows it), the agent type it registers for phases, and the words of baton's
+	// board (`baton board`), which it draws.
 	Run   string        `json:"run,omitempty"`
 	Dir   string        `json:"dir,omitempty"`
 	Seen  int           `json:"seen,omitempty"`
 	Agent *modAgentType `json:"agent,omitempty"`
+	Board *modBoard     `json:"board,omitempty"`
+}
+
+// modBoard is what the mod says about baton's board: the line of its own command (which opens it while
+// Claude works) in Claude Code's list, and its pane's title.
+type modBoard struct {
+	Description string `json:"description"`
+	Title       string `json:"title"`
 }
 
 type modAgentType struct {
@@ -171,5 +180,6 @@ func modHello(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modRep
 		return modReply{Retry: true, Why: err.Error()}
 	}
 	return modReply{OK: true, Run: s.Ref, Dir: b.Dir, Seen: seen,
-		Agent: &modAgentType{Name: "phase", Description: decide.PhaseAgentDescription, Prompt: decide.PhaseAgentPrompt}}
+		Agent: &modAgentType{Name: "phase", Description: decide.PhaseAgentDescription, Prompt: decide.PhaseAgentPrompt},
+		Board: &modBoard{Description: decide.BoardCommand, Title: decide.BoardTitle}}
 }

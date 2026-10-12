@@ -9,6 +9,7 @@ Explain briefly:
 - `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
 - `/baton start`: hand this session to baton (same conversation); `/baton plan` and `/baton run` do it when they need to.
 - `/baton status`: where the run stands.
+- `/baton board`: the plan step by step: how each phase stands (the lead's, a phase agent's, verifying, landing, waiting), and what the lead is doing. baton keeps the same in one line above the prompt while a plan runs; `/baton-board` opens the board while Claude works.
 - `/baton pause`: take the wheel; `/baton run` gives it back.
 - `/baton drop`: drop the run; its plan is set aside, and baton does nothing more until the next plan.
 - `/baton clean`: end what no live session uses: workers, jobs, lanes, worktrees, leftover files (`--dry-run` only says what it would end).
@@ -23,6 +24,10 @@ Each session runs its own plan, so several terminals can each run one in the sam
 ## status
 
 Run `baton status` and show its output verbatim.
+
+## board
+
+Run `baton board` and show its output verbatim, in a code block. (Where baton's mod runs, `/baton board` opens it in a pane instead, and this is never asked.)
 
 ## drafts
 

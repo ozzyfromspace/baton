@@ -9,6 +9,10 @@
 // running `baton mod report` with one numbered report on stdin, and keeps each report until the host has
 // recorded it. In the store it keeps, per host instance, the last command it ran, the one it is running,
 // and the reports not recorded yet, so that once reloaded it neither repeats nor skips one.
+//
+// It draws baton's view of the run (internal/board) as the host words it: every second it reads `baton
+// board --band` for the band above the prompt, and, while the /baton board pane is open, `baton board`
+// for the pane.
 
 const PROTOCOL = 1 // what the mod and the host say to each other (bridge.Protocol)
 const POLL_MS = 500
@@ -18,6 +22,11 @@ const HELLO_SLOW_MS = 10000 // and then
 const REPORT_TIMEOUT_MS = 5000
 const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused this long
 const CUT = 1000 // the most of an agent's last words a turn report carries
+const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
+const VIEW_TIMEOUT_MS = 5000
+const PANE = 'baton-board' // the pane of baton's board
+const SKILL = 'baton:baton' // the /baton skill's command, as Claude Code names it to a command.run hook
+const BOARD = 'baton-board' // the board's own command, which runs while Claude works (/baton waits for the turn)
 
 // What the mod knows. env: what the host set for this claude; ready: the host answered its hello; dir: the
 // bridge's directory; agents: baton's agents by id ({ phase, drop }); keep: what is kept in the store.
@@ -39,6 +48,14 @@ const M = {
   poll: null,
   registered: false,
   spec: null,
+  view: null,
+  viewing: false,
+  band: '', // the band as the host last worded it ('' for none)
+  board: '', // the board as the host last worded it
+  width: 0, // the columns the band was last drawn in
+  paneWidth: 0, // and the board's pane
+  boardSpec: null, // the board command's and pane's words, from the host's hello
+  boardOn: false, // the board command is registered
 }
 
 // env reads what the baton host set for this claude ($.env.get takes literal names only).
@@ -135,7 +152,9 @@ async function hello($) {
       await save($)
     }
     await registerType($, r.agent)
+    await registerBoard($, r.board)
     if (!M.poll) M.poll = $.clock.every(POLL_MS, () => poll($))
+    if (!M.view) M.view = $.clock.every(VIEW_MS, () => view($))
     await flush($)
     return
   }
@@ -159,6 +178,19 @@ async function registerType($, spec) {
     M.registered = true
   } catch (err) {
     M.spec = spec // the session has not bound yet: the next poll tries again
+  }
+}
+
+// registerBoard registers the board's own command, which opens the pane while Claude works, with the
+// host's words, until it holds.
+async function registerBoard($, spec) {
+  if (spec) M.boardSpec = spec
+  if (M.boardOn || !M.boardSpec) return
+  try {
+    await $.command.register({ name: BOARD, description: M.boardSpec.description, immediate: true })
+    M.boardOn = true
+  } catch (err) {
+    // the next poll tries again
   }
 }
 
@@ -257,6 +289,7 @@ async function poll($) {
   M.polling = true
   try {
     if (M.spec && !M.registered) await registerType($, M.spec)
+    if (M.boardSpec && !M.boardOn) await registerBoard($)
     await agentsNow($)
     await flush($)
     const e = await env($)
@@ -333,6 +366,52 @@ async function ask($, c) {
     rep = { kind: 'answered', command: c.id, dismissed: true, error: cut(String(err), CUT) }
   }
   await report($, rep)
+}
+
+// board runs `baton board` with args, and resolves what it printed, without its last newline, or null
+// when it failed.
+async function board($, args) {
+  const e = await env($)
+  try {
+    const session = await $.session.id()
+    const out = await $.process.run([e.bin, 'board', ...args], { env: { CLAUDE_CODE_SESSION_ID: session }, timeoutMs: VIEW_TIMEOUT_MS })
+    return out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : null
+  } catch (err) {
+    return null
+  }
+}
+
+// view reads the band again, and the board while its pane is open, and redraws what changed.
+async function view($) {
+  if (!live() || M.viewing) return
+  M.viewing = true
+  try {
+    let changed = false
+    const band = await board($, ['--band', '--width', String(M.width || 80)])
+    if (band !== null && band !== M.band) {
+      M.band = band
+      changed = true
+    }
+    if (await paneUp($)) {
+      const text = await board($, ['--width', String(M.paneWidth || 80)])
+      if (text !== null && text !== M.board) {
+        M.board = text
+        changed = true
+      }
+    }
+    if (changed) $.ui.invalidate('ui.render')
+  } finally {
+    M.viewing = false
+  }
+}
+
+// paneUp says whether the board's pane is open.
+async function paneUp($) {
+  try {
+    return (await $.ui.panes()).some((p) => p.id === PANE)
+  } catch (err) {
+    return false
+  }
 }
 
 function cut(s, n) {
@@ -412,11 +491,47 @@ async function compacting($, e, next) {
   return r
 }
 
+// The band above the prompt: the run in one line, as the host words it, fitted to the columns it is
+// drawn in (the next read fits a new width).
+async function band($, e, next) {
+  if (!live() || !M.band || e.props.hasSurvey) return next(e)
+  if (e.props.bodyColumns > 0) M.width = e.props.bodyColumns
+  const { Text } = $.ui.resolve(e)
+  return Text({ children: [M.band], wrap: 'truncate-end' })
+}
+
+// The board's pane: the plan step by step, as the host words it.
+async function pane($, e, next) {
+  if (!live()) return next(e)
+  if (e.props.bodyColumns > 0) M.paneWidth = e.props.bodyColumns
+  const { Box, Text } = $.ui.resolve(e)
+  const lines = M.board === '' ? [] : M.board.split('\n')
+  return Box({ flexDirection: 'column', children: lines.map((l) => Text({ children: [l], wrap: 'truncate-end' })) })
+}
+
+// /baton board, and the board's own command: the pane opens with the board in it, and nothing reaches
+// the model. Where the pane cannot be placed yet, the board is the command's output. Anything else typed
+// to /baton is the skill's.
+async function boardCommand($, e, next) {
+  if (!live() || (e.command === SKILL && String(e.args || '').trim().toLowerCase() !== 'board')) return next(e)
+  if (!M.paneWidth && e.presentation) M.paneWidth = e.presentation.columns
+  const text = await board($, ['--width', String(M.paneWidth || 80)])
+  if (text === null) return next(e)
+  M.board = text
+  const title = (M.boardSpec && M.boardSpec.title) || 'baton'
+  const opened = await $.ui.open({ id: PANE, title })
+  return opened && opened.isPlaced ? {} : { text }
+}
+
 export function register(on) {
   on('session.start', start).catch(letThrough)
   on('turn.complete', turned).catch(letThrough)
   on('prompt.submit', prompted).catch(letThrough)
   on('session.compact', compacting).catch(letThrough)
+  on('ui.render', { component: 'AbovePrompt' }, band).catch(letThrough)
+  on('ui.render', { component: 'Pane', requestId: PANE }, pane).catch(letThrough)
+  on('command.run', { command: SKILL }, boardCommand).catch(letThrough)
+  on('command.run', { command: BOARD }, boardCommand).catch(letThrough)
   // Only baton starts phases: the model is never offered the type.
   on('agent.offer', { agent: 'baton:phase' }, () => ({ isOffered: false })).catch(hidden)
 }

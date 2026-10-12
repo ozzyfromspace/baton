@@ -8,6 +8,7 @@ import { test, expect, mock } from 'claude-code/testing'
 const DIR = '/proj/.baton/runs/sess/mod'
 const HOSTED = { BATON_HOST: '1', BATON_BIN: '/opt/baton', BATON_INSTANCE: 'inst' }
 const AGENT = { name: 'phase', description: 'A phase of a plan baton runs.', prompt: 'You work on one phase.' }
+const BOARD = { description: "baton's board", title: 'baton' }
 
 type Opts = {
   env?: Record<string, string>
@@ -15,6 +16,10 @@ type Opts = {
   files?: Record<string, string>
   // reply answers a report in the host's place (undefined: as the host would)
   reply?: (rep: any) => any
+  // board answers `baton board` with its arguments in the host's place (null: it fails)
+  board?: (args: string[]) => string | null
+  // placed: whether the board's pane is drawn once opened
+  placed?: boolean
 }
 
 function cmdPath(id: number) {
@@ -35,6 +40,10 @@ function world(on: any, o: Opts = {}) {
     answer: 'Go ahead',
     clock: null as any,
     beneath: [] as string[], // the events that reached the bottom
+    boards: [] as string[][], // the arguments of every `baton board` the mod ran
+    boardEnv: [] as any[], // and what it set in its environment
+    panes: [] as any[], // the panes open
+    commands: [] as string[], // the slash commands the mod registered
   }
   mock.env(on, o.env ?? HOSTED)
   mock.store(on, o.store ?? {})
@@ -42,11 +51,18 @@ function world(on: any, o: Opts = {}) {
   on('session.id', async () => ({ value: 'sess' }))
   on('session.start', async ($: any, e: any) => ({ cwd: e.cwd }))
   on('process.run', async ($: any, e: any) => {
+    if (e.argv[0] === '/opt/baton' && e.argv[1] === 'board') {
+      const args = e.argv.slice(2)
+      w.boards.push(args)
+      w.boardEnv.push(e.init?.env ?? {})
+      const out = o.board ? o.board(args) : args.includes('--band') ? '◆ baton · step 1/2 · P1 ▶ 1m · lead: working on P1' : 'step 1  ▶ P1  The mod\nlead: working on P1'
+      return { value: { exitCode: out === null ? 1 : 0, stdout: out === null ? '' : out + '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const rep = JSON.parse(e.init.stdin)
     w.runs.push(rep.kind)
     let reply = o.reply ? o.reply(rep) : undefined
     if (reply === undefined) {
-      if (rep.kind === 'hello') reply = { ok: true, run: 'sess', dir: DIR, seen: w.seen, agent: AGENT }
+      if (rep.kind === 'hello') reply = { ok: true, run: 'sess', dir: DIR, seen: w.seen, agent: AGENT, board: BOARD }
       else if (rep.seq <= w.seen) reply = { ok: true, ignored: 'recorded already' }
       else {
         w.seen = rep.seq
@@ -97,6 +113,23 @@ function world(on: any, o: Opts = {}) {
     return { messages: e.messages, tokensBefore: 2, tokensAfter: 1 }
   })
   on('agent.offer', async ($: any, e: any) => ({ isOffered: true }))
+  on('command.register', async ($: any, e: any) => {
+    w.commands.push(`/${e.name}${e.immediate ? ' immediate' : ''}: ${e.description}`)
+    return { value: { command: e.name } }
+  })
+  on('command.run', async ($: any, e: any) => {
+    w.beneath.push(`command ${e.command} ${e.args}`)
+    return { text: 'the skill ran' }
+  })
+  on('ui.open', async ($: any, e: any) => {
+    w.panes = w.panes.filter((p: any) => p.id !== e.id).concat([{ id: e.id, title: e.title }])
+    return { value: o.placed === false ? { isPlaced: false, reason: 'too narrow' } : { isPlaced: true } }
+  })
+  on('ui.panes', async () => ({ value: w.panes.map((p: any) => ({ ...p, isShown: true, isFocused: false, isPlaced: o.placed !== false })) }))
+  on('ui.render', async ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: ["Claude Code's own"] })
+  })
   return w
 }
 
@@ -281,4 +314,72 @@ test('the model is never offered the phase agent type', async ($, on) => {
   const other = await $.agent.offer({ agent: 'Explore', description: 'x', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } } as any)
   expect((r as any).isOffered).toBe(false)
   expect((other as any).isOffered).toBe(true)
+})
+
+test('the band is the line baton words, read every second and fitted to the columns it is drawn in', async ($, on) => {
+  let band = '◆ baton · step 1/2 · P1 ▶ 1m · lead: working on P1'
+  const w = world(on, { board: (args) => (args.includes('--band') ? band : 'the board') })
+  await start($, w)
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 64 } as any })
+  expect((await ui.find({ type: 'Text' }))?.text).toBe(band)
+  band = '◆ baton · step 2/2 · P2 ⚙ 1m · lead: idle'
+  await w.clock.advance(1000)
+  expect((await ui.find({ type: 'Text' }))?.text).toBe(band)
+  expect(w.boards[w.boards.length - 1]).toEqual(['--band', '--width', '64'])
+  expect(w.boardEnv[0]).toEqual({ CLAUDE_CODE_SESSION_ID: 'sess' })
+  expect(w.boards.filter((a) => !a.includes('--band'))).toEqual([]) // no pane open: the board is not read
+})
+
+const PROMPT = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 64 } as any
+
+test('outside a session baton hosts there is no band, and no baton command is run for one', async ($, on) => {
+  const w = world(on, { env: { BATON_BIN: '/opt/baton', BATON_INSTANCE: 'inst' } })
+  await start($, w)
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: PROMPT })
+  expect((await ui.find({ type: 'Text' }))?.text).toBe("Claude Code's own")
+  expect(w.boards).toEqual([])
+  expect(w.commands).toEqual([])
+})
+
+test('with no plan, or a survey up, the band is not baton\'s', async ($, on) => {
+  let band = ''
+  const w = world(on, { board: (args) => (args.includes('--band') ? band : 'the board') })
+  await start($, w)
+  expect(w.boards.length).toBeGreaterThan(0)
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: PROMPT })
+  expect((await ui.find({ type: 'Text' }))?.text).toBe("Claude Code's own")
+  band = '◆ baton · step 1/2 · lead: idle'
+  await w.clock.advance(1000)
+  const survey = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: { ...PROMPT, hasSurvey: true } })
+  expect((await survey.find({ type: 'Text' }))?.text).toBe("Claude Code's own")
+})
+
+test('/baton board opens the pane with the board in it, and never reaches the skill or the model', async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  expect(w.commands).toEqual(["/baton-board immediate: baton's board"])
+  const r = await $.command.run({ command: 'baton:baton', args: 'board' })
+  expect(r).toEqual({})
+  expect(w.panes).toEqual([{ id: 'baton-board', title: 'baton' }])
+  expect(w.beneath).toEqual([])
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'Pane', requestId: 'baton-board', props: { bodyColumns: 50 } as any })
+  expect((await ui.findAll({ type: 'Text' })).map((t) => t.text)).toEqual(['step 1  ▶ P1  The mod', 'lead: working on P1'])
+  await w.clock.advance(1000)
+  expect(w.boards.filter((a) => !a.includes('--band')).pop()).toEqual(['--width', '50']) // read again while open
+  expect(await $.command.run({ command: 'baton-board', args: '' })).toEqual({})
+  expect(await $.command.run({ command: 'baton:baton', args: 'status' })).toEqual(expect.objectContaining({ text: 'the skill ran' }))
+  expect(w.beneath).toEqual(['command baton:baton status'])
+})
+
+test('a pane not drawn yet leaves the board as the command\'s output', async ($, on) => {
+  const w = world(on, { placed: false })
+  await start($, w)
+  expect(await $.command.run({ command: 'baton:baton', args: ' Board ' })).toEqual(expect.objectContaining({ text: 'step 1  ▶ P1  The mod\nlead: working on P1' }))
+})
+
+test('where baton board fails, or outside a hosted session, /baton board is the skill\'s', async ($, on) => {
+  const w = world(on, { board: () => null })
+  await start($, w)
+  expect(await $.command.run({ command: 'baton:baton', args: 'board' })).toEqual(expect.objectContaining({ text: 'the skill ran' }))
+  expect(w.panes).toEqual([])
 })

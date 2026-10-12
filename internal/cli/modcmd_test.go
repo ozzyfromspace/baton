@@ -60,7 +60,8 @@ func TestTheModReportsThroughTheCLI(t *testing.T) {
 	m := newModRun(t)
 	r := m.report(modHelloJSON)
 	if !r.OK || r.Run != m.run.Ref || r.Dir != filepath.Join(m.run.Dir, "mod") || r.Seen != 0 || r.Agent == nil ||
-		r.Agent.Name != "phase" || r.Agent.Prompt != decide.PhaseAgentPrompt || r.Agent.Description != decide.PhaseAgentDescription {
+		r.Agent.Name != "phase" || r.Agent.Prompt != decide.PhaseAgentPrompt || r.Agent.Description != decide.PhaseAgentDescription ||
+		r.Board == nil || r.Board.Description != decide.BoardCommand || r.Board.Title != decide.BoardTitle {
 		t.Fatalf("hello: %+v", r)
 	}
 	ask, err := m.bridge().Issue(bridge.Command{Kind: bridge.Ask, Instance: "i", Question: "May P3 commit unsigned?"})

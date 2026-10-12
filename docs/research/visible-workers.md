@@ -122,6 +122,15 @@ baton still in control, deterministically and with no model judgment, and its re
 - **Four agents for 20 minutes:** 156 turns and 151 messages without a failure, 152 reports dropped before the
   lead's model, and claude's memory flat (286–445 MB).
 
+## What spike 33 found
+
+- **`/baton board` is the skill's command, answered by the mod.** Claude Code refuses a mod command named
+  like its plugin's skill (`"/baton" refused: it is the plugin's /baton:baton`), but a mod's `command.run`
+  hook sees the skill's command as `baton:baton` with its arguments, and can answer it itself: the skill
+  never runs and no model is called ([`spikes/33-board-command`](../../spikes/33-board-command)). A skill's
+  command waits for the turn to end, so the board also has a command of its own, `/baton-board`, which is
+  `immediate`.
+
 ## What it means for baton
 
 The control baton needs exists, and none of it is model judgment. A mod in baton's plugin does what only something
