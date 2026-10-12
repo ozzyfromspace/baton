@@ -18,7 +18,7 @@ const greeterPlan = "# Greeter plan\n\n## Standing rules\n\n- Every phase ends w
 	"Commit it with the message `feat: farewell`.\n\n" +
 	"## Verification\n\n`git log --oneline` shows both commits.\n"
 
-// The incident behind graduated escalation (docs/escalation.md), replayed as S2 did: Sonnet in auto mode,
+// The incident behind graduated escalation (docs/design.md), replayed as S2 did: Sonnet in auto mode,
 // nobody at the terminal, and gpg timing out on every commit after the plan starts. v0.1.1 hard-blocked
 // here with the work staged, every time. Now the run must work around it without the human: propose (or
 // note) committing unsigned with a way to re-sign later, go ahead when nobody answers, and finish the

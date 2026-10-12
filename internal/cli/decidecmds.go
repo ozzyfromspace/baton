@@ -10,7 +10,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// The two ways the model reaches the human short of stopping the run (docs/escalation.md): a note says
+// The two ways the model reaches the human short of stopping the run (docs/design.md): a note says
 // what it already did, and a proposal says what it will do unless the human objects by a deadline.
 
 func init() {

@@ -1,5 +1,5 @@
 // Package decide is baton's policy for a run that must not stop for something it can work around
-// (docs/escalation.md): which way of reaching the human fits, the questions baton puts to them, and the
+// (docs/design.md): which way of reaching the human fits, the questions baton puts to them, and the
 // words the model reads about all of it. It lives in one place so that the CLI, the hooks and the brief
 // say the same thing, and so that no text meant for a project without git mentions committing.
 package decide

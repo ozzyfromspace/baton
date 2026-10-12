@@ -114,7 +114,7 @@ func NewProject(t *testing.T) string {
 }
 
 // NewSignedProject makes a git repository whose history is signed, like the one in the incident behind
-// graduated escalation (docs/escalation.md): commit.gpgsign is on, and gpg is a stand-in that signs
+// graduated escalation (docs/design.md): commit.gpgsign is on, and gpg is a stand-in that signs
 // without any keyring. breakSigning makes every signature from then on time out, as the real gpg did
 // once the machine had restarted and its agent had lost the passphrase. No real gpg is ever run.
 func NewSignedProject(t *testing.T) (dir string, breakSigning func()) {

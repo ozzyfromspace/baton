@@ -12,7 +12,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// A proposal's life after `baton propose` (docs/escalation.md): the model puts baton's question to the
+// A proposal's life after `baton propose` (docs/design.md): the model puts baton's question to the
 // human; the human answers, or nobody does and baton picks Go ahead at the deadline; or the question goes
 // away unanswered, and the proposal is held for the human like Wait for me. What happens next is decided
 // here, from the answer, not left to the model.

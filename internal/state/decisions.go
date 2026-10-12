@@ -7,7 +7,7 @@ import (
 )
 
 // A run that may not stop for something it can work around makes decisions the human did not see
-// coming. Each one is kept here, with its undo, for the whole run (docs/escalation.md).
+// coming. Each one is kept here, with its undo, for the whole run (docs/design.md).
 
 // Decision kinds.
 const (

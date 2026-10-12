@@ -8,7 +8,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// The record of what a run decided without the human (docs/escalation.md). The human finds it in
+// The record of what a run decided without the human (docs/design.md). The human finds it in
 // baton status, at each phase's end and at the plan's; the model is handed it after every compaction and
 // whenever the human writes, so that a late "undo that" finds its undo even in a context that never saw
 // the decision (the S3 spike, docs/research/escalation.md).

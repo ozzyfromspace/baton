@@ -10,13 +10,12 @@ import (
 
 // baton waiting is gone: long commands move to the background by themselves, and baton await waits on
 // what is outside the project. Nothing may still mention it, or the model would be told to run a command
-// that no longer exists. Only the record keeps it: the changelog, the research (spikes, docs/research),
-// and docs/plan.md's account of how v0.1 was built.
+// that no longer exists. Only the record keeps it: the changelog and the research (spikes, docs/research).
 func TestBatonWaitingIsGone(t *testing.T) {
 	root := filepath.Join("..", "..")
 	traces := []string{"baton waiting", "`waiting`", "|waiting|", `"waiting"`, "SetWaiting", "MaxWait", "WaitGrace", "WAIT_GRACE", ".Waiting"}
 	record := map[string]bool{"CHANGELOG.md": true, "spikes": true, "dist": true, filepath.Join("docs", "research"): true,
-		filepath.Join("docs", "plan.md"): true, filepath.Join("internal", "cli", "retired_test.go"): true}
+		filepath.Join("internal", "cli", "retired_test.go"): true}
 	text := map[string]bool{".go": true, ".md": true, ".sh": true, ".ps1": true, ".json": true, ".golden": true, ".yml": true, ".yaml": true, ".txt": true}
 	checked := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

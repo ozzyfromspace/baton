@@ -168,7 +168,7 @@ func agentPhase(st state.State, agent string) string {
 // answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context
 // question (Keep going) after WarnTimeout, since it only warns and Claude Code compacts on its own when
 // the context is full; and a timed proposal (Go ahead) at its deadline, since a run must not stop for
-// something it can work around (docs/escalation.md). An untimed proposal is never answered: only the
+// something it can work around (docs/design.md). An untimed proposal is never answered: only the
 // human can let it go ahead. The answer arrives through the usual hook.
 //
 // It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
