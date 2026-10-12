@@ -13,7 +13,7 @@ type Words struct {
 	Git     bool
 	Timeout time.Duration
 	// Worker: the session is a worker's, which works on one phase of the run in a worktree of its own;
-	// its work lands on the run's branch, and its questions reach the human through the lead session.
+	// its work lands on the run's branch, and baton asks the human its questions.
 	Worker bool
 }
 
@@ -31,7 +31,7 @@ func (w Words) deadline() string { return "a deadline of " + Spell(w.Timeout) }
 // putToHuman is what becomes of a proposal: who puts it to the human, and how the model hears back.
 func (w Words) putToHuman() string {
 	if w.Worker {
-		return "baton puts it to them through the lead session, with " + w.deadline() + " from when they are asked (their answer reaches you here)"
+		return "baton puts it to them with " + w.deadline() + " from when they are asked (their answer reaches you here)"
 	}
 	return "baton puts it to them with " + w.deadline()
 }
@@ -57,7 +57,7 @@ func (w Words) Playbook() string {
 		"  · baton blocked \"<why>\" --tried \"<what you tried>\"\n" +
 		"        only if every way forward is irreversible, or needs a secret only the human holds. ")
 	if w.Worker {
-		b.WriteString("Your phase stops until they answer, through the lead session.")
+		b.WriteString("Your phase stops until they answer.")
 	} else {
 		b.WriteString("The run stops until they answer.")
 	}
@@ -78,7 +78,7 @@ func (w Words) Reporting() string {
 	pause := "(If the human wants to talk instead of running the plan, they can run /baton pause.)"
 	if w.Worker {
 		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " "
-		blocked = ", and end your turn: it stops only your phase, and baton asks the human through the lead session. "
+		blocked = ", and end your turn: it stops only your phase, and baton asks the human. "
 		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
 		pause = ""
 	}
@@ -127,7 +127,7 @@ func (w Words) CheckpointHold() string {
 // proposeThen is what follows a proposal, for a stop that reported nothing.
 func (w Words) proposeThen() string {
 	if w.Worker {
-		return "baton puts it to the human through the lead session and gives you their answer here; no answer by its deadline means you do it"
+		return "baton puts it to the human and gives you their answer here; no answer by its deadline means you do it"
 	}
 	return "baton puts it to the human with " + w.deadline() + ", then you do it"
 }
@@ -181,7 +181,7 @@ func (w Words) QuestionRefused(call string) string {
 	}
 	head := "[baton] baton is running this plan unattended, so a question would stop the run until someone answers it. "
 	if w.Worker {
-		head = "[baton] Nobody watches this worker session, so a question would stop your phase until someone opens it. "
+		head = "[baton] baton runs your phase unattended, so a question would stop it until someone answers it. "
 	}
 	return head +
 		"Decide yourself and carry on; if the human should know what you decided, run `baton note \"<what you did>\" --undo \"<how to reverse it>\"`. " +
@@ -204,7 +204,7 @@ func (w Words) Closing(id string) string {
 		return fmt.Sprintf("When %s is %s, run `baton done %s --notes \"<what later phases need to know>\"` and end your turn: %s "+
 			"Gates that take more than about 2 minutes, or need state of their own, go to baton: %s "+
 			"If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), "+
-			"`baton propose` (a reversible way around a problem; baton puts it to the human through the lead session, who may veto it by a deadline, and gives you the answer here), "+
+			"`baton propose` (a reversible way around a problem; baton puts it to the human, who may veto it by a deadline, and gives you the answer here), "+
 			"`baton blocked --tried` (only if every way forward is irreversible; it stops only %s). Never type /compact yourself.", id, w.complete(), id, landing, w.verifyHow(), id)
 	}
 	return fmt.Sprintf("When %s is %s, run `baton done %s --notes \"<what later phases need to know>\"` and end your turn. "+

@@ -38,6 +38,8 @@ function world(on: any, o: Opts = {}) {
     calls: [] as string[], // what the mod did beneath
     seen: 0,
     answer: 'Go ahead',
+    hang: false, // the human never answers the dialog
+    asking: [] as any[], // the askings the mod sent
     clock: null as any,
     beneath: [] as string[], // the events that reached the bottom
     boards: [] as string[][], // the arguments of every `baton board` the mod ran
@@ -61,8 +63,10 @@ function world(on: any, o: Opts = {}) {
     const rep = JSON.parse(e.init.stdin)
     w.runs.push(rep.kind)
     let reply = o.reply ? o.reply(rep) : undefined
+    if (rep.kind === 'asking') w.asking.push(rep)
     if (reply === undefined) {
       if (rep.kind === 'hello') reply = { ok: true, run: 'sess', dir: DIR, seen: w.seen, agent: AGENT, board: BOARD }
+      else if (rep.kind === 'asking') reply = { ok: true }
       else if (rep.seq <= w.seen) reply = { ok: true, ignored: 'recorded already' }
       else {
         w.seen = rep.seq
@@ -93,6 +97,7 @@ function world(on: any, o: Opts = {}) {
   on('tool.call', async ($: any, e: any) => {
     if (e.tool === 'AskUserQuestion') {
       w.calls.push('ask ' + e.questions[0].question)
+      if (w.hang) return new Promise(() => {})
       return { result: { questions: e.questions, answers: { [e.questions[0].question]: w.answer } } }
     }
     w.calls.push(`${e.tool} ${e.to ?? e.task_id}${e.message ? ' ' + e.message : ''}`)
@@ -197,15 +202,14 @@ test("the host's commands run in order, once each, and only its own", async ($, 
     'SendMessage a1 The gate passed.',
     'TaskStop a1',
     'SendMessage stopped Go on.',
-    'ask May P3 commit unsigned?',
     'TaskStop gone',
   ])
-  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4', 'ack 5', 'answered 5', 'ack 7'])
-  expect(w.reports[6]).toEqual(expect.objectContaining({ ok: false, error: 'No task found with ID: gone' }))
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4', 'ack 5', 'ack 7'])
+  expect(w.reports[5]).toEqual(expect.objectContaining({ ok: false, error: 'No task found with ID: gone' }))
   expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false, error: 'no agent started' }))
-  expect(w.reports.map((r: any) => r.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
+  expect(w.reports.map((r: any) => r.seq)).toEqual([1, 2, 3, 4, 5, 6])
   expect(w.reports[3]).toEqual(expect.objectContaining({ ok: false, result: 'was stopped by the user' }))
-  expect(w.reports[5]).toEqual(expect.objectContaining({ answer: 'Go ahead' }))
+  expect(w.reports[4]).toEqual(expect.objectContaining({ ok: true, result: 'queued' }))
   expect(Object.keys(w.files)).toEqual([cmdPath(6), DIR + '/out/.000008.json.tmp-1'])
 })
 
@@ -382,4 +386,74 @@ test('where baton board fails, or outside a hosted session, /baton board is the 
   await start($, w)
   expect(await $.command.run({ command: 'baton:baton', args: 'board' })).toEqual(expect.objectContaining({ text: 'the skill ran' }))
   expect(w.panes).toEqual([])
+})
+
+test("baton's questions are asked from the band, one at a time, and each answer reported", async ($, on) => {
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'ask', question: 'baton: the agent on P3 is blocked: no key. Only P3 waits for you.', options: ['Continue', 'Pause baton', 'Wait for me'] }),
+      ...command({ id: 2, kind: 'ask', question: 'baton: the agent on P4 is blocked: no disk. Only P4 waits for you.', options: ['Continue', 'Pause baton', 'Wait for me'] }),
+    },
+  })
+  await start($, w)
+  expect(w.calls.filter((c) => c.startsWith('ask'))).toEqual([]) // acked, and waiting for the band
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2'])
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: PROMPT })
+  await ui.find({ type: 'Text' })
+  await w.clock.advance(1000)
+  await ui.find({ type: 'Text' })
+  await w.clock.advance(1000)
+  expect(w.calls.filter((c) => c.startsWith('ask'))).toEqual([
+    'ask baton: the agent on P3 is blocked: no key. Only P3 waits for you.',
+    'ask baton: the agent on P4 is blocked: no disk. Only P4 waits for you.',
+  ])
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'answered 1', 'answered 2'])
+  expect(w.reports[2]).toEqual(expect.objectContaining({ question: 'baton: the agent on P3 is blocked: no key. Only P3 waits for you.', answer: 'Go ahead', deadline: false }))
+})
+
+test("a question of baton's nobody answers is answered by the mod at the host's deadline", async ($, on) => {
+  const q = 'baton: the agent on P3: no signing key. Unless you answer by 15:04, I will commit unsigned.'
+  let due = false
+  const w = world(on, {
+    files: command({ id: 1, kind: 'ask', question: q, options: ['Wait for me', 'Pause baton', 'Go ahead'] }),
+    reply: (rep) => (rep.kind === 'asking' ? (due ? { ok: true, answer: 'Go ahead' } : { ok: true, wait_ms: 60_000 }) : undefined),
+  })
+  w.hang = true
+  await start($, w)
+  const ui = await $.ui.mount({ plugin: 'baton', surface: 'terminal', component: 'AbovePrompt', props: PROMPT })
+  await ui.find({ type: 'Text' })
+  await w.clock.advance(30_000)
+  expect(w.asking.length).toBe(1)
+  expect(kinds(w)).toEqual(['ack 1'])
+  due = true
+  await w.clock.advance(30_000)
+  await w.clock.advance(1000)
+  expect(w.asking.map((a: any) => a.question)).toEqual([q, q])
+  expect(w.asking[1].elapsed).toBeGreaterThanOrEqual(60_000)
+  expect(kinds(w)).toEqual(['ack 1', 'deadline', 'answered 1'])
+  expect(w.reports[1]).toEqual(expect.objectContaining({ question: q, answer: 'Go ahead' }))
+  expect(w.reports[2]).toEqual(expect.objectContaining({ question: q, answer: 'Go ahead', deadline: true }))
+})
+
+test("the lead model's own question of baton's is bounded too; the human's answer in time stands", async ($, on) => {
+  const q = 'baton: the tests need a database. Unless you answer by 15:04, I will use sqlite.'
+  const w = world(on, { reply: (rep) => (rep.kind === 'asking' ? { ok: true, wait_ms: 60_000 } : undefined) })
+  await start($, w)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: q, header: 'baton', options: [{ label: 'Go ahead', description: '' }], multiSelect: false }] } as any)
+  expect((r as any).result.answers).toEqual({ [q]: 'Go ahead' })
+  expect(w.asking.map((a: any) => a.question)).toEqual([q])
+  expect(kinds(w)).toEqual([])
+})
+
+test("a question baton never answers waits for the human, and one not baton's is not asked about", async ($, on) => {
+  const w = world(on)
+  w.hang = true
+  await start($, w)
+  let answered = false
+  $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'baton: P2 is blocked: no key.', header: 'baton', options: [], multiSelect: false }] } as any).then(() => (answered = true))
+  $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'q', options: [], multiSelect: false }] } as any).then(() => (answered = true))
+  await w.clock.advance(120_000)
+  expect(answered).toBe(false)
+  expect(w.asking.map((a: any) => a.question)).toEqual(['baton: P2 is blocked: no key.'])
+  expect(kinds(w)).toEqual([])
 })

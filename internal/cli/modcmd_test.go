@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -76,7 +77,7 @@ func TestTheModReportsThroughTheCLI(t *testing.T) {
 		{`{"seq":4,"kind":"compacting","session":"sess","trigger":"auto"}`, "mod_compacting"},
 		{`{"seq":5,"kind":"compacted","session":"sess","trigger":"auto"}`, "mod_compacted"},
 		{`{"seq":6,"kind":"dropped","session":"sess","agent":"a3"}`, "mod_dropped"},
-		{`{"seq":7,"kind":"answered","session":"sess","command":1,"answer":"Go ahead"}`, "mod_answered"},
+		{`{"seq":7,"kind":"answered","session":"sess","command":1,"question":"May P3 commit unsigned?","answer":"Go ahead"}`, "mod_answered"},
 	} {
 		if r := m.report(c.report); !r.OK || r.Ignored != "" {
 			t.Errorf("%s: %+v", c.report, r)
@@ -105,6 +106,58 @@ func TestTheModReportsThroughTheCLI(t *testing.T) {
 	}
 }
 
+// The mod asks how long a question of baton's on the human's screen may wait, and is told: a while yet,
+// or the answer to give it now. Once it gave it, its report records the answer as the call's result
+// would have, once. A question of nobody's, or a mod that has not said hello, is told nothing.
+func TestTheModBoundsBatonsQuestions(t *testing.T) {
+	m := newModRun(t)
+	now := time.Unix(0, 0)
+	q := decide.ProposalQuestion("gpg signing times out", "commit P0 unsigned", now.Add(-time.Minute))
+	asking := func(question string, elapsed time.Duration) modReply {
+		t.Helper()
+		b, _ := json.Marshal(map[string]any{"kind": "asking", "session": "sess", "question": question, "elapsed": elapsed.Milliseconds()})
+		return m.report(string(b))
+	}
+	if r := asking(q.Text, 0); !r.OK || r.WaitMs != 0 || r.Answer != "" {
+		t.Errorf("before any hello: %+v", r)
+	}
+	m.report(modHelloJSON)
+	m.run.Update(func(st *state.State) error {
+		st.Mode, st.Current = state.ModeRunning, "P0"
+		_, err := state.AddProposal(st, state.Decision{What: "commit P0 unsigned", Because: "gpg signing times out", Undo: "x", Deadline: now.Add(5 * time.Minute), Question: q.Text}, now)
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: now, Kind: "proposal"})
+		return err
+	})
+	if r := asking(q.Text, 0); !r.OK || r.WaitMs != 30_000 || r.Answer != "" {
+		t.Errorf("before its deadline: %+v", r)
+	}
+	if r := asking("baton: lunch?", 0); !r.OK || r.WaitMs != 0 || r.Answer != "" {
+		t.Errorf("none of baton's: %+v", r)
+	}
+	m.run.Update(func(st *state.State) error {
+		st.Decisions[len(st.Decisions)-1].Deadline = now.Add(-time.Minute)
+		st.Run.Dialogs[0].Front = now.Add(-2 * time.Minute)
+		return nil
+	})
+	if r := asking(q.Text, 2*time.Minute); !r.OK || r.WaitMs != 0 || r.Answer != "Go ahead" {
+		t.Fatalf("at its deadline: %+v", r)
+	}
+	deadline, _ := json.Marshal(map[string]any{"seq": 1, "kind": "deadline", "session": "sess", "question": q.Text, "answer": "Go ahead"})
+	if r := m.report(string(deadline)); !r.OK || r.Ignored != "" {
+		t.Fatalf("deadline: %+v", r)
+	}
+	st, _ := m.run.Load()
+	if d := st.Decisions[len(st.Decisions)-1]; d.Resolved == nil || d.Resolved.By != state.ByTimeout || st.Run.Dialogs.AnyOpen() {
+		t.Errorf("decision %+v, dialogs %+v", d, st.Run.Dialogs)
+	}
+	if !strings.Contains(m.events(), `"kind":"mod_deadline"`) || strings.Count(m.events(), `"kind":"proposal_resolved"`) != 1 {
+		t.Errorf("events:\n%s", m.events())
+	}
+	if r := m.report(string(deadline)); !r.OK || r.Ignored != "recorded already" || strings.Count(m.events(), `"kind":"proposal_resolved"`) != 1 {
+		t.Errorf("again: %+v\n%s", r, m.events())
+	}
+}
+
 // A report that cannot be read is let go (the mod drops it), and logged; one before any hello, or from a
 // mod another claude ran, sends the mod back to say hello.
 func TestABadModReportIsLetGo(t *testing.T) {
@@ -115,6 +168,9 @@ func TestABadModReportIsLetGo(t *testing.T) {
 		{`{"kind":"turn","agent":"a1"}`, "not numbered"},
 		{`{"seq":1,"kind":"turn"}`, "turn names no agent"},
 		{`{"seq":1,"kind":"ack"}`, "ack names no command"},
+		{`{"seq":1,"kind":"answered","command":3}`, "answered names no command or no question"},
+		{`{"seq":1,"kind":"deadline","question":"q"}`, "deadline names no question or no answer"},
+		{`{"kind":"asking"}`, "asking names no question"},
 		{`{"seq":1,"kind":"dropped","text":"` + strings.Repeat("x", maxReport) + `"}`, "too long"},
 	} {
 		r := m.report(c.report)
@@ -122,7 +178,7 @@ func TestABadModReportIsLetGo(t *testing.T) {
 			t.Errorf("%.40s: %+v", c.report, r)
 		}
 	}
-	if n := strings.Count(m.events(), `"kind":"mod_report_bad"`); n != 6 {
+	if n := strings.Count(m.events(), `"kind":"mod_report_bad"`); n != 9 {
 		t.Errorf("%d bad reports logged:\n%s", n, m.events())
 	}
 	if r := m.report(`{"seq":1,"kind":"turn","agent":"a1"}`); r.OK || !r.Stale {

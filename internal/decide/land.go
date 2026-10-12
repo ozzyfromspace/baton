@@ -87,7 +87,7 @@ func MailTyped(kinds []string) string {
 		case state.MessageLand:
 			return "[baton] Your work did not land yet: baton's message, attached, says why and what to do."
 		case state.MessageAnswer:
-			return "[baton] The human answered your question: baton's message, attached, says what to do."
+			return "[baton] Your question has its answer: baton's message, attached, says what it is and what to do."
 		}
 	}
 	return "[baton] baton has a message for you, attached."

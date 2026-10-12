@@ -13,6 +13,13 @@
 // It draws baton's view of the run (internal/board) as the host words it: every second it reads `baton
 // board --band` for the band above the prompt, and, while the /baton board pane is open, `baton board`
 // for the pane.
+//
+// It asks the human baton's questions from inside the band's render hook, one at a time: only there does
+// it see its own question's call (from a timer it would not), and the band is never drawn while another
+// dialog is open, so a question of baton's never waits behind a permission prompt. Its tool.call hook
+// bounds each of baton's questions in the lead's session, the lead model's own included: it asks the host
+// how long the question may wait, and at the deadline answers the call itself with the answer the host
+// gives, which closes the dialog. Nothing types into a dialog (spike 34).
 
 const PROTOCOL = 1 // what the mod and the host say to each other (bridge.Protocol)
 const POLL_MS = 500
@@ -24,6 +31,7 @@ const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused
 const CUT = 1000 // the most of an agent's last words a turn report carries
 const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
 const VIEW_TIMEOUT_MS = 5000
+const ASK_RETRY_MS = 5000 // how soon the host is asked about a question again when it gave no answer
 const PANE = 'baton-board' // the pane of baton's board
 const SKILL = 'baton:baton' // the /baton skill's command, as Claude Code names it to a command.run hook
 const BOARD = 'baton-board' // the board's own command, which runs while Claude works (/baton waits for the turn)
@@ -56,6 +64,9 @@ const M = {
   paneWidth: 0, // and the board's pane
   boardSpec: null, // the board command's and pane's words, from the host's hello
   boardOn: false, // the board command is registered
+  asks: [], // the host's questions waiting for the band to ask them, oldest first
+  asking: null, // the question on the human's screen now
+  settled: {}, // the questions the mod answered at their deadlines, by text
 }
 
 // env reads what the baton host set for this claude ($.env.get takes literal names only).
@@ -310,7 +321,7 @@ async function poll($) {
       await save($)
       if (c.kind === 'spawn' && result.agent) M.agents[result.agent] = { phase: c.phase, drop: c.drop } // until the host lists it
       await report($, { kind: 'ack', command: id, ...result })
-      if (c.kind === 'ask') ask($, c).catch(() => {}) // not awaited: the human may take a while
+      if (c.kind === 'ask') queueAsk($, c)
     }
   } finally {
     M.polling = false
@@ -334,7 +345,7 @@ async function run($, c) {
         return answer(r)
       }
       case 'ask':
-        return { ok: true, result: 'asked' } // poll opens the dialog once the ack is kept
+        return { ok: true, result: 'queued' } // the band asks it once the ack is kept
       default:
         return { ok: false, error: 'no such command: ' + c.kind }
     }
@@ -355,17 +366,74 @@ function answer(r) {
   return { ok: true, result: cut(String(r.text || ''), CUT) }
 }
 
-// ask asks the human the host's question in Claude Code's own dialog, and reports the answer, or that the
-// dialog closed without one.
-async function ask($, c) {
-  let rep
+// queueAsk keeps the host's question c for the band to ask: a question asked already, or waiting, is
+// the same question asked again (the host asks again what it fears the mod lost), and takes its place.
+function queueAsk($, c) {
+  if (c.question === M.asking) return
+  M.asks = M.asks.filter((a) => a.question !== c.question)
+  M.asks.push(c)
+  $.ui.invalidate('ui.render')
+}
+
+// ask asks the human the front question in Claude Code's own dialog, from inside the band's render hook:
+// it calls $.ui.ask before it awaits anything, while that hook still runs. The answer, or that the dialog
+// closed without one, is reported once it comes, and the band asks the next.
+function ask($) {
+  const c = M.asks.shift()
+  M.asking = c.question
+  let asked
   try {
-    const a = await $.ui.ask(c.question, { options: c.options || [], header: c.header || 'baton' })
-    rep = { kind: 'answered', command: c.id, answer: String(a) }
+    asked = $.ui.ask(c.question, { options: c.options || [], header: c.header || 'baton' })
   } catch (err) {
-    rep = { kind: 'answered', command: c.id, dismissed: true, error: cut(String(err), CUT) }
+    asked = Promise.reject(err)
   }
-  await report($, rep)
+  asked
+    .then(
+      (a) => ({ kind: 'answered', command: c.id, question: c.question, answer: String(a), deadline: !!M.settled[c.question] }),
+      (err) => ({ kind: 'answered', command: c.id, question: c.question, dismissed: true, error: cut(String(err), CUT) }),
+    )
+    .then(async (rep) => {
+      delete M.settled[c.question]
+      M.asking = null
+      $.ui.invalidate('ui.render')
+      await report($, rep)
+    })
+    .catch(() => {})
+}
+
+// bounded is the tool.call hook of AskUserQuestion in the lead's session: a question of baton's ("baton:
+// …") waits for the human as long as the host says, then the mod answers it with the host's answer,
+// which closes its dialog, and reports that it did (Claude Code fires no PostToolUse then). The host asks
+// nothing of the questions it never answers, and the human's answer in time stands.
+async function bounded($, e, next) {
+  const qs = e.questions
+  const q = Array.isArray(qs) && qs.length === 1 && qs[0] ? qs[0].question : null
+  if (!live() || e.agentId || typeof q !== 'string' || !q.startsWith('baton:')) return next(e)
+  const t0 = await $.clock.now()
+  let done = null
+  const beneath = next(e).then(
+    (v) => (done = { v }),
+    (err) => (done = { err }),
+  )
+  for (;;) {
+    const r = await call($, { kind: 'asking', question: q, elapsed: (await $.clock.now()) - t0 })
+    if (done) break
+    if (r && r.ok && r.answer && !r.wait_ms) {
+      M.settled[q] = true
+      await keep($, { kind: 'deadline', question: q, answer: r.answer })
+      flush($)
+      return { result: { questions: qs, answers: { [q]: r.answer } } } // AskUserQuestion's own output
+    }
+    if (r && r.ok && !r.wait_ms) break // baton never answers it: the human does
+    const ms = r && r.wait_ms > 0 ? r.wait_ms : ASK_RETRY_MS
+    const slept = $.clock.sleep(ms, { signal: next.signal }).then(
+      () => true,
+      () => false,
+    )
+    if (!(await Promise.race([beneath.then(() => false), slept])) || done) break
+  }
+  await beneath
+  return 'v' in done ? done.v : next(e) // next replays what it rejected with
 }
 
 // board runs `baton board` with args, and resolves what it printed, without its last newline, or null
@@ -492,8 +560,10 @@ async function compacting($, e, next) {
 }
 
 // The band above the prompt: the run in one line, as the host words it, fitted to the columns it is
-// drawn in (the next read fits a new width).
+// drawn in (the next read fits a new width). It is also where baton's questions are asked, one at a
+// time, before anything here awaits.
 async function band($, e, next) {
+  if (M.asks.length && !M.asking && live()) ask($)
   if (!live() || !M.band || e.props.hasSurvey) return next(e)
   if (e.props.bodyColumns > 0) M.width = e.props.bodyColumns
   const { Text } = $.ui.resolve(e)
@@ -529,6 +599,7 @@ export function register(on) {
   on('prompt.submit', prompted).catch(letThrough)
   on('session.compact', compacting).catch(letThrough)
   on('ui.render', { component: 'AbovePrompt' }, band).catch(letThrough)
+  on('tool.call', { tool: 'AskUserQuestion' }, bounded).catch(letThrough)
   on('ui.render', { component: 'Pane', requestId: PANE }, pane).catch(letThrough)
   on('command.run', { command: SKILL }, boardCommand).catch(letThrough)
   on('command.run', { command: BOARD }, boardCommand).catch(letThrough)

@@ -220,6 +220,8 @@ type Dialog struct {
 	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when it did.
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
+	// Front is when baton first saw it at the front of the queue, on screen (hooks.Bound).
+	Front time.Time `json:"front,omitzero"`
 }
 
 // Same reports whether d and o are the same entry.

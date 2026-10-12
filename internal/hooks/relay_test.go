@@ -11,10 +11,10 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// relayProposal is the worker on P2's timed proposal, queued for the lead to put to the human.
+// relayProposal is the agent on P2's timed proposal, queued for baton to put to the human.
 var relayProposal = state.Relay{Kind: state.RelayProposal, Decision: "P2.d1", What: "use a fake clock", Because: "the real one drifts"}
 
-// queue queues r, a question of the worker on P2, in the lead's run.
+// queue queues r, a question of the agent on P2, in the lead's run.
 func queue(lead *fixture, r state.Relay) {
 	lead.t.Helper()
 	if r.Phase == "" {
@@ -23,386 +23,284 @@ func queue(lead *fixture, r state.Relay) {
 	lead.set(func(st *state.State) { state.QueueRelay(st, r, lead.now) })
 }
 
-// relayAsk is the question call for the lead's front relayed question, exactly as baton issued it.
-func relayAsk(lead *fixture) map[string]any {
+// issue queues r and issues it to the mod as the coordinator does, with its deadline five minutes on.
+func issue(lead *fixture, r state.Relay) {
+	lead.t.Helper()
+	queue(lead, r)
+	lead.set(func(st *state.State) {
+		q := st.FrontRelay()
+		deadline := lead.now.Add(5 * time.Minute)
+		state.IssueRelay(q, decide.RelayQuestion(*q, deadline).Text, 4, lead.inst, deadline, lead.now)
+	})
+}
+
+// modAskOf is the mod's question call for the lead's front issued question, exactly as baton issued it.
+func modAskOf(lead *fixture) map[string]any {
 	lead.t.Helper()
 	st := lead.state()
 	r := st.RelayIssued()
 	if r == nil {
-		lead.t.Fatal("no worker's question was issued")
+		lead.t.Fatal("no agent's question was issued")
 	}
 	var labels []string
 	for _, o := range decide.RelayOptions(*r) {
 		labels = append(labels, o.Label)
 	}
-	return ask(r.Question, labels...)
+	in := ask(r.Question, labels...)
+	in["tool_use_id"] = "toolu_plugin_0a1b"
+	return in
 }
 
-// The lead is given a worker's question, word for word, through whichever of its channels comes first:
-// the result of its next tool call, a refusal of its stop, or the prompt of the line the host types. Its
-// deadline starts then.
-func TestTheLeadIsGivenAWorkersQuestion(t *testing.T) {
+// No phase agent's question ever reaches the lead's model: not with its tool calls, its stop or its
+// prompts. Only baton's mod asks it, and the hooks issue nothing.
+func TestTheLeadsModelIsNeverGivenAnAgentsQuestion(t *testing.T) {
+	_, lead, _ := newWorker(t)
+	queue(lead, relayProposal)
 	for _, c := range []struct {
-		name, event string
-		in          map[string]any
-		text        func(out map[string]any) string
-		say         bool // the human is told it comes
+		event string
+		in    map[string]any
+		text  func(map[string]any) string
 	}{
-		{"mid-turn", "PostToolUse", bash("go test ./..."), feedback, true},
-		{"at its stop", "Stop", map[string]any{}, feedback, true},
-		{"with the host's line", "UserPromptSubmit", map[string]any{"prompt": decide.RelayTyped("P2")}, additionalContext, true},
+		{"PostToolUse", bash("go test ./..."), feedback},
+		{"Stop", map[string]any{}, feedback},
+		{"UserPromptSubmit", map[string]any{"prompt": "[baton] go on"}, additionalContext},
+		{"UserPromptSubmit", map[string]any{"prompt": "how is it going?"}, additionalContext},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, lead, _ := newWorker(t)
-			queue(lead, relayProposal)
-			lead.now = lead.now.Add(17 * time.Second) // the time the question names is rounded up to the minute
-			out := lead.fire(c.event, c.in)
-			st := lead.state()
-			r := st.RelayIssued()
-			if r == nil || !r.Issued.Equal(lead.now) || r.Asked {
-				t.Fatalf("issued %+v", st.Relay)
-			}
-			deadline := decide.Deadline(lead.now, 5*time.Minute)
-			if want := decide.RelayQuestion(*r, deadline); r.Question != want.Text || !r.Deadline.Equal(deadline) {
-				t.Errorf("issued %q, deadline %s; want %q", r.Question, r.Deadline, want.Text)
-			}
-			text := c.text(out)
-			for _, want := range []string{"[baton] ", "worker on P2", relayQuestion(*r).Call(), "baton gives the answer to the worker itself"} {
-				if !strings.Contains(text, want) {
-					t.Errorf("told %q, which lacks %q", text, want)
-				}
-			}
-			if c.say && !strings.Contains(say(out), "baton: the worker on P2 has a question for you — Claude puts it to you now") {
-				t.Errorf("announced %q", say(out))
-			}
-			via := map[string]string{"PostToolUse": "tool", "Stop": "stop", "UserPromptSubmit": "prompt"}[c.event]
-			if !lead.logged("relay_issued", map[string]any{"phase": "P2", "type": "proposal", "decision": "P2.d1", "via": via, "timed": true}) {
-				t.Errorf("events:\n%s", lead.eventLog())
-			}
-
-			// Until it is asked, nothing else of the lead's runs, and the call that asks it does.
-			if d := denyReason(lead.fire("PreToolUse", bash("go build ./..."))); !strings.Contains(d, "Not yet: put the question of the worker on P2 to the human first") {
-				t.Errorf("held with %q", d)
-			}
-			if d := denyReason(lead.fire("PreToolUse", relayAsk(lead))); d != "" {
-				t.Errorf("the question itself was refused: %q", d)
-			}
-			// Given once mid-turn; issued once.
-			if out := lead.fire("PostToolUse", bash("ls")); strings.Contains(feedback(out), "has a question") {
-				t.Errorf("given again: %v", out)
-			}
-			if st := lead.state(); st.RelayIssued() == nil || !st.RelayIssued().Issued.Equal(lead.now) {
-				t.Errorf("issued again: %+v", st.Relay)
-			}
-		})
+		out := lead.fire(c.event, c.in)
+		if text := c.text(out) + say(out); strings.Contains(text, "P2") {
+			t.Errorf("%s: told %q", c.event, text)
+		}
+	}
+	if d := denyReason(lead.fire("PreToolUse", bash("go build ./..."))); d != "" {
+		t.Errorf("the lead's call was held: %q", d)
+	}
+	if st := lead.state(); st.RelayIssued() != nil || st.FrontRelay() == nil {
+		t.Errorf("relay %+v: a hook issued it", st.Relay)
 	}
 }
 
-// A block's question has no time in it: baton leaves it for the human in the worker's session one
-// escalation_timeout after it was given.
-func TestABlocksQuestionWaitsOneTimeout(t *testing.T) {
+// The mod's question gets through whatever holds the lead's own calls, and is no call of the lead's
+// (a landing does not wait for it); a question passed off as baton's is refused as the model's would be.
+func TestTheModsQuestionGetsThrough(t *testing.T) {
 	_, lead, _ := newWorker(t)
-	queue(lead, state.Relay{Kind: state.RelayBlocked, Since: lead.now, Because: "need a key"})
-	lead.now = lead.now.Add(17 * time.Second)
-	lead.fire("PostToolUse", bash("ls"))
-	st := lead.state()
-	if r := st.RelayIssued(); r == nil || !r.Deadline.Equal(lead.now.Add(5*time.Minute)) {
-		t.Fatalf("issued %+v", st.Relay)
+	issue(lead, relayProposal)
+	lead.set(func(st *state.State) { st.BoundaryOwed = true })
+	if d := denyReason(lead.fire("PreToolUse", bash("ls"))); d == "" {
+		t.Fatal("a boundary is owed, yet the lead's call ran")
 	}
-}
-
-// Results and baton's other messages wait while a worker's question the lead was given is not asked:
-// the question goes first.
-func TestResultsWaitForAWorkersQuestion(t *testing.T) {
-	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	lead.fire("PostToolUse", bash("ls"))
-	lead.finished("P1", state.JobFailed)
-	if out := lead.fire("PostToolUse", bash("ls")); strings.Contains(feedback(out), "Job j1") {
-		t.Fatalf("a result went before the worker's question: %v", out)
+	if d := denyReason(lead.fire("PreToolUse", modAskOf(lead))); d != "" {
+		t.Errorf("the mod's question was refused: %q", d)
 	}
-	q := relayAsk(lead)
-	lead.fire("PermissionRequest", q)
-	lead.fire("PostToolUse", answer(q, "Go ahead"))
-	if out := lead.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "Job j1") {
-		t.Fatalf("the result after the question: %v", out)
+	if st := lead.state(); len(st.Run.Tools) != 0 {
+		t.Errorf("tools %+v: the mod's question counted as a call of the lead's", st.Run.Tools)
 	}
-}
-
-// A human's prompt is theirs: the question comes with the next tool call, or at the stop.
-func TestAHumansPromptDoesNotCarryAWorkersQuestion(t *testing.T) {
-	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	if out := lead.fire("UserPromptSubmit", map[string]any{"prompt": "how is it going?"}); strings.Contains(additionalContext(out), "has a question") {
-		t.Fatalf("given with the human's prompt: %v", out)
-	}
-	if st := lead.state(); st.RelayIssued() != nil {
-		t.Fatal("issued with the human's prompt")
-	}
-}
-
-// One question at a time: a question of the lead's own goes first, and a second worker question waits
-// until the first is answered.
-func TestOneQuestionAtATime(t *testing.T) {
-	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	queue(lead, state.Relay{Phase: "P2", Kind: state.RelayBlocked, Since: lead.now, Because: "need a key"})
-	lead.propose(false) // the lead's own
-	if out, st := lead.fire("PostToolUse", bash("ls")), lead.state(); strings.Contains(feedback(out), "has a question") || st.RelayIssued() != nil {
-		t.Fatalf("a worker's question went before the lead's own: %v", out)
-	}
-	if out := lead.fire("Stop", map[string]any{}); !strings.Contains(feedback(out), "put your proposal d1 to the human first") {
-		t.Fatalf("stop: %v", out)
-	}
-	lead.set(func(st *state.State) { state.Resolve(st, "d1", state.ByHuman, "Go ahead", lead.now) })
-
-	lead.fire("PostToolUse", bash("ls"))
-	st := lead.state()
-	first := st.RelayIssued()
-	if first == nil || first.Kind != state.RelayProposal {
-		t.Fatalf("issued %+v", first)
-	}
-	lead.fire("PermissionRequest", relayAsk(lead))
-	if out := lead.fire("PostToolUse", bash("ls")); strings.Contains(feedback(out), "has a question") {
-		t.Fatalf("a second question while the first waits: %v", out)
-	}
-	lead.fire("PostToolUse", answer(relayAsk(lead), "Go ahead"))
-	if out := lead.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "is blocked: need a key") {
-		t.Fatalf("the next question: %v", out)
+	other := ask("baton: lunch?", "Yes", "No")
+	other["tool_use_id"] = "toolu_plugin_ffff"
+	if d := denyReason(lead.fire("PreToolUse", other)); d == "" {
+		t.Error("a mod's question baton did not issue got through")
 	}
 }
 
 // The question's dialog opening is the question asked: the human is pushed about a proposal, whose
 // question names its deadline.
-func TestAWorkersQuestionAsked(t *testing.T) {
+func TestAnAgentsQuestionAsked(t *testing.T) {
 	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	lead.fire("PostToolUse", bash("ls"))
-	lead.fire("PermissionRequest", relayAsk(lead))
+	issue(lead, relayProposal)
+	lead.now = lead.now.Add(3 * time.Second)
+	lead.fire("PermissionRequest", modAskOf(lead))
 	st := lead.state()
-	if r := st.RelayIssued(); r == nil || !r.Asked {
+	if r := st.RelayIssued(); r == nil || !r.Asked || !r.AskedAt.Equal(lead.now) {
 		t.Fatalf("not asked: %+v", st.Relay)
 	}
 	if d, _ := st.Run.Dialogs.Front(); d.Kind != "relay" {
 		t.Errorf("the dialog is %q, not baton's own", d.Kind)
 	}
-	if got := noticeKinds(st); len(got) != 1 || got[0] != "proposal" || !strings.HasPrefix(st.Run.Notices[0].Text, "worker P2: the real one drifts") {
+	if got := noticeKinds(st); len(got) != 1 || got[0] != "proposal" || !strings.HasPrefix(st.Run.Notices[0].Text, "the agent on P2: the real one drifts") {
 		t.Errorf("notices %+v", st.Run.Notices)
 	}
 	if !lead.logged("relay_asked", map[string]any{"phase": "P2", "decision": "P2.d1"}) {
 		t.Errorf("events:\n%s", lead.eventLog())
 	}
-	if out := lead.fire("Stop", map[string]any{}); out["decision"] == "block" && strings.Contains(feedback(out), "worker on P2") {
-		t.Errorf("asked, yet the stop was refused for it: %v", out)
-	}
 }
 
-// The answer is found by the question's exact text and recorded for the coordinator to apply; the lead
-// is told it has nothing to do about it, and the human what becomes of it.
-func TestAWorkersQuestionAnswered(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		r      state.Relay
-		answer string
-		auto   bool
-		by     string
-		say    string
-		tell   string
-		paused bool
-	}{
-		{"go ahead", relayProposal, "Go ahead", false, state.ByHuman, "baton: you chose Go ahead — the worker on P2 does it", "The human answered the question of the worker on P2", false},
-		{"nobody answered", relayProposal, "Go ahead", true, state.ByTimeout, "baton: nobody answered by", "so baton chose Go ahead for the human", false},
-		{"wait for me", relayProposal, "Wait for me", false, state.ByHuman, "baton: the worker on P2 waits for you — answer it in its session: baton view P2", "nothing about it is yours to do", false},
-		{"pause", relayProposal, "Pause baton", false, state.ByHuman, "baton: paused — the human is driving", "baton is paused", true},
-		{"own words", relayProposal, "use the staging clock", false, state.ByHuman, "baton: your answer went to the worker on P2", "The human answered", false},
-		{"baton's key, the human's choice", relayProposal, "Wait for me", true, state.ByHuman, "baton: the worker on P2 waits for you", "The human answered", false},
-		{"a block, continue", state.Relay{Kind: state.RelayBlocked, Since: time.Unix(1, 0), Because: "need a key"}, "Continue", false, state.ByHuman,
-			"baton: the worker on P2 carries on", "The human answered", false},
-		{"a block nobody answered", state.Relay{Kind: state.RelayBlocked, Since: time.Unix(1, 0), Because: "need a key"}, "Wait for me", true, state.ByTimeout,
-			"baton: nobody answered, so the worker on P2 waits for you", "so baton chose Wait for me", false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, lead, _ := newWorker(t)
-			queue(lead, c.r)
-			lead.fire("PostToolUse", bash("ls"))
-			q := relayAsk(lead)
-			lead.fire("PermissionRequest", q)
-			if c.auto {
-				lead.set(func(st *state.State) { st.Run.Dialogs[0].AutoAnswered = lead.now })
-			}
-			lead.now = lead.now.Add(time.Minute)
-			out := lead.fire("PostToolUse", answer(q, c.answer))
-			st := lead.state()
-			r := st.Relay[0]
-			if r.Answered == nil || r.Answered.By != c.by || r.Answered.Answer != c.answer || !r.Answered.At.Equal(lead.now) || !r.Applied.IsZero() {
-				t.Fatalf("answered %+v", r.Answered)
-			}
-			if !strings.Contains(say(out), c.say) || !strings.Contains(feedback(out), c.tell) {
-				t.Errorf("said %q, told %q", say(out), feedback(out))
-			}
-			if (st.Mode == state.ModePaused) != c.paused {
-				t.Errorf("mode %s", st.Mode)
-			}
-			if humanAt := st.Run.HumanAt.Equal(lead.now); humanAt != (c.by == state.ByHuman) {
-				t.Errorf("the human took part: %v", humanAt)
-			}
-			if !lead.logged("relay_answered", map[string]any{"phase": "P2", "answer": c.answer, "by": c.by}) {
-				t.Errorf("events:\n%s", lead.eventLog())
-			}
-			if len(st.Unapplied()) != 1 || st.RelayIssued() != nil {
-				t.Errorf("unapplied %+v; still issued %+v", st.Unapplied(), st.RelayIssued())
-			}
-		})
-	}
-}
-
-// A question settled meanwhile (in the worker's own session, or as the worker went) is left as it was,
-// whatever the human answers in the lead.
-func TestALateAnswerChangesNothing(t *testing.T) {
+// The human's answer closes the mod's dialog, and reaches no model: the mod reports it, and the host
+// applies it. A result due meanwhile waits for the lead's own next call.
+func TestTheModsQuestionAnsweredReachesNoModel(t *testing.T) {
 	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	lead.fire("PostToolUse", bash("ls"))
-	q := relayAsk(lead)
-	lead.set(func(st *state.State) { state.AnswerRelay(st.FrontRelay(), state.ByWithdrawn, "", lead.now) })
-	out := lead.fire("PostToolUse", answer(q, "Go ahead"))
-	if r := lead.state().Relay[0]; r.Answered.By != state.ByWithdrawn {
-		t.Errorf("answered %+v", r.Answered)
-	}
-	if !strings.Contains(feedback(out), "was settled already") || !strings.Contains(say(out), "your answer changed nothing") {
-		t.Errorf("out %v", out)
-	}
-}
-
-// A question whose dialog went away unanswered waits for the human in the worker's own session.
-func TestAWorkersQuestionThatWentAway(t *testing.T) {
-	for _, event := range []string{"PostToolUseFailure", "Stop", "UserPromptSubmit"} {
-		t.Run(event, func(t *testing.T) {
-			_, lead, _ := newWorker(t)
-			queue(lead, relayProposal)
-			lead.fire("PostToolUse", bash("ls"))
-			q := relayAsk(lead)
-			lead.fire("PermissionRequest", q)
-			in := map[string]any{}
-			switch event {
-			case "PostToolUseFailure":
-				in = q
-			case "UserPromptSubmit":
-				lead.set(func(st *state.State) { st.Run.Dialogs = nil }) // Esc
-				in = map[string]any{"prompt": "never mind"}
-			default:
-				lead.set(func(st *state.State) { st.Run.Dialogs = nil })
-			}
-			lead.fire(event, in)
-			if r := lead.state().Relay[0]; r.Answered == nil || r.Answered.By != state.ByDeclined {
-				t.Fatalf("answered %+v", r.Answered)
-			}
-			if !lead.logged("relay_answered", map[string]any{"phase": "P2", "by": state.ByDeclined}) {
-				t.Errorf("events:\n%s", lead.eventLog())
-			}
-			// The human is told at the lead's next hook.
-			if out := lead.fire("PostToolUse", bash("ls")); !strings.Contains(say(out), "the question of the worker on P2 went unanswered — it waits for you in its session: baton view P2") {
-				t.Errorf("announced %q", say(out))
-			}
-		})
-	}
-}
-
-// A lead that will not put a worker's question to the human is asked MaxStopBlocks times: then the
-// question waits for the human in the worker's session, they are pushed about it, and the lead's run
-// goes on.
-func TestALeadThatWillNotAskIt(t *testing.T) {
-	_, lead, _ := newWorker(t)
-	queue(lead, relayProposal)
-	for i := range MaxStopBlocks {
-		if out := lead.fire("Stop", map[string]any{}); !strings.Contains(feedback(out), "You stopped, but put the question of the worker on P2 to the human first") {
-			t.Fatalf("stop %d: %v", i+1, out)
-		}
-	}
-	out := lead.fire("Stop", map[string]any{})
-	if strings.Contains(feedback(out), "worker on P2") || !strings.Contains(say(out), "answer it in its session: baton view P2") {
-		t.Fatalf("stop %d: %v", MaxStopBlocks+1, out)
+	issue(lead, relayProposal)
+	q := modAskOf(lead)
+	lead.fire("PermissionRequest", q)
+	lead.finished("P1", state.JobFailed)
+	done := answer(q, "Go ahead")
+	done["tool_use_id"] = q["tool_use_id"]
+	if out := lead.fire("PostToolUse", done); len(out) != 0 {
+		t.Errorf("the mod's question's result said %v", out)
 	}
 	st := lead.state()
-	if r := st.Relay[0]; r.Answered == nil || r.Answered.By != state.ByDeclined || st.Run.Escalation != nil {
-		t.Errorf("answered %+v, escalation %+v", r.Answered, st.Run.Escalation)
+	if st.Run.Dialogs.AnyOpen() {
+		t.Errorf("dialogs %+v: the question's is still open", st.Run.Dialogs)
 	}
-	if got := noticeKinds(st); len(got) != 1 || got[0] != "relay" {
-		t.Errorf("notices %v", got)
+	if r := st.RelayIssued(); r == nil || r.Answered != nil {
+		t.Errorf("relay %+v: the hook answered it, not the mod's report", st.Relay)
+	}
+	if out := lead.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "Job j1") {
+		t.Errorf("the result after the question: %v", out)
 	}
 }
 
-// A worker whose block or review waits for the human goes on once they write in its own session: their
-// message is the answer.
-func TestAWorkerAnsweredInItsOwnSession(t *testing.T) {
+// How long a question of baton's may wait before the mod answers it, and with what: the deadline of a
+// timed proposal, a minute on screen at least, the context question's timeout; nothing for a question
+// only the human answers, or for none of baton's.
+func TestBound(t *testing.T) {
+	t0 := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	q := decide.ProposalQuestion("gpg signing times out", "commit P0 unsigned", t0.Add(5*time.Minute))
+	timed := func(st *state.State) {
+		state.AddProposal(st, state.Decision{What: "commit P0 unsigned", Because: "gpg signing times out", Undo: "x", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
+	}
+	front := func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal", Front: t0})
+	}
+	behind := func(st *state.State) {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
+		front(st)
+	}
+	relay := func(st *state.State) {
+		state.QueueRelay(st, state.Relay{Phase: "P2", Kind: state.RelayBlocked, Since: t0, Because: "need a key"}, t0)
+		state.IssueRelay(st.FrontRelay(), "baton: the agent on P2 is blocked: need a key.", 4, "inst", t0.Add(5*time.Minute), t0)
+	}
+	rq := "baton: the agent on P2 is blocked: need a key."
 	for _, c := range []struct {
-		name string
-		set  func(st *state.State, now time.Time)
-		tell string
+		name     string
+		set      []func(*state.State)
+		question string
+		asked    time.Duration // after t0
+		now      time.Duration // after t0
+		want     Wait
 	}{
-		{"blocked", func(st *state.State, now time.Time) { state.SetBlocked(st, "need a key", now) }, "their message answers your block (need a key)"},
-		{"a review", func(st *state.State, now time.Time) { state.DueReview(st, "P2", now) }, "their message answers the review of the decisions P2 made without them"},
+		{"a timed proposal before its deadline", []func(*state.State){timed, front}, q.Text, 0, time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
+		{"near its deadline", []func(*state.State){timed, front}, q.Text, 0, 4*time.Minute + 50*time.Second, Wait{For: 10 * time.Second, Answer: "Go ahead"}},
+		{"at its deadline", []func(*state.State){timed, front}, q.Text, 0, 5 * time.Minute, Wait{Answer: "Go ahead"}},
+		{"at its deadline, behind another dialog", []func(*state.State){timed, behind}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
+		{"not on record yet", []func(*state.State){timed}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
+		{"an untimed proposal", []func(*state.State){func(st *state.State) {
+			state.AddProposal(st, state.Decision{What: "push", Because: "b", Undo: "x", Untimed: "push", Question: q.Text}, t0)
+		}, front}, q.Text, 0, time.Hour, Wait{}},
+		{"the context question", []func(*state.State){func(st *state.State) { st.Run.WarnQuestion = "baton: the context holds a lot. Checkpoint now?" }, func(st *state.State) {
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: the context holds a lot. Checkpoint now?"), Since: t0, Front: t0})
+		}}, "baton: the context holds a lot. Checkpoint now?", 0, 20 * time.Minute, Wait{Answer: "Keep going"}},
+		{"an agent's question at its deadline", []func(*state.State){relay}, rq, time.Minute, 5 * time.Minute, Wait{Answer: "Wait for me"}},
+		{"an agent's question asked late", []func(*state.State){relay}, rq, 4*time.Minute + 30*time.Second, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Wait for me"}},
+		{"an agent's question settled meanwhile", []func(*state.State){relay, func(st *state.State) {
+			state.AnswerRelay(st.FrontRelay(), state.ByWithdrawn, "", t0)
+		}}, rq, 0, time.Minute, Wait{Answer: "Wait for me"}},
+		{"none of baton's", []func(*state.State){timed, front}, "baton: lunch?", 0, time.Hour, Wait{}},
+		{"the plan paused", []func(*state.State){timed, front, func(st *state.State) { st.Mode = state.ModePaused }}, q.Text, 0, time.Hour, Wait{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w, _, _ := newWorker(t)
-			w.fire("SessionStart", map[string]any{"source": "startup"})
-			w.set(func(st *state.State) { c.set(st, w.now) })
-			w.fire("Stop", map[string]any{})
-			w.now = w.now.Add(time.Minute)
-			out := w.fire("UserPromptSubmit", map[string]any{"prompt": "use the spare key in the vault"})
-			if !strings.Contains(additionalContext(out), c.tell) {
-				t.Errorf("told %q", additionalContext(out))
+			st := state.New()
+			st.Mode, st.Current = state.ModeRunning, "P0"
+			for _, set := range c.set {
+				set(&st)
 			}
-			if st := w.state(); st.Blocked != nil || st.ReviewDue != "" || st.Run.Escalation != nil || st.Mode != state.ModeRunning {
-				t.Errorf("still waiting: blocked %+v, review %q, escalation %+v", st.Blocked, st.ReviewDue, st.Run.Escalation)
-			}
-			if !w.logged("resumed", map[string]any{"in": "worker session"}) {
-				t.Errorf("events:\n%s", w.eventLog())
+			if got := bound(&st, c.question, t0.Add(c.asked), t0.Add(c.now), 20*time.Minute); got != c.want {
+				t.Errorf("waits %+v, want %+v", got, c.want)
 			}
 		})
 	}
+
+	// In front, a question's clock runs from when baton first saw it there.
+	st := state.New()
+	st.Mode, st.Current = state.ModeRunning, "P0"
+	timed(&st)
+	st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
+	st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal"})
+	bound(&st, q.Text, t0, t0.Add(6*time.Minute), 20*time.Minute)
+	st.Run.Dialogs.CloseExact("a1", "Bash", "k")
+	if w := bound(&st, q.Text, t0, t0.Add(7*time.Minute), 20*time.Minute); w.For != 30*time.Second {
+		t.Errorf("first in front past its deadline: waits %+v, want a minute on screen", w)
+	}
+	if d, _ := st.Run.Dialogs.Front(); !d.Front.Equal(t0.Add(7 * time.Minute)) {
+		t.Errorf("front since %s", d.Front)
+	}
+	if w := bound(&st, q.Text, t0, t0.Add(8*time.Minute), 20*time.Minute); w != (Wait{Answer: "Go ahead"}) {
+		t.Errorf("a minute in front: waits %+v", w)
+	}
 }
 
-// Every new path of the hooks around a worker's question fails open: a panic in one exits 0 and writes
-// nothing. (A call held until the question is asked changes nothing and logs nothing, inside a handler
-// whose panics TestPanicFailsOpenForEveryEvent covers.)
+// A question the mod answered at its deadline is recorded as its result would have been: a proposal of
+// the lead's own goes ahead, by baton, and the model is told at its next call; the context question keeps
+// going; an agent's question only closes its dialog (the mod's answered report settles it). Each once.
+func TestSettle(t *testing.T) {
+	f := newFixture(t, true)
+	f.set(func(st *state.State) { st.Mode, st.Current = state.ModeRunning, "P0" })
+	in := f.propose(false)
+	f.fire("PermissionRequest", in)
+	q := in["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string)
+	own, err := Settle(f.store, q, "Go ahead", f.now, f.env(f.inst))
+	if err != nil || !own {
+		t.Fatalf("settled %v, %v", own, err)
+	}
+	st := f.state()
+	if p := st.Decisions[len(st.Decisions)-1]; p.ID != "d1" || p.Resolved == nil || p.Resolved.By != state.ByTimeout {
+		t.Fatalf("decisions %+v", st.Decisions)
+	}
+	if st.Run.Dialogs.AnyOpen() || len(st.Run.Announce) == 0 || !strings.Contains(st.Run.Announce[len(st.Run.Announce)-1], "nobody answered") {
+		t.Errorf("dialogs %+v, announce %q", st.Run.Dialogs, st.Run.Announce)
+	}
+	if !f.logged("proposal_resolved", map[string]any{"id": "d1", "by": state.ByTimeout, "via": "mod"}) {
+		t.Errorf("events:\n%s", f.eventLog())
+	}
+	if out := f.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "Nobody answered your proposal d1") {
+		t.Errorf("told at the next call: %v", out)
+	}
+	if own, err := Settle(f.store, q, "Go ahead", f.now, f.env(f.inst)); own || err != nil {
+		t.Errorf("settled again: %v, %v", own, err)
+	}
+
+	f.set(func(st *state.State) { st.Run.WarnQuestion = "baton: the context holds a lot. Checkpoint now?" })
+	if own, _ := Settle(f.store, "baton: the context holds a lot. Checkpoint now?", "Keep going", f.now, f.env(f.inst)); !own || f.state().Run.WarnQuestion != "" {
+		t.Errorf("the context question: own %v, %q", own, f.state().Run.WarnQuestion)
+	}
+
+	_, lead, _ := newWorker(t)
+	issue(lead, relayProposal)
+	aq := modAskOf(lead)
+	lead.fire("PermissionRequest", aq)
+	st = lead.state()
+	text := st.RelayIssued().Question
+	if own, err := Settle(lead.store, text, "Go ahead", lead.now, lead.env(lead.inst)); !own || err != nil {
+		t.Fatalf("an agent's question: %v, %v", own, err)
+	}
+	if st = lead.state(); st.Run.Dialogs.AnyOpen() || st.RelayIssued() == nil {
+		t.Errorf("relay %+v, dialogs %+v", st.Relay, st.Run.Dialogs)
+	}
+}
+
+// Every hook path of the mod's question fails open.
 func TestTheRelayHooksFailOpen(t *testing.T) {
 	for _, c := range []struct {
 		name, event string
 		in          func(lead *fixture) map[string]any
-		worker      bool
 	}{
-		{"given mid-turn", "PostToolUse", func(*fixture) map[string]any { return bash("ls") }, false},
-		{"given at the stop", "Stop", func(*fixture) map[string]any { return map[string]any{} }, false},
-		{"given with the host's line", "UserPromptSubmit", func(*fixture) map[string]any { return map[string]any{"prompt": decide.RelayTyped("P2")} }, false},
-		{"asked", "PermissionRequest", func(lead *fixture) map[string]any { lead.fire("PostToolUse", bash("ls")); return relayAsk(lead) }, false},
+		{"asked", "PreToolUse", modAskOf},
+		{"drawn", "PermissionRequest", modAskOf},
 		{"answered", "PostToolUse", func(lead *fixture) map[string]any {
-			lead.fire("PostToolUse", bash("ls"))
-			q := relayAsk(lead)
+			q := modAskOf(lead)
 			lead.fire("PermissionRequest", q)
-			return answer(q, "Go ahead")
-		}, false},
-		{"answered in the worker's session", "UserPromptSubmit", func(*fixture) map[string]any { return map[string]any{"prompt": "go on"} }, true},
+			out := answer(q, "Go ahead")
+			out["tool_use_id"] = q["tool_use_id"]
+			return out
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w, lead, _ := newWorker(t)
-			queue(lead, relayProposal)
-			f := lead
-			if c.worker {
-				f = w
-				w.set(func(st *state.State) { state.SetBlocked(st, "need a key", w.now) })
-			}
-			in := c.in(f)
-			open := func(ctx Context) (*state.Store, error) {
-				s, err := OpenRun(f.clock)(ctx)
-				if s != nil {
-					s.Now = func() time.Time { panic("boom") }
-				}
-				return s, err
-			}
-			in["hook_event_name"], in["session_id"] = c.event, f.sid
+			_, lead, _ := newWorker(t)
+			issue(lead, relayProposal)
+			in := c.in(lead)
+			open := func(ctx Context) (*state.Store, error) { panic("boom") }
+			in["hook_event_name"], in["session_id"] = c.event, lead.sid
 			raw, _ := json.Marshal(in)
 			var out, errb bytes.Buffer
-			code := Dispatch(c.event, bytes.NewReader(raw), &out, &errb, f.env(f.inst), f.clock, Handlers(Deps{Open: open}))
+			code := Dispatch(c.event, bytes.NewReader(raw), &out, &errb, lead.env(lead.inst), lead.clock, Handlers(Deps{Open: open}))
 			if code != 0 || out.Len() != 0 || !strings.Contains(errb.String(), "failed open") {
 				t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 			}

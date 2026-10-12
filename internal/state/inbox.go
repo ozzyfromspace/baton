@@ -17,7 +17,7 @@ type Message struct {
 // Message kinds.
 const (
 	MessageLand   = "land"   // a worker's work did not land, and the worker must act on why
-	MessageAnswer = "answer" // the human answered a worker's question, which the lead session put to them
+	MessageAnswer = "answer" // the human answered a question of baton's, or baton did for them at its deadline
 	MessageRewind = "rewind" // the human rewound the conversation past what baton recorded, which stands
 )
 

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// A worker's question joins the relay queue once, however often its commands and hooks queue it, and
+// A phase agent's question joins the relay queue once, however often its commands and hooks queue it, and
 // even once it is answered; a new question of the same phase queues after it.
 func TestQueueRelay(t *testing.T) {
 	st := New()
@@ -38,9 +38,9 @@ func TestQueueRelay(t *testing.T) {
 	}
 }
 
-// The front question goes to the lead only while the plan runs, with no compaction owed or underway, and
-// nothing of the lead's own waiting on the human; once given, it stays the one asked until it is
-// answered, and the next one waits behind it.
+// The front question is issued to the mod only while the plan runs and nothing of the lead's own waits on
+// the human (a compaction of the lead does not hold it: the mod asks it, not the lead's model); once
+// issued, it stays the one asked until it is answered, and the next one waits behind it.
 func TestRelayDue(t *testing.T) {
 	running := func() State {
 		st := New()
@@ -56,8 +56,8 @@ func TestRelayDue(t *testing.T) {
 	}{
 		{"running", func(*State) {}, true},
 		{"paused", func(st *State) { st.Mode = ModePaused }, false},
-		{"a boundary owed", func(st *State) { st.BoundaryOwed = true }, false},
-		{"a compaction queued", func(st *State) { st.Run.Compaction.Queue("checkpoint", t0) }, false},
+		{"a boundary owed", func(st *State) { st.BoundaryOwed = true }, true},
+		{"a compaction queued", func(st *State) { st.Run.Compaction.Queue("checkpoint", t0) }, true},
 		{"the lead escalated", func(st *State) { st.Run.Escalation = &Escalation{Kind: "stalled", Since: t0} }, false},
 		{"the lead is blocked", func(st *State) { st.Blocked = &Block{Reason: "x", Since: t0} }, false},
 		{"the lead's own proposal", func(st *State) { AddProposal(st, Decision{What: "x"}, t0) }, false},
@@ -68,29 +68,25 @@ func TestRelayDue(t *testing.T) {
 	} {
 		st := running()
 		c.set(&st)
-		if got := st.RelayDue() != nil; got != c.due || (st.RelayToAsk() != nil) != c.due {
+		if got := st.RelayDue() != nil; got != c.due {
 			t.Errorf("%s: due %v, want %v", c.name, got, c.due)
 		}
 	}
 
 	st := running()
 	r := st.RelayDue()
-	if r == nil || r.Phase != "P3" || st.RelayIssued() != nil || st.RelayUnasked() != nil {
+	if r == nil || r.Phase != "P3" || st.RelayIssued() != nil {
 		t.Fatalf("front %+v; issued %v", r, st.RelayIssued())
 	}
-	IssueRelay(r, "baton: worker P3: q", t0.Add(5*time.Minute), t0)
-	if st.RelayDue() != nil || st.RelayIssued() != r || st.RelayUnasked() != r || st.RelayToAsk() != r {
-		t.Fatal("given: it is the one asked, and nothing else is due")
+	IssueRelay(r, "baton: the agent on P3: q", 7, "inst", t0.Add(5*time.Minute), t0)
+	if st.RelayDue() != nil || st.RelayIssued() != r || r.Ask != 7 || r.Instance != "inst" {
+		t.Fatalf("issued %+v: it is the one asked, and nothing else is due", *r)
 	}
 	st.Run.Escalation = &Escalation{Kind: "stalled", Since: t0}
 	if st.RelayIssued() != r {
-		t.Fatal("a question of the lead's own came after it was given: it still waits for its answer")
+		t.Fatal("a question of the lead's own came after it was issued: it still waits for its answer")
 	}
 	st.Run.Escalation = nil
-	r.Asked = true
-	if st.RelayUnasked() != nil || st.RelayToAsk() != nil || st.RelayIssued() != r {
-		t.Fatal("asked")
-	}
 	AnswerRelay(r, ByHuman, "Go ahead", t0.Add(time.Minute))
 	if next := st.RelayDue(); next == nil || next.Phase != "P4" {
 		t.Fatalf("after the answer, next %+v", next)
@@ -114,7 +110,7 @@ func btoi(b bool) int {
 	return 0
 }
 
-// A worker's question waits in its sub-run while its proposal is unresolved, or while its block or its
+// A phase agent's question waits in its sub-run while its proposal is unresolved, or while its block or its
 // review is still the one it asked about.
 func TestWaits(t *testing.T) {
 	st := AttachWorker(New(), "P3")
@@ -138,5 +134,38 @@ func TestWaits(t *testing.T) {
 	Resume(&st)
 	if st.Waits(p) || st.Waits(b) || st.Waits(v) {
 		t.Error("answered, yet waiting")
+	}
+}
+
+// A question answered and applied whose phase still waits on the human is asked again at the end of the
+// queue, afresh; one not answered yet, or not applied yet, stays as it is.
+func TestAskAgain(t *testing.T) {
+	st := New()
+	p := Relay{Phase: "P3", Kind: RelayProposal, Decision: "P3.d1"}
+	b := Relay{Phase: "P4", Kind: RelayBlocked, Since: t0}
+	QueueRelay(&st, p, t0)
+	QueueRelay(&st, b, t0)
+	if AskAgain(&st, p, t0) {
+		t.Fatal("asked again before it was answered")
+	}
+	q := st.RelayOf(p)
+	IssueRelay(q, "baton: the agent on P3: q", 3, "inst", t0.Add(5*time.Minute), t0)
+	q.Asked, q.AskedAt = true, t0
+	AnswerRelay(q, ByHuman, "Wait for me", t0.Add(time.Minute))
+	if AskAgain(&st, p, t0) {
+		t.Fatal("asked again before its answer was applied")
+	}
+	q.Applied = t0.Add(time.Minute)
+	if !AskAgain(&st, p, t0.Add(time.Hour)) {
+		t.Fatal("not asked again")
+	}
+	if len(st.Relay) != 2 || !st.Relay[0].Same(b) || !st.Relay[1].Same(p) {
+		t.Fatalf("queue %+v: the question asked again goes last", st.Relay)
+	}
+	if r := st.Relay[1]; r.Answered != nil || !r.Applied.IsZero() || !r.Issued.IsZero() || r.Question != "" || r.Asked || r.Ask != 0 || r.Instance != "" || !r.Queued.Equal(t0.Add(time.Hour)) {
+		t.Errorf("asked again %+v: it is asked afresh", r)
+	}
+	if AskAgain(&st, Relay{Phase: "P9", Kind: RelayBlocked}, t0) {
+		t.Error("a question never queued asked again")
 	}
 }

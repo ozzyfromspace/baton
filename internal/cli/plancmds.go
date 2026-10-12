@@ -529,7 +529,7 @@ func printWaitingOnYou(io IO, st *state.State) {
 		fmt.Fprintf(io.Out, "proposal %s: %s\n  because: %s\n", p.ID, p.What, p.Because)
 		switch {
 		case p.Relayed:
-			fmt.Fprintln(io.Out, "  the lead session puts it to you, and baton gives this worker your answer")
+			fmt.Fprintln(io.Out, "  baton puts it to you in the lead's terminal, and gives this agent your answer")
 		case p.Untimed != "":
 			fmt.Fprintf(io.Out, "  waits for you: baton will not let it go ahead without you (%s)\n", p.Untimed)
 		case p.Asked:
@@ -548,8 +548,8 @@ func printWaitingOnYou(io IO, st *state.State) {
 	}
 }
 
-// printRelay lists the questions the run's workers have for the human: those the lead session puts to
-// them, one at a time, and those left for them in a worker's own session, which they answer there.
+// printRelay lists the questions the run's phase agents have for the human: those baton puts to them, one
+// at a time, and those that wait for them, which /baton run asks them again.
 func printRelay(io IO, s *state.Store, st state.State) {
 	var open, here []string
 	for i, r := range st.Relay {
@@ -560,9 +560,9 @@ func printRelay(io IO, s *state.Store, st state.State) {
 			case r.Asked && r.Timed():
 				where = "asked; it goes ahead at " + r.Deadline.Local().Format("15:04") + " unless you answer"
 			case r.Asked:
-				where = "asked; if you do not answer, it waits for you in the worker's own session"
+				where = "asked; if you do not answer, it waits for you"
 			case !r.Issued.IsZero():
-				where = "Claude has yet to put it to you"
+				where = "asked as soon as no other dialog is open"
 			case st.FrontRelay() == &st.Relay[i]:
 				where = "next"
 			}
@@ -572,16 +572,16 @@ func printRelay(io IO, s *state.Store, st state.State) {
 		}
 	}
 	if len(open) > 0 {
-		fmt.Fprintln(io.Out, "questions from workers (the lead session puts them to you, one at a time):")
+		fmt.Fprintln(io.Out, "questions from phase agents (baton puts them to you, one at a time):")
 		fmt.Fprintln(io.Out, strings.Join(open, "\n"))
 	}
 	if len(here) > 0 {
-		fmt.Fprintln(io.Out, "waiting for you in a worker's own session (baton view <phase>, in another terminal):")
+		fmt.Fprintln(io.Out, "waiting for you (/baton run asks you again):")
 		fmt.Fprintln(io.Out, strings.Join(here, "\n"))
 	}
 }
 
-// relayWhat says what a worker's question is about.
+// relayWhat says what a phase agent's question is about.
 func relayWhat(r state.Relay) string {
 	switch r.Kind {
 	case state.RelayProposal:
@@ -592,8 +592,8 @@ func relayWhat(r state.Relay) string {
 	return "blocked: " + r.Because
 }
 
-// leftHere reports worker question r, answered, left for the human in the worker's own session, where it
-// still waits.
+// leftHere reports phase agent question r, answered, that still waits for the human in the agent's
+// sub-run (/baton run asks them again).
 func leftHere(s *state.Store, st state.State, r state.Relay) bool {
 	if o := decide.RelayOutcome(r, r.Answered.Answer); o != decide.OutcomeWait && o != decide.OutcomePause {
 		return false
@@ -1140,7 +1140,7 @@ func cmdRun(args []string, io IO) int {
 			pl.Title, st.Mode, phaseLabel(pl, st.Current), name, name)
 		return 0
 	}
-	fresh := takeUp(io, s)
+	fresh := append(takeUp(io, s), askAgain(io, s)...)
 	for _, line := range fresh {
 		fmt.Fprintln(io.Out, line)
 	}
@@ -1151,6 +1151,36 @@ func cmdRun(args []string, io IO) int {
 		return 0
 	}
 	return resume(io, s, pl, st)
+}
+
+// askAgain puts each question of the run's phase agents that waits for the human back in the queue, to be
+// asked again (state.AskAgain): nobody answered it with a way on (Wait for me, Pause baton, none), and its
+// phase still waits on it. It returns a line for the human about each.
+func askAgain(io IO, s *state.Store) []string {
+	st, err := s.Load()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range st.Relay {
+		if r.Answered == nil || !leftHere(s, st, r) { // AskAgain asks it again only once its answer was applied
+			continue
+		}
+		again := false
+		s.Update(func(st *state.State) error {
+			again = state.AskAgain(st, r, io.Now())
+			return nil
+		})
+		if again {
+			fields := map[string]any{"phase": r.Phase, "type": r.Kind}
+			if r.Decision != "" {
+				fields["decision"] = r.Decision
+			}
+			s.Event("relay_again", fields)
+			out = append(out, decide.RelayAgain(r.Phase))
+		}
+	}
+	return out
 }
 
 // takeUp asks for a fresh phase agent on each of the run's phases that waits for the human because of its

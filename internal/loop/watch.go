@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -40,13 +41,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{} // the account waits on its usage limit, and so does every session of the run
 		return
 	}
-	if l.relayLine(v, st, in) || l.deliver(v, st, in) {
-		l.idleNudged = time.Time{}
-		return
-	}
-	if p := st.PendingProposal(); p != nil && p.Relayed {
-		// A worker waits on the human's answer to its proposal, which the lead session puts to them, and
-		// which wakes it: nothing is stalled.
+	if l.deliver(v, st, in) {
 		l.idleNudged = time.Time{}
 		return
 	}
@@ -128,7 +123,7 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 		}
 	}
 	if _, alone := st.Run.Dialogs.Only(); alone && d.Kind == "relay" && relayOnScreen(st, d.Key) != nil {
-		return // a worker's question: baton answers it if nobody does, and the lead goes on
+		return // a phase agent's question: baton answers it if nobody does, and the lead goes on
 	}
 	due := []time.Duration{l.Timing.DialogNotify}
 	for _, r := range Reminders {
@@ -176,6 +171,9 @@ func agentPhase(st state.State, agent string) string {
 // something it can work around (docs/escalation.md). An untimed proposal is never answered: only the
 // human can let it go ahead. The answer arrives through the usual hook.
 //
+// It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
+// baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog.
+//
 // A key typed into the wrong dialog can approve something nobody approved (in a permission prompt, 2 is
 // "Yes, and always allow"), so three layers keep it out of anyone else's (docs/research/escalation.md):
 //   - baton's question must be the only dialog open, so nothing can be on screen in front of it;
@@ -189,7 +187,7 @@ func agentPhase(st state.State, agent string) string {
 // per question.
 func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) {
 	d, alone := st.Run.Dialogs.Only()
-	if !alone || !d.AutoAnswered.IsZero() {
+	if !alone || !d.AutoAnswered.IsZero() || l.modSettles() {
 		return
 	}
 	var due time.Time
@@ -212,22 +210,6 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		// the wake (the minute alone does that).
 		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
 		fields["id"] = p.ID
-	case "relay":
-		// A worker's question has an answer for nobody answering, whatever it is (decide.RelayOptions): a
-		// timed proposal goes ahead at the time its question names, and anything else waits for the human
-		// in the worker's own session, so that the lead never waits on it. Timed like a proposal.
-		r := relayOnScreen(st, d.Key)
-		if r == nil || r.Deadline.IsZero() {
-			return
-		}
-		if !l.alone.Same(d) {
-			l.alone, l.aloneAt = d, v.Now
-		}
-		due = latest(r.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
-		fields["phase"], fields["type"] = r.Phase, r.Kind
-		if r.Decision != "" {
-			fields["id"] = r.Decision
-		}
 	default:
 		return
 	}
@@ -250,7 +232,17 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 const ownAnswerKey = "3"
 
 // MinProposalWait is the least time a proposal's question is on screen, alone, before baton answers it.
-const MinProposalWait = time.Minute
+const MinProposalWait = decide.MinWait
+
+// modSettles reports that baton's mod in the claude this host runs said hello: it settles baton's
+// questions at their deadlines itself. Once it has, it does for the rest of this host's life.
+func (l *Loop) modSettles() bool {
+	if !l.modAnswers {
+		rec, err := bridge.Open(l.Store.Dir, l.Store.Now, nil).Peek()
+		l.modAnswers = err == nil && rec.Hello.Ready(l.Store.Instance)
+	}
+	return l.modAnswers
+}
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
 // login, billing, a model that does not exist, a request Claude Code refuses to send, a turn the model's
@@ -290,7 +282,6 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 				l.escalate(kind, decide.CannotGoOn(l.stopped(st), why))
 			}
 		}
-		l.leaveRelays(v.Now)
 		return
 	}
 	var wait time.Duration

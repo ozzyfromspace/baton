@@ -8,7 +8,7 @@ import (
 
 // A worker is a phase agent: an agent of the lead session on one phase of a run, in a git worktree of its
 // own, while the lead works on other phases in the human's checkout (docs/research/visible-workers.md).
-// Its questions reach the human through the lead, and its work lands on the run's branch under the lead.
+// baton asks the human its questions, and its work lands on the run's branch under the lead.
 // These are the words it reads about all that. None of them names the project's checkout, which is the
 // lead's.
 
@@ -174,7 +174,7 @@ func WorkerPlanRefused(phase string) string {
 		"Carry on with %s as the plan describes it.", phase, phase)
 }
 
-// WorkerProposed acknowledges a worker's proposal id, which the lead session puts to the human. untimed
+// WorkerProposed acknowledges a worker's proposal id, which baton puts to the human. untimed
 // says why it has no deadline ("" for a timed one); a timed one goes ahead timeout after the human is
 // asked.
 func WorkerProposed(id, untimed string, timeout time.Duration) string {
@@ -182,20 +182,20 @@ func WorkerProposed(id, untimed string, timeout time.Duration) string {
 	if untimed != "" {
 		how = "It has no deadline: " + untimed + ", so only the human can let it go ahead."
 	}
-	return fmt.Sprintf("proposal %s recorded. baton puts it to the human through the lead session, and gives you their answer here. %s "+
+	return fmt.Sprintf("proposal %s recorded. baton puts it to the human, and gives you their answer here. %s "+
 		"Until then, do not do what you proposed: keep working on what does not depend on it, or, with nothing else to do, commit your work and end your turn.", id, how)
 }
 
 // WorkerAwaits is why a worker may not move on (done, blocked, another proposal) while its proposal id,
 // to do what, waits for the human's answer.
 func WorkerAwaits(id, what string) string {
-	return fmt.Sprintf("your proposal %s (%s) waits for the human's answer, which baton gets through the lead session and gives you here. "+
+	return fmt.Sprintf("your proposal %s (%s) waits for the human's answer, which baton gives you here. "+
 		"Until then, keep working on what does not depend on it, or end your turn.", id, what)
 }
 
-// WorkerBlocked acknowledges a worker's block on phase, which the lead session puts to the human.
+// WorkerBlocked acknowledges a worker's block on phase, which baton puts to the human.
 func WorkerBlocked(phase string) string {
-	return fmt.Sprintf("recorded. baton puts it to the human through the lead session; it stops only %s, while the lead session and any other workers carry on. "+
+	return fmt.Sprintf("recorded. baton puts it to the human; it stops only %s, while the lead session and any other workers carry on. "+
 		"Their answer reaches you here. End your turn now.", phase)
 }
 

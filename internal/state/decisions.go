@@ -42,8 +42,8 @@ type Decision struct {
 	Untimed  string    `json:"untimed,omitempty"`
 	// Asked: the question reached the human's screen.
 	Asked bool `json:"asked,omitempty"`
-	// Relayed: a worker's proposal, which the lead session puts to the human (Relay). The worker never
-	// asks it itself, and its deadline counts from when the lead is given it.
+	// Relayed: a phase agent's proposal, which baton's mod puts to the human (Relay). The agent never
+	// asks it itself, and its deadline counts from when the mod is told to ask it.
 	Relayed  bool        `json:"relayed,omitempty"`
 	Resolved *Resolution `json:"resolved,omitempty"`
 	// Announced: shown in the session. Told: put in front of the human the next time they typed.

@@ -252,7 +252,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		w.agent.Tick(now)
 	}
 	c.merge(now, s)
-	c.relay(now, s)
+	c.relay(now, s, b)
 	if st, err = s.Load(); err != nil {
 		return
 	}
@@ -383,7 +383,7 @@ func (c *Coordinator) issue(now time.Time, s *state.Store, b *bridge.Bridge, e s
 }
 
 // reports takes what the mod reported since the last step (bridge.Take): the acks of the commands this
-// host gave it, and its agents' turns. (Its hello is serial mode's to read, modWait, and `baton mod
+// host gave it, its agents' turns, and the answers to the questions it put to the human. (Its hello is serial mode's to read, modWait, and `baton mod
 // report` counts the lead's compactions as they come.)
 func (c *Coordinator) reports(now time.Time, s *state.Store, b *bridge.Bridge) {
 	reps, err := b.Take()
@@ -406,6 +406,8 @@ func (c *Coordinator) reports(now time.Time, s *state.Store, b *bridge.Bridge) {
 			}
 		case bridge.Turn:
 			c.turned(s, r)
+		case bridge.Answered:
+			c.asked(now, s, r)
 		}
 	}
 }

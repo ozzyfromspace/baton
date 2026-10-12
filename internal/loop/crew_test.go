@@ -47,11 +47,12 @@ type crew struct {
 	stopped  []string
 	sent     []sent
 	resumes  []string
-	modOff   bool   // it runs nothing: no spawn is acked
-	ackless  bool   // it runs a spawn, whose agent starts, but its ack never comes
-	unplaced bool   // a spawn's agent starts without its worktree hook (somewhere else)
-	spawnErr string // the spawn's Agent call fails with this
-	sendErr  string // a message's SendMessage call fails with this
+	asks     []bridge.Command // the questions it was told to ask, in order
+	modOff   bool             // it runs nothing: no spawn is acked
+	ackless  bool             // it runs a spawn, whose agent starts, but its ack never comes
+	unplaced bool             // a spawn's agent starts without its worktree hook (somewhere else)
+	spawnErr string           // the spawn's Agent call fails with this
+	sendErr  string           // a message's SendMessage call fails with this
 }
 
 // sent is a message the crew's mod sent: to whom, and what it said.
@@ -173,6 +174,9 @@ func (x *crew) runMod() {
 			}
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
 			x.resume(c.Agent)
+		case bridge.Ask:
+			x.asks = append(x.asks, c)
+			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true, Result: "queued"})
 		default:
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
 		}

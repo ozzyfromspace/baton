@@ -235,8 +235,8 @@ func agent(st state.State, subs map[string]state.State, id string, p *Phase) dec
 }
 
 // needs is what the phase agent of worker w needs of the human, or "": a permission prompt of its own on
-// the lead's screen, a question the lead puts to the human for it, or in its sub-run (sub, when ok), a
-// block, a review due, a proposal waiting, or an escalation.
+// the lead's screen, a question baton's mod puts to the human for it, or in its sub-run (sub, when ok), a
+// block, a review due, a proposal waiting (one held for the human too), or an escalation.
 func needs(st state.State, w *state.Worker, sub state.State, ok bool) string {
 	if w.AgentID != "" {
 		for _, d := range st.Run.Dialogs {

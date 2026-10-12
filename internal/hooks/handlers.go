@@ -262,7 +262,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			return res, ok(err)
 		}
 	}
-	var landing bool
+	var landing, asking bool
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		holds := func() {
 			if phase := s.Worker(); phase != "" {
@@ -294,13 +294,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 						return
 					}
 				}
+				if asking = own && modAsk(c.Input); asking {
+					return // baton's question, which its mod puts to the human: no call of the model's
+				}
 			}
 			if st.Mode != state.ModeRunning || c.Agent != "" || isBatonCommand(c.Input) {
 				return
 			}
 			hold = holdCall(st, own, words(c, s))
 		}
-		if holds(); refuseWorker == "" && refuseHere == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
+		if holds(); refuseWorker == "" && refuseHere == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && !asking && s.Worker() == "" {
 			// The call runs, in the lead's checkout: no worker's work lands there until it has ended, and
 			// it waits for any landing under way.
 			st.Run.ToolStarted(state.ToolCall{ID: str(c.Input, "tool_use_id"), Agent: c.Agent, Tool: str(c.Input, "tool_name"), Since: c.Now})
@@ -382,9 +385,6 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 		return NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
 	case st.Replan != nil:
 		return replanHold(st.Replan)
-	case st.RelayUnasked() != nil:
-		r := st.RelayUnasked()
-		return decide.RelayHold(r.Phase, relayQuestion(*r).Call())
 	}
 	return ""
 }
@@ -893,7 +893,6 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	var told []string
 	var dl delivery
 	var news news
-	var ask, asker string
 	var owed *state.Briefing
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
@@ -908,17 +907,11 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen
 		st.Run.ClearedPlan = nil   // a "clear context" approval starts working with no prompt
 		events, tell = vanished(st, c.Now, by == "human")
-		events = append(events, relayVanished(st, c.Now)...)
 		if by == "human" {
 			// The human is engaged: whatever baton escalated, they have it now, and the model may act on
-			// what they say (state.Held). A proposal held for them is answered by what they wrote, and so
-			// is a worker's block or review they write to it about (in its own session).
+			// what they say (state.Held). A proposal held for them is answered by what they wrote.
 			if e, t, ok := released(st); ok {
 				events, tell = append(events, e), t
-			} else if phase := s.Worker(); phase != "" {
-				if e, t, ok := answeredHere(st, phase); ok {
-					events, tell = append(events, e), t
-				}
 			}
 			var record string
 			if told, record = tellDecisions(st, s.WorkerDecisions(*st)); record != "" {
@@ -939,16 +932,6 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		// idle session. So do baton's messages, and what landed underneath the lead.
 		dl = take(st, c.Now)
 		news = takeNews(st, s)
-		// A worker's question comes first with a line the host typed (a human's prompt is theirs: the
-		// question comes with the next tool call, or at the stop).
-		if by == "baton" {
-			if r, q, fresh := relayToGive(st, c.Now, words(c, s).Timeout); r != nil {
-				ask, asker = decide.RelayAsk(r.Phase, q.Call()), r.Phase
-				if fresh {
-					events = append(events, relayIssued(*r, "prompt"))
-				}
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -971,10 +954,6 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	if news.any() {
 		tell = strings.TrimSpace(news.text + "\n\n" + tell)
 		news.event(s, "prompt")
-	}
-	if ask != "" {
-		tell = strings.TrimSpace(ask + "\n\n" + tell)
-		says = append(says, relayComing(asker))
 	}
 	for _, e := range events {
 		s.Event(e.kind, e.fields)
@@ -1102,6 +1081,15 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		// A call baton's mod made: it is not the model's, and nothing given with its result reaches the model.
 		return h.spawned(c)
 	}
+	if modAsk(c.Input) {
+		// A question a mod put to the human: its dialog is gone. The mod reports the answer to one of baton's
+		// (loop.Coordinator.relay), and nothing given with its result reaches the model.
+		_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+			st.Run.Dialogs.CloseExact("", "AskUserQuestion", dialogKey(c.Input))
+			return nil
+		})
+		return Result{}, ok(err)
+	}
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	var dropped []event
@@ -1136,10 +1124,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				auto := !closed.AutoAnswered.IsZero()
 				if v = answeredReplan(st, s, c, w); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
-						if v = answeredRelay(st, c, auto); v.event == "" {
-							if v = answeredReview(st, c); v.event == "" {
-								v = answered(st, c, auto, w)
-							}
+						if v = answeredReview(st, c); v.event == "" {
+							v = answered(st, c, auto, w)
 						}
 					}
 				}
@@ -1148,23 +1134,16 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				v = approved(st, s, c, file, true, w)
 			}
 			// No other question while a proposal, a review or an approved plan waits on the human: one at a
-			// time. A job's result waits too: the model must put the question first. (A worker's proposal
-			// is the lead's to put to the human, and holds up nothing in the worker.) A worker's question
-			// the lead is to put to the human comes before everything else of baton's, and only then.
+			// time. A job's result waits too: the model must put the question first. (A phase agent's
+			// proposal is baton's to put to the human, and holds up nothing in the agent.)
 			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
-				// Given once mid-turn: until it is asked, the model's calls are held with it (holdCall).
-				if r, q, fresh := relayToGive(st, c.Now, w.Timeout); fresh {
-					v = relayGiven(*r, q)
-				} else if r == nil {
-					dl = take(st, c.Now)
-					news = takeNews(st, s)
-					v = contextValves(st, valve.FromEnv(c.Env), w)
-				}
+				dl = take(st, c.Now)
+				news = takeNews(st, s)
+				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
 			notes, ann = announceNotes(st), announced(st)
 		}
 		dropped, _ = vanished(st, c.Now, false) // a proposal's question that failed or was denied went unanswered
-		dropped = append(dropped, relayVanished(st, c.Now)...)
 		return nil
 	})
 	if err != nil {

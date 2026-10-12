@@ -39,7 +39,7 @@ func issuedQuestions(st *state.State) []issued {
 		out = append(out, issued{"replan", replanQuestion(r)})
 	}
 	if r := st.RelayIssued(); r != nil {
-		out = append(out, issued{"relay", relayQuestion(*r)}) // a worker's, which the lead puts to the human
+		out = append(out, issued{"relay", relayQuestion(*r)}) // a phase agent's, which baton's mod puts to the human
 	}
 	return out
 }

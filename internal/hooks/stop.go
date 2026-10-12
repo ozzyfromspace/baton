@@ -29,7 +29,6 @@ func (h *handlers) stop(c Context) (Result, error) {
 		recordStop(st, c)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
-		dropped = append(dropped, relayVanished(st, c.Now)...)
 		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to
 		// follow, and so is restarting on a newer baton.
 		worker := s.Worker() != ""
@@ -100,7 +99,7 @@ type decision struct {
 	events  []event
 	deliver delivery        // results the stop is refused with; stop writes the reason from them
 	mail    []state.Message // baton's messages the stop is refused with
-	relay   *state.Relay    // a worker's question, for the lead session to put to the human
+	relay   *state.Relay    // a phase agent's question, for baton to put to the human
 }
 
 func (d *decision) say(msg string) { d.out()["systemMessage"] = msg }
@@ -166,7 +165,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 	case st.Run.Compaction.InFlight():
 		// A compaction is already queued or underway; let the turn end so the host can type it.
 	case st.ReviewDue != "" && w.Worker:
-		// A worker's review is put to the human by the lead session; the phase waits for it.
+		// A phase agent's review is put to the human by baton; the phase waits for it.
 		st.Run.StopBlocks = 0
 		relayed(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", state.Relay{Kind: state.RelayReview, Since: st.ReviewAt, Count: st.Unattended(st.ReviewDue)}, now)
 	case st.ReviewDue != "":
@@ -229,7 +228,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.StopBlocks = 0
 		d.say("baton: waiting on you — " + st.Run.Escalation.Reason)
 	case st.Blocked != nil && w.Worker:
-		// A worker's block stops its phase alone, and is put to the human by the lead session.
+		// A phase agent's block stops its phase alone, and is put to the human by baton.
 		st.Run.StopBlocks = 0
 		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked, Since: st.Blocked.Since, Because: st.Blocked.Reason}, now)
 	case st.Blocked != nil:
@@ -240,9 +239,6 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.WarnOwed = false
 		d.refuse(decide.ContextWarning(decide.Question{Text: st.Run.WarnQuestion, Options: decide.WarnOptions}.Call(), true))
 		d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "context question not asked"})
-	case !w.Worker && (st.RelayDue() != nil || st.RelayUnasked() != nil):
-		// A worker's question for the human, which only the lead can put to them: it goes first.
-		relayStop(st, &d, now, w.Timeout)
 	case len(st.Due()) > 0:
 		// A job of the phase in hand finished: its result is what the model goes on with.
 		st.Run.StopBlocks = 0
@@ -258,12 +254,12 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		}
 		d.refuse(strings.Join(texts, "\n\n"))
 	case w.Worker && st.PendingProposal() != nil:
-		// A worker's proposal, which the lead session puts to the human: the stop is the model's to make,
+		// A phase agent's proposal, which baton puts to the human: the stop is the model's to make,
 		// and their answer wakes it. It is queued again, in case its own queueing failed.
 		rp := st.PendingProposal()
 		st.Run.StopBlocks = 0
 		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID, What: rp.What, Because: rp.Because, Untimed: rp.Untimed}
-		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which the lead session puts to them", cur, rp.ID))
+		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which baton puts to them", cur, rp.ID))
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":
 		// Every phase left waits for a job, or a gate in the working tree holds the next one, so there is

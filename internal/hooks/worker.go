@@ -49,8 +49,8 @@ func workerPlan(phase, file string) valveAction {
 		tell: decide.WorkerPlanRefused(phase)}
 }
 
-// relayed is escalate in a worker. Nobody watches its session, so no question is put there: the human is
-// pushed (the notice), the lead session asks them (r, which the stop queues), and the stop goes through
+// relayed is escalate in a phase agent. It asks the human nothing itself: the human is pushed (the
+// notice), baton's mod asks them (r, which the stop queues), and the stop goes through
 // while the phase waits for their answer. A repeated escalation for the same reason pushes nothing new.
 func relayed(st *state.State, d *decision, kind, reason string, r state.Relay, now time.Time) {
 	if e := st.Run.Escalation; e == nil || e.Reason != reason {
@@ -59,5 +59,5 @@ func relayed(st *state.State, d *decision, kind, reason string, r state.Relay, n
 		d.emit("escalated", map[string]any{"type": kind, "reason": reason, "relayed": true})
 	}
 	d.relay = &r
-	d.say("baton: waiting on the human — " + reason + "; the lead session asks them")
+	d.say("baton: waiting on the human — " + reason + "; baton asks them")
 }

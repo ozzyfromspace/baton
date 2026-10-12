@@ -1,14 +1,16 @@
 package state
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
-// A worker never puts a question to the human itself: nobody watches its session. Its proposal, its
-// block, or a review of its decisions joins the run's relay queue (Store.Relay), and the lead session
-// puts the questions to the human in their terminal, one at a time, and only while nothing of the lead's
-// own waits on them (OwnQuestion). The lead's model is given the front question (IssueRelay) at its next
-// tool call, at its stop, or with a line the host types into the idle session; the host answers it by
-// itself if nobody does; and the answer goes back to the worker's sub-run as its own answer would have
-// (docs/research/workers.md).
+// A phase agent never puts a question to the human itself. Its proposal, its block, or a review of its
+// decisions joins the run's relay queue (Store.Relay), and baton's mod asks the human in Claude Code's own
+// dialog in the lead's terminal, one question at a time, and only while nothing of the lead's own waits on
+// them (OwnQuestion). The host issues the front question to the mod (IssueRelay), which settles it at its
+// deadline if nobody answers; the answer goes back to the agent's sub-run as its own answer would have
+// (docs/research/visible-workers.md). No model takes part in any of it.
 
 // Relay is a question a worker's phase has for the human.
 type Relay struct {
@@ -27,15 +29,19 @@ type Relay struct {
 	Because string `json:"because,omitempty"`
 	Untimed string `json:"untimed,omitempty"`
 	Count   int    `json:"count,omitempty"`
-	// Question is the question exactly as the lead is to ask it, written when the lead is given it.
+	// Question is the question exactly as the human is asked it, written when it is issued.
 	Question string    `json:"question,omitempty"`
 	Queued   time.Time `json:"queued"`
-	// Issued is when the lead's model was given the question, and Deadline when the host answers it if
-	// nobody has: a timed proposal goes ahead then (the time its question names), and anything else waits
-	// for the human in the worker's own session. Asked: it reached the human's screen.
+	// Issued is when the host had the mod ask it (command Ask, of host instance Instance), and Deadline
+	// when baton answers it if nobody has: a timed proposal goes ahead then (the time its question names),
+	// and anything else waits for the human, who has it again with /baton run. Asked: it reached
+	// Claude Code's dialog queue, at AskedAt.
 	Issued   time.Time   `json:"issued,omitzero"`
+	Ask      int         `json:"ask,omitempty"`
+	Instance string      `json:"instance,omitempty"`
 	Deadline time.Time   `json:"deadline,omitzero"`
 	Asked    bool        `json:"asked,omitempty"`
+	AskedAt  time.Time   `json:"asked_at,omitzero"`
 	Answered *Resolution `json:"answered,omitempty"`
 	// Applied is when the answer reached the worker's sub-run.
 	Applied time.Time `json:"applied,omitzero"`
@@ -51,14 +57,9 @@ const (
 // relayWhat names each kind of question for the human.
 var relayWhat = map[string]string{RelayProposal: "a proposal", RelayBlocked: "it is blocked", RelayReview: "a review of its decisions"}
 
-// ByWithdrawn settles a worker's question that no longer needs the human's answer: it was settled in the
-// worker's own session, or the worker is gone.
+// ByWithdrawn settles a phase agent's question that no longer needs the human's answer: it was settled
+// in its sub-run meanwhile, or the agent is gone.
 const ByWithdrawn = "withdrawn"
-
-// ByLeadStopped settles a worker's question the lead session cannot put to the human: its last turn
-// failed in a way baton cannot retry, and it asks nothing until the human acts. Like a question that went
-// away unanswered, it waits for the human in the worker's own session.
-const ByLeadStopped = "lead_stopped"
 
 // Same reports the same question: the same phase's question of the same kind, about the same proposal,
 // block or review.
@@ -69,16 +70,35 @@ func (r Relay) Same(o Relay) bool {
 // Timed reports a proposal that goes ahead if nobody answers it.
 func (r Relay) Timed() bool { return r.Kind == RelayProposal && r.Untimed == "" }
 
-// QueueRelay queues r, a question of r.Phase's worker for the human, unless it was queued already: the
-// worker's commands and hooks may each queue the same question, and each must be able to retry. A
-// question answered once is never asked again, even if its answer was to leave it for the human in the
-// worker's own session. It reports whether r joined the queue.
+// QueueRelay queues r, a question of r.Phase's agent for the human, unless it was queued already: the
+// agent's commands and hooks may each queue the same question, and each must be able to retry. A question
+// answered once is asked again only when the human asks for it (AskAgain). It reports whether r joined
+// the queue.
 func QueueRelay(st *State, r Relay, now time.Time) bool {
 	if st.RelayOf(r) != nil {
 		return false
 	}
-	r.Queued, r.Question, r.Issued, r.Deadline, r.Asked, r.Answered, r.Applied = now, "", time.Time{}, time.Time{}, false, nil, time.Time{}
-	st.Relay = append(st.Relay, r)
+	st.Relay = append(st.Relay, fresh(r, now))
+	return true
+}
+
+// fresh is r as it joins the queue at now: asked of nobody yet.
+func fresh(r Relay, now time.Time) Relay {
+	r.Queued, r.Question, r.Issued, r.Ask, r.Instance, r.Deadline = now, "", time.Time{}, 0, "", time.Time{}
+	r.Asked, r.AskedAt, r.Answered, r.Applied = false, time.Time{}, nil, time.Time{}
+	return r
+}
+
+// AskAgain puts r, a question answered and applied already whose phase still waits on the human (they
+// chose Wait for me, nobody answered it, or it went away unanswered), back at the end of the queue, to be
+// asked again: /baton run does it. It reports whether it did.
+func AskAgain(st *State, r Relay, now time.Time) bool {
+	i := slices.IndexFunc(st.Relay, func(q Relay) bool { return q.Same(r) })
+	if i < 0 || st.Relay[i].Answered == nil || st.Relay[i].Applied.IsZero() {
+		return false
+	}
+	q := fresh(st.Relay[i], now)
+	st.Relay = append(slices.Delete(st.Relay, i, i+1), q)
 	return true
 }
 
@@ -93,7 +113,8 @@ func (st *State) FrontRelay() *Relay {
 	return nil
 }
 
-// RelayIssued is the worker's question the lead's model was given and the human has not answered, or nil.
+// RelayIssued is the phase agent's question the mod was told to ask and the human has not answered, or
+// nil.
 func (st *State) RelayIssued() *Relay {
 	if r := st.FrontRelay(); r != nil && !r.Issued.IsZero() {
 		return r
@@ -101,38 +122,13 @@ func (st *State) RelayIssued() *Relay {
 	return nil
 }
 
-// RelayUnasked is the worker's question the lead's model was given and has not put to the human yet, or
-// nil.
-func (st *State) RelayUnasked() *Relay {
-	if r := st.RelayIssued(); r != nil && !r.Asked {
-		return r
-	}
-	return nil
-}
-
-// RelayDue is the worker's question the lead's model is to be given now, or nil: the front one, not given
-// yet, while the lead may ask (relayAskable).
+// RelayDue is the phase agent's question the mod is to be told to ask now, or nil: the front one, not
+// issued yet, while the plan runs and nothing of the lead's own waits on the human, which goes first.
 func (st *State) RelayDue() *Relay {
-	if r := st.FrontRelay(); r != nil && r.Issued.IsZero() && st.relayAskable() {
+	if r := st.FrontRelay(); r != nil && r.Issued.IsZero() && st.Mode == ModeRunning && !st.OwnQuestion() {
 		return r
 	}
 	return nil
-}
-
-// RelayToAsk is the worker's question the lead is to put to the human now, given to its model already or
-// not, or nil: the front one, not asked yet, while the lead may ask (relayAskable).
-func (st *State) RelayToAsk() *Relay {
-	if r := st.FrontRelay(); r != nil && !r.Asked && st.relayAskable() {
-		return r
-	}
-	return nil
-}
-
-// relayAskable reports a lead that may put a worker's question to the human: the plan runs, no
-// compaction is owed or underway (the question would be lost in it), and nothing of the lead's own
-// waits on the human, which goes first.
-func (st *State) relayAskable() bool {
-	return st.Mode == ModeRunning && !st.Compacting() && !st.OwnQuestion()
 }
 
 // OwnQuestion reports something of the lead session's own that the human is asked, or is to be asked:
@@ -142,10 +138,10 @@ func (st *State) OwnQuestion() bool {
 	return st.Run.Escalation != nil || st.Blocked != nil || st.OwnProposal() != nil || st.ReviewDue != "" || st.Run.WarnQuestion != "" || st.Replan != nil
 }
 
-// IssueRelay records that r was given to the lead's model, to put to the human as question; deadline is
-// when the host answers it if nobody has.
-func IssueRelay(r *Relay, question string, deadline, now time.Time) {
-	r.Question, r.Issued, r.Deadline, r.Asked = question, now, deadline, false
+// IssueRelay records that r was issued to the mod by host instance as command ask, to put to the human as
+// question; deadline is when baton answers it if nobody has.
+func IssueRelay(r *Relay, question string, ask int, instance string, deadline, now time.Time) {
+	r.Question, r.Issued, r.Ask, r.Instance, r.Deadline, r.Asked, r.AskedAt = question, now, ask, instance, deadline, false, time.Time{}
 }
 
 // AnswerRelay settles r: by is who answered (ByHuman, ByTimeout: the host, as nobody did; ByDeclined:
@@ -154,8 +150,8 @@ func AnswerRelay(r *Relay, by, answer string, now time.Time) {
 	r.Answered = &Resolution{By: by, Answer: answer, At: now}
 }
 
-// Waits reports worker question r still waiting for its answer in the worker's sub-run st: its proposal
-// unresolved, or its block or its review still the one that began when r asked about it.
+// Waits reports phase agent question r still waiting for its answer in the agent's sub-run st: its
+// proposal unresolved, or its block or its review still the one that began when r asked about it.
 func (st *State) Waits(r Relay) bool {
 	switch r.Kind {
 	case RelayProposal:
@@ -179,7 +175,7 @@ func (st *State) RelayOf(r Relay) *Relay {
 	return nil
 }
 
-// Unapplied lists the answered questions whose answers have not reached their workers' sub-runs.
+// Unapplied lists the answered questions whose answers have not reached their agents' sub-runs.
 func (st State) Unapplied() []Relay {
 	var out []Relay
 	for _, r := range st.Relay {

@@ -416,6 +416,18 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 	if len(r.in.text) != 0 {
 		t.Fatalf("answered a question that was not baton's: %q", r.in.text)
 	}
+
+	// Where baton's mod runs in the lead's claude, the mod settles it, and nothing types into a dialog.
+	r = newIdleRig(t)
+	helloFrom(t, r.loop.Store)
+	r.set(func(st *state.State) {
+		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+	})
+	r.run(DefaultTiming.WarnTimeout * 3)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed %q with baton's mod in the lead's claude", r.in.text)
+	}
 }
 
 // Every key the human presses starts the clock over: somebody at the keyboard is answering.

@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	goio "io"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
 
@@ -40,6 +43,10 @@ type modReply struct {
 	Seen  int           `json:"seen,omitempty"`
 	Agent *modAgentType `json:"agent,omitempty"`
 	Board *modBoard     `json:"board,omitempty"`
+	// An asking's: how long the question may wait before the mod asks again (WaitMs), or, with none, the
+	// answer it gives the question now (Answer); with neither, baton never answers it, and the human does.
+	WaitMs int64  `json:"wait_ms,omitempty"`
+	Answer string `json:"answer,omitempty"`
 }
 
 // modBoard is what the mod says about baton's board: the line of its own command (which opens it while
@@ -99,8 +106,20 @@ func recordModReport(io IO) modReply {
 	rep.Instance = inst // the claude the mod runs in is the one this host instance runs
 	b := bridge.Open(s.Dir, io.Now, func(kind string, fields map[string]any) { s.Event(kind, fields) })
 	b.Drop = decide.ReportKept
-	if rep.Kind == bridge.Hello {
+	switch rep.Kind {
+	case bridge.Hello:
 		return modHello(io, s, b, rep)
+	case bridge.Asking:
+		return modAsking(io, s, b, rep)
+	case bridge.Deadline:
+		// Recorded in the lead's state before the report is (Settle does nothing twice), so that a failure
+		// leaves the mod to send it again.
+		if rec, err := b.Peek(); err != nil || !rec.Hello.Ready(inst) {
+			return modReply{Stale: true, Why: "say hello first"}
+		}
+		if _, err := hooks.Settle(s, rep.Question, rep.Answer, io.Now(), io.Env); err != nil {
+			return modReply{Retry: true, Why: err.Error()}
+		}
 	}
 	switch dup, err := b.Record(rep); {
 	case errors.Is(err, bridge.ErrStale):
@@ -139,9 +158,22 @@ func malformed(data []byte, rerr, perr error, rep bridge.Report) string {
 	switch rep.Kind {
 	case bridge.Hello:
 		return ""
-	case bridge.Ack, bridge.Answered:
+	case bridge.Asking:
+		if rep.Question == "" {
+			return "asking names no question"
+		}
+		return ""
+	case bridge.Ack:
 		if rep.Command <= 0 {
 			return rep.Kind + " names no command"
+		}
+	case bridge.Answered:
+		if rep.Command <= 0 || rep.Question == "" {
+			return "answered names no command or no question"
+		}
+	case bridge.Deadline:
+		if rep.Question == "" || rep.Answer == "" {
+			return "deadline names no question or no answer"
 		}
 	case bridge.Turn, bridge.Dropped:
 		if rep.Agent == "" {
@@ -155,6 +187,30 @@ func malformed(data []byte, rerr, perr error, rep bridge.Report) string {
 		return "not numbered"
 	}
 	return ""
+}
+
+// modAsking answers the mod's asking: how long the question of baton's it shows the human may wait, and
+// what baton answers it then (hooks.Bound). Nothing is recorded but when the question was first seen in
+// front of the human. A mod baton does not work with is told nothing: the human answers.
+func modAsking(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modReply {
+	if rec, err := b.Peek(); err != nil || !rec.Hello.Ready(rep.Instance) {
+		return modReply{OK: true}
+	}
+	now := io.Now()
+	warn := valve.FromEnv(io.Env).WarnTimeout
+	if warn == 0 {
+		warn = valve.DefaultWarnTimeout
+	}
+	w, err := hooks.Bound(s, rep.Question, now.Add(-time.Duration(rep.Elapsed)*time.Millisecond), now, warn)
+	switch {
+	case err != nil:
+		return modReply{OK: true, WaitMs: 5000} // ask again in a moment
+	case w.Answer == "":
+		return modReply{OK: true}
+	case w.For > 0:
+		return modReply{OK: true, WaitMs: max(w.For.Milliseconds(), 1)}
+	}
+	return modReply{OK: true, Answer: w.Answer}
 }
 
 // modHello records the mod's hello. A mod of another protocol is recorded as refused, and does nothing

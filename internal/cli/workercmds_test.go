@@ -81,7 +81,7 @@ func TestAWorkerIsRefusedTheLeadsCommands(t *testing.T) {
 func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	w, lead := asWorker(t)
 	out := w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
-	for _, want := range []string{"baton: proposal P1.d1 recorded. baton puts it to the human through the lead session",
+	for _, want := range []string{"baton: proposal P1.d1 recorded. baton puts it to the human, and gives you their answer here",
 		"If nobody answers within 5 minutes of being asked, baton picks Go ahead for them", "Until then, do not do what you proposed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in:\n%s", want, out)
@@ -102,7 +102,7 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 		t.Errorf("the worker's events:\n%s", w.events())
 	}
 	for _, args := range [][]string{{"propose", "x", "--because", "y", "--undo", "z"}, {"done", "P1"}, {"blocked", "x", "--tried", "y"}} {
-		w.mustFail("your proposal P1.d1 (use a fake clock) waits for the human's answer, which baton gets through the lead session", args...)
+		w.mustFail("your proposal P1.d1 (use a fake clock) waits for the human's answer, which baton gives you here", args...)
 	}
 	if got := relays(lead); got != "P1/proposal/P1.d1" {
 		t.Errorf("queued again: %q", got)
@@ -125,7 +125,7 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 func TestAWorkersBlockGoesThroughTheLead(t *testing.T) {
 	w, lead := asWorker(t)
 	out := w.must("", "blocked", "need the signing key", "--tried", "the keychain")
-	if !strings.Contains(out, "baton: recorded. baton puts it to the human through the lead session; it stops only P1, while the lead session and any other workers carry on") {
+	if !strings.Contains(out, "baton: recorded. baton puts it to the human; it stops only P1, while the lead session and any other workers carry on") {
 		t.Errorf("blocked: %s", out)
 	}
 	if got := relays(lead); got != "P1/blocked" || lead.state().Relay[0].Because != "need the signing key" || !lead.state().Relay[0].Since.Equal(w.state().Blocked.Since) {
@@ -186,36 +186,75 @@ func TestAttachRecordsTheRunsBranch(t *testing.T) {
 	}
 }
 
-// baton status lists the workers' questions: those the lead puts to the human, and those left for them in
-// a worker's own session. A worker's own status says the lead puts its proposal to the human.
-func TestStatusListsTheWorkersQuestions(t *testing.T) {
+// baton status lists the phase agents' questions: those baton puts to the human, and those that wait for
+// them, which /baton run asks them again. An agent's own status says baton puts its proposal to the human.
+func TestStatusListsTheAgentsQuestions(t *testing.T) {
 	w, lead := asWorker(t)
 	w.must("", "blocked", "need the signing key", "--tried", "the keychain")
-	if out := lead.must("", "status"); !strings.Contains(out, "questions from workers (the lead session puts them to you, one at a time):\n  ? P1     blocked: need the signing key — next") {
+	if out := lead.must("", "status"); !strings.Contains(out, "questions from phase agents (baton puts them to you, one at a time):\n  ? P1     blocked: need the signing key — next") {
 		t.Errorf("status:\n%s", out)
 	}
 	lead.set(func(st *state.State) {
 		r := st.FrontRelay()
-		state.IssueRelay(r, "baton: worker P1 is blocked: need the signing key.", lead.now.Add(5*time.Minute), lead.now)
-		r.Asked = true
+		state.IssueRelay(r, "baton: the agent on P1 is blocked: need the signing key.", 3, "inst", lead.now.Add(5*time.Minute), lead.now)
 	})
-	if out := lead.must("", "status"); !strings.Contains(out, "? P1     blocked: need the signing key — asked; if you do not answer, it waits for you in the worker's own session") {
+	if out := lead.must("", "status"); !strings.Contains(out, "? P1     blocked: need the signing key — asked as soon as no other dialog is open") {
+		t.Errorf("status:\n%s", out)
+	}
+	lead.set(func(st *state.State) { st.FrontRelay().Asked = true })
+	if out := lead.must("", "status"); !strings.Contains(out, "? P1     blocked: need the signing key — asked; if you do not answer, it waits for you") {
 		t.Errorf("status:\n%s", out)
 	}
 	lead.set(func(st *state.State) { state.AnswerRelay(st.FrontRelay(), state.ByHuman, "Wait for me", lead.now) })
 	out := lead.must("", "status")
-	if strings.Contains(out, "questions from workers") || !strings.Contains(out, "waiting for you in a worker's own session (baton view <phase>, in another terminal):\n  ! P1     blocked: need the signing key") {
+	if strings.Contains(out, "questions from phase agents") || !strings.Contains(out, "waiting for you (/baton run asks you again):\n  ! P1     blocked: need the signing key") {
 		t.Errorf("status:\n%s", out)
 	}
-	w.set(func(st *state.State) { state.Resume(st) }) // answered in its session
-	if out := lead.must("", "status"); strings.Contains(out, "waiting for you in a worker's own session") {
+	w.set(func(st *state.State) { state.Resume(st) }) // settled meanwhile
+	if out := lead.must("", "status"); strings.Contains(out, "waiting for you (/baton run") {
 		t.Errorf("status:\n%s", out)
 	}
 
 	w, _ = asWorker(t)
 	w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
-	if out := w.must("", "status"); !strings.Contains(out, "proposal P1.d1: use a fake clock\n  because: the real one drifts\n  the lead session puts it to you, and baton gives this worker your answer") {
-		t.Errorf("the worker's status:\n%s", out)
+	if out := w.must("", "status"); !strings.Contains(out, "proposal P1.d1: use a fake clock\n  because: the real one drifts\n  baton puts it to you in the lead's terminal, and gives this agent your answer") {
+		t.Errorf("the agent's status:\n%s", out)
+	}
+}
+
+// /baton run asks the human again each question of a phase agent that waits for them: it goes back in
+// the queue, afresh. One settled meanwhile, or not applied yet, is not asked again.
+func TestRunAsksAgainWhatWaitsForTheHuman(t *testing.T) {
+	w, lead := asWorker(t)
+	w.must("", "blocked", "need the signing key", "--tried", "the keychain")
+	lead.set(func(st *state.State) {
+		r := st.FrontRelay()
+		state.IssueRelay(r, "baton: the agent on P1 is blocked: need the signing key.", 3, "inst", lead.now.Add(5*time.Minute), lead.now)
+		state.AnswerRelay(r, state.ByTimeout, "Wait for me", lead.now)
+	})
+	if out := lead.must("", "run"); strings.Contains(out, "asks you its question again") {
+		t.Fatalf("asked again before its answer was applied:\n%s", out)
+	}
+	lead.set(func(st *state.State) { st.Relay[0].Applied = lead.now })
+	out := lead.must("", "run")
+	if !strings.Contains(out, "baton: the agent on P1 waits for you — baton asks you its question again") {
+		t.Fatalf("run:\n%s", out)
+	}
+	if r := lead.state().Relay[0]; r.Answered != nil || !r.Issued.IsZero() || r.Question != "" {
+		t.Errorf("relay %+v: not asked afresh", r)
+	}
+	if !lead.logged("relay_again", map[string]any{"phase": "P1", "type": "blocked"}) {
+		t.Errorf("events:\n%s", lead.events())
+	}
+	lead.set(func(st *state.State) {
+		r := st.FrontRelay()
+		state.IssueRelay(r, "q", 4, "inst", lead.now.Add(5*time.Minute), lead.now)
+		state.AnswerRelay(r, state.ByHuman, "Wait for me", lead.now)
+		r.Applied = lead.now
+	})
+	w.set(func(st *state.State) { state.Resume(st) })
+	if out := lead.must("", "run"); strings.Contains(out, "asks you its question again") {
+		t.Errorf("asked again once settled:\n%s", out)
 	}
 }
 

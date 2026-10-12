@@ -155,7 +155,7 @@ settings hooks baton already has do the rest, now told apart by `agent_id`. Phas
 | the worker's Stop hook refuses a stop without a status | `SubagentStop` blocks, with the same text |
 | mid-turn requests as PostToolUse feedback | unchanged, routed by `agent_id` |
 | a gate's result typed or given at the next tool call | the idle agent resumed by a message carrying the result |
-| a worker's question relayed through the lead's model | `$.ui.ask` from the mod, or the lead as today |
+| a worker's question relayed through the lead's model | `$.ui.ask` from the mod, settled at its deadline by the mod's own `tool.call` hook (spike 34) |
 | a permission prompt seen only with `baton view` | shown in the lead's terminal by Claude Code, and known to baton by `agent_id` |
 | a crashed worker resumed by baton | the session resumed (v0.7), then each agent by a message |
 | `baton view P3` in another terminal | the agent's row and transcript in the same terminal |

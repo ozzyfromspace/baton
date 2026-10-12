@@ -55,6 +55,9 @@ const (
 	Compacted  = "compacted"  // and has
 	Dropped    = "dropped"    // a report of one of baton's agents was kept from the lead's model
 	Answered   = "answered"   // the human answered a question the mod asked
+	Deadline   = "deadline"   // nobody answered a question of baton's by its deadline, and the mod answered it
+	// Asking asks how long a question of baton's on the human's screen may wait: a query, not recorded.
+	Asking = "asking"
 )
 
 // Command is one thing the host has the mod do.
@@ -110,9 +113,16 @@ type Report struct {
 	// Compacting and Compacted: what started the lead's compaction; Skipped: a hook vetoed it.
 	Trigger string `json:"trigger,omitempty"`
 	Skipped bool   `json:"skipped,omitempty"`
-	// Answered: the label the human chose, or what they typed; Dismissed: the dialog closed without one.
+	// Answered: the question, and the label the human chose, or what they typed; Dismissed: the dialog
+	// closed without one; Deadline: nobody answered it, and the mod gave it the answer baton gave it.
+	// Deadline (a report of its own) is that too, for any question of baton's in the lead's session.
+	Question  string `json:"question,omitempty"`
 	Answer    string `json:"answer,omitempty"`
 	Dismissed bool   `json:"dismissed,omitempty"`
+	Deadline  bool   `json:"deadline,omitempty"`
+	// Asking (asked, not recorded: `baton mod report` answers it at once): a question of baton's is on
+	// the human's screen, put to them Elapsed milliseconds ago; the reply says how long it may wait.
+	Elapsed int64 `json:"elapsed,omitempty"`
 }
 
 // Record is the host's side of the bridge (bridge.json).
@@ -579,8 +589,10 @@ func reportFields(rep Report, cmd *Issued) map[string]any {
 	add("ms", rep.Ms, rep.Ms != 0)
 	add("trigger", rep.Trigger, rep.Trigger != "")
 	add("skipped", true, rep.Skipped)
+	add("question", cut(rep.Question, 300), rep.Question != "")
 	add("answer", cut(rep.Answer, 300), rep.Answer != "")
 	add("dismissed", true, rep.Dismissed)
+	add("deadline", true, rep.Deadline)
 	return f
 }
 

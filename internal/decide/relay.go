@@ -8,21 +8,20 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// A worker's question reaches the human through the lead session, which puts it to them in their
-// terminal (state.Relay). Its third option is what baton picks when nobody answers, as for the lead's own
-// questions (its key, 3, is "No" in a permission prompt): a timed proposal goes ahead at the time its
-// question names, and anything else waits for the human in the worker's own session (baton view), so
-// that the lead never waits on a worker's question. These are the words the lead and the worker read
-// about all that.
+// A phase agent's question reaches the human in Claude Code's own dialog, which baton's mod opens in the
+// lead's terminal (state.Relay). Its third option is what baton picks when nobody answers, as for the
+// lead's own questions: a timed proposal goes ahead at the time its question names, and anything else
+// waits for the human, who has it again with /baton run, so that nothing waits on an agent's question
+// on screen. These are the words the human and the agent read about all that.
 
-// RelayOptions are the answers to worker question r.
+// RelayOptions are the answers to phase agent question r.
 func RelayOptions(r state.Relay) []Option {
 	pause := Option{"Pause baton", "I'm taking over; baton stops driving the plan"}
-	wait := Option{"Wait for me", fmt.Sprintf("Leave %s waiting; I'll answer in its session (baton view %s)", r.Phase, r.Phase)}
+	wait := Option{"Wait for me", "Leave " + r.Phase + " waiting; /baton run asks me again"}
 	goAhead := Option{"Go ahead", "Do what it proposed"}
 	switch {
 	case r.Timed():
-		return []Option{{"Wait for me", fmt.Sprintf("Don't do it yet; I'll answer in its session (baton view %s)", r.Phase)}, pause, goAhead}
+		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again"}, pause, goAhead}
 	case r.Kind == state.RelayProposal:
 		return []Option{goAhead, pause, wait}
 	case r.Kind == state.RelayReview:
@@ -31,16 +30,16 @@ func RelayOptions(r state.Relay) []Option {
 	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, wait}
 }
 
-// What an answer to a worker's question does (RelayOutcome).
+// What an answer to a phase agent's question does (RelayOutcome).
 const (
 	OutcomeGo    = "go"    // its proposal goes ahead
 	OutcomeOn    = "on"    // its block or its review is over, and its phase goes on
-	OutcomeWait  = "wait"  // it waits for the human in the worker's own session
-	OutcomePause = "pause" // the run is paused, and it waits for the human in the worker's own session
-	OutcomeWords = "words" // the human answered in their own words, which the worker follows
+	OutcomeWait  = "wait"  // its phase waits for the human
+	OutcomePause = "pause" // the run is paused, and its phase waits for the human
+	OutcomeWords = "words" // the human answered in their own words, which the agent follows
 )
 
-// RelayOutcome is what answer does to worker question r. No answer (a question that went away
+// RelayOutcome is what answer does to phase agent question r. No answer (a question that went away
 // unanswered) leaves it for the human, as Wait for me does.
 func RelayOutcome(r state.Relay, answer string) string {
 	switch {
@@ -56,13 +55,13 @@ func RelayOutcome(r state.Relay, answer string) string {
 	return OutcomeWords
 }
 
-// RelayDefault is the answer baton picks for worker question r when nobody answers.
+// RelayDefault is the answer baton picks for phase agent question r when nobody answers.
 func RelayDefault(r state.Relay) string { return RelayOptions(r)[2].Label }
 
-// RelayQuestion is the question that puts worker question r to the human, from the lead session. A timed
-// proposal goes ahead at deadline.
+// RelayQuestion is the question that puts phase agent question r to the human. A timed proposal goes
+// ahead at deadline.
 func RelayQuestion(r state.Relay, deadline time.Time) Question {
-	who := "baton: worker " + r.Phase
+	who := "baton: the agent on " + r.Phase
 	var text string
 	switch {
 	case r.Timed():
@@ -78,63 +77,12 @@ func RelayQuestion(r state.Relay, deadline time.Time) Question {
 	return Question{Text: Sanitize(text), Options: RelayOptions(r)}
 }
 
-// RelayAsk tells the lead's model to put the question of the worker on phase to the human now; call is
-// its exact call.
-func RelayAsk(phase, call string) string {
-	return fmt.Sprintf("[baton] The worker on %s has a question for the human, and only this session can put it to them. Before anything else, %s. "+
-		"baton gives the answer to the worker itself; then carry on with your own work.", phase, call)
-}
-
-// RelayStopped refuses the lead's stop: it has not put the question of the worker on phase to the human.
-func RelayStopped(phase, call string) string {
-	return fmt.Sprintf("[baton] You stopped, but put the question of the worker on %s to the human first: %s. "+
-		"baton gives the answer to the worker itself; then carry on with your own work.", phase, call)
-}
-
-// RelayHold holds the lead's tool call until it has put the question of the worker on phase to the human.
-func RelayHold(phase, call string) string {
-	return fmt.Sprintf("[baton] Not yet: put the question of the worker on %s to the human first: %s. Until they have it, nothing else runs.", phase, call)
-}
-
-// RelayTyped is the line typed into the idle lead session to have it put the question of the worker on
-// phase to the human; the exact call comes with the prompt.
-func RelayTyped(phase string) string { return "[baton] worker " + phase + " has a question for you" }
-
-// RelayPassed tells the lead's model that the human answered the question of the worker on phase, or
-// that nobody did and baton chose answer for them (auto). cur is the lead's phase in hand ("" for none).
-func RelayPassed(phase, answer string, auto bool, cur string) string {
-	who := "The human answered the question of the worker on " + phase
-	if auto {
-		who = "Nobody answered the question of the worker on " + phase + ", so baton chose " + answer + " for the human"
-	}
-	next := "Carry on with what you were doing."
-	if cur != "" {
-		next = "Carry on with " + cur + "."
-	}
-	return fmt.Sprintf("[baton] %s. baton gives the answer to the worker itself: nothing about it is yours to do. %s", who, next)
-}
-
-// RelaySettled tells the lead's model that the question of the worker on phase it put to the human was
-// settled already, in the worker's own session or because the worker is gone: the answer changed nothing.
-func RelaySettled(phase, cur string) string {
-	next := "Carry on with what you were doing."
-	if cur != "" {
-		next = "Carry on with " + cur + "."
-	}
-	return fmt.Sprintf("[baton] That question of the worker on %s was settled already, so the answer changed nothing, and nothing about it is yours to do. %s", phase, next)
-}
-
-// RelayPaused tells the lead's model that the human chose Pause baton on a worker's question.
-func RelayPaused() string {
-	return "[baton] The human chose Pause baton: baton is paused. Wait for the human's instructions."
-}
-
-// RelayGoAhead tells a worker on phase that the human chose Go ahead on its proposal id, to do what.
+// RelayGoAhead tells the agent on phase that the human chose Go ahead on its proposal id, to do what.
 func RelayGoAhead(id, what, phase string) string {
 	return fmt.Sprintf("[baton] The human chose Go ahead on your proposal %s. Do what you proposed now: %s. Then carry on with %s.", id, what, phase)
 }
 
-// RelayWentAhead tells a worker on phase that nobody answered its proposal id by deadline, so baton chose
+// RelayWentAhead tells the agent on phase that nobody answered its proposal id by deadline, so baton chose
 // Go ahead: it does what, which undo reverses. last says it was the last decision the phase may make
 // without the human before they review them.
 func RelayWentAhead(id, what, undo, phase string, deadline time.Time, last bool) string {
@@ -147,14 +95,14 @@ func RelayWentAhead(id, what, undo, phase string, deadline time.Time, last bool)
 	return s + " Then carry on with " + phase + "."
 }
 
-// RelayHeld tells a worker on phase not to do what its proposal id proposed (what): why says what became
-// of its question. It waits for the human, who answers in the worker's own session.
+// RelayHeld tells the agent on phase not to do what its proposal id proposed (what): why says what became
+// of its question. It waits for the human, and baton gives it their answer.
 func RelayHeld(id, what, phase, why string) string {
-	return fmt.Sprintf("[baton] %s: do not do what you proposed in %s (%s). End your turn now: %s waits for the human, who answers in this session, "+
-		"and their message reaches you here.", why, id, what, phase)
+	return fmt.Sprintf("[baton] %s: do not do what you proposed in %s (%s). End your turn now: %s waits for the human, "+
+		"and baton gives you their answer here.", why, id, what, phase)
 }
 
-// RelayContinue tells a worker on phase that the human chose Continue on its block (because) or its
+// RelayContinue tells the agent on phase that the human chose Continue on its block (because) or its
 // review (kind).
 func RelayContinue(kind, because, phase string) string {
 	if kind == state.RelayReview {
@@ -163,7 +111,7 @@ func RelayContinue(kind, because, phase string) string {
 	return fmt.Sprintf("[baton] The human chose Continue: they have dealt with what blocked you (%s). Carry on with %s.", because, phase)
 }
 
-// RelayOwnWords gives a worker on phase the human's own answer to its question r.
+// RelayOwnWords gives the agent on phase the human's own answer to its question r.
 func RelayOwnWords(r state.Relay, answer, phase string) string {
 	switch r.Kind {
 	case state.RelayProposal:
@@ -177,12 +125,23 @@ func RelayOwnWords(r state.Relay, answer, phase string) string {
 		r.Because, strconv.Quote(answer), phase)
 }
 
-// WorkerAnsweredHere tells a worker on phase that the human wrote in its own session, where its block
-// (because) or its review (kind) waited for them: their message is the answer.
-func WorkerAnsweredHere(kind, because, phase string) string {
-	what := "your block (" + because + ")"
-	if kind == state.RelayReview {
-		what = "the review of the decisions " + phase + " made without them"
-	}
-	return fmt.Sprintf("[baton] The human has written to you in this session: their message answers %s. Follow it, then carry on with %s.", what, phase)
+// RelayWaits is the notice that the phase agent on phase waits for the human (what): nobody answered its
+// question with a way on.
+func RelayWaits(phase, what string) string {
+	return fmt.Sprintf("the agent on %s waits for you (%s): /baton run asks you again", phase, what)
+}
+
+// RelayWithdrawn tells the human that the question of the agent on phase needs no answer any more (why).
+func RelayWithdrawn(phase, why string) string {
+	return fmt.Sprintf("baton: the question of the agent on %s needs no answer any more: %s", phase, why)
+}
+
+// RelayPaused tells the human that baton is paused, as they chose on the question of the agent on phase.
+func RelayPaused(phase string) string {
+	return "baton: paused — the human is driving; the agent on " + phase + " waits for you, and /baton run asks you again"
+}
+
+// RelayAgain tells the human that /baton run puts the question of the agent on phase to them again.
+func RelayAgain(phase string) string {
+	return "baton: the agent on " + phase + " waits for you — baton asks you its question again"
 }

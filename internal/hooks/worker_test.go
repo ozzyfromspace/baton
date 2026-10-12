@@ -106,7 +106,7 @@ func TestAWorkerStartsItsPhaseFromItsBrief(t *testing.T) {
 	for _, want := range []string{
 		`You are a worker for the plan "Demo"`, "you work on P2 alone, in a git worktree of your own (" + tree + ", on the branch baton/sess-1/P2)",
 		"Now: P2 — Third. Begin it now.", "Be kind.", "Do c.", "Notes left by the phases P2 builds on", "Overlay done.",
-		"baton then lands your work on the run's branch", "baton puts it to them through the lead session",
+		"baton then lands your work on the run's branch", "baton puts it to them with a deadline",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the brief lacks %q:\n%s", want, brief)
@@ -199,9 +199,9 @@ func TestAWorkerKeepsToItsOwnWorktree(t *testing.T) {
 	}
 }
 
-// A worker's stop leaves its questions to the lead: a block, a review or its proposal is queued in the run
-// (once, however often it stops) for the lead session to put to the human, and the stop goes through. Its
-// phase done, its work is the run's to land.
+// A phase agent's stop leaves its questions to baton: a block, a review or its proposal is queued in the
+// run (once, however often it stops) for baton to put to the human, and the stop goes through. Its phase
+// done, its work is the run's to land.
 func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -215,18 +215,18 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 		{"its phase done", func(st *state.State, _ time.Time) { st.Mode, st.Current = state.ModeComplete, "" },
 			"baton: P2 (Third) done → baton lands its work on the run's branch", "", "", "", map[string]any{"kind": "worker_finished", "phase": "P2"}},
 		{"blocked", func(st *state.State, now time.Time) { state.SetBlocked(st, "need a key", now) },
-			"baton: waiting on the human — blocked on P2: need a key; the lead session asks them", "", "P2/blocked", "|need a key|0", map[string]any{"kind": "escalated", "type": "blocked", "relayed": true}},
+			"baton: waiting on the human — blocked on P2: need a key; baton asks them", "", "P2/blocked", "|need a key|0", map[string]any{"kind": "escalated", "type": "blocked", "relayed": true}},
 		{"a review due", func(st *state.State, now time.Time) {
 			state.AddNote(st, "used a fake", "", now)
 			state.DueReview(st, "P2", now)
 		},
-			"baton: waiting on the human — review the decisions P2 made without you; the lead session asks them", "", "P2/review", "||1", map[string]any{"kind": "escalated", "type": "review"}},
+			"baton: waiting on the human — review the decisions P2 made without you; baton asks them", "", "P2/review", "||1", map[string]any{"kind": "escalated", "type": "review"}},
 		{"its proposal waits", func(st *state.State, now time.Time) {
 			state.AddProposal(st, state.Decision{What: "use a fake", Because: "no clock", Relayed: true}, now)
 		},
-			"baton: P2 (Third) waits on the human's answer to proposal P2.d1, which the lead session puts to them", "", "P2/proposal/P2.d1", "use a fake|no clock|0",
+			"baton: P2 (Third) waits on the human's answer to proposal P2.d1, which baton puts to them", "", "P2/proposal/P2.d1", "use a fake|no clock|0",
 			map[string]any{"kind": "idle_on_relay", "id": "P2.d1"}},
-		{"no status", func(*state.State, time.Time) {}, "", "baton puts it to the human through the lead session", "", "", map[string]any{"kind": "stop_refused", "phase": "P2"}},
+		{"no status", func(*state.State, time.Time) {}, "", "baton puts it to the human and gives you their answer here", "", "", map[string]any{"kind": "stop_refused", "phase": "P2"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, lead, _ := newWorker(t)

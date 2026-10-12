@@ -50,6 +50,10 @@ var ReviewOptions = []Option{
 	{"Pause baton", "I'll take it from here"},
 }
 
+// MinWait is the least time one of baton's questions is on screen before baton answers it for the human:
+// after a sleep, or once a dialog in front of it goes, they get that long again.
+const MinWait = time.Minute
+
 // WarnOptions are the context question's answers. The default, Keep going, is third on purpose: baton
 // types 3 when nobody answers, and in a permission prompt 3 is "No" (docs/research/escalation.md).
 var WarnOptions = []Option{
