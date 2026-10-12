@@ -186,10 +186,10 @@ func TestAResumeWaitsOnlyForRoom(t *testing.T) {
 	}
 	x.machine.Load1 = 3
 	x.tick(time.Second)
-	if got := x.spawns(); len(got) != 2 || got[1] != "P1" || x.worker("P1").Status != state.WorkerStarting {
+	if got := x.spawns(); len(got) != 2 || got[1] != "P1" || x.worker("P1").Status != state.WorkerWorking { // its agent, by a message
 		t.Errorf("spawned %v; P1's worker %+v", got, x.worker("P1"))
 	}
-	x.tick(time.Second) // its agent at work, the next phase waits for room under the usage
+	x.tick(time.Second) // the next phase waits for room under the usage
 	if h := x.state().Hold; h == nil || h.Kind != state.HoldUsage || x.worker("P1").Status != state.WorkerWorking {
 		t.Errorf("new workers are held by the usage: %+v", h)
 	}

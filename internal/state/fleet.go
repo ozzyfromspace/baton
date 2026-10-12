@@ -47,8 +47,13 @@ type Worker struct {
 	// AgentID is the phase agent at work on it in the lead's claude, linked to its sub-run
 	// (Project.LinkAgent) as its worktree was made for it (WorktreeCreate); "" until then.
 	AgentID string `json:"agent,omitempty"`
-	Status  string `json:"status"`
-	Why     string `json:"why,omitempty"` // why it is suspended or failed
+	// Resume is the lead's session in which a message by its id would start its agent again with its
+	// conversation: set when its agent ended with the lead's claude (loop's Coordinator.Ended), since a
+	// crash or a restart resumes that session (spike 31), and cleared as it is taken up. A worker set
+	// aside for any other reason gets a fresh agent.
+	Resume string `json:"resume,omitempty"`
+	Status string `json:"status"`
+	Why    string `json:"why,omitempty"` // why it is suspended or failed
 	// Assigned is when it was given its phase, Since when it took its status, Started when its first agent
 	// started, and Ended when its agent last ended.
 	Assigned time.Time `json:"assigned"`

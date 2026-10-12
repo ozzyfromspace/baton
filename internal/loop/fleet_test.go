@@ -399,15 +399,25 @@ func TestAnAgentThatDoesNotStopIsRetiredAnyway(t *testing.T) {
 	}
 }
 
-// Phase agents end with the lead's claude: their workers are suspended, and the next host for the run
-// starts an agent for each again, in its worktree as it was left, at once. The agent before it is none of
-// baton's any more, and the new one is told it takes the phase up. One whose spawn was never acked starts
-// anew.
+// The phase agents end with the lead's claude: each one's worker is suspended, its sub-run let go, and the
+// next host for the run takes it up again. An agent at work in the conversation the lead has back (a crash,
+// a restart) is started again by a message, with its conversation, in its worktree; a spawn never acked,
+// an agent of a conversation the lead no longer has, or one Claude Code cannot resume, gets a fresh agent
+// there.
 func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		started bool
-	}{{"an agent at work", true}, {"a spawn not acked yet", false}} {
+		session string // the lead's session on the next host ("": the same)
+		refused string // what Claude Code says to the message that would start it again
+		message bool   // started again by a message
+	}{
+		{"an agent at work", true, "", "", true},
+		{"a spawn not acked yet", false, "", "", false},
+		{"an agent placed, its spawn not acked", false, "", "", false},
+		{"a fresh conversation for the lead", true, "sess-2", "", false},
+		{"an agent Claude Code cannot resume", true, "", "Agent ap11 is stopped (completed) and could not be resumed", false},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newCrew(t, 1)
 			if c.started {
@@ -415,7 +425,8 @@ func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 				gittest.Write(t, x.worker("P1").Worktree, "w.txt", "the worker's\n")
 				gittest.Commit(t, x.worker("P1").Worktree, "the worker's commit")
 			} else {
-				x.modOff = true
+				x.modOff, x.ackless = c.name == "a spawn not acked yet", true
+				x.tick(time.Second)
 				x.tick(time.Second)
 			}
 			before := x.worker("P1")
@@ -424,7 +435,7 @@ func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 			if len(suspended) != 1 || suspended[0].Phase != "P1" || !slices.Equal(stopped, []string{"sess-1/P1"}) {
 				t.Fatalf("Ended returned %+v, ran on %v", suspended, stopped)
 			}
-			if w := x.worker("P1"); w.Status != state.WorkerSuspended || w.Why != "the baton session ended" || x.state().Phases["P1"].Status != state.PhaseWorking {
+			if w := x.worker("P1"); w.Status != state.WorkerSuspended || w.Why != "the baton session ended" || x.state().Phases["P1"].Status != state.PhaseWorking || (w.Resume == "sess-1") != c.started {
 				t.Fatalf("worker %+v", w)
 			}
 			if sst, _ := x.sub("P1").Load(); sst.Owner != nil {
@@ -432,16 +443,39 @@ func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 			}
 			x.proj.Unbind("inst")
 
-			x.modOff = false
+			x.modOff, x.ackless, x.sendErr = false, false, c.refused
 			x.c = x.coordinator("next", 1)
+			if c.session != "" {
+				x.lead.Update(func(st *state.State) error { st.Run.SessionID = c.session; return nil })
+			}
 			x.tick(time.Second)
-			if got := x.spawns(); len(got) != 2 || !strings.Contains(x.events(), `"why":"the baton session ended"`) {
-				t.Fatalf("spawned %v; events:\n%s", got, x.events())
+			if c.message {
+				x.tick(time.Second)
+				w := x.worker("P1")
+				if len(x.agents) != 1 || w.Status != state.WorkerWorking || w.AgentID != before.AgentID || w.Resume != "" || !slices.Equal(x.tracked(), []string{before.AgentID}) {
+					t.Fatalf("agents %+v; worker %+v; baton's agents %v", x.agents, w, x.tracked())
+				}
+				if !slices.Contains(x.sent, sent{agent: before.AgentID, text: decide.AgentResumed("P1")}) || len(x.resumes) != 1 {
+					t.Fatalf("sent %+v, resumed %v", x.sent, x.resumes)
+				}
+				sst, _ := x.sub("P1").Load()
+				if sst.Owner == nil || sst.Owner.Instance != state.WorkerInstance("next", "P1") || sst.Run.Briefed != before.AgentID || strings.Count(x.subEvents("P1"), `"kind":"brief"`) != 1 {
+					t.Errorf("the sub-run: owner %+v, briefed %q:\n%s", sst.Owner, sst.Run.Briefed, x.subEvents("P1"))
+				}
+				if !x.logged("worker_resumed", map[string]any{"phase": "P1", "agent": before.AgentID, "by": "message", "why": "the baton session ended"}) {
+					t.Errorf("events:\n%s", x.events())
+				}
+				return
+			}
+			for range 4 {
+				if a := x.agent("P1"); a.id != before.AgentID && x.status("P1") == state.WorkerWorking {
+					break
+				}
+				x.tick(time.Second)
 			}
 			a := x.agent("P1")
-			x.tick(time.Second)
 			w := x.worker("P1")
-			if a.tree != before.Worktree || w.Status != state.WorkerWorking || w.AgentID != a.id || !slices.Equal(x.tracked(), []string{a.id}) {
+			if a.id == before.AgentID || a.tree != before.Worktree || w.Status != state.WorkerWorking || w.AgentID != a.id || !slices.Equal(x.tracked(), []string{a.id}) {
 				t.Fatalf("agent %+v; worker %+v; baton's agents %v", a, w, x.tracked())
 			}
 			sst, _ := x.sub("P1").Load()
@@ -451,7 +485,8 @@ func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 			if c.started && gitx.Head(a.tree) != gitx.Head(before.Worktree) || !c.started && gitx.Head(a.tree) != before.Base {
 				t.Errorf("the worktree is at %s", gitx.Head(a.tree))
 			}
-			if !x.logged("agent_placed", map[string]any{"phase": "P1", "agent": a.id, "kept": c.started}) {
+			placed := c.started || c.name == "an agent placed, its spawn not acked" // its worktree was made before
+			if !x.logged("agent_placed", map[string]any{"phase": "P1", "agent": a.id, "kept": placed}) {
 				t.Errorf("events:\n%s", x.events())
 			}
 		})
@@ -503,5 +538,70 @@ func TestASuspendedWorkerOfADroppedRunIsCleanedUp(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(x.sub("P1").Dir, "events.jsonl"))
 	if !strings.Contains(string(b), `"kind":"snapshot"`) || !strings.Contains(string(b), `"why":"the run was dropped"`) {
 		t.Errorf("its uncommitted work was not saved:\n%s", b)
+	}
+}
+
+// A /clear of the lead's conversation ends its phase agents, and none can be messaged after it; one at
+// work finishes its turn in its worktree first, and only once it is quiet does a fresh agent take its phase
+// up there. Never two agents at once in one worktree.
+func TestAClearedLeadsAgentsAreTakenUpAfresh(t *testing.T) {
+	x := newCrew(t, 1)
+	x.atWork("P1")
+	first := x.agent("P1")
+	x.lead.Update(func(st *state.State) error { st.Run.SessionID = "sess-2"; return nil })
+	x.wait(time.Minute)
+	if len(x.agents) != 1 || x.status("P1") != state.WorkerWorking {
+		t.Fatalf("taken up mid-turn: %+v, %s", x.agents, x.status("P1"))
+	}
+	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastActivity = false, x.now; return nil })
+	x.tick(time.Second)
+	if len(x.agents) != 1 || x.status("P1") != state.WorkerWorking {
+		t.Fatalf("taken up while its last hook was a moment ago: %+v, %s", x.agents, x.status("P1"))
+	}
+	for range 8 {
+		x.tick(time.Second)
+	}
+	fresh := x.agent("P1")
+	if fresh.id == first.id || fresh.tree != first.tree || !slices.Equal(x.tracked(), []string{fresh.id}) || x.status("P1") != state.WorkerWorking {
+		t.Fatalf("agents %+v; baton's %v; %s", x.agents, x.tracked(), x.status("P1"))
+	}
+	if !x.logged("worker_resumed", map[string]any{"phase": "P1", "why": decide.AgentCleared}) || slices.ContainsFunc(x.sent, func(s sent) bool { return s.agent == first.id }) {
+		t.Errorf("sent %+v; events:\n%s", x.sent, x.events())
+	}
+}
+
+// A phase agent whose last turn was refused waits for the human, across a crash too: the next host neither
+// starts it again by a message nor gives its phase a fresh agent, until they run /baton run.
+func TestARefusedAgentWaitsForTheHumanAcrossACrash(t *testing.T) {
+	for _, kind := range []string{"refused", "api_error"} {
+		t.Run(kind, func(t *testing.T) {
+			x := newCrew(t, 1)
+			x.atWork("P1")
+			x.sub("P1").Update(func(st *state.State) error {
+				st.Run.Escalation = &state.Escalation{Kind: kind, Reason: "P1 stopped", Since: x.now}
+				return nil
+			})
+			x.c.Ended("the baton session ended", nil)
+			x.proj.Unbind("inst")
+			x.c = x.coordinator("next", 1)
+			x.wait(3 * time.Minute)
+			if len(x.agents) != 1 || len(x.sent) != 0 || x.status("P1") != state.WorkerSuspended {
+				t.Fatalf("taken up: agents %+v, sent %+v, %s", x.agents, x.sent, x.status("P1"))
+			}
+			// /baton run clears the escalation and asks for a fresh agent (cli's takeUp).
+			x.sub("P1").Update(func(st *state.State) error { st.Run.Escalation = nil; return nil })
+			w := x.worker("P1")
+			x.lead.Update(func(st *state.State) error {
+				e := st.Entry(w)
+				e.Why, e.Resume = "the human asked for a fresh agent", ""
+				return nil
+			})
+			for range 4 {
+				x.tick(time.Second)
+			}
+			if a := x.agent("P1"); len(x.agents) != 2 || x.status("P1") != state.WorkerWorking || len(x.sent) != 0 {
+				t.Errorf("after /baton run: %+v %s, sent %+v", a, x.status("P1"), x.sent)
+			}
+		})
 	}
 }

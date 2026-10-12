@@ -613,6 +613,35 @@ func TestALandingWaitsForTheWorkerToStop(t *testing.T) {
 	}
 }
 
+// A message on its way to a finished phase's agent would start it again in its worktree: nothing lands
+// until the mod has run it, and the turn it starts has ended.
+func TestALandingWaitsForAMessageOnItsWay(t *testing.T) {
+	x := landingCrew(t)
+	x.leadCommits(map[string]string{"lead.txt": "lead\n"})
+	old := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	x.modOff = true
+	if err := x.c.send(x.lead, x.c.session(x.worker("P1")), "[baton] a word"); err != nil {
+		t.Fatal(err)
+	}
+	x.tick(workerQuiet)
+	x.tick(time.Second)
+	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old || x.worker("P1").Status != state.WorkerLanding {
+		t.Fatalf("rebased with a message on its way to its agent\n%s", x.events())
+	}
+	x.modOff = false
+	x.runMod() // the message starts it again
+	x.tick(workerQuiet)
+	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old || len(x.resumes) != 1 {
+		t.Fatalf("rebased under the turn the message started (%v)\n%s", x.resumes, x.events())
+	}
+	x.stops("P1")
+	x.tick(workerQuiet)
+	x.tick(time.Second)
+	if x.worker("P1").Status != state.WorkerLanded {
+		t.Fatalf("not landed once its turn ended\n%s", x.events())
+	}
+}
+
 // The lead idle with no phase in hand takes up the phase that waited for the landed one, after a
 // compaction; and the landing that finishes the plan completes it.
 func TestALandingMovesTheRunOn(t *testing.T) {

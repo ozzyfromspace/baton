@@ -49,6 +49,17 @@ func AgentBriefAgain(phase string) string {
 	return fmt.Sprintf("[baton] Your context was compacted, so baton gives you the brief of %s again: read it, then go on with the phase from where it stands.", phase)
 }
 
+// AgentResumed is the message that starts the phase agent on phase again, with its conversation, once the
+// lead's session is back after its claude ended (a crash, or a restart).
+func AgentResumed(phase string) string {
+	return fmt.Sprintf("[baton] The lead's session is back after its claude ended, and baton starts you again: go on with %s from where it stands. "+
+		"A command of yours that was running then was cut off: run it again if you still need it.", phase)
+}
+
+// AgentCleared is why a phase agent's phase is taken up by a fresh agent after the human cleared the
+// lead's conversation: /clear ends every agent of the session (spike 32).
+const AgentCleared = "the lead's conversation was cleared, which ends its agents"
+
 // AgentCheckpointed is why a phase agent's phase is taken up again by a fresh agent, after its
 // checkpoint: for the human, and the roster.
 const AgentCheckpointed = "its agent checkpointed, and a fresh one goes on from its notes"

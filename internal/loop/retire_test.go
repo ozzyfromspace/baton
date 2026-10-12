@@ -293,7 +293,7 @@ func TestResumeAndRetireNeverBoth(t *testing.T) {
 			switch {
 			case resumed != c.resumed:
 				t.Errorf("resumed %v, want %v", resumed, c.resumed)
-			case resumed && (old.Status != state.WorkerStarting || retired.Skipped == "" || len(x.spawns()) != sessions+1):
+			case resumed && (old.Status != state.WorkerWorking || retired.Skipped == "" || len(x.spawns()) != sessions+1): // by a message to its agent
 				t.Errorf("resumed, and retired too (%q): entry %+v", retired.Skipped, old)
 			case !resumed && (old.Status != state.WorkerFailed || retired.Skipped != "" || len(x.spawns()) != sessions+btoi(c.fresh)):
 				t.Errorf("retired (%q), with %d sessions started: entry %+v\n%s", retired.Skipped, len(x.spawns())-sessions, old, x.events())
@@ -334,7 +334,7 @@ func TestAStaleMarkDoesNotHoldAResume(t *testing.T) {
 	mark(x, &w, "baton clean", x.now.Add(-state.RetireStale-time.Second))
 	x.c = x.coordinator("next", 1)
 	x.tick(time.Second)
-	if after := x.worker("P1"); len(x.spawns()) != 2 || after.Status != state.WorkerStarting || !after.Retiring.IsZero() || after.Retirer != "" {
+	if after := x.worker("P1"); len(x.spawns()) != 2 || after.Status != state.WorkerWorking || !after.Retiring.IsZero() || after.Retirer != "" {
 		t.Errorf("%d sessions; entry %+v", len(x.spawns()), after)
 	}
 }

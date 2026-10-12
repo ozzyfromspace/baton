@@ -546,6 +546,11 @@ func TestBatonRunAsksForAFreshAgent(t *testing.T) {
 			sub.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped"}
 			sub.Run.LastError = &state.StopError{Error: state.ErrRefusal}
 		}, "the model's safeguards declined the last turn of the agent before it"},
+		// Its agent ended with the lead's claude since: a fresh agent, never a message into that conversation.
+		{"refused, then suspended", func(e *state.Worker, sub *state.State) {
+			e.Status, e.Why, e.Resume = state.WorkerSuspended, "the baton session ended", "sess-1"
+			sub.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped"}
+		}, "the model's safeguards declined the last turn of the agent before it"},
 		{"at work", func(*state.Worker, *state.State) {}, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -576,7 +581,7 @@ func TestBatonRunAsksForAFreshAgent(t *testing.T) {
 			if !strings.Contains(out, decide.AgentAfresh("P1", c.why)) || strings.Contains(out, "already running") {
 				t.Errorf("out: %s", out)
 			}
-			if got.Status != state.WorkerSuspended || got.Why != "the human asked for a fresh agent: "+c.why || !got.Since.Equal(lead.now) || !got.Is(e) {
+			if got.Status != state.WorkerSuspended || got.Why != "the human asked for a fresh agent: "+c.why || !got.Since.Equal(lead.now) || !got.Is(e) || got.Resume != "" {
 				t.Errorf("the worker %+v", got)
 			}
 			if sst.Run.Escalation != nil || sst.Run.LastError != nil {

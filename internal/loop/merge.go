@@ -93,8 +93,8 @@ const (
 	lockedRetry  = 2 * time.Second
 )
 
-// workerQuiet is how long a worker's session must have been quiet before baton touches its worktree: a
-// stop baton refuses ends no turn, though the session's state says it did.
+// workerQuiet is how long a phase agent must have been quiet before baton touches its worktree: a stop
+// baton refuses ends no turn, though the sub-run's state says it did.
 const workerQuiet = 5 * time.Second
 
 // merge moves the merge queue on by a step: it queues the workers whose phases are finished, then tries
@@ -174,8 +174,8 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 		c.returned(now, s, e, "its phase was taken up again", nil)
 		return true
 	}
-	if sub.Run.TurnOpen || now.Sub(sub.Run.LastActivity) < workerQuiet {
-		return false // its session is still at work, in its worktree
+	if sub.Run.TurnOpen || w.sending != 0 || now.Sub(sub.Run.LastActivity) < workerQuiet {
+		return false // its agent is at work in its worktree, or a message on its way to it would start it there
 	}
 	if !isDir(e.Worktree) {
 		c.end(now, s, c.bridge(s), w, "its worktree is gone")

@@ -127,6 +127,7 @@ type worker struct {
 	stop     int
 	sending  int
 	sentAt   time.Time
+	session  string // the lead's session its agent lives in: a /clear of the lead's ends it
 }
 
 // guarded runs fn, a part of a session's tick, so that a panic in it is logged, in l's log and at most

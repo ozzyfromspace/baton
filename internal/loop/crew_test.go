@@ -48,6 +48,7 @@ type crew struct {
 	sent     []sent
 	resumes  []string
 	modOff   bool   // it runs nothing: no spawn is acked
+	ackless  bool   // it runs a spawn, whose agent starts, but its ack never comes
 	unplaced bool   // a spawn's agent starts without its worktree hook (somewhere else)
 	spawnErr string // the spawn's Agent call fails with this
 	sendErr  string // a message's SendMessage call fails with this
@@ -158,7 +159,9 @@ func (x *crew) runMod() {
 		switch c.Kind {
 		case bridge.Spawn:
 			agent, why := x.spawn(c)
-			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: why == "", Agent: agent, Error: why})
+			if !x.ackless {
+				x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: why == "", Agent: agent, Error: why})
+			}
 		case bridge.Stop:
 			x.stopped = append(x.stopped, c.Agent)
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})

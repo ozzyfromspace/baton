@@ -1174,7 +1174,7 @@ func takeUp(io IO, s *state.Store) []string {
 		switch w.Status {
 		case state.WorkerHeld:
 			why = "you stopped the agent before it"
-		case state.WorkerWorking:
+		case state.WorkerWorking, state.WorkerSuspended: // suspended: its agent ended with the lead's claude since
 			sub, err := p.ExistingRun(w.Ref, instance(io))
 			if err != nil {
 				continue
@@ -1201,7 +1201,7 @@ func takeUp(io IO, s *state.Store) []string {
 		taken := false
 		s.Update(func(st *state.State) error {
 			if e := st.Entry(w); e != nil && e.Live() {
-				e.Status, e.Since, e.Why, taken = state.WorkerSuspended, now, "the human asked for a fresh agent: "+why, true
+				e.Status, e.Since, e.Why, e.Resume, taken = state.WorkerSuspended, now, "the human asked for a fresh agent: "+why, "", true
 			}
 			return nil
 		})

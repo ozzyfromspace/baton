@@ -28,9 +28,11 @@ import (
 // work landed) is ended: the mod stops its agent, and it is retired (RetireWorker): its uncommitted work is
 // saved and its worktree removed. Its branch goes too, unless it holds commits that never landed. Phase
 // agents live in the lead's claude and end with it: a worker whose agent ended with the host is suspended
-// (Ended), and the next host for the run starts an agent for it again in its worktree, or retires it when
-// that host runs no workers. All of this runs off the lead's tick, one step at a time, since git takes a
-// while.
+// (Ended), and the next host for the run takes it up again, by a message to its agent where the lead's
+// conversation is back (a crash, a restart), by a fresh agent in its worktree otherwise, or retires it when
+// that host runs no workers. A /clear of the lead's ends every agent: each phase goes on in a fresh one,
+// once the agent before it is quiet. All of this runs off the lead's tick, one step at a time, since git
+// takes a while.
 
 // fleetEvery is how often the coordinator looks over the run's phase agents.
 const fleetEvery = time.Second
@@ -260,7 +262,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		}
 		if why := unwanted(st, pl, &e); why != "" {
 			c.retire(now, s, e, why)
-		} else if e.Status != state.WorkerHeld && c.mayLaunch(now, s, st) == "" && c.noRoom == "" {
+		} else if e.Status != state.WorkerHeld && !c.humans(e) && c.mayLaunch(now, s, st) == "" && c.noRoom == "" {
 			why := e.Why
 			if why == "" {
 				why = "its agent ended with the baton session that ran it"
@@ -425,7 +427,7 @@ func (c *Coordinator) spawnAcked(now time.Time, s *state.Store, b *bridge.Bridge
 	switch {
 	case placed != "" && (r.Interrupted || r.OK && r.Agent == placed):
 		b.Track(placed, w.phase) // an interrupted spawn's ack made it none of baton's agents
-		w.entry.AgentID = placed
+		w.entry.AgentID, w.session = placed, st.Run.SessionID
 		w.agent.in = line{c, s, w} // its loop reaches it from now on
 		c.setEntry(s, w.entry, func(x *state.Worker) {
 			x.Status, x.Since = state.WorkerWorking, now
@@ -484,8 +486,9 @@ func (c *Coordinator) turned(s *state.Store, r bridge.Report) {
 	}
 }
 
-// watch looks at the agent of w: whether the run still counts on it, whether it checkpointed, whether it
-// has started in time, and whether one baton is ending has stopped.
+// watch looks at the agent of w: whether the run still counts on it, whether a /clear of the lead's ended
+// it, whether it checkpointed, whether it has started in time, and whether one baton is ending has
+// stopped.
 func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st state.State, pl plan.Plan, w *worker) {
 	e := st.Entry(w.entry)
 	switch why := unwanted(st, pl, e); {
@@ -497,6 +500,13 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		c.end(now, s, b, w, why)
 	case e.Status == state.WorkerSuspended:
 		c.afresh(now, s, b, w, *e) // its agent is gone for good, it checkpointed, or the human asked for a fresh one
+	case c.cleared(now, w, st):
+		c.setEntry(s, w.entry, func(x *state.Worker) {
+			if x.Live() {
+				x.Status, x.Since, x.Why = state.WorkerSuspended, now, decide.AgentCleared
+			}
+		})
+		w.store.Event("agent_cleared", map[string]any{"agent": w.entry.AgentID, "session": st.Run.SessionID})
 	case c.checkpointed(w):
 		c.setEntry(s, w.entry, func(x *state.Worker) {
 			if x.Live() {
@@ -509,6 +519,18 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		b.Void(s.Instance, w.spawn)
 		c.spawnAcked(now, s, b, w, bridge.Report{Interrupted: true, Error: fmt.Sprintf("the mod did not start it within %s", c.Lead.Timing.AgentStart)})
 	}
+}
+
+// cleared reports that w's agent was ended by a /clear of the lead's conversation (st, the lead's run), and
+// is quiet: /clear ends every agent of the session, and none can be messaged after it, but one at work
+// then finishes its turn first, in its worktree (spike 32). Only once it has does a fresh agent take its
+// phase up there: never two agents at once in one worktree.
+func (c *Coordinator) cleared(now time.Time, w *worker, st state.State) bool {
+	if w.session == "" || st.Run.SessionID == "" || st.Run.SessionID == w.session || w.agent.in == nil || w.sending != 0 || w.ending != "" {
+		return false
+	}
+	sub, err := w.store.Load()
+	return err == nil && !sub.Run.TurnOpen && now.Sub(sub.Run.LastActivity) >= workerQuiet
 }
 
 // checkpointed reports that w's agent checkpointed and ended its turn: its stop queued the compaction a
@@ -599,12 +621,28 @@ func (c *Coordinator) subRun(s *state.Store, pl plan.Plan, e state.Worker) (*sta
 	return sub, err
 }
 
-// respawn starts an agent again for the roster's worker e, on which no agent of this host works: one whose
-// agent ended with the lead's claude (suspended), or one an earlier baton left. The new agent takes the
-// phase up in its worktree as the worker left it; the agent before it is none of baton's any more. Once its
-// sub-run is claimed, the worker must still be on the roster as e was read, and not retiring: another baton
-// process may be retiring it meanwhile (RetireWorker), and a worker is never both started again and
-// retired.
+// humans reports that the roster's worker e waits for the human before any agent takes its phase up again:
+// its agent's last turn was refused, or failed in a way baton does not retry (its sub-run escalated
+// refused or api_error). Nothing types into that conversation, and no fresh one starts, until they ask
+// for one (/baton run, which clears the escalation).
+func (c *Coordinator) humans(e state.Worker) bool {
+	sub, err := c.Project.ExistingRun(e.Ref, "")
+	if err != nil {
+		return false
+	}
+	st, err := sub.Load()
+	esc := st.Run.Escalation
+	return err == nil && esc != nil && (esc.Kind == "refused" || esc.Kind == "api_error")
+}
+
+// respawn takes up again the roster's worker e, on which no agent of this host works: one whose agent
+// ended with the lead's claude (suspended), one set aside for a fresh agent, or one an earlier baton left.
+// An agent that ended with the lead's claude, in the conversation the lead has now (Worker.Resume: a crash
+// or a restart resumed it), is started again by a message, with its conversation (resume); otherwise a new
+// agent takes the phase up in its worktree as the worker left it, and the agent before it is none of
+// baton's any more. Once its sub-run is claimed, the worker must still be on the roster as e was read, and
+// not retiring: another baton process may be retiring it meanwhile (RetireWorker), and a worker is never
+// both started again and retired.
 func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e state.Worker, why string) {
 	hook(c.resumeStep, "read")
 	sub, err := c.Project.NewWorker(s.Ref, e.Phase, s.Instance, e.Worktree)
@@ -614,6 +652,7 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 	}
 	hook(c.resumeStep, "claimed")
 	var held string
+	var again bool
 	_, err = s.Update(func(st *state.State) error {
 		w := st.Entry(e)
 		switch {
@@ -625,8 +664,14 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 		if held != "" {
 			return errKept
 		}
-		w.Status, w.Since, w.Why, w.Ended, w.Merge, w.AgentID = state.WorkerStarting, now, "", now, nil, ""
+		again = w.AgentID != "" && w.Resume != "" && w.Resume == st.Run.SessionID
+		w.Since, w.Why, w.Ended, w.Merge, w.Resume = now, "", now, nil, ""
 		w.Retiring, w.Retirer = time.Time{}, ""
+		if again {
+			w.Status = state.WorkerWorking
+		} else {
+			w.Status, w.AgentID = state.WorkerStarting, ""
+		}
 		return nil
 	})
 	if err != nil && held == "" {
@@ -638,12 +683,40 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 		return
 	}
 	hook(c.resumeStep, "guarded")
+	if again {
+		e.Status, e.Since, e.Resume = state.WorkerWorking, now, ""
+		c.resume(now, s, b, e, sub, why)
+		return
+	}
 	if e.AgentID != "" {
-		b.Forget(e.AgentID) // gone with its claude: a message would only start it again
+		b.Forget(e.AgentID) // a message would only start it again
 	}
 	pl, _ := s.LoadPlan()
-	e.Status, e.Since, e.AgentID = state.WorkerStarting, now, ""
+	e.Status, e.Since, e.AgentID, e.Resume = state.WorkerStarting, now, "", ""
 	c.issue(now, s, b, e, sub, pl, why)
+}
+
+// resume starts the agent of worker e, whose sub-run is sub, again by a message (decide.AgentResumed),
+// with its conversation, in its worktree: it ended with the lead's claude, whose conversation is back (a
+// crash, or a restart). It is one of baton's agents again (its reports are kept from the lead), its loop
+// reaches it, and as it starts its hooks give it what was queued for it meanwhile. Claude Code refuses a
+// message to one it cannot resume, and a fresh agent then takes the phase up (sendAcked).
+func (c *Coordinator) resume(now time.Time, s *state.Store, b *bridge.Bridge, e state.Worker, sub *state.Store, why string) {
+	st, _ := s.Load()
+	w := &worker{phase: e.Phase, entry: e, store: sub, agent: c.newAgent(e.Phase, sub), launched: now, session: st.Run.SessionID}
+	c.mu.Lock()
+	if c.workers == nil {
+		c.workers = map[string]*worker{}
+	}
+	c.workers[e.Phase] = w
+	c.mu.Unlock()
+	b.Track(e.AgentID, e.Phase)
+	w.agent.in = line{c, s, w}
+	s.Event("worker_resumed", map[string]any{"phase": e.Phase, "worktree": e.Worktree, "branch": e.Branch, "agent": e.AgentID, "why": why, "by": "message"})
+	c.announce(s, fmt.Sprintf("baton: the phase agent on %s goes on with its conversation, in its worktree: %s", e.Phase, why))
+	if err := c.send(s, w, decide.AgentResumed(e.Phase)); err != nil {
+		c.Lead.logf("loop: %s: starting its agent again: %v", e.Phase, err)
+	}
 }
 
 // afresh lets go of w, whose agent a fresh one replaces in its worktree (e, its entry, is suspended, and
@@ -705,8 +778,9 @@ func (c *Coordinator) retire(now time.Time, s *state.Store, e state.Worker, why 
 
 // Ended suspends the run's phase agents as the host ends: they end with the lead's claude. stop (nil: none)
 // runs on each one's sub-run first, while this host still holds it (the host stops its jobs there, as it
-// does the lead's); then nothing holds it any more, and the next host for the run starts an agent for it
-// again, in its worktree, at once. It returns their workers.
+// does the lead's); then nothing holds it any more, and the next host for the run takes it up again at
+// once: by a message to its agent, where the lead's conversation is the one it lived in (Worker.Resume),
+// or by a fresh agent in its worktree. It returns their workers.
 func (c *Coordinator) Ended(why string, stop func(sub *state.Store)) []state.Worker {
 	c.fleetWG.Wait()
 	s := c.Lead.Store
@@ -717,7 +791,11 @@ func (c *Coordinator) Ended(why string, stop func(sub *state.Store)) []state.Wor
 		if stop != nil {
 			stop(w.store)
 		}
-		w.store.Update(func(st *state.State) error { state.Release(st, w.store.Instance); return nil })
+		w.store.Update(func(st *state.State) error {
+			state.Release(st, w.store.Instance)
+			st.Run.TurnOpen = false // its turn ended with the lead's claude
+			return nil
+		})
 		if s == nil {
 			continue
 		}
@@ -725,6 +803,8 @@ func (c *Coordinator) Ended(why string, stop func(sub *state.Store)) []state.Wor
 		c.setEntry(s, w.entry, func(e *state.Worker) {
 			if e.Status == state.WorkerStarting || e.Status == state.WorkerWorking || e.Status == state.WorkerLanding {
 				e.Status, e.Since, e.Why, e.Ended, e.Merge = state.WorkerSuspended, now, why, now, nil
+				// A message starts its agent again once its conversation is back; one never at work has none.
+				e.Resume = w.session
 			}
 		})
 		s.Event("worker_ended", map[string]any{"phase": w.phase, "why": why, "suspended": true})
