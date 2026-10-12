@@ -58,6 +58,9 @@ type Runtime struct {
 	// Spawning is the phase agent baton's mod is starting in the lead's claude, from its call's PreToolUse
 	// until its worktree is made (WorktreeCreate) or the call ends (Spawning).
 	Spawning *Spawning `json:"spawning,omitempty"`
+	// AgentCalls are the Agent tool's calls of the model's own in the lead's claude (the lead's, or any
+	// agent's), oldest first, whose agents may still ask for a worktree (AgentCall).
+	AgentCalls []AgentCall `json:"agent_calls,omitempty"`
 	// Plain are the worktrees baton made in a hosted session for an agent that is not one of its phases
 	// (the model's own isolated subagents, a workflow's agents), where Claude Code would have, newest last:
 	// one still as it was made when its agent stops is removed, as Claude Code removes its own (PlainTree).
@@ -547,18 +550,69 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 
 // Spawning is the call baton's mod makes in the lead's session to start the phase agent on Phase: the Agent
 // tool's call ToolUse, made at At, as PreToolUse saw it. Claude Code says neither the agent's type nor
-// the call at WorktreeCreate, only the prompt id of the event that made the call (Prompt): the model's own
-// calls run under its turn's prompt id, and each event of the mod has one of its own (spike 32), so a
-// worktree asked for under this one is the phase agent's.
+// the call at WorktreeCreate (its prompt id is the session's latest prompt's, whoever's: a prompt of the
+// lead's or another call of the mod's in between changes it), so a worktree asked for while this call is
+// open is the phase agent's only when no call of the model's own may ask for one too (AgentCalls).
 type Spawning struct {
 	Phase   string    `json:"phase"`
-	Prompt  string    `json:"prompt"`
 	ToolUse string    `json:"tool_use"`
 	At      time.Time `json:"at"`
 }
 
-// PlainTree is a worktree baton made for an agent of the model's own, at Path on Branch from commit Base.
+// An AgentCall is a call of the model's own to the Agent tool (ToolUse), made at At, whose agent may still
+// ask for a worktree: Claude Code asks for an isolated agent's as the call starts, right after its
+// PreToolUse, or, where the human must allow the call first, once they have. It is settled by its result,
+// by a worktree baton makes for an agent of the model's own, or AgentCallWait after At while no Agent
+// call waits on the human.
+type AgentCall struct {
+	ToolUse string    `json:"tool_use"`
+	At      time.Time `json:"at"`
+}
+
+// AgentCallWait is how long after its PreToolUse an Agent call of the model's own, with no permission
+// prompt open, may still ask for a worktree.
+const AgentCallWait = 30 * time.Second
+
+// maxAgentCalls bounds the Agent calls on record: one whose result never came must not pile up.
+const maxAgentCalls = 32
+
+// AgentCalled records the model's own Agent call id, made at at, and lets go of the ones settled by time.
+func (r *Runtime) AgentCalled(id string, at time.Time) {
+	r.AgentCalls = append(slices.DeleteFunc(r.AgentCalls, func(c AgentCall) bool { return c.ToolUse == id || !r.agentMayAsk(c, at) }),
+		AgentCall{ToolUse: id, At: at})
+	if n := len(r.AgentCalls) - maxAgentCalls; n > 0 {
+		r.AgentCalls = slices.Delete(r.AgentCalls, 0, n)
+	}
+}
+
+// AgentCallEnded settles the model's own Agent call id: its result came.
+func (r *Runtime) AgentCallEnded(id string) {
+	r.AgentCalls = slices.DeleteFunc(r.AgentCalls, func(c AgentCall) bool { return c.ToolUse == id })
+}
+
+// AgentPlaced settles the oldest of the model's own Agent calls: baton made a worktree for its agent.
+func (r *Runtime) AgentPlaced() {
+	if len(r.AgentCalls) > 0 {
+		r.AgentCalls = slices.Delete(r.AgentCalls, 0, 1)
+	}
+}
+
+// AgentCallsOpen reports that a call of the model's own to the Agent tool may still ask for a worktree at
+// now.
+func (r Runtime) AgentCallsOpen(now time.Time) bool {
+	return slices.ContainsFunc(r.AgentCalls, func(c AgentCall) bool { return r.agentMayAsk(c, now) })
+}
+
+// agentMayAsk reports that the agent of call c may still ask for a worktree at now: not long after its
+// call, or with an Agent call's permission prompt open (none says whose).
+func (r Runtime) agentMayAsk(c AgentCall, now time.Time) bool {
+	return now.Sub(c.At) < AgentCallWait || slices.ContainsFunc(r.Dialogs, func(d Dialog) bool { return d.Tool == "Agent" })
+}
+
+// PlainTree is a worktree baton made for an agent of the model's own, named Name (agent-<id> for an
+// isolated subagent), at Path on Branch from commit Base.
 type PlainTree struct {
+	Name   string    `json:"name,omitempty"`
 	Path   string    `json:"path"`
 	Branch string    `json:"branch"`
 	Base   string    `json:"base"`
@@ -574,6 +628,17 @@ func (r *Runtime) MadePlain(t PlainTree) {
 	if n := len(r.Plain) - maxPlain; n > 0 {
 		r.Plain = slices.Delete(r.Plain, 0, n)
 	}
+}
+
+// PlainNamed is the plain worktree baton made with name, and lets go of it.
+func (r *Runtime) PlainNamed(name string) (PlainTree, bool) {
+	for i, t := range r.Plain {
+		if name != "" && t.Name == name {
+			r.Plain = slices.Delete(r.Plain, i, i+1)
+			return t, true
+		}
+	}
+	return PlainTree{}, false
 }
 
 // PlainAt is the plain worktree baton made that holds dir, and lets go of it.

@@ -79,17 +79,23 @@ func (r *agentRun) issueSpawn() {
 }
 
 // spawnCall is baton's mod's call to start P2's agent, as the lead's PreToolUse sees it.
-func spawnCall(prompt string) map[string]any {
-	return map[string]any{"tool_name": "Agent", "tool_use_id": "toolu_plugin_1", "prompt_id": prompt,
+func spawnCall() map[string]any {
+	return map[string]any{"tool_name": "Agent", "tool_use_id": "toolu_plugin_1", "prompt_id": "p-mod",
 		"tool_input": map[string]any{"subagent_type": state.PhaseAgent, "name": "P2", "description": "P2 — Third", "prompt": "Begin P2."}}
 }
 
-// worktree fires WorktreeCreate for the worktree name, asked for under prompt, and returns its exit code,
-// its stdout and its stderr.
-func (r *agentRun) worktree(name, prompt string) (int, string, string) {
+// modelCall is a call of the model's own to the Agent tool, id, for an isolated subagent.
+func modelCall(id string) map[string]any {
+	return map[string]any{"tool_name": "Agent", "tool_use_id": id, "prompt_id": "p-turn",
+		"tool_input": map[string]any{"subagent_type": "general-purpose", "description": "Look around", "prompt": "Look around.", "isolation": "worktree"}}
+}
+
+// worktree fires WorktreeCreate for the worktree name and returns its exit code, its stdout and its
+// stderr. Its prompt id is the session's latest prompt's, whoever's: here the lead's.
+func (r *agentRun) worktree(name string) (int, string, string) {
 	r.t.Helper()
 	in := map[string]any{"hook_event_name": "WorktreeCreate", "session_id": r.sid, "transcript_path": r.leadTranscript(),
-		"cwd": r.checkout, "name": name, "prompt_id": prompt}
+		"cwd": r.checkout, "name": name, "prompt_id": "p-turn"}
 	raw, _ := json.Marshal(in)
 	var out, errb bytes.Buffer
 	code := Dispatch("WorktreeCreate", bytes.NewReader(raw), &out, &errb, r.env(r.inst), r.clock, Handlers(Deps{Open: OpenRun(r.clock)}))
@@ -107,10 +113,10 @@ func asAgent(in map[string]any, agent, dir string) map[string]any {
 // before its first hook. The agent is briefed at its first start, once, and its stop is the Stop table's.
 func TestAPhaseAgentWorksInItsPhasesWorktree(t *testing.T) {
 	r := newAgentRun(t)
-	if out := r.fire("PreToolUse", spawnCall("p-mod")); out != nil {
+	if out := r.fire("PreToolUse", spawnCall()); out != nil {
 		t.Fatalf("the mod's call: %v", out)
 	}
-	code, path, errs := r.worktree("agent-a1", "p-mod")
+	code, path, errs := r.worktree("agent-a1")
 	if code != 0 || path != r.entry.Worktree {
 		t.Fatalf("exit %d, path %q (want %q): %s", code, path, r.entry.Worktree, errs)
 	}
@@ -148,23 +154,28 @@ func TestAPhaseAgentWorksInItsPhasesWorktree(t *testing.T) {
 }
 
 // A worktree baton cannot tell for a phase's is made where Claude Code makes one: the model's own isolated
-// subagent asking for one while baton's spawn is open, a workflow's agent, or any with no spawn under way.
-// Nothing of the phase's changes, and baton's spawn still gets its own.
+// subagent's, with no spawn of baton's under way or while one is (each call's PreToolUse comes before its
+// worktree; baton's spawn then gets a plain one too, and its agent is ended), or a workflow's agent's.
+// Nothing of the phase's changes.
 func TestAWorktreeNotAPhasesIsPlain(t *testing.T) {
 	for _, c := range []struct {
-		name, tree, prompt string
-		spawning           bool
+		name, tree      string
+		spawning, model bool
+		batons, settled bool // baton's own worktree after it is the phase's; the model's call is settled
 	}{
-		{"no spawn under way", "agent-m1", "p-turn", false},
-		{"the model's own subagent while baton's spawn is open", "agent-m1", "p-turn", true},
-		{"a workflow's agent", "wf_run-1", "p-mod", true},
+		{"the model's own subagent, no spawn under way", "agent-m1", false, true, false, true},
+		{"the model's own subagent while baton's spawn is open", "agent-m1", true, true, false, false},
+		{"a workflow's agent", "wf_run-1", true, false, true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newAgentRun(t)
 			if c.spawning {
-				r.fire("PreToolUse", spawnCall("p-mod"))
+				r.fire("PreToolUse", spawnCall())
 			}
-			code, path, errs := r.worktree(c.tree, c.prompt)
+			if c.model {
+				r.fire("PreToolUse", modelCall("toolu_m1"))
+			}
+			code, path, errs := r.worktree(c.tree)
 			want := filepath.Join(gitxReal(t, r.checkout), ".claude", "worktrees", c.tree)
 			if code != 0 || path != want {
 				t.Fatalf("exit %d, path %q (want %q): %s", code, path, want, errs)
@@ -172,19 +183,84 @@ func TestAWorktreeNotAPhasesIsPlain(t *testing.T) {
 			if b := git(t, path, "rev-parse", "--abbrev-ref", "HEAD"); b != "worktree-"+c.tree {
 				t.Errorf("on %q", b)
 			}
+			// It is not the checkout's work, as none of Claude Code's own worktrees are.
+			if dirty := git(t, r.checkout, "status", "--porcelain", "--untracked-files=all", "--", ".claude"); dirty != "" {
+				t.Errorf("git status in the checkout: %s", dirty)
+			}
 			st := r.state()
-			if w := st.WorkerOn("P2"); w.AgentID != "" || len(st.Run.Plain) != 1 || (st.Run.Spawning != nil) != c.spawning {
+			if w := st.WorkerOn("P2"); w.AgentID != "" || len(st.Run.Plain) != 1 || st.Run.Plain[0].Name != c.tree || (st.Run.Spawning != nil) != c.spawning {
 				t.Errorf("roster %+v, plain %+v, spawning %+v", w, st.Run.Plain, st.Run.Spawning)
+			}
+			if st.Run.AgentCallsOpen(r.now) == c.settled {
+				t.Errorf("the model's calls %+v", st.Run.AgentCalls)
 			}
 			if isDir(r.entry.Worktree) {
 				t.Error("the phase's worktree was made")
 			}
 			if c.spawning {
-				if code, path, _ := r.worktree("agent-a1", "p-mod"); code != 0 || path != r.entry.Worktree {
+				code, path, _ := r.worktree("agent-a1")
+				if phase := path == r.entry.Worktree; code != 0 || phase != c.batons {
 					t.Errorf("baton's own: exit %d, %q", code, path)
 				}
 			}
 		})
+	}
+}
+
+// A call of the model's own to the Agent tool is settled by its result, by time, or by the worktree baton
+// makes for its agent; until then baton's spawn cannot tell its worktree from the model's. One waiting on
+// the human's permission is not settled by time.
+func TestTheModelsAgentCallsHoldThePhasesWorktree(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		before func(r *agentRun)
+		phase  bool // baton's spawn then gets the phase's worktree
+	}{
+		{"none", func(*agentRun) {}, true},
+		{"one just made", func(r *agentRun) { r.fire("PreToolUse", modelCall("toolu_m1")) }, false},
+		{"one whose result came", func(r *agentRun) {
+			r.fire("PreToolUse", modelCall("toolu_m1"))
+			r.fire("PostToolUse", modelCall("toolu_m1"))
+		}, true},
+		{"one refused at its prompt", func(r *agentRun) {
+			r.fire("PreToolUse", modelCall("toolu_m1"))
+			r.fire("PermissionDenied", modelCall("toolu_m1"))
+		}, true},
+		{"one made long enough ago", func(r *agentRun) {
+			r.fire("PreToolUse", modelCall("toolu_m1"))
+			r.now = r.now.Add(state.AgentCallWait)
+		}, true},
+		{"one waiting on the human's permission", func(r *agentRun) {
+			r.fire("PreToolUse", modelCall("toolu_m1"))
+			r.fire("PermissionRequest", modelCall("toolu_m1"))
+			r.now = r.now.Add(time.Hour)
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newAgentRun(t)
+			c.before(r)
+			r.fire("PreToolUse", spawnCall())
+			code, path, errs := r.worktree("agent-a2")
+			if phase := path == r.entry.Worktree; code != 0 || phase != c.phase {
+				t.Errorf("exit %d, path %q, the phase's %v (want %v): %s", code, path, phase, c.phase, errs)
+			}
+		})
+	}
+}
+
+// A phase agent's own calls to the Agent tool count in the lead's run, where worktrees are told apart, from
+// their PreToolUse to their result.
+func TestAPhaseAgentsAgentCallsCountInTheLeadsRun(t *testing.T) {
+	r := newAgentRun(t)
+	r.fire("PreToolUse", spawnCall())
+	r.worktree("agent-a1")
+	r.fire("PreToolUse", asAgent(modelCall("toolu_m1"), "a1", r.entry.Worktree))
+	if sub, st := loaded(t, r.sub), r.state(); len(sub.Run.AgentCalls) != 0 || len(st.Run.AgentCalls) != 1 || st.Run.AgentCalls[0].ToolUse != "toolu_m1" {
+		t.Errorf("the lead's run %+v, the sub-run's %+v", st.Run.AgentCalls, sub.Run.AgentCalls)
+	}
+	r.fire("PostToolUse", asAgent(modelCall("toolu_m1"), "a1", r.entry.Worktree))
+	if st := r.state(); len(st.Run.AgentCalls) != 0 {
+		t.Errorf("its result left %+v", st.Run.AgentCalls)
 	}
 }
 
@@ -215,9 +291,9 @@ func TestAPhaseAgentBatonCannotPlaceDoesNotStart(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newAgentRun(t)
-			r.fire("PreToolUse", spawnCall("p-mod"))
+			r.fire("PreToolUse", spawnCall())
 			c.without(r)
-			code, path, errs := r.worktree("agent-a1", "p-mod")
+			code, path, errs := r.worktree("agent-a1")
 			if code != 1 || path != "" || !strings.Contains(errs, "no worktree for the agent on P2") {
 				t.Errorf("exit %d, path %q, stderr %q", code, path, errs)
 			}
@@ -233,8 +309,8 @@ func TestAPhaseAgentBatonCannotPlaceDoesNotStart(t *testing.T) {
 // agent is briefed to take the phase up where it stands.
 func TestARespawnedAgentGetsItsPhasesWorktreeBack(t *testing.T) {
 	r := newAgentRun(t)
-	r.fire("PreToolUse", spawnCall("p-mod"))
-	r.worktree("agent-a1", "p-mod")
+	r.fire("PreToolUse", spawnCall())
+	r.worktree("agent-a1")
 	r.fire("SubagentStart", asAgent(map[string]any{}, "a1", r.entry.Worktree))
 	gittest.Write(t, r.entry.Worktree, "b.go", "package a\n")
 	gittest.Commit(t, r.entry.Worktree, "P2's start", "b.go")
@@ -247,8 +323,8 @@ func TestARespawnedAgentGetsItsPhasesWorktreeBack(t *testing.T) {
 	r.bridge().Forget("a1")
 	r.issueSpawn()
 	r.now = r.now.Add(time.Minute)
-	r.fire("PreToolUse", spawnCall("p-mod-2"))
-	code, path, errs := r.worktree("agent-a2", "p-mod-2")
+	r.fire("PreToolUse", spawnCall())
+	code, path, errs := r.worktree("agent-a2")
 	if code != 0 || path != r.entry.Worktree || git(t, path, "rev-parse", "HEAD") != tip {
 		t.Fatalf("exit %d, path %q: %s", code, path, errs)
 	}
@@ -280,7 +356,7 @@ func TestAPlainWorktreeGoesWhenItsAgentChangedNothing(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newAgentRun(t)
-			_, path, _ := r.worktree("agent-m1", "p-turn")
+			_, path, _ := r.worktree("agent-m1")
 			c.work(t, path)
 			r.fire("SubagentStop", map[string]any{"agent_id": "m1", "agent_type": "general-purpose", "cwd": path})
 			gone := !isDir(path) && gittest.Git(t, r.checkout, "branch", "--list", "worktree-agent-m1") == ""
@@ -301,13 +377,13 @@ func TestAPlainWorktreeStartsWhereClaudeCodesWould(t *testing.T) {
 	gittest.Write(t, r.checkout, "a.go", "package a // later\n")
 	gittest.Commit(t, r.checkout, "later", "a.go")
 	head := git(t, r.checkout, "rev-parse", "HEAD")
-	if _, path, _ := r.worktree("fresh", "p-turn"); git(t, path, "rev-parse", "HEAD") != first {
+	if _, path, _ := r.worktree("fresh"); git(t, path, "rev-parse", "HEAD") != first {
 		t.Errorf("fresh: from %s, want the remote's %s", git(t, path, "rev-parse", "HEAD"), first)
 	}
 	settings := filepath.Join(t.TempDir(), "settings.json")
 	os.WriteFile(settings, []byte(`{"worktree":{"baseRef":"head"}}`), 0o644)
 	claudeSettings = func(string) []string { return []string{settings} }
-	if _, path, _ := r.worktree("head", "p-turn"); git(t, path, "rev-parse", "HEAD") != head {
+	if _, path, _ := r.worktree("head"); git(t, path, "rev-parse", "HEAD") != head {
 		t.Errorf("head: from %s, want %s", git(t, path, "rev-parse", "HEAD"), head)
 	}
 }
@@ -316,9 +392,9 @@ func TestAPlainWorktreeStartsWhereClaudeCodesWould(t *testing.T) {
 // given with their results, where no model would read it.
 func TestTheModsCallsCarryNothingForTheModel(t *testing.T) {
 	r := newAgentRun(t)
-	r.fire("PreToolUse", spawnCall("p-mod"))
+	r.fire("PreToolUse", spawnCall())
 	r.set(func(st *state.State) { st.Run.Briefing = &state.Briefing{Kind: "auto", Phase: "P1", At: r.now} })
-	res := spawnCall("p-mod")
+	res := spawnCall()
 	res["tool_response"] = map[string]any{"status": "async_launched", "agentId": "a1"}
 	if out := r.fire("PostToolUse", res); out != nil {
 		t.Errorf("the mod's result carried %v", out)
@@ -332,7 +408,7 @@ func TestTheModsCallsCarryNothingForTheModel(t *testing.T) {
 // the model's goes without one, and exits 0.
 func TestTheWorktreeHookFailsOpen(t *testing.T) {
 	r := newAgentRun(t)
-	r.fire("PreToolUse", spawnCall("p-mod"))
+	r.fire("PreToolUse", spawnCall())
 	open := func(ctx Context) (*state.Store, error) {
 		s, err := OpenRun(r.clock)(ctx)
 		if s != nil {

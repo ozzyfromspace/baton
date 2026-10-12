@@ -47,6 +47,23 @@ func WorktreeRemove(ctx context.Context, root, dir string) error {
 	return err
 }
 
+// RemoveUntouched removes the worktree at dir, made on branch from commit base, and the branch with it, if
+// nothing was done there: no change, no untracked file, no commit. It reports whether it removed it.
+func RemoveUntouched(ctx context.Context, dir, branch, base string) (bool, error) {
+	root := MainRoot(dir)
+	if root == "" {
+		return false, ErrNoGit
+	}
+	changed, err := Dirty(dir)
+	if err != nil || len(changed) > 0 || RevParse(dir, "HEAD") != base {
+		return false, err
+	}
+	if err := WorktreeRemove(ctx, root, dir); err != nil {
+		return false, err
+	}
+	return true, RemoveBranch(ctx, root, branch)
+}
+
 // PruneUnder makes the repository at root forget the worktrees whose directories are gone, among those
 // that were under one of dirs (symbolic links resolved). Unlike git's own prune, it never forgets a
 // worktree anywhere else, such as the human's on a drive that is not mounted, nor a locked one.

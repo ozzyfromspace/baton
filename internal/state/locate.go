@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
@@ -58,6 +59,20 @@ const DirName = ".baton"
 // baton's state never shows up in `git status` and the user's .gitignore is never touched. Without git
 // (gitx.Usable) it does nothing.
 func ExcludeFromGit(root string) error {
+	return excludeFromGit(root, "baton's per-project state (added by baton)", ".baton/", ".baton", "/.baton/")
+}
+
+// ExcludeWorktrees adds Claude Code's worktrees (.claude/worktrees) to the info/exclude of the repository
+// whose working tree is root, as Claude Code does when it makes one there itself: in a session baton hosts,
+// baton's WorktreeCreate hook makes them in its place, and one must not show up in `git status` as the
+// checkout's work.
+func ExcludeWorktrees(root string) error {
+	return excludeFromGit(root, "Claude Code's worktrees (added by baton, as Claude Code adds them)", "**/.claude/worktrees/")
+}
+
+// excludeFromGit adds pattern to the info/exclude of the repository whose working tree is root, under a
+// comment, unless it, or one of alike, is there already.
+func excludeFromGit(root, comment, pattern string, alike ...string) error {
 	if !gitx.Usable(root) {
 		return nil
 	}
@@ -89,7 +104,7 @@ func ExcludeFromGit(root string) error {
 	if f, err := os.Open(exclude); err == nil {
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
-			if t := strings.TrimSpace(sc.Text()); t == ".baton/" || t == ".baton" || t == "/.baton/" {
+			if t := strings.TrimSpace(sc.Text()); t == pattern || slices.Contains(alike, t) {
 				f.Close()
 				return nil
 			}
@@ -104,6 +119,6 @@ func ExcludeFromGit(root string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.WriteString("\n# baton's per-project state (added by baton)\n.baton/\n")
+	_, err = f.WriteString("\n# " + comment + "\n" + pattern + "\n")
 	return err
 }

@@ -226,6 +226,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		h.spawning(c)
 		return Result{}, nil
 	}
+	h.agentCall(c, false)
 	if s, phase := h.steersAgent(c); phase != "" {
 		tool := str(c.Input, "tool_name")
 		s.Event("refused", map[string]any{"tool": tool, "why": "a phase agent", "phase": phase})
@@ -1081,6 +1082,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		// A call baton's mod made: it is not the model's, and nothing given with its result reaches the model.
 		return h.spawned(c)
 	}
+	h.agentCall(c, true)
 	if modAsk(c.Input) {
 		// A question a mod put to the human: its dialog is gone. The mod reports the answer to one of baton's
 		// (loop.Coordinator.relay), and nothing given with its result reaches the model.

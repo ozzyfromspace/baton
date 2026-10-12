@@ -50,7 +50,8 @@ type crew struct {
 	asks     []bridge.Command // the questions it was told to ask, in order
 	modOff   bool             // it runs nothing: no spawn is acked
 	ackless  bool             // it runs a spawn, whose agent starts, but its ack never comes
-	unplaced bool             // a spawn's agent starts without its worktree hook (somewhere else)
+	unplaced bool             // a call of the model's own to the Agent tool starts as the spawn's does: baton cannot tell their worktrees apart
+	plain    string           // the plain worktree a spawn's agent started in, so
 	spawnErr string           // the spawn's Agent call fails with this
 	sendErr  string           // a message's SendMessage call fails with this
 }
@@ -191,20 +192,26 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 		return "", x.spawnErr
 	}
 	agent = fmt.Sprintf("a%s%d", strings.ToLower(c.Phase), len(x.agents)+1)
-	if x.unplaced {
-		x.agents = append(x.agents, started{phase: c.Phase, id: agent})
-		return agent, ""
-	}
 	prompt := fmt.Sprintf("p-mod-%d", c.ID)
 	call := map[string]any{"tool_name": "Agent", "tool_use_id": fmt.Sprintf("toolu_plugin_%d", c.ID), "prompt_id": prompt,
 		"tool_input": map[string]any{"subagent_type": state.PhaseAgent, "name": c.Name, "description": c.Description, "prompt": c.Prompt}}
 	x.hook("PreToolUse", call)
+	if x.unplaced {
+		x.hook("PreToolUse", map[string]any{"tool_name": "Agent", "tool_use_id": fmt.Sprintf("toolu_model_%d", c.ID), "prompt_id": "p-turn",
+			"tool_input": map[string]any{"subagent_type": "general-purpose", "description": "Look around", "prompt": "Look around."}})
+	}
 	code, tree := x.hook("WorktreeCreate", map[string]any{"name": "agent-" + agent, "prompt_id": prompt})
 	if code != 0 || tree == "" {
 		x.hook("PostToolUseFailure", call)
 		return "", "the worktree hook failed"
 	}
 	x.agents = append(x.agents, started{phase: c.Phase, id: agent, tree: tree})
+	if x.unplaced {
+		x.plain = tree
+		call["tool_response"] = map[string]any{"agentId": agent, "status": "async_launched"}
+		x.hook("PostToolUse", call)
+		return agent, ""
+	}
 	x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree, "transcript_path": x.leadTranscript()})
 	call["tool_response"] = map[string]any{"agentId": agent, "status": "async_launched"}
 	x.hook("PostToolUse", call)

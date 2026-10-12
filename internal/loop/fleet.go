@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -308,6 +309,9 @@ func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) s
 		return "a phase agent failed to start a moment ago"
 	case !gitx.Usable(s.Checkout):
 		return "the project is not a git repository"
+	case st.Run.AgentCallsOpen(now):
+		// Its worktree would be one baton cannot tell for the phase's (hooks.worktreeCreate).
+		return "an agent the model started may still ask for a worktree"
 	}
 	for _, w := range c.launched() {
 		if w.spawn != 0 {
@@ -440,7 +444,7 @@ func (c *Coordinator) spawnAcked(now time.Time, s *state.Store, b *bridge.Bridge
 		s.Event("worker_started", map[string]any{"phase": w.phase, "agent": placed, "after": now.Sub(w.launched).Round(time.Second).String()})
 		c.announce(s, fmt.Sprintf("baton: the phase agent on %s is at work", w.phase))
 	case r.OK && r.Agent != "":
-		w.entry.AgentID = r.Agent // the mod tracks it: it is stopped, and forgotten
+		w.entry.AgentID, w.stray = r.Agent, r.Agent // the mod tracks it: it is stopped, and forgotten
 		c.end(now, s, b, w, "its agent started outside its phase's worktree")
 		c.later(now, s, w.phase, "its agent started outside its phase's worktree")
 	default:
@@ -578,6 +582,9 @@ func (c *Coordinator) finish(now time.Time, s *state.Store, b *bridge.Bridge, w 
 	if agent := c.agentOf(s, w); agent != "" {
 		b.Forget(agent)
 	}
+	if w.stray != "" {
+		dropStray(s, w.stray)
+	}
 	entry := w.entry
 	if st, err := s.Load(); err == nil {
 		if e := st.Entry(w.entry); e != nil {
@@ -585,6 +592,30 @@ func (c *Coordinator) finish(now time.Time, s *state.Store, b *bridge.Bridge, w 
 		}
 	}
 	c.retire(now, s, entry, w.ending)
+}
+
+// dropStray removes the plain worktree baton made for agent, one of its own that started in it (spawnAcked)
+// and that baton ended, unless something was done there: no SubagentStop follows an agent stopped so, to
+// let it go as the model's own agents' go (hooks.plainStopped).
+func dropStray(s *state.Store, agent string) {
+	var t state.PlainTree
+	var found bool
+	s.Update(func(st *state.State) error { t, found = st.Run.PlainNamed("agent-" + agent); return nil })
+	if !found {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	removed, err := gitx.RemoveUntouched(ctx, t.Path, t.Branch, t.Base)
+	fields := map[string]any{"worktree": t.Path, "branch": t.Branch, "agent": agent}
+	if !removed {
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		s.Event("worktree_kept", fields)
+		return
+	}
+	s.Event("worktree_removed", fields)
 }
 
 // agentOf is the agent working for w, as the roster has it (the worktree hook records it), or as this host

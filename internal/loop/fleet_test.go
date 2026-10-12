@@ -253,10 +253,41 @@ func TestNoWorkerStartsBeforeTheLead(t *testing.T) {
 	}
 }
 
+// No phase agent starts while a call of the model's own to the Agent tool may still ask for a worktree:
+// baton could not tell the two worktrees apart (hooks.worktreeCreate). It starts once the call's result
+// comes, or once the call can ask for none any more.
+func TestNoPhaseAgentStartsWhileTheModelsAgentMayAskForAWorktree(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		settle func(x *crew, call map[string]any)
+	}{
+		{"its result comes", func(x *crew, call map[string]any) { x.hook("PostToolUse", call) }},
+		{"it can ask for none any more", func(x *crew, _ map[string]any) { x.tick(state.AgentCallWait) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newCrew(t, 1)
+			call := map[string]any{"tool_name": "Agent", "tool_use_id": "toolu_model_1", "prompt_id": "p-turn",
+				"tool_input": map[string]any{"subagent_type": "general-purpose", "description": "Look around", "prompt": "Look around.", "isolation": "worktree"}}
+			x.hook("PreToolUse", call)
+			x.tick(time.Second)
+			x.tick(time.Second)
+			if len(x.spawns()) != 0 {
+				t.Fatal("a phase agent started while the model's Agent call may still ask for a worktree")
+			}
+			c.settle(x, call)
+			x.tick(time.Second)
+			if len(x.spawns()) != 1 {
+				t.Errorf("%d spawns once the call was settled", len(x.spawns()))
+			}
+		})
+	}
+}
+
 // A spawn that starts no agent in its phase's worktree is taken back, and its worker retired; its phase
 // goes back to the scheduler, and an agent takes it up a while later. One the mod never runs is voided
-// after Timing.AgentStart, so that its worktree would be refused; one that started somewhere else is
-// stopped, and is none of baton's agents any more.
+// after Timing.AgentStart, so that its worktree would be refused; one that started somewhere else (a
+// plain worktree, as a call of the model's own to the Agent tool started meanwhile) is stopped, and is
+// none of baton's agents any more, and its worktree goes, as nothing was done there.
 func TestASpawnThatStartsNoAgentIsTakenBack(t *testing.T) {
 	never := "its agent did not start: the mod did not start it within " + DefaultTiming.AgentStart.String()
 	for _, c := range []struct {
@@ -291,6 +322,9 @@ func TestASpawnThatStartsNoAgentIsTakenBack(t *testing.T) {
 			}
 			if x.unplaced && (len(x.stopped) != 1 || x.stopped[0] != x.agent("P1").id) {
 				t.Errorf("stopped %v", x.stopped)
+			}
+			if x.unplaced && (isDir(x.plain) || gitx.RevParse(x.repo, "refs/heads/worktree-agent-"+x.agent("P1").id) != "" || len(st.Run.Plain) != 0) {
+				t.Errorf("the plain worktree %s it started in is still there: %+v", x.plain, st.Run.Plain)
 			}
 			retry := x.now.Add(launchRetry - 2*time.Second).Local().Format("15:04")
 			if ann := strings.Join(st.Run.Announce, "\n"); !strings.Contains(ann, "baton: no phase agent on P1 for now ("+c.why+") → baton tries again at "+retry) {

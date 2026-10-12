@@ -216,17 +216,28 @@ func TestLocateSkipsBatonHome(t *testing.T) {
 	}
 }
 
+// baton's state and Claude Code's worktrees are each excluded from git once, beside a block Claude Code
+// wrote itself.
 func TestExcludeFromGitIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, ".git", "info"), 0o755)
+	os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("# claude-code-runtime\n**/.claude/mailbox/\n"), 0o644)
 	for i := 0; i < 2; i++ {
 		if err := ExcludeFromGit(root); err != nil {
 			t.Fatal(err)
 		}
+		if err := ExcludeWorktrees(root); err != nil {
+			t.Fatal(err)
+		}
 	}
 	b, _ := os.ReadFile(filepath.Join(root, ".git", "info", "exclude"))
-	if strings.Count(string(b), ".baton/") != 1 {
+	if strings.Count(string(b), ".baton/") != 1 || strings.Count(string(b), "\n**/.claude/worktrees/\n") != 1 || !strings.HasPrefix(string(b), "# claude-code-runtime\n") {
 		t.Fatalf("exclude = %q", b)
+	}
+	os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("**/.claude/worktrees/\n"), 0o644)
+	ExcludeWorktrees(root)
+	if b, _ := os.ReadFile(filepath.Join(root, ".git", "info", "exclude")); strings.Count(string(b), "worktrees") != 1 {
+		t.Error("Claude Code's own line was added again")
 	}
 }
 

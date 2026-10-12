@@ -22,10 +22,12 @@ const worktreeTimeout = 2 * time.Minute
 // so it makes every worktree the hosted session asks for.
 //
 // The one for the phase agent baton's mod is starting is that phase's (phaseWorktree). Claude Code names
-// neither the agent's type nor the call it comes from, but its prompt id is the one the mod's call ran
-// under (Runtime.Spawning), which none of the model's own calls shares, and the bridge must have that
-// phase's spawn open. Any other is made where Claude Code makes one (plainWorktree). Neither is ever
-// mistaken for the other: a worktree baton cannot tell for a phase's is not a phase's.
+// neither the agent's type nor the call it comes from, so it is the phase's only while the mod's call is
+// open (Runtime.Spawning, from its PreToolUse to its result) and no call of the model's own may ask for a
+// worktree too (Runtime.AgentCallsOpen: each one's PreToolUse comes before its worktree), and the bridge
+// must have that phase's spawn open. Any other is made where Claude Code makes one (plainWorktree). Neither
+// is ever mistaken for the other: a worktree baton cannot tell for a phase's is not a phase's, and a phase
+// agent that starts in one is ended, and its phase started again later (loop.Coordinator.spawnAcked).
 func (h *handlers) worktreeCreate(c Context) (res Result, err error) {
 	name := str(c.Input, "name")
 	defer func() {
@@ -42,7 +44,7 @@ func (h *handlers) worktreeCreate(c Context) (res Result, err error) {
 	agent, isAgent := strings.CutPrefix(name, "agent-")
 	st, err := s.Load()
 	sp := st.Run.Spawning
-	if err != nil || !isAgent || sp == nil || sp.Prompt == "" || sp.Prompt != str(c.Input, "prompt_id") || s.Worker() != "" {
+	if err != nil || !isAgent || sp == nil || st.Run.AgentCallsOpen(c.Now) || s.Worker() != "" {
 		return h.plainWorktree(c, s, name)
 	}
 	return h.phaseWorktree(s, st, *sp, agent)
@@ -118,6 +120,7 @@ func (h *handlers) plainWorktree(c Context, s *state.Store, name string) (Result
 	}
 	dir := filepath.Join(root, ".claude", "worktrees", name)
 	branch := "worktree-" + name
+	state.ExcludeWorktrees(root) // best effort, as Claude Code's own
 	base := plainBase(root, cwd)
 	if base == "" {
 		return Result{Fail: "no worktree: the repository has no commit to start one from"}, nil
@@ -128,8 +131,14 @@ func (h *handlers) plainWorktree(c Context, s *state.Store, name string) (Result
 		return Result{Fail: "no worktree: " + err.Error()}, nil
 	}
 	if s != nil {
-		t := state.PlainTree{Path: dir, Branch: branch, Base: base, At: c.Now}
-		s.Update(func(st *state.State) error { st.Run.MadePlain(t); return nil })
+		t := state.PlainTree{Name: name, Path: dir, Branch: branch, Base: base, At: c.Now}
+		s.Update(func(st *state.State) error {
+			st.Run.MadePlain(t)
+			if st.Run.Spawning == nil {
+				st.Run.AgentPlaced() // the agent of the model's own call that asked first: none else can be
+			}
+			return nil
+		})
 		s.Event("worktree_made", map[string]any{"name": name, "worktree": dir, "branch": branch, "base": base})
 	}
 	return Result{Stdout: dir}, nil
@@ -190,20 +199,18 @@ func (h *handlers) plainStopped(c Context, s *state.Store) {
 	if !found || !isDir(t.Path) {
 		return
 	}
-	root := gitx.MainRoot(t.Path)
-	changed, err := gitx.Dirty(t.Path)
-	if root == "" || err != nil || len(changed) > 0 || gitx.RevParse(t.Path, "HEAD") != t.Base {
-		s.Event("worktree_kept", map[string]any{"worktree": t.Path, "branch": t.Branch})
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), worktreeTimeout)
 	defer cancel()
-	if err := gitx.WorktreeRemove(ctx, root, t.Path); err != nil {
-		s.Event("worktree_kept", map[string]any{"worktree": t.Path, "branch": t.Branch, "error": err.Error()})
+	removed, err := gitx.RemoveUntouched(ctx, t.Path, t.Branch, t.Base)
+	fields := map[string]any{"worktree": t.Path, "branch": t.Branch}
+	if !removed {
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		s.Event("worktree_kept", fields)
 		return
 	}
-	gitx.RemoveBranch(ctx, root, t.Branch)
-	s.Event("worktree_removed", map[string]any{"worktree": t.Path, "branch": t.Branch})
+	s.Event("worktree_removed", fields)
 }
 
 func isDir(path string) bool {

@@ -20,7 +20,7 @@ func (h *handlers) spawning(c Context) {
 	if str(c.Input, "tool_name") != "Agent" || str(ti, "subagent_type") != state.PhaseAgent || str(ti, "name") == "" {
 		return
 	}
-	sp := state.Spawning{Phase: str(ti, "name"), Prompt: str(c.Input, "prompt_id"), ToolUse: str(c.Input, "tool_use_id"), At: c.Now}
+	sp := state.Spawning{Phase: str(ti, "name"), ToolUse: str(c.Input, "tool_use_id"), At: c.Now}
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.Spawning = &sp
 		return nil
@@ -28,6 +28,37 @@ func (h *handlers) spawning(c Context) {
 	if err == nil {
 		s.Event("agent_spawning", map[string]any{"phase": sp.Phase, "tool_use": sp.ToolUse})
 	}
+}
+
+// agentCall records, in the lead's run, a call of the model's own to the Agent tool in any loop of the lead's
+// claude, at its PreToolUse, and lets go of it at its result (ended): until then its agent may ask for a
+// worktree, which no phase agent's must be taken for (worktreeCreate).
+func (h *handlers) agentCall(c Context, ended bool) {
+	if str(c.Input, "tool_name") != "Agent" || modCall(c.Input) {
+		return
+	}
+	s, err := h.d.Open(c)
+	if err != nil || s == nil {
+		return
+	}
+	if s.Agent != "" { // a phase agent's call: its sub-run is not where the lead's worktrees are told apart
+		if s, err = s.ParentRun(); err != nil {
+			return
+		}
+		s.Instance = c.Env("BATON_INSTANCE")
+	}
+	id := str(c.Input, "tool_use_id")
+	s.Update(func(st *state.State) error {
+		if !st.IsOwner(s.Instance, c.Now) {
+			return errNotOwner
+		}
+		if ended {
+			st.Run.AgentCallEnded(id)
+		} else {
+			st.Run.AgentCalled(id, c.Now)
+		}
+		return nil
+	})
 }
 
 // spawned ends the call baton's mod made to start a phase agent, at its result: a worktree asked for after
