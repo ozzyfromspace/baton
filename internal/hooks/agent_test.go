@@ -43,7 +43,7 @@ func newAgentRun(t *testing.T) *agentRun {
 	}
 	lead.store.SavePlan(pl)
 	tree := filepath.Join(gitxReal(t, t.TempDir()), "worktrees", "P2")
-	e := state.Worker{Phase: "P2", Ref: state.WorkerRef(lead.store.Ref, "P2"), Session: "unused", Worktree: tree,
+	e := state.Worker{Phase: "P2", Ref: state.WorkerRef(lead.store.Ref, "P2"), Worktree: tree,
 		Branch: "baton/sess-1/P2", Base: git(t, checkout, "rev-parse", "HEAD"), Assigned: lead.now}
 	lead.store.Update(func(st *state.State) error {
 		*st = state.Reattach(*st, pl, lead.now, state.Origin{})
@@ -53,7 +53,7 @@ func newAgentRun(t *testing.T) *agentRun {
 		return state.Assign(st, pl, e, lead.now)
 	})
 	p, _ := state.OpenProject(lead.dir, lead.clock)
-	sub, err := p.NewWorker(lead.store.Ref, "P2", "unused", lead.inst, tree)
+	sub, err := p.NewWorker(lead.store.Ref, "P2", lead.inst, tree)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -170,14 +170,12 @@ func TestNoNewerBatonNoRestart(t *testing.T) {
 	}
 }
 
-// With workers, an upgrade restart waits until every one of them is idle, since it ends their sessions
+// With workers, an upgrade restart waits until every one of them is idle, since it ends their agents
 // too. A running plan does not wait for that: the lead compacts as usual, and restarts at the next safe
-// point. From the moment a newer baton waits, no new worker starts. Once the restart is under way, a
-// worker's session ending is the host's end, not a crash: it is neither resumed nor retired.
+// point. From the moment a newer baton waits, no new worker starts.
 func TestARestartWaitsForTheWorkers(t *testing.T) {
 	x := newCrew(t, 2)
 	x.tick(time.Second)
-	x.started("P1")
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastActivity = true, x.now; return nil })
 	x.c.Lead.Version, x.c.Lead.Newer = "v0.5.0", func() string { return "v0.5.1" }
 	boundary := func(epoch int) {
@@ -203,8 +201,8 @@ func TestARestartWaitsForTheWorkers(t *testing.T) {
 		t.Errorf("announced %q", ann)
 	}
 	x.tick(time.Second)
-	if len(x.specs) != 1 {
-		t.Errorf("a worker started while a restart waits: %d", len(x.specs))
+	if len(x.spawns()) != 1 {
+		t.Errorf("a worker started while a restart waits: %d", len(x.spawns()))
 	}
 
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = false; return nil })
@@ -214,11 +212,9 @@ func TestARestartWaitsForTheWorkers(t *testing.T) {
 	if to, _, ok := x.c.Lead.Restart(); !ok || to != "v0.5.1" {
 		t.Fatal("did not restart once the worker was idle")
 	}
-	_, f := x.last()
-	f.exit(0)
 	x.tick(time.Second)
-	if w := x.worker("P1"); len(x.specs) != 1 || w.Status != state.WorkerWorking || w.Resumes != 0 {
-		t.Errorf("the worker's end was taken for a crash: %d sessions, %+v", len(x.specs), w)
+	if w := x.worker("P1"); len(x.spawns()) != 1 || w.Status != state.WorkerWorking {
+		t.Errorf("%d spawns; P1's worker %+v", len(x.spawns()), w)
 	}
 }
 
@@ -255,8 +251,7 @@ func TestWorkerBusy(t *testing.T) {
 }
 
 // Once the lead's claude is asked to end because the human leaves baton, the host is on its way out: no
-// worker starts any more, and a worker's session ending with it is suspended as the host ends, not
-// resumed as a crash.
+// worker starts any more.
 func TestLeavingBatonStartsNoMoreWorkers(t *testing.T) {
 	x := newCrew(t, 2)
 	x.tick(time.Second)
@@ -265,11 +260,9 @@ func TestLeavingBatonStartsNoMoreWorkers(t *testing.T) {
 	if !x.c.Lead.quit {
 		t.Fatal("the lead did not leave")
 	}
-	_, f := x.last()
-	f.exit(0)
 	x.tick(time.Second)
 	x.tick(time.Second)
-	if w := x.worker("P1"); len(x.specs) != 1 || w.Status != state.WorkerStarting || w.Resumes != 0 {
-		t.Errorf("%d sessions started; P1's worker %+v", len(x.specs), w)
+	if w := x.worker("P1"); len(x.spawns()) != 1 || w.Status != state.WorkerWorking {
+		t.Errorf("%d spawns; P1's worker %+v", len(x.spawns()), w)
 	}
 }

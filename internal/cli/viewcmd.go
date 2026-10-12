@@ -89,7 +89,7 @@ func viewables(proj *state.Project, now time.Time) []viewable {
 				titles = phaseTitles(proj, r.ID)
 			}
 			v := viewable{run: r, w: w, title: titles[w.Phase]}
-			if r.Live(now) && w.Status != state.WorkerSuspended && w.Instance == state.WorkerInstance(r.State.Owner.Instance, w.Phase) {
+			if r.Live(now) && w.Status != state.WorkerSuspended {
 				v.host = r.State.Owner.Instance
 			}
 			out = append(out, v)

@@ -257,7 +257,9 @@ func (c *cleaner) read() *look {
 			l.protected[o.Instance] = true
 		}
 		for _, e := range info.State.LiveWorkers() {
-			l.protected[e.Instance] = true
+			if o := info.State.Owner; o != nil {
+				l.protected[state.WorkerInstance(o.Instance, e.Phase)] = true
+			}
 			l.trees = append(l.trees, e.Worktree)
 		}
 		for _, s := range r.subs {
@@ -435,9 +437,6 @@ func (c *cleaner) orphan(r *cleanRun, s state.RunInfo) (state.Worker, bool) {
 		e = *last
 	}
 	e.Worktree = s.Worktree
-	if o := s.State.Owner; o != nil {
-		e.Instance = o.Instance
-	}
 	return e, true
 }
 
@@ -773,7 +772,9 @@ func (c *cleaner) ancestors() map[int]bool {
 // runOf is the run whose host or worker ran as instance, if it is on record.
 func (c *cleaner) runOf(instance string) string {
 	for _, r := range c.look.runs {
-		if o := r.State.Owner; o != nil && o.Instance == instance || slices.ContainsFunc(r.State.Workers, func(w state.Worker) bool { return w.Instance == instance }) {
+		if o := r.State.Owner; o != nil && (o.Instance == instance || slices.ContainsFunc(r.State.Workers, func(w state.Worker) bool {
+			return state.WorkerInstance(o.Instance, w.Phase) == instance
+		})) {
 			return r.ID
 		}
 	}

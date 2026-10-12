@@ -441,6 +441,25 @@ func (b *Bridge) Claim(instance string) error {
 	return err
 }
 
+// Void takes back command id of instance, not acked yet: its file goes, and the mod never runs it. A spawn
+// voided leaves no spawn open, so the worktree of an agent the mod started from it all the same is not its
+// phase's, and the agent does not start (hooks.worktreeCreate). It reports whether the command was open.
+func (b *Bridge) Void(instance string, id int) (bool, error) {
+	var found bool
+	_, err := b.update(func(r *Record) error {
+		i := slices.IndexFunc(r.Open, func(o Issued) bool { return o.ID == id && o.Instance == instance })
+		if found = i >= 0; found {
+			r.Open = slices.Delete(r.Open, i, i+1)
+			os.Remove(b.CommandPath(id))
+		}
+		return nil
+	})
+	if err == nil && found {
+		b.event("mod_voided", map[string]any{"ids": []int{id}})
+	}
+	return found, err
+}
+
 // Commands lists the command files the mod finds in the directory now, in order, as it reads them.
 func (b *Bridge) Commands() ([]Command, error) {
 	entries, err := os.ReadDir(b.Out())

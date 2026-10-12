@@ -11,9 +11,8 @@ import (
 )
 
 // worker is the roster entry of a worker on phase, as the host assigns it.
-func worker(phase, session string) Worker {
-	return Worker{Phase: phase, Ref: WorkerRef("r1", phase), Session: session, Instance: WorkerInstance("i1", phase),
-		Worktree: "/worktrees/" + phase, Branch: "baton/r1/" + phase, Base: "abc"}
+func worker(phase string) Worker {
+	return Worker{Phase: phase, Ref: WorkerRef("r1", phase), Worktree: "/worktrees/" + phase, Branch: "baton/r1/" + phase, Base: "abc"}
 }
 
 // assigned is a running run of p in which the lead holds lead (active, or "" for none), the phases have
@@ -26,7 +25,7 @@ func assigned(t *testing.T, p plan.Plan, lead string, statuses map[string]string
 		st.Phases[lead].Status = PhaseActive
 	}
 	for _, id := range workers {
-		if err := Assign(&st, p, worker(id, "s-"+id), t0); err != nil {
+		if err := Assign(&st, p, worker(id), t0); err != nil {
 			t.Fatalf("assign %s: %v", id, err)
 		}
 	}
@@ -69,17 +68,17 @@ func TestAssign(t *testing.T) {
 	p := graph("P0:", "P1:", "P2:P1")
 	st := assigned(t, p, "P0", nil)
 	t1 := t0.Add(time.Minute)
-	if err := Assign(&st, p, worker("P1", "s1"), t1); err != nil {
+	if err := Assign(&st, p, worker("P1"), t1); err != nil {
 		t.Fatal(err)
 	}
 	ps, w := st.Phases["P1"], st.WorkerOn("P1")
 	if ps.Status != PhaseWorking || ps.Worker != "r1/P1" || !ps.StartedAt.Equal(t1) {
 		t.Errorf("the phase: %+v", ps)
 	}
-	if w == nil || w.Status != WorkerStarting || w.Session != "s1" || !w.Assigned.Equal(t1) || !w.Since.Equal(t1) || w.Branch != "baton/r1/P1" {
+	if w == nil || w.Status != WorkerStarting || !w.Assigned.Equal(t1) || !w.Since.Equal(t1) || w.Branch != "baton/r1/P1" || !w.Is(st.Workers[0]) {
 		t.Fatalf("the roster: %+v", st.Workers)
 	}
-	if err := Assign(&st, p, worker("P1", "s1"), t1.Add(time.Minute)); err != nil || len(st.Workers) != 1 || !st.Workers[0].Assigned.Equal(t1) {
+	if err := Assign(&st, p, *w, t1.Add(time.Minute)); err != nil || len(st.Workers) != 1 || !st.Workers[0].Assigned.Equal(t1) {
 		t.Errorf("assigned again to the same worker: %v, %+v", err, st.Workers)
 	}
 	if got := st.LiveWorkers(); len(got) != 1 || got[0].Phase != "P1" {
@@ -92,13 +91,13 @@ func TestAssign(t *testing.T) {
 		w    Worker
 		want string
 	}{
-		{"a paused run", func(st *State) { st.Mode = ModePaused }, worker("P2", "s2"), "while a plan runs"},
-		{"an unknown phase", nil, worker("P9", "s2"), `unknown phase "P9"`},
-		{"no session", nil, worker("P2", ""), "needs its sub-run and its session"},
-		{"another worker's phase", nil, worker("P1", "s2"), "has a worker already"},
-		{"the lead's phase", nil, worker("P0", "s2"), "is the lead's"},
-		{"a phase that waits for a working one", nil, worker("P2", "s2"), "waits for phases not done yet"},
-		{"a phase done", func(st *State) { st.Phases["P2"].Status, st.Phases["P1"].Status = PhaseDone, PhaseDone }, worker("P2", "s2"), "is done, not pending"},
+		{"a paused run", func(st *State) { st.Mode = ModePaused }, worker("P2"), "while a plan runs"},
+		{"an unknown phase", nil, worker("P9"), `unknown phase "P9"`},
+		{"no sub-run", nil, Worker{Phase: "P2"}, "needs its sub-run"},
+		{"another worker's phase", nil, worker("P1"), "has a worker already"},
+		{"the lead's phase", nil, worker("P0"), "is the lead's"},
+		{"a phase that waits for a working one", nil, worker("P2"), "waits for phases not done yet"},
+		{"a phase done", func(st *State) { st.Phases["P2"].Status, st.Phases["P1"].Status = PhaseDone, PhaseDone }, worker("P2"), "is done, not pending"},
 	} {
 		cp := assigned(t, p, "P0", nil, "P1")
 		if c.edit != nil {
@@ -280,7 +279,7 @@ func TestUnassign(t *testing.T) {
 	if got := NextWorker(st, p); got != "P1" {
 		t.Errorf("NextWorker after: %q", got)
 	}
-	if err := Assign(&st, p, worker("P1", "s2"), t1); err != nil || len(st.Workers) != 2 || st.WorkerOn("P1").Session != "s2" {
+	if err := Assign(&st, p, worker("P1"), t1); err != nil || len(st.Workers) != 2 || st.WorkerOn("P1").Is(st.Workers[0]) || !st.WorkerOn("P1").Is(st.Workers[1]) {
 		t.Errorf("assigned to another worker: %v, %+v", err, st.Workers)
 	}
 	if _, err := Unassign(&st, p, "P0", "nothing", t1); err == nil {
@@ -401,7 +400,7 @@ func TestPlanGenerations(t *testing.T) {
 		t.Fatalf("a first plan is generation %d", st.Generation)
 	}
 	for _, id := range []string{"P1", "P2", "P3"} {
-		if err := Assign(&st, p, worker(id, "s-"+id), t0); err != nil {
+		if err := Assign(&st, p, worker(id), t0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -431,14 +430,14 @@ func TestPlanGenerations(t *testing.T) {
 	if got := NextWorker(next, p); got != "P2" {
 		t.Errorf("NextWorker = %q, want P2", got)
 	}
-	if err := Assign(&next, p, worker("P1", "s-new"), t0); err == nil || !strings.Contains(err.Error(), "not retired yet") {
+	if err := Assign(&next, p, worker("P1"), t0); err == nil || !strings.Contains(err.Error(), "not retired yet") {
 		t.Errorf("assigned P1 beside the replaced plan's worker: %v", err)
 	}
-	ReleaseWorker(&next, "r1/P1", "s-P1", "the run's plan was replaced", t0)
-	if err := Assign(&next, p, worker("P1", "s-new"), t0); err != nil {
+	ReleaseWorker(&next, next.Workers[0], "the run's plan was replaced", t0)
+	if err := Assign(&next, p, worker("P1"), t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if w := next.WorkerOn("P1"); w == nil || w.Session != "s-new" || w.Generation != 2 {
+	if w := next.WorkerOn("P1"); w == nil || !w.Assigned.Equal(t0.Add(time.Hour)) || w.Generation != 2 {
 		t.Errorf("P1's worker: %+v", w)
 	}
 }
@@ -450,27 +449,30 @@ func TestReleaseWorker(t *testing.T) {
 	p := graph("P0:", "P1:", "P2:P1")
 	t1 := t0.Add(time.Hour)
 	for _, c := range []struct {
-		name    string
-		lead    string
-		before  func(*State)
-		ref     string
-		session string
-		ok      bool
-		phase   string // P1's status after
+		name   string
+		lead   string
+		before func(*State)
+		other  bool // another assignment of P1 than the one on the roster
+		ok     bool
+		phase  string // P1's status after
 	}{
-		{"the lead busy", "P0", nil, "r1/P1", "s-P1", true, PhasePending},
-		{"the lead idle: it takes nothing up", "", func(st *State) { st.Phases["P0"].Status = PhaseDone }, "r1/P1", "s-P1", true, PhasePending},
-		{"another session's worker", "P0", nil, "r1/P1", "s-other", false, PhaseWorking},
-		{"a failed worker", "P0", func(st *State) { st.Workers[0].Status = WorkerFailed }, "r1/P1", "s-P1", false, PhaseWorking},
-		{"a replaced plan's worker", "P0", func(st *State) { st.Generation++ }, "r1/P1", "s-P1", true, PhaseWorking},
+		{"the lead busy", "P0", nil, false, true, PhasePending},
+		{"the lead idle: it takes nothing up", "", func(st *State) { st.Phases["P0"].Status = PhaseDone }, false, true, PhasePending},
+		{"another assignment's worker", "P0", nil, true, false, PhaseWorking},
+		{"a failed worker", "P0", func(st *State) { st.Workers[0].Status = WorkerFailed }, false, false, PhaseWorking},
+		{"a replaced plan's worker", "P0", func(st *State) { st.Generation++ }, false, true, PhaseWorking},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := assigned(t, p, c.lead, nil, "P1")
 			if c.before != nil {
 				c.before(&st)
 			}
+			e := st.Workers[0]
+			if c.other {
+				e.Assigned = e.Assigned.Add(time.Second)
+			}
 			compaction, current := st.Run.Compaction, st.Current
-			if got := ReleaseWorker(&st, c.ref, c.session, "a new run started in this project", t1); got != c.ok {
+			if got := ReleaseWorker(&st, e, "a new run started in this project", t1); got != c.ok {
 				t.Errorf("ReleaseWorker = %v, want %v", got, c.ok)
 			}
 			if st.Phases["P1"].Status != c.phase || st.Current != current || st.BoundaryOwed || !reflect.DeepEqual(st.Run.Compaction, compaction) {

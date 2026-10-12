@@ -69,7 +69,7 @@ func TestARunIsSerialWithoutTheMod(t *testing.T) {
 			if c.late {
 				helloFrom(t, x.lead)
 			}
-			if n := len(x.specs); c.serial != "" && n != 0 {
+			if n := len(x.spawns()); c.serial != "" && n != 0 {
 				t.Fatalf("%d workers before the wait was over", n)
 			}
 			if strings.Contains(x.events(), `"kind":"serial"`) && c.serial != mismatch {
@@ -80,8 +80,8 @@ func TestARunIsSerialWithoutTheMod(t *testing.T) {
 			}
 			helloFrom(t, x.lead) // too late for a serial run
 			x.tick(2 * time.Second)
-			if len(x.specs) != c.workers {
-				t.Errorf("%d workers, want %d", len(x.specs), c.workers)
+			if len(x.spawns()) != c.workers {
+				t.Errorf("%d workers, want %d", len(x.spawns()), c.workers)
 			}
 			ev, st := x.events(), x.state()
 			announced := 0

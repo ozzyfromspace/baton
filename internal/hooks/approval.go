@@ -111,8 +111,8 @@ func workersAttached(c Context, checkout string, pl plan.Plan) string {
 	if err != nil {
 		return ""
 	}
-	mode, local := config.WorkerMode(c.Env, checkout)
-	return decide.WorkersAttached(n, auto, pl.Width(), mode, local)
+	mode := config.WorkerMode(c.Env, checkout)
+	return decide.WorkersAttached(n, auto, pl.Width(), mode)
 }
 
 // attachedFields are the fields of the "attached" event for a plan the human approved.

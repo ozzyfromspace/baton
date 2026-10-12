@@ -454,3 +454,35 @@ func TestEachCommandRunsOnce(t *testing.T) {
 		t.Errorf("the other claude's mod ran %v", y.ran)
 	}
 }
+
+// A command the host takes back is gone: its file, and its place in the record, so a spawn voided leaves
+// no spawn open, and its ack, if the mod ran it all the same, ends nothing. Only the host's own commands
+// are its to take back.
+func TestAVoidedCommandIsGone(t *testing.T) {
+	r := newRig(t)
+	spawn := r.issue(Command{Kind: Spawn, Phase: "P3", Prompt: "Begin P3."})
+	if ok, err := r.b.Void("other", spawn.ID); ok || err != nil {
+		t.Errorf("another host voided it: %v %v", ok, err)
+	}
+	if ok, err := r.b.Void("inst", spawn.ID); !ok || err != nil {
+		t.Fatalf("void: %v %v", ok, err)
+	}
+	rec, _ := r.b.Load()
+	if _, open := rec.PendingSpawn("inst"); open || len(rec.Open) != 0 {
+		t.Errorf("still open: %+v", rec.Open)
+	}
+	if _, err := os.Stat(r.b.CommandPath(spawn.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("its file: %v", err)
+	}
+	if ok, _ := r.b.Void("inst", spawn.ID); ok {
+		t.Error("voided twice")
+	}
+	r.hello("inst")
+	r.record(Report{Seq: 1, Kind: Ack, Command: spawn.ID, OK: true, Agent: "a3"})
+	if agents, _ := r.b.Agents(); len(agents) != 0 {
+		t.Errorf("the voided spawn's agent was tracked: %+v", agents)
+	}
+	if !slices.ContainsFunc(r.events, func(e string) bool { return strings.HasPrefix(e, "mod_voided ") }) {
+		t.Errorf("events %v", r.events)
+	}
+}

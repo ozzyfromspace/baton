@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -275,14 +276,12 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 	}
 }
 
-// relayCrew is a crew whose worker on P1 is at work, idle, with a proposal the lead was to put to the
-// human.
+// relayCrew is a crew whose phase agent on P1 is at work, idle, with a proposal the lead was to put to
+// the human.
 func relayCrew(t *testing.T) *crew {
 	t.Helper()
 	x := newCrew(t, 1)
-	x.tick(time.Second)
-	x.started("P1")
-	x.tick(time.Second)
+	x.atWork("P1")
 	sub := x.sub("P1")
 	sub.Update(func(st *state.State) error {
 		state.Start(st, x.now, state.Origin{})
@@ -296,8 +295,8 @@ func relayCrew(t *testing.T) *crew {
 	return x
 }
 
-// The coordinator applies the human's answer to the worker's sub-run, and the worker's own Loop gives it
-// to its idle session.
+// The coordinator applies the human's answer to the worker's sub-run, where it waits for the agent (its
+// next tool call, or the message that wakes it).
 func TestTheCoordinatorAppliesAnAnswer(t *testing.T) {
 	x := relayCrew(t)
 	x.lead.Update(func(st *state.State) error {
@@ -314,13 +313,12 @@ func TestTheCoordinatorAppliesAnAnswer(t *testing.T) {
 	if d := sst.Decisions[0]; d.Resolved == nil || d.Resolved.Answer != "Go ahead" {
 		t.Fatalf("the worker's proposal: %+v", d)
 	}
+	if !slices.ContainsFunc(sst.Inbox, func(m state.Message) bool { return m.Kind == state.MessageAnswer }) {
+		t.Errorf("the worker's inbox: %+v", sst.Inbox)
+	}
 	for range 5 {
 		x.tick(time.Second)
 	}
-	if got := strings.Join(x.typedTo["P1"].text, "\n"); !strings.Contains(got, decide.MailTyped([]string{state.MessageAnswer})) {
-		t.Errorf("typed into the worker: %q", got)
-	}
-	x.tick(time.Second)
 	if n := strings.Count(x.events(), `"kind":"relay_applied"`); n != 1 {
 		t.Errorf("applied %d times", n)
 	}

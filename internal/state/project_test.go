@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -353,13 +352,13 @@ func TestAProjectFromBeforeRunsMovesIntoOne(t *testing.T) {
 }
 
 // newWorker makes the sub-run of a worker on phase of lead's run, working in a fresh directory.
-func newWorker(t *testing.T, p *Project, lead *Store, phase, session string) *Store {
+func newWorker(t *testing.T, p *Project, lead *Store, phase string) *Store {
 	t.Helper()
 	tree := filepath.Join(t.TempDir(), phase)
 	if err := os.MkdirAll(tree, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w, err := p.NewWorker(lead.Ref, phase, session, "host", tree)
+	w, err := p.NewWorker(lead.Ref, phase, "host", tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,11 +369,11 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 	p, _ := newProject(t)
 	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
 	withPlan(t, lead, "Plan")
-	w := newWorker(t, p, lead, "P1", "wsess")
+	w := newWorker(t, p, lead, "P1")
 
 	tree, _ := filepath.EvalSymlinks(w.Root)
 	switch {
-	case w.Ref != "lead/P1" || w.Parent != "lead" || w.Worker() != "P1" || w.Session != "wsess":
+	case w.Ref != "lead/P1" || w.Parent != "lead" || w.Worker() != "P1" || w.Session != "":
 		t.Errorf("ref %q parent %q worker %q session %q", w.Ref, w.Parent, w.Worker(), w.Session)
 	case w.Dir != filepath.Join(lead.Dir, "workers", "P1"):
 		t.Errorf("dir %s", w.Dir)
@@ -388,26 +387,27 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 	if lead.Ref != "lead" || lead.Parent != "" || lead.Worker() != "" || lead.Root != p.Root || lead.Checkout != p.Root || lead.Project != p.Dir {
 		t.Errorf("lead: %+v", lead)
 	}
-	if p.RunOf("wsess") != "lead/P1" || p.HostRun(WorkerInstance("host", "P1")) != "lead/P1" {
-		t.Errorf("links: session %q host %q", p.RunOf("wsess"), p.HostRun("host-P1"))
+	// A phase agent shares the lead's session: nothing links a session or a host to its sub-run.
+	if p.HostRun(WorkerInstance("host", "P1")) != "" {
+		t.Errorf("a host link %q", p.HostRun("host-P1"))
 	}
 	if ownerOf(t, w) != "host-P1" || ownerOf(t, lead) != "host" || p.HostRun("host") != "lead" {
 		t.Errorf("owners: worker %q lead %q; the lead's host link %q", ownerOf(t, w), ownerOf(t, lead), p.HostRun("host"))
 	}
 	again, err := p.Run("lead/P1", "x")
-	if err != nil || again.Dir != w.Dir || again.Root != w.Root || again.Session != "wsess" {
+	if err != nil || again.Dir != w.Dir || again.Root != w.Root {
 		t.Fatalf("reopened: %+v %v", again, err)
 	}
 	if runs := p.Runs(); len(runs) != 1 || runs[0].ID != "lead" {
 		t.Errorf("runs list a worker: %+v", runs)
 	}
-	if ws := p.Workers("lead"); len(ws) != 1 || ws[0].ID != "lead/P1" || ws[0].Worktree != w.Root || len(ws[0].Sessions) != 1 || ws[0].Sessions[0] != "wsess" {
+	if ws := p.Workers("lead"); len(ws) != 1 || ws[0].ID != "lead/P1" || ws[0].Worktree != w.Root || len(ws[0].Sessions) != 0 {
 		t.Errorf("workers: %+v", ws)
 	}
 	if o := p.Others("lead"); len(o) != 0 {
 		t.Errorf("a worker counts as another session in the checkout: %+v", o)
 	}
-	if _, err := p.NewWorker("nobody", "P1", "s2", "host", w.Root); err == nil {
+	if _, err := p.NewWorker("nobody", "P1", "host", w.Root); err == nil {
 		t.Error("a worker for a run that is not there")
 	}
 	up, err := w.ParentRun()
@@ -419,86 +419,10 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 	}
 }
 
-// A worker's session finds its sub-run and nothing else: it never creates, adopts or claims a run, and
-// never touches a host link, least of all the lead's. A /clear in it keeps its sub-run.
-func TestAWorkerBindsOnlyItsOwnSubRun(t *testing.T) {
-	p, _ := newProject(t)
-	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
-	withPlan(t, lead, "Plan")
-	w := newWorker(t, p, lead, "P1", "wsess")
-	leadState, _ := os.ReadFile(filepath.Join(lead.Dir, "state.json"))
-	links := func() map[string]string {
-		out := map[string]string{}
-		for _, sub := range []string{sessionsDir, hostsDir} {
-			entries, _ := os.ReadDir(p.path(sub))
-			for _, e := range entries {
-				out[sub+"/"+e.Name()] = p.readLink(sub, e.Name())
-			}
-		}
-		out[pendingFile] = p.readLink(pendingFile)
-		return out
-	}
-	pend, _ := p.Pending("") // a shell's plan waits for the next session: never a worker's
-	before := links()
-
-	for _, b := range []Binding{
-		{Session: "wsess", Instance: "host-P1", Worker: true},
-		{Session: "wsess", Instance: "host-P1"}, // the role lost on the way
-		{Session: "wsess", Instance: "host"},    // the lead's instance
-		{Session: "wsess", Instance: "host-P1", Carry: true},
-		{Instance: "host-P1", Worker: true},
-		{Session: "wsess"},
-	} {
-		got, err := p.Bind(b)
-		if err != nil || got.Dir != w.Dir {
-			t.Errorf("%+v: %v %v", b, got, err)
-		}
-	}
-	for _, b := range []Binding{
-		{Session: "fresh", Instance: "host-P1", Worker: true},
-		{Session: "fresh", Instance: "host-P1"}, // the role lost on the way
-		{Instance: "nobody", Worker: true},
-		{Session: "lead", Instance: "host-P1", Worker: true, Carry: true},  // a session of another run
-		{Session: "fresh", Instance: "host-P9", Worker: true, Carry: true}, // a worker's instance that drives nothing
-	} {
-		if _, err := p.Bind(b); !errors.Is(err, ErrNotLinked) {
-			t.Errorf("%+v: %v, want ErrNotLinked", b, err)
-		}
-	}
-	if after := links(); fmt.Sprint(after) != fmt.Sprint(before) {
-		t.Errorf("links changed:\n%v\n%v", before, after)
-	}
-	if now, _ := os.ReadFile(filepath.Join(lead.Dir, "state.json")); string(now) != string(leadState) {
-		t.Error("a worker's binding wrote the lead's state")
-	}
-	if !exists(pend.Dir) || p.readLink(pendingFile) == "" {
-		t.Error("a worker took the pending run")
-	}
-	if ownerOf(t, w) != "host-P1" {
-		t.Errorf("the worker's owner is %q", ownerOf(t, w))
-	}
-	// A /clear typed in the worker's session (in a viewer) keeps its sub-run: the cleared session is linked
-	// to the sub-run the worker's host instance drives, as a lead's /clear keeps its run.
-	got, err := p.Bind(Binding{Session: "cleared-w", Instance: "host-P1", Worker: true, Carry: true})
-	if err != nil || got.Dir != w.Dir || got.Session != "cleared-w" || p.RunOf("cleared-w") != w.Ref || p.HostRun("host-P1") != w.Ref {
-		t.Errorf("a cleared worker got %v %v; its links: session %q, host %q", got, err, p.RunOf("cleared-w"), p.HostRun("host-P1"))
-	}
-	if got, err := p.Bind(Binding{Session: "cleared-w", Instance: "host-P1", Worker: true}); err != nil || got.Dir != w.Dir {
-		t.Errorf("the cleared worker's next hook got %v %v", got, err)
-	}
-	if now, _ := os.ReadFile(filepath.Join(lead.Dir, "state.json")); string(now) != string(leadState) || !exists(pend.Dir) || ownerOf(t, w) != "host-P1" {
-		t.Error("a cleared worker touched the lead's state, the pending run, or its owner")
-	}
-	// A cleared lead carries its own run.
-	if got := bind(t, p, Binding{Session: "cleared", Instance: "host", Carry: true}); got.Dir != lead.Dir || p.HostRun("host-P1") != w.Ref {
-		t.Errorf("a cleared lead got %s; the worker's host link %q", got.Dir, p.HostRun("host-P1"))
-	}
-}
-
 func TestRefs(t *testing.T) {
 	p, _ := newProject(t)
 	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
-	newWorker(t, p, lead, "P1", "wsess")
+	newWorker(t, p, lead, "P1")
 	for _, tc := range []struct {
 		ref    string
 		exists bool
@@ -532,39 +456,11 @@ func TestRefs(t *testing.T) {
 	}
 }
 
-func TestSweepKeepsLiveWorkerLinks(t *testing.T) {
-	p, c := newProject(t)
-	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
-	withPlan(t, lead, "Plan")
-	w := newWorker(t, p, lead, "P1", "wsess")
-	gone := newWorker(t, p, lead, "P2", "gsess")
-	os.Remove(filepath.Join(gone.Dir, treeFile)) // its sub-run is gone
-
-	c.t = c.t.Add(OwnerTTL / 2)
-	p.Sweep()
-	if p.RunOf("wsess") != w.Ref || p.HostRun("host-P1") != w.Ref {
-		t.Fatalf("swept a live worker's links: %q %q", p.RunOf("wsess"), p.HostRun("host-P1"))
-	}
-	if exists(p.path(sessionsDir, "gsess")) || exists(p.path(hostsDir, "host-P2")) {
-		t.Error("kept the links of a worker whose sub-run is gone")
-	}
-
-	c.t = c.t.Add(OwnerTTL) // the worker's host stopped beating
-	lead.Update(func(st *State) error { return Claim(st, "host", 1, c.t) })
-	p.Sweep()
-	if p.HostRun("host-P1") != "" {
-		t.Error("kept the link of a host that no longer drives its worker")
-	}
-	if p.RunOf("wsess") != w.Ref || !exists(w.Dir) {
-		t.Error("swept a worker's sub-run or its session's link")
-	}
-}
-
-func TestAWorkersEventsNameItsPhaseAndSession(t *testing.T) {
+func TestAWorkersEventsNameItsPhase(t *testing.T) {
 	p, _ := newProject(t)
 	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
-	w := newWorker(t, p, lead, "P1", "wsess")
-	w.Event("phase_done", map[string]any{"phase": "P1", "worker": "P9", "session": "forged"})
+	w := newWorker(t, p, lead, "P1")
+	w.Event("phase_done", map[string]any{"phase": "P1", "worker": "P9"})
 	lead.Event("attached", nil)
 	read := func(s *Store) map[string]any {
 		b, err := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
@@ -577,7 +473,7 @@ func TestAWorkersEventsNameItsPhaseAndSession(t *testing.T) {
 		}
 		return rec
 	}
-	if rec := read(w); rec["worker"] != "P1" || rec["session"] != "wsess" || rec["instance"] != "host-P1" || rec["kind"] != "phase_done" {
+	if rec := read(w); rec["worker"] != "P1" || rec["instance"] != "host-P1" || rec["kind"] != "phase_done" {
 		t.Errorf("worker's event: %v", rec)
 	}
 	if rec := read(lead); rec["worker"] != nil || rec["session"] != nil {
@@ -592,8 +488,8 @@ func TestAPhaseAgentIsLinkedByItsID(t *testing.T) {
 	p, _ := newProject(t)
 	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
 	withPlan(t, lead, "Plan")
-	w := newWorker(t, p, lead, "P1", "wsess")
-	gone := newWorker(t, p, lead, "P2", "gsess")
+	w := newWorker(t, p, lead, "P1")
+	gone := newWorker(t, p, lead, "P2")
 	for _, c := range []struct{ run, phase, agent string }{
 		{"lead", "P1", ""}, {"lead", "", "a1"}, {"lead", "P1", "../a1"}, {"lead", "P9", "a1"}, {"nobody", "P1", "a1"},
 	} {

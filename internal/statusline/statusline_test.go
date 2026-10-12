@@ -139,7 +139,7 @@ func TestWorkerSegments(t *testing.T) {
 	run := state.Attach(pl, now.Add(-time.Hour), state.Origin{})
 	run.Run.Context = &state.ContextUse{UsedPct: 41.4}
 	worker := func(phase, status string, assigned time.Duration) state.Worker {
-		return state.Worker{Phase: phase, Ref: "r/" + phase, Session: "s-" + phase, Status: status, Assigned: now.Add(-assigned), Since: now.Add(-assigned)}
+		return state.Worker{Phase: phase, Ref: "r/" + phase, Status: status, Assigned: now.Add(-assigned), Since: now.Add(-assigned)}
 	}
 	with := func(ws ...state.Worker) state.State {
 		st := withJobs(run)
@@ -176,13 +176,6 @@ func TestWorkerSegments(t *testing.T) {
 			state.QueueRelay(&st, state.Relay{Phase: "P1", Kind: state.RelayBlocked, Since: now}, now)
 			return st
 		}, 0, head + "W P2 1h00m · ? P1 · ctx 41%"},
-		{"one waiting on the human in its own session", func() state.State {
-			w := worker("P1", state.WorkerWorking, time.Hour)
-			w.Needs = "a permission prompt for Bash"
-			st := with(w)
-			state.QueueRelay(&st, state.Relay{Phase: "P1", Kind: state.RelayBlocked, Since: now}, now)
-			return st
-		}, 0, head + "! P1 needs you · ctx 41%"},
 		{"landed and failed workers are gone", func() state.State {
 			st := with(worker("P1", state.WorkerLanded, time.Hour), worker("P2", state.WorkerFailed, time.Hour))
 			st.Phases["P1"].Status, st.Phases["P2"].Status = state.PhaseDone, state.PhasePending

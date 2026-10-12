@@ -18,7 +18,7 @@ import (
 
 // RetireOrphan ends what a worker's sub-run left behind when its run has no live worker on it any more:
 // its uncommitted work is saved, its jobs stopped, its worktree removed, and its branch removed or kept,
-// as RetireWorker does. r.Entry describes the sub-run: its Ref, Phase, Session, Instance and Worktree,
+// as RetireWorker does. r.Entry describes the sub-run: its Ref, Phase and Worktree,
 // the branch its worker worked on and the base it started from (or ""), and the Generation of its last
 // roster entry, or -1 when the run has none: a branch kept for a plan the run no longer runs is renamed
 // under kept/, so that no later worker carries on from it. Its last roster entry, if it has one, records
@@ -62,7 +62,7 @@ func RetireOrphan(r Retirement) Retired {
 		}
 		return nil
 	})
-	r.Project.Unbind(e.Instance)
+	x.unbind()
 	x.event()
 	return x.out
 }

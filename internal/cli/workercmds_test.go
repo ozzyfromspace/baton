@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,8 @@ import (
 )
 
 // asWorker is a run attached in sess-1 (the lead, on P0, host inst) with a worker on P1 in a worktree of
-// its own, its phase started; w runs commands as the worker's session, lead as the lead's.
+// its own, its phase started; w runs commands as the worker's phase agent (the lead's session, in the
+// worktree), lead as the lead's.
 func asWorker(t *testing.T) (w, lead *session) {
 	t.Helper()
 	lead = attached(t)
@@ -26,13 +28,14 @@ func asWorker(t *testing.T) (w, lead *session) {
 	}
 	pl.Phases[1].After = []string{} // P1 can go ahead beside P0
 	run.SavePlan(pl)
+	tree := t.TempDir()
 	lead.set(func(x *state.State) {
-		if err := state.Assign(x, pl, state.Worker{Phase: "P1", Ref: state.WorkerRef(run.Ref, "P1"), Session: "wsess"}, lead.now); err != nil {
+		if err := state.Assign(x, pl, state.Worker{Phase: "P1", Ref: state.WorkerRef(run.Ref, "P1"), Worktree: tree}, lead.now); err != nil {
 			t.Fatal(err)
 		}
 	})
 	p, _ := state.OpenProject(lead.env["BATON_DIR"], nil)
-	sub, err := p.NewWorker(run.Ref, "P1", "wsess", "inst", t.TempDir())
+	sub, err := p.NewWorker(run.Ref, "P1", "inst", tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +46,7 @@ func asWorker(t *testing.T) (w, lead *session) {
 		state.Start(x, lead.now, state.Origin{})
 		return nil
 	})
-	w = &session{t: t, now: lead.now, env: map[string]string{"BATON_DIR": lead.env["BATON_DIR"], "BATON_HOST": "1", "BATON_ROLE": "worker",
-		"BATON_INSTANCE": state.WorkerInstance("inst", "P1"), "BATON_PHASE": "P1", "CLAUDE_CODE_SESSION_ID": "wsess"}}
+	w = &session{t: t, now: lead.now, env: maps.Clone(lead.env), dir: sub.Root}
 	return w, lead
 }
 
@@ -62,7 +64,7 @@ func TestAWorkerIsRefusedTheLeadsCommands(t *testing.T) {
 	for _, args := range [][]string{{"attach", "plan.md", "--suggested"}, {"run"}, {"pause"}, {"drop"}, {"exit"}} {
 		t.Run(args[0], func(t *testing.T) {
 			w, lead := asWorker(t)
-			w.mustFail("not run — this session is a worker: it works on P1 alone, in a worktree of its own, while the lead session runs the plan in the human's terminal, "+
+			w.mustFail("not run — you are a worker: you work on P1 alone, in a worktree of your own, while the lead session runs the plan in the human's terminal, "+
 				"and baton "+args[0]+" belongs to the lead session. Carry on with P1", args...)
 			if !w.logged("refused", map[string]any{"command": args[0], "why": "worker"}) {
 				t.Errorf("the worker's events:\n%s", w.events())
@@ -79,7 +81,7 @@ func TestAWorkerIsRefusedTheLeadsCommands(t *testing.T) {
 func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	w, lead := asWorker(t)
 	out := w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
-	for _, want := range []string{"baton: proposal P1.d1 recorded. Nobody watches this session, so baton puts it to the human through the lead session",
+	for _, want := range []string{"baton: proposal P1.d1 recorded. baton puts it to the human through the lead session",
 		"If nobody answers within 5 minutes of being asked, baton picks Go ahead for them", "Until then, do not do what you proposed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in:\n%s", want, out)
@@ -351,23 +353,22 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 	lead.set(func(x *state.State) {
 		x.RunBranch = "main"
 		p1 := &x.Workers[0]
-		p1.Status, p1.Assigned, p1.Branch, p1.Needs = state.WorkerWorking, now.Add(-14*time.Minute), "baton/sess-1/P1", "a permission prompt for Bash"
+		p1.Status, p1.Assigned, p1.Branch, p1.AgentID = state.WorkerWorking, now.Add(-14*time.Minute), "baton/sess-1/P1", "a1b2c3"
 		x.Workers = append(x.Workers,
-			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "0123456789abcdef", Branch: "baton/sess-1/R1", Status: state.WorkerFailed,
-				Why: "its session ended unexpectedly (exit code 1), 3 times", Unlanded: 2},
-			state.Worker{Phase: "R1", Ref: "sess-1/R1", Session: "fedcba9876543210", Branch: "baton/sess-1/R1", Worktree: "/wt/R1", Status: state.WorkerLanding,
-				Assigned: now.Add(-time.Hour), Resumes: 1, Generation: x.Generation,
+			state.Worker{Phase: "R1", Ref: "sess-1/R1", Branch: "baton/sess-1/R1", Status: state.WorkerFailed,
+				Why: "its agent never started", Unlanded: 2},
+			state.Worker{Phase: "R1", Ref: "sess-1/R1", Branch: "baton/sess-1/R1", Worktree: "/wt/R1", Status: state.WorkerLanding,
+				Assigned: now.Add(-time.Hour), Generation: x.Generation,
 				Merge: &state.Merge{Queued: now.Add(-5 * time.Minute), Deferred: "the lead changed a.txt too", DeferredAt: now.Add(-2 * time.Minute)}})
 		x.Phases["R1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "sess-1/R1"}
 		x.Usage = &state.Usage{UsedPct: 62, Resets: now.Add(2 * time.Hour), At: now.Add(-time.Minute)}
 	})
 	out := lead.must("", "status")
 	for _, want := range []string{
-		"workers (each in a worktree of its own; baton view <phase>, in another terminal, shows one):\n" +
-			"  P1     working 14m · branch baton/sess-1/P1 · session wsess\n" +
+		"workers (each an agent in a worktree of its own; the agent panel below the prompt shows them):\n" +
+			"  P1     working 14m · branch baton/sess-1/P1 · agent a1b2c3\n" +
 			"         worktree: " + tree + "\n" +
-			"         needs you: a permission prompt for Bash — answer it in its session: baton view P1\n" +
-			"  R1     finished, waits to land · branch baton/sess-1/R1 · session fedcba98 · resumed 1 time\n" +
+			"  R1     finished, waits to land · branch baton/sess-1/R1\n" +
 			"         worktree: /wt/R1",
 		"merge queue (first finished, first landed on main):\n" +
 			"  1. R1     finished " + at(-5*time.Minute) + " · waits to land: the lead changed a.txt too (since " + at(-2*time.Minute) + ")",
@@ -403,16 +404,16 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 		x.Workers = x.Workers[:2]
 		x.Phases["R1"] = &state.PhaseState{Status: state.PhasePending}
 		p1 := &x.Workers[0]
-		p1.Status, p1.Why, p1.Needs = state.WorkerSuspended, "baton exited", ""
+		p1.Status, p1.Why, p1.AgentID = state.WorkerSuspended, "baton exited", ""
 		x.Usage.Limited, x.Usage.Hit, x.Usage.By = now.Add(time.Hour), now.Add(-10*time.Minute), "P1"
 	})
 	out = lead.must("", "status")
 	for _, want := range []string{
-		"workers (each in a worktree of its own; baton view <phase>, in another terminal, shows one):\n" +
-			"  P1     suspended · branch baton/sess-1/P1 · session wsess\n" +
+		"workers (each an agent in a worktree of its own; the agent panel below the prompt shows them):\n" +
+			"  P1     suspended · branch baton/sess-1/P1\n" +
 			"         worktree: " + tree + "\n" +
-			"         baton exited; the next baton session of this run resumes it\n" +
-			"  R1     ended: its session ended unexpectedly (exit code 1), 3 times · its branch baton/sess-1/R1 keeps 2 commits that never landed",
+			"         baton exited; the next baton session of this run starts its agent again\n" +
+			"  R1     ended: its agent never started · its branch baton/sess-1/R1 keeps 2 commits that never landed",
 		"usage limit: the worker on P1 hit it at " + at(-10*time.Minute) + " → no worker starts, and baton types nothing into the run's sessions, until " + at(time.Hour),
 	} {
 		header, _, _ := strings.Cut(want, "\n")
@@ -503,7 +504,7 @@ func TestAttachSaysHowManyWorkersRun(t *testing.T) {
 		{"auto by default: as many as the plan allows, in the default mode", nil,
 			"baton: tell the human: up to 1 worker works beside this session on the phases that can go ahead, each in a worktree of its own, " +
 				"and baton lands their work on this branch (the plan's widest step is 2 phases; this machine allows 6).", ""},
-		{"the default mode stops them at prompts", nil, "Workers start in the permission mode this session started in (default)", ""},
+		{"the default mode stops them at prompts", nil, "Workers work in this session's permission mode (default as it started)", ""},
 		{"a mode with no prompts", map[string]string{"BATON_WORKER_MODE": "auto"}, "(workers: 2).", "permission mode"},
 		{"none", map[string]string{"BATON_WORKERS": "0"}, "", "worker"},
 	} {

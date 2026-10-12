@@ -79,7 +79,7 @@ func (w Words) Reporting() string {
 	if w.Worker {
 		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " "
 		blocked = ", and end your turn: it stops only your phase, and baton asks the human through the lead session. "
-		unattended = "Nobody watches this session, so do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. "
+		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
 		pause = ""
 	}
 	return strings.TrimSpace("Report progress only with these commands (Bash tool): " + done +

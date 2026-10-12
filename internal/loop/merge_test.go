@@ -25,18 +25,14 @@ func landingCrew(t *testing.T) *crew {
 	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
 		t.Setenv(k, v)
 	}
-	x.tick(time.Second)
-	x.started("P1")
-	x.tick(time.Second)
-	if w := x.worker("P1"); w.Status != state.WorkerWorking {
-		t.Fatalf("P1's worker: %+v", w)
-	}
+	x.atWork("P1")
 	return x
 }
 
 // finish makes the worker on phase finish it: it commits files in its worktree, and reports the phase
-// done (verified on that commit, when verify says so), which completes its sub-run, and its turn ends.
-// It returns the commit.
+// done (verified on that commit, when verify says so), which completes its sub-run, and its turn ends:
+// its hooks have been quiet long enough for baton to touch its worktree (workerQuiet). It returns the
+// commit.
 func (x *crew) finish(phase string, files map[string]string, verify bool) string {
 	t := x.t
 	t.Helper()
@@ -60,7 +56,7 @@ func (x *crew) finish(phase string, files map[string]string, verify bool) string
 		if _, err := state.Done(st, pl, phase, x.now, state.DoneOpts{}); err != nil {
 			return err
 		}
-		st.Run.TurnOpen, st.Run.CompleteNotified = false, true
+		st.Run.TurnOpen, st.Run.CompleteNotified, st.Run.LastActivity = false, true, x.now.Add(-workerQuiet)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -135,20 +131,19 @@ func TestAFinishedWorkersPhaseLands(t *testing.T) {
 			t.Errorf("announced %q, want %q", x.announced(), want)
 		}
 	}
-	f := x.sessions[0]
-	if f.ended != 1 {
-		t.Fatalf("the landed worker's session was ended %d times", f.ended)
+	x.tick(time.Second)
+	if !slices.Equal(x.stopped, []string{before.AgentID}) {
+		t.Fatalf("stopped %v, want the landed worker's agent", x.stopped)
 	}
-	f.exit(0)
 	x.tick(time.Second)
 	if isDir(before.Worktree) || gitx.RevParse(x.repo, "refs/heads/"+before.Branch) != "" {
 		t.Error("the landed worker's worktree or branch is still there")
 	}
-	if w := x.worker("P1"); w.Status != state.WorkerLanded || !x.has("worker_ended", `"why":"its work landed"`) {
-		t.Errorf("worker %+v\n%s", w, x.events())
+	if w := x.worker("P1"); w.Status != state.WorkerLanded || !x.has("worker_ended", `"why":"its work landed"`) || slices.Contains(x.tracked(), before.AgentID) {
+		t.Errorf("worker %+v; baton's agents %v\n%s", w, x.tracked(), x.events())
 	}
-	if w := x.worker("P2"); w.Status != state.WorkerStarting {
-		t.Errorf("the freed slot went unused: %+v", w)
+	if x.status("P2") == "" {
+		t.Errorf("the freed slot went unused: %+v", x.state().Workers)
 	}
 }
 
@@ -219,8 +214,8 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 				if gitx.Head(x.repo) != rebased || x.worker("P1").Status != state.WorkerLanded {
 					t.Fatalf("not landed after its verification passed\n%s", x.events())
 				}
-				if typed := x.typedTo["P1"].text; len(typed) > 0 {
-					t.Errorf("the worker was told %q, for a verification that passed", typed)
+				if sst, _ := sub.Load(); len(sst.Inbox) > 0 {
+					t.Errorf("the worker was told %+v, for a verification that passed", sst.Inbox)
 				}
 				return
 			}
@@ -259,10 +254,6 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	}
 	if n := x.state().Conflicts; n != 1 {
 		t.Errorf("%d landings in a row conflicted, want 1", n)
-	}
-	x.tick(time.Second)
-	if typed := x.typedTo["P1"].text; !slices.Contains(typed, decide.MailTyped([]string{state.MessageLand})) {
-		t.Errorf("typed into the idle worker: %q", typed)
 	}
 
 	// The worker resolves it, and reports the phase done again.
@@ -671,19 +662,17 @@ func TestALandingWorkerIsSuspendedAndResumed(t *testing.T) {
 	x.lead.Update(func(st *state.State) error { st.Mode = state.ModePaused; return nil })
 	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
 	x.tick(time.Second)
-	_, f := x.last()
-	f.exit(0)
-	x.c.Ended("the baton session ended")
+	x.c.Ended("the baton session ended", nil)
 	if w := x.worker("P1"); w.Status != state.WorkerSuspended || w.Merge != nil {
 		t.Fatalf("worker %+v", w)
 	}
-	x.proj.Unbind("inst-P1")
 	x.proj.Unbind("inst")
 	x.lead.Update(func(st *state.State) error { st.Mode = state.ModeRunning; return nil })
 
 	x.c = x.coordinator("next", 1)
-	x.tick(time.Second)
-	x.started("P1")
+	x.tick(time.Second) // its agent starts again
+	x.stops("P1")       // and stops: its phase is finished
+	x.tick(workerQuiet)
 	x.tick(time.Second)
 	if gitx.Head(x.repo) != tip || x.worker("P1").Status != state.WorkerLanded {
 		t.Fatalf("not landed after the next host resumed it: %+v\n%s", x.worker("P1"), x.events())
@@ -783,11 +772,7 @@ func TestAWaitingLandingHoldsUpNoOther(t *testing.T) {
 	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid"} {
 		t.Setenv(k, v)
 	}
-	x.tick(time.Second)
-	x.tick(time.Second)
-	x.started("P1")
-	x.started("P2")
-	x.tick(time.Second)
+	x.atWork("P1", "P2")
 	first := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = true; return nil }) // its session still at work
 	x.tick(time.Second)

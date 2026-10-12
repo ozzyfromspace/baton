@@ -9,19 +9,15 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// Whether there is room for another worker's session. With workers: auto, how many may run at once is
-// the plan's to say (the phases that can go ahead) and the machine's (a ceiling the host works out from
-// its CPUs and memory, config.AutoWorkers); whatever the setting, a worker starts or resumes only while
-// the machine has room for one, as it reads at the step (busy), and new workers start one Ramp apart, so
-// that each one's load shows before the next starts. Nor does a new worker start while the project's
-// lanes fall behind, a gate of the run's waiting for one (lanes), or while the workers' landings keep
-// conflicting with the run's branch (conflicted): another worker would only add to either. What holds
-// back a phase that could go ahead is told once (hold). The workers at work are never stopped. The
-// machine's readings and limits come from spike 27 (docs/research/workers.md, "Machine readings and
-// leftovers").
-
-// DefaultRamp is how long after a worker's session started the next new one may, with workers: auto.
-const DefaultRamp = time.Minute
+// Whether there is room for another phase agent. With workers: auto, how many may run at once is the
+// plan's to say (the phases that can go ahead) and the machine's (a ceiling the host works out from its
+// CPUs and memory, config.AutoWorkers); whatever the setting, an agent starts only while the machine has
+// room for one, as it reads at the step (busy), and one at a time (mayLaunch). Nor does a new agent start
+// while the project's lanes fall behind, a gate of the run's waiting for one (lanes), or while the
+// workers' landings keep conflicting with the run's branch (conflicted): another agent would only add to
+// either. What holds back a phase that could go ahead is told once (hold). The agents at work are never
+// stopped. The machine's readings and limits come from spike 27 (docs/research/workers.md, "Machine
+// readings and leftovers").
 
 const (
 	// memFloor is the least share of memory, in percent, Linux must have available for another session.
@@ -122,27 +118,17 @@ func (c *Coordinator) look(now time.Time) {
 	}
 }
 
-// room is what a step knows of the room for another worker: why the machine has none ("" if it has), why
-// the lanes have none (lanes), and when this host last started a worker's session.
+// room is what a step knows of the room for another phase agent: why the machine has none ("" if it has),
+// and why the lanes have none (lanes).
 type room struct {
-	busy    string
-	lanes   string
-	started time.Time
-}
-
-// ramp is how long after a worker's session started the next new one may, with auto.
-func (f *Fleet) ramp() time.Duration {
-	if f.Ramp > 0 {
-		return f.Ramp
-	}
-	return DefaultRamp
+	busy  string
+	lanes string
 }
 
 // hold keeps the run's record of what holds back a phase that waits for a worker (state.Hold) in step
 // with what next found: phase waits ("" for none), why no worker starts ("" if one does), and held, the
 // hold on it ("" for none). A hold is told once, as it starts or changes kind (worker_deferred, and a line
-// in the session), and its record goes once a worker starts or no phase waits for one. The ramp between
-// two workers holds nothing back, and ends nothing.
+// in the session), and its record goes once a worker starts or no phase waits for one.
 func (c *Coordinator) hold(now time.Time, s *state.Store, st state.State, phase, why, held string) {
 	cur := st.Hold
 	switch {

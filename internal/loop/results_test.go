@@ -180,33 +180,21 @@ func TestAResultWaitsForTheGates(t *testing.T) {
 	}
 }
 
-// A worker's proposal is the lead session's to put to the human. While it waits, the worker's job results
-// still reach it, and the watchdog leaves the idle worker be. A session's own proposal holds both: it is
-// to be asked first.
-func TestAWorkersRelayedProposalHoldsNothingUp(t *testing.T) {
-	for _, c := range []struct {
-		name    string
-		relayed bool
-	}{{"a worker's relayed proposal", true}, {"the session's own proposal", false}} {
-		t.Run(c.name, func(t *testing.T) {
-			r := resultRig(t)
-			if c.relayed {
-				r.asWorker()
-			}
-			r.set(func(st *state.State) {
-				state.AddProposal(st, state.Decision{What: "use a fake", Relayed: c.relayed}, r.now)
-				st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Command: "make test", Status: state.JobFailed, Exit: 1}}
-			})
-			r.tick(time.Second)
-			if typed := len(r.in.text) == 1 && strings.Contains(r.in.text[0], "Job j1 (P1) finished"); typed != c.relayed {
-				t.Errorf("typed %q", r.in.text)
-			}
-			r.set(func(st *state.State) { st.Jobs = nil })
-			r.in.text = nil
-			r.run(3 * DefaultTiming.IdleNudge)
-			if nudged := strings.Contains(r.events(), "idle_nudge"); nudged == c.relayed {
-				t.Errorf("nudged %v:\n%s", nudged, r.events())
-			}
-		})
+// A session's own proposal is to be asked first: its job results wait for it, and the watchdog reminds the
+// idle session of it.
+func TestASessionsOwnProposalIsAskedFirst(t *testing.T) {
+	r := resultRig(t)
+	r.set(func(st *state.State) {
+		state.AddProposal(st, state.Decision{What: "use a fake"}, r.now)
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P1", Command: "make test", Status: state.JobFailed, Exit: 1}}
+	})
+	r.tick(time.Second)
+	if len(r.in.text) != 0 {
+		t.Errorf("typed %q", r.in.text)
+	}
+	r.set(func(st *state.State) { st.Jobs = nil })
+	r.run(3 * DefaultTiming.IdleNudge)
+	if !strings.Contains(r.events(), "idle_nudge") {
+		t.Errorf("not reminded:\n%s", r.events())
 	}
 }

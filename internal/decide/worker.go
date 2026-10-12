@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// A worker is a session of its own on one phase of a run, in a git worktree of its own, while the lead
-// session works on other phases in the human's checkout (docs/research/workers.md). Nobody watches a
-// worker: its questions reach the human through the lead, and its work lands on the run's branch under
-// the lead. These are the words it reads about all that. None of them names the project's checkout,
-// which is the lead's.
+// A worker is a phase agent: an agent of the lead session on one phase of a run, in a git worktree of its
+// own, while the lead works on other phases in the human's checkout (docs/research/visible-workers.md).
+// Its questions reach the human through the lead, and its work lands on the run's branch under the lead.
+// These are the words it reads about all that. None of them names the project's checkout, which is the
+// lead's.
 
 // WorkerIntro opens the brief a worker starts from: what a worker is, and where it works (tree, on
 // branch, if any).
@@ -19,10 +19,16 @@ func WorkerIntro(title, file, phase, tree, branch string) string {
 	if branch != "" {
 		on = ", on the branch " + branch
 	}
-	return fmt.Sprintf("You are a worker for the plan %q (%s). baton works on the phases of the plan that can go ahead at the same time, each in a session of its own: "+
-		"this session works on %s alone, in a git worktree of its own (%s%s), while the lead session and any other workers work on other phases elsewhere. "+
+	return fmt.Sprintf("You are a worker for the plan %q (%s). baton works on the phases of the plan that can go ahead at the same time, each by an agent of its own: "+
+		"you work on %s alone, in a git worktree of your own (%s%s), while the lead session and any other workers work on other phases elsewhere. "+
 		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, and never merge, rebase or push it yourself: "+
 		"once you report %s done, baton lands it on the run's branch.", title, file, phase, tree, on, phase)
+}
+
+// WorkerTakesUp tells the agent briefed for phase that an agent before it worked on it, and ended before
+// it was finished.
+func WorkerTakesUp(phase string) string {
+	return fmt.Sprintf("An agent before you worked on %s and ended before it was finished: you take the phase up where it stands, in the same worktree.", phase)
 }
 
 // WorkerHosted opens the primer of a worker's session that resumed: what it is.
@@ -48,11 +54,10 @@ func WorkingPhases(names []string) string {
 // WorkersAttached says, as a plan is attached, how many workers will work beside the lead session: up to
 // n, the most that may run at once (workers' number, or with auto what this machine allows), and no more
 // than the phases that can be worked on at once allow (width), less the lead's. mode is the permission
-// mode they start in ("" for Claude Code's default): one that asks before tools makes them stop at
-// prompts, which only the human can answer, in the worker's own session. local: the project has a
-// .claude/settings.local.json, which a worktree lacks. It is the human's to read: the caller says so, and
-// who it is from. "" with workers off.
-func WorkersAttached(n int, auto bool, width int, mode string, local bool) string {
+// mode they start in, the lead session's ("" for Claude Code's default): one that asks before tools makes
+// them stop at prompts, which only the human can answer, in the lead's terminal. It is the human's to
+// read: the caller says so, and who it is from. "" with workers off.
+func WorkersAttached(n int, auto bool, width int, mode string) string {
 	switch {
 	case n == 0 && !auto:
 		return ""
@@ -75,11 +80,8 @@ func WorkersAttached(n int, auto bool, width int, mode string, local bool) strin
 		if mode == "" {
 			mode = "default"
 		}
-		s += fmt.Sprintf(" Workers start in the permission mode this session started in (%s), so a permission prompt stops a worker until you answer it in its own session "+
-			"(baton view <phase>, in another terminal); only its phase waits. To keep them going, start baton with --permission-mode auto, or allow what the plan needs in .claude/settings.json.", mode)
-	}
-	if local {
-		s += " Workers do not see .claude/settings.local.json: their worktrees hold only what is committed."
+		s += fmt.Sprintf(" Workers work in this session's permission mode (%s as it started), so a permission prompt stops a worker until you answer it, here in this terminal; "+
+			"only its phase waits. To keep them going, start baton with --permission-mode auto, or allow what the plan needs in .claude/settings.json.", mode)
 	}
 	return s
 }
@@ -92,7 +94,7 @@ func WorkerHeld(phase, why string) string {
 
 // WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.
 func WorkerRefused(command, phase string) string {
-	return fmt.Sprintf("not run — this session is a worker: it works on %s alone, in a worktree of its own, while the lead session runs the plan in the human's terminal, "+
+	return fmt.Sprintf("not run — you are a worker: you work on %s alone, in a worktree of your own, while the lead session runs the plan in the human's terminal, "+
 		"and baton %s belongs to the lead session. Carry on with %s, and when it is complete and committed, run baton done %s: baton lands your work on the run's branch.",
 		phase, command, phase, phase)
 }
@@ -101,13 +103,13 @@ func WorkerRefused(command, phase string) string {
 // lead's; mine is the same file in the worker's own worktree.
 func WorkerEditRefused(phase, mine string) string {
 	return fmt.Sprintf("[baton] Not here: that file is in the lead session's checkout, which a worker never changes. "+
-		"This session is a worker on %s, and works only in its own worktree: edit %s instead.", phase, mine)
+		"You are a worker on %s, and work only in your own worktree: edit %s instead.", phase, mine)
 }
 
 // WorkerPlanRefused is why a worker on phase does not plan: its phase is planned already, and only the
 // lead session attaches plans.
 func WorkerPlanRefused(phase string) string {
-	return fmt.Sprintf("[baton] This session is a worker on %s: its phase is planned already, in the run's plan, and only the lead session attaches plans. "+
+	return fmt.Sprintf("[baton] You are a worker on %s: your phase is planned already, in the run's plan, and only the lead session attaches plans. "+
 		"Carry on with %s as the plan describes it.", phase, phase)
 }
 
@@ -119,7 +121,7 @@ func WorkerProposed(id, untimed string, timeout time.Duration) string {
 	if untimed != "" {
 		how = "It has no deadline: " + untimed + ", so only the human can let it go ahead."
 	}
-	return fmt.Sprintf("proposal %s recorded. Nobody watches this session, so baton puts it to the human through the lead session, and gives you their answer here. %s "+
+	return fmt.Sprintf("proposal %s recorded. baton puts it to the human through the lead session, and gives you their answer here. %s "+
 		"Until then, do not do what you proposed: keep working on what does not depend on it, or, with nothing else to do, commit your work and end your turn.", id, how)
 }
 
@@ -145,18 +147,6 @@ func WorkerDone(phase, job, ran string) string {
 	}
 	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it rebases your branch onto it and merges it under the lead session. "+
 		"If anything needs you first (a rebase conflict, a red verification), baton tells you here. End your turn now.", phase)
-}
-
-// WorkerBegin is the prompt a worker's session is started with. Its brief reaches it first, from the
-// SessionStart hook.
-func WorkerBegin(phase string) string {
-	return fmt.Sprintf("[baton] Begin %s — the brief above has your instructions.", phase)
-}
-
-// WorkerResume is the prompt a worker's session is resumed with, in its own worktree: why says why its
-// session ended.
-func WorkerResume(phase, why string) string {
-	return fmt.Sprintf("[baton] baton resumed this session: %s. Carry on with %s where you left off: check git status and your notes first.", why, phase)
 }
 
 // DropWorkers is what `baton drop` says about the workers it ends: phases names them.

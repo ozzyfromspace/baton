@@ -36,10 +36,11 @@ type Deps struct {
 // OpenRun returns the run a hook belongs to, in the project the host named in BATON_DIR. Every hook knows
 // its loop first (docs/research/visible-workers.md): one from a phase agent (its agent_id linked,
 // state.Project.LinkAgent) is its phase's sub-run's, written as the sub-run's worker instance; one from an
-// agent baton did not start, working in a phase agent's worktree, is Claude Code's own fork of that agent
-// (errFork: it changes nothing, for the lead or the phase); any other is the session's, its session bound
-// to its host first (state.Project.Bind). A SessionStart after /clear, or after a plan approved with "clear
-// context", carries the host's run into the new session id.
+// agent baton did not start, working in a phase agent's worktree, is a subagent of that agent's model, its
+// phase's as the lead's model's subagents are the lead's, or, with no agent type, Claude Code's own fork of
+// that agent (errFork: it changes nothing, for the lead or the phase); any other is the session's, its
+// session bound to its host first (state.Project.Bind). A SessionStart after /clear, or after a plan
+// approved with "clear context", carries the host's run into the new session id.
 func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 	return func(c Context) (*state.Store, error) {
 		dir := c.Env("BATON_DIR")
@@ -60,12 +61,11 @@ func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 				}
 				return s, err
 			}
-			run := p.RunOf(session)
-			if run == "" {
-				run = p.HostRun(instance)
-			}
-			if run != "" && !strings.Contains(run, "/") && p.WorktreeOf(run, str(c.Input, "cwd")) != "" {
-				return nil, errFork
+			if s, ok := p.PhaseAt(session, instance, str(c.Input, "cwd")); ok {
+				if str(c.Input, "agent_type") == "" {
+					return nil, errFork
+				}
+				return s, nil // a subagent the phase agent's model started, which is the phase's
 			}
 		}
 		return p.Bind(state.Binding{

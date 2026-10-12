@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,7 +216,7 @@ func TestAWorkersGateHere(t *testing.T) {
 	run := lead.store()
 	pl, _ := run.LoadPlan()
 	p, _ := state.OpenProject(lead.env["BATON_DIR"], nil)
-	sub, err := p.NewWorker(run.Ref, "P1", "wsess", "inst", tree)
+	sub, err := p.NewWorker(run.Ref, "P1", "inst", tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +227,7 @@ func TestAWorkersGateHere(t *testing.T) {
 		state.Start(x, lead.now, state.Origin{})
 		return nil
 	})
-	w := &session{t: t, now: lead.now, env: map[string]string{"BATON_DIR": lead.env["BATON_DIR"], "BATON_HOME": lead.env["BATON_HOME"], "BATON_HOST": "1",
-		"BATON_ROLE": "worker", "BATON_INSTANCE": state.WorkerInstance("inst", "P1"), "BATON_PHASE": "P1", "CLAUDE_CODE_SESSION_ID": "wsess"}}
+	w := &session{t: t, now: lead.now, env: maps.Clone(lead.env), dir: sub.Root} // the phase agent, in its worktree
 
 	for _, here := range []bool{false, true} {
 		args := []string{"verify", "cd " + root + " && make e2e", "--notes", "x"}

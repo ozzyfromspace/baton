@@ -52,7 +52,7 @@ type Timing struct {
 	JobStale       time.Duration // a running job whose runner has not beaten for this long is taken for dead
 	SpawnGrace     time.Duration // a runner gone this long after it was started, without taking up its job, never will
 	SwitchAfter    time.Duration // the phase in hand waiting this long on its job is set aside for another (switch_after)
-	WorkerStart    time.Duration // a worker's session must send its first prompt this soon after it is launched
+	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
@@ -69,7 +69,7 @@ var DefaultTiming = Timing{
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, BackgroundMax: 30 * time.Minute, BackgroundIdle: time.Hour,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
-	SwitchAfter: config.DefaultSwitchAfter, WorkerStart: 30 * time.Second, ModHello: 15 * time.Second,
+	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 

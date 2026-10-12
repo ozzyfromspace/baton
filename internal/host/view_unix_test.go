@@ -263,36 +263,6 @@ func TestViewRefuses(t *testing.T) {
 	}
 }
 
-// Attaching and detaching are on the record, in the worker's own run.
-func TestViewingIsLoggedInTheWorkersRun(t *testing.T) {
-	sock := viewSocket(t)
-	r := startRig(t, func(c *Config) { c.ViewSocket = sock })
-	if _, err := r.proj.NewWorker("sess-1", "P3", "sess-w", "inst-1", t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	spawn(t, r.sv, "P3", nil)
-	w := watch(t, sock, "P3", 40, 120)
-	w.waitScreen("repaint 40x120")
-	w.keys.Write([]byte{0x1d})
-	w.wait()
-	sub, _ := r.proj.Run("sess-1/P3", "")
-	events := func() string {
-		b, _ := os.ReadFile(filepath.Join(sub.Dir, "events.jsonl"))
-		return string(b)
-	}
-	waitFor(t, "viewer_detached was logged", func() bool { return strings.Contains(events(), `"kind":"viewer_detached"`) })
-	for _, want := range []string{`"kind":"viewer_attached"`, `"rows":40`, `"cols":120`, `"why":"the viewer left"`} {
-		if !strings.Contains(events(), want) {
-			t.Errorf("no %s in the worker's events:\n%s", want, events())
-		}
-	}
-	lead, _ := r.proj.Run("sess-1", "")
-	if b, _ := os.ReadFile(filepath.Join(lead.Dir, "events.jsonl")); strings.Contains(string(b), "viewer_") {
-		t.Errorf("viewing a worker was logged in the lead's run:\n%s", b)
-	}
-	r.quit()
-}
-
 // A viewer is told when the worker it shows ends.
 func TestAViewerIsDetachedWhenItsWorkerEnds(t *testing.T) {
 	sv, sock := viewSupervisor(t)

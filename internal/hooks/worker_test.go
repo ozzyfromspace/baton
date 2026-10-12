@@ -20,10 +20,10 @@ import (
 const workerDoc = "# Demo\n\n## Standing rules\n\nBe kind.\n\n## P0 — First\n\nAfter: none\n\nDo a.\n\n## P1 — Second\n\nAfter: none\n\nDo b.\n\n" +
 	"## P2 — Third\n\nAfter: P0\n\nDo c.\n\n## Verification\n\nAll green.\n"
 
-// newWorker is a run (sess-1, on host inst-1, the lead on P0) with a worker on P2 in a git worktree of
-// its own (tree, on the branch baton/sess-1/P2), set up as the host sets a worker up before its session
-// starts. w fires hooks as the worker's session, lead as the lead's. The plan file lives outside the
-// project, as plan files do.
+// newWorker is a run (sess-1, on host inst-1, the lead on P1) with a worker on P2 in a git worktree of
+// its own (tree, on the branch baton/sess-1/P2), set up as the host and the worktree hook set a worker up
+// before its phase agent (agent-p2) starts. w fires hooks as that agent, lead as the lead's session. The
+// plan file lives outside the project, as plan files do.
 func newWorker(t *testing.T) (w, lead *fixture, tree string) {
 	t.Helper()
 	return newWorkerIn(t, func(string) string { return t.TempDir() })
@@ -41,31 +41,35 @@ func newWorkerIn(t *testing.T, in func(checkout string) string) (w, lead *fixtur
 		t.Fatal(err)
 	}
 	lead.store.SavePlan(pl)
+	tree = in(filepath.Dir(lead.dir))
+	os.MkdirAll(tree, 0o755)
+	gittest.Git(t, tree, "init", "-q", "-b", "baton/sess-1/P2")
 	lead.store.Update(func(st *state.State) error {
 		*st = state.Reattach(*st, pl, lead.now, state.Origin{})
 		st.Phases["P0"].Status = state.PhaseDone
 		st.Current = "P1"
 		state.Start(st, lead.now, state.Origin{})
-		return state.Assign(st, pl, state.Worker{Phase: "P2", Ref: state.WorkerRef(lead.store.Ref, "P2"), Session: "wsess"}, lead.now)
+		e := state.Worker{Phase: "P2", Ref: state.WorkerRef(lead.store.Ref, "P2"), Worktree: tree, Branch: "baton/sess-1/P2", AgentID: "agent-p2"}
+		return state.Assign(st, pl, e, lead.now)
 	})
 	lead.store.AppendHandoff("P0", "Overlay done.")
 	lead.store.AppendHandoff("P1", "Not for P2.")
-	tree = in(filepath.Dir(lead.dir))
-	os.MkdirAll(tree, 0o755)
-	gittest.Git(t, tree, "init", "-q", "-b", "baton/sess-1/P2")
 	p, err := state.OpenProject(lead.dir, lead.clock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sub, err := p.NewWorker(lead.store.Ref, "P2", "wsess", lead.inst, tree)
+	sub, err := p.NewWorker(lead.store.Ref, "P2", lead.inst, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
 	only, _ := pl.Only("P2")
 	sub.SavePlan(only)
 	sub.Update(func(st *state.State) error { *st = state.AttachWorker(*st, "P2"); return nil })
-	w = &fixture{t: t, dir: lead.dir, store: sub, now: lead.now, inst: state.WorkerInstance(lead.inst, "P2"), sid: "wsess",
-		vars: map[string]string{"BATON_ROLE": "worker"}}
+	if err := p.LinkAgent(lead.store.Ref, "P2", "agent-p2"); err != nil {
+		t.Fatal(err)
+	}
+	w = &fixture{t: t, dir: lead.dir, store: sub, now: lead.now, inst: lead.inst, sid: lead.sid, vars: map[string]string{},
+		tp: lead.leadTranscript(), agent: "agent-p2", cwd: sub.Root}
 	return w, lead, sub.Root
 }
 
@@ -94,14 +98,13 @@ func edit(tool, path string) map[string]any {
 	return map[string]any{"tool_name": tool, "tool_input": map[string]any{key: path, "old_string": "a", "new_string": "b", "content": "x"}}
 }
 
-// A worker's session starts its phase from a brief of its own, which names its worktree and branch, and
-// quotes the notes of the phases its phase builds on. The lead's run is not touched.
+// A phase agent starts its phase from a brief of its own, which names its worktree and branch, and quotes
+// the notes of the phases its phase builds on. The lead's run is not touched.
 func TestAWorkerStartsItsPhaseFromItsBrief(t *testing.T) {
 	w, lead, tree := newWorker(t)
-	out := w.fire("SessionStart", map[string]any{"source": "startup"})
-	brief := additionalContext(out)
+	brief := additionalContext(w.fire("SubagentStart", map[string]any{}))
 	for _, want := range []string{
-		`You are a worker for the plan "Demo"`, "this session works on P2 alone, in a git worktree of its own (" + tree + ", on the branch baton/sess-1/P2)",
+		`You are a worker for the plan "Demo"`, "you work on P2 alone, in a git worktree of your own (" + tree + ", on the branch baton/sess-1/P2)",
 		"Now: P2 — Third. Begin it now.", "Be kind.", "Do c.", "Notes left by the phases P2 builds on", "Overlay done.",
 		"baton then lands your work on the run's branch", "baton puts it to them through the lead session",
 	} {
@@ -109,55 +112,34 @@ func TestAWorkerStartsItsPhaseFromItsBrief(t *testing.T) {
 			t.Errorf("the brief lacks %q:\n%s", want, brief)
 		}
 	}
-	for _, not := range []string{"Do b.", "Not for P2.", filepath.Dir(w.dir), "/baton pause"} {
+	for _, not := range []string{"Do b.", "Not for P2.", filepath.Dir(w.dir), "/baton pause", "this session"} {
 		if strings.Contains(brief, not) {
 			t.Errorf("the brief has %q:\n%s", not, brief)
 		}
 	}
-	if say(out) != "baton: worker on P2 (Third) — it starts now, with its brief" {
-		t.Errorf("announced %q", say(out))
-	}
 	if ps := w.state().Phases["P2"]; ps.Status != state.PhaseActive || !ps.StartedAt.Equal(w.now) {
 		t.Errorf("P2 in the worker's run: %+v", ps)
 	}
-	if !w.logged("phase_started", map[string]any{"phase": "P2", "worker": "P2", "session": "wsess"}) || !w.logged("brief", map[string]any{"type": "worker", "phase": "P2"}) {
+	if !w.logged("phase_started", map[string]any{"phase": "P2", "agent": "agent-p2"}) || !w.logged("brief", map[string]any{"type": "worker", "phase": "P2"}) {
 		t.Errorf("the worker's events:\n%s", w.eventLog())
 	}
 	if ps := lead.state().Phases["P2"]; ps.Status != state.PhaseWorking || strings.Contains(lead.eventLog(), "brief") {
 		t.Errorf("the lead's run was touched: P2 %+v\n%s", ps, lead.eventLog())
 	}
 
-	// Started anew, it gets its brief again; its phase is under way already.
+	// A message that starts it again finds it briefed; another agent taking the phase up is briefed anew,
+	// its phase under way already.
 	w.now = w.now.Add(time.Hour)
-	if b := additionalContext(w.fire("SessionStart", map[string]any{"source": "startup"})); !strings.Contains(b, "Now: P2 — Third") {
-		t.Errorf("started anew: %s", b)
+	if out := w.fire("SubagentStart", map[string]any{}); out != nil {
+		t.Errorf("started again: %v", out)
+	}
+	p, _ := state.OpenProject(w.dir, w.clock)
+	p.LinkAgent(lead.store.Ref, "P2", "agent-p2b")
+	if b := additionalContext(w.fire("SubagentStart", map[string]any{"agent_id": "agent-p2b", "agent_type": state.PhaseAgent})); !strings.Contains(b, decide.WorkerTakesUp("P2")) || !strings.Contains(b, "Now: continue P2 — Third") {
+		t.Errorf("another agent's brief: %s", b)
 	}
 	if ps := w.state().Phases["P2"]; !ps.StartedAt.Equal(lead.now) || strings.Count(w.eventLog(), "phase_started") != 1 {
 		t.Errorf("started twice: %+v", ps)
-	}
-	// Resumed, it is reminded what it is.
-	if p := additionalContext(w.fire("SessionStart", map[string]any{"source": "resume"})); !strings.Contains(p, `as a worker for the attached plan "Demo": it works on P2 alone`) ||
-		!strings.Contains(p, "Current phase: P2 — Third") || strings.Contains(p, "phase by phase") {
-		t.Errorf("resumed: %s", p)
-	}
-}
-
-// After a compaction, a worker is reminded what it is, and given the notes its phase builds on again.
-func TestAWorkersBriefAfterACheckpoint(t *testing.T) {
-	w, _, tree := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
-	w.set(func(st *state.State) { st.CheckpointOwed = true })
-	w.fire("Stop", map[string]any{})
-	w.set(func(st *state.State) { st.Run.Compaction.Status = state.CompactTyped })
-	_, brief := w.compacted("manual")
-	for _, want := range []string{"compacted at your checkpoint", `You are a worker on P2 of the plan "Demo"`, "in a git worktree of your own (" + tree + ")",
-		"Overlay done.", "baton then lands your work on the run's branch"} {
-		if !strings.Contains(brief, want) {
-			t.Errorf("the brief lacks %q:\n%s", want, brief)
-		}
-	}
-	if strings.Contains(brief, "Not for P2.") || strings.Contains(brief, "You are running the plan") {
-		t.Errorf("the brief reads as the lead's:\n%s", brief)
 	}
 }
 
@@ -178,7 +160,7 @@ func TestAWorkerKeepsToItsOwnWorktree(t *testing.T) {
 		{"a new file there", edit("Write", filepath.Join(checkout, "notes.md")), "edit " + filepath.Join(tree, "notes.md") + " instead", map[string]any{"path": "notes.md"}},
 		{"a notebook there", edit("NotebookEdit", filepath.Join(checkout, "n.ipynb")), "lead session's checkout", map[string]any{"path": "n.ipynb"}},
 		{"a subagent's edit there", byAgent(edit("Edit", filepath.Join(checkout, "b.go")), "sub-1"), "lead session's checkout", map[string]any{"path": "b.go"}},
-		{"entering plan mode", map[string]any{"tool_name": "EnterPlanMode", "tool_input": map[string]any{}}, "its phase is planned already",
+		{"entering plan mode", map[string]any{"tool_name": "EnterPlanMode", "tool_input": map[string]any{}}, "your phase is planned already",
 			map[string]any{"tool": "EnterPlanMode", "why": "plan mode"}},
 		{"an edit in its worktree", edit("Edit", filepath.Join(tree, "src", "a.go")), "", nil},
 		{"a relative edit, from its worktree", relative, "", nil},
@@ -248,14 +230,14 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, lead, _ := newWorker(t)
-			w.fire("SessionStart", map[string]any{"source": "startup"})
+			w.fire("SubagentStart", map[string]any{})
 			w.set(func(st *state.State) { c.set(st, w.now) })
-			out := w.fire("Stop", map[string]any{})
+			out := w.fire("SubagentStop", map[string]any{})
 			if c.refused == "" && out["decision"] == "block" || !strings.Contains(say(out), c.say) || c.refused != "" && !strings.Contains(feedback(out), c.refused) {
 				t.Fatalf("stop: %v", out)
 			}
 			if c.refused == "" {
-				w.fire("Stop", map[string]any{})
+				w.fire("SubagentStop", map[string]any{})
 			}
 			if got := relays(lead); got != c.relays {
 				t.Errorf("the run's relay queue: %q, want %q", got, c.relays)
@@ -294,10 +276,10 @@ func TestAWorkersStopLeavesItsQuestionsToTheLead(t *testing.T) {
 // and a worker never restarts on a newer baton.
 func TestAWorkerLeavesThePlanFileToTheLead(t *testing.T) {
 	w, lead, _ := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
+	w.fire("SubagentStart", map[string]any{})
 	pl, _ := lead.store.LoadPlan()
 	os.WriteFile(pl.File, []byte(strings.Replace(workerDoc, "## P2 — Third", "## P3 — Renamed", 1)), 0o644)
-	w.fire("Stop", map[string]any{})
+	w.fire("SubagentStop", map[string]any{})
 	if st := w.state(); st.Mode != state.ModeRunning || st.PlanDrift != "" || strings.Contains(w.eventLog(), "plan_changed") {
 		t.Errorf("the worker followed the plan file: mode %s drift %q\n%s", st.Mode, st.PlanDrift, w.eventLog())
 	}
@@ -309,7 +291,7 @@ func TestAWorkerLeavesThePlanFileToTheLead(t *testing.T) {
 // Nobody watches a worker to answer the context question: it is nudged to checkpoint instead.
 func TestAWorkerIsNudgedToCheckpointNotAsked(t *testing.T) {
 	w, _, _ := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
+	w.fire("SubagentStart", map[string]any{})
 	w.vars["BATON_COMPACT_CAP"] = "810000"
 	w.setContext(730_000)
 	out := w.fire("PostToolUse", bash("go test ./..."))
@@ -325,7 +307,7 @@ func TestAWorkerIsNudgedToCheckpointNotAsked(t *testing.T) {
 // valves still run.
 func TestAWorkersProposalHoldsNothingUp(t *testing.T) {
 	w, _, _ := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
+	w.fire("SubagentStart", map[string]any{})
 	w.set(func(st *state.State) { state.AddProposal(st, state.Decision{What: "use a fake", Relayed: true}, w.now) })
 	if d := denyReason(w.fire("PreToolUse", bash("go test ./..."))); d != "" {
 		t.Fatalf("held: %q", d)
@@ -340,7 +322,7 @@ func TestAWorkersProposalHoldsNothingUp(t *testing.T) {
 // Only the lead session attaches plans: one approved in a worker is left alone.
 func TestAPlanApprovedInAWorkerIsNotAttached(t *testing.T) {
 	w, lead, _ := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
+	w.fire("SubagentStart", map[string]any{})
 	out := w.approve(w.writePlan("other.md", approvedDoc))
 	if say(out) != "baton: plan approved in the worker on P2 — not attached: only the lead session attaches plans" ||
 		!strings.Contains(feedback(out), "only the lead session attaches plans. Carry on with P2") {
@@ -353,16 +335,6 @@ func TestAPlanApprovedInAWorkerIsNotAttached(t *testing.T) {
 	run, _ := lead.store.LoadPlan()
 	if st := w.state(); st.Mode != state.ModeRunning || st.Current != "P2" || len(only.Phases) != 1 || len(run.Phases) != 3 {
 		t.Errorf("a plan was attached: worker %s on %s, %d phases; the run's %d phases", st.Mode, st.Current, len(only.Phases), len(run.Phases))
-	}
-}
-
-// The host ends and resumes its workers itself: a worker's session ending is no news for the human.
-func TestAWorkersSessionEndingIsNotPushed(t *testing.T) {
-	w, _, _ := newWorker(t)
-	w.fire("SessionStart", map[string]any{"source": "startup"})
-	w.fire("SessionEnd", map[string]any{"reason": "other"})
-	if st := w.state(); len(st.Run.Notices) != 0 || st.Run.Ended == nil {
-		t.Errorf("notices %+v, ended %+v", st.Run.Notices, st.Run.Ended)
 	}
 }
 
@@ -387,7 +359,7 @@ func TestAWorkersHooksFailOpen(t *testing.T) {
 		in    func(w *fixture) map[string]any
 		set   func(st *state.State, now time.Time)
 	}{
-		{"its start", "SessionStart", func(*fixture) map[string]any { return map[string]any{"source": "startup"} }, nil},
+		{"its start", "SubagentStart", func(*fixture) map[string]any { return map[string]any{} }, nil},
 		{"its edit refused", "PreToolUse", func(w *fixture) map[string]any { return edit("Edit", filepath.Join(checkout(w), "a.go")) }, nil},
 		{"plan mode refused", "PreToolUse", func(*fixture) map[string]any {
 			return map[string]any{"tool_name": "EnterPlanMode", "tool_input": map[string]any{}}
@@ -395,18 +367,18 @@ func TestAWorkersHooksFailOpen(t *testing.T) {
 		{"a plan approved", "PostToolUse", func(w *fixture) map[string]any {
 			return map[string]any{"tool_name": "ExitPlanMode", "tool_response": map[string]any{"filePath": w.writePlan("x.md", approvedDoc)}}
 		}, nil},
-		{"its block", "Stop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) { state.SetBlocked(st, "x", now) }},
-		{"its review", "Stop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) { state.DueReview(st, "P2", now) }},
-		{"its proposal", "Stop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) {
+		{"its block", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) { state.SetBlocked(st, "x", now) }},
+		{"its review", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) { state.DueReview(st, "P2", now) }},
+		{"its proposal", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) {
 			state.AddProposal(st, state.Decision{What: "x", Relayed: true}, now)
 		}},
-		{"its phase done", "Stop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, _ time.Time) { st.Mode = state.ModeComplete }},
+		{"its phase done", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, _ time.Time) { st.Mode = state.ModeComplete }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for _, how := range []string{"panic", "unreachable run"} {
 				w, lead, _ := newWorker(t)
-				if c.event != "SessionStart" {
-					w.fire("SessionStart", map[string]any{"source": "startup"})
+				if c.event != "SubagentStart" {
+					w.fire("SubagentStart", map[string]any{})
 				}
 				if c.set != nil {
 					w.set(func(st *state.State) { c.set(st, w.now) })
@@ -424,7 +396,7 @@ func TestAWorkersHooksFailOpen(t *testing.T) {
 					os.WriteFile(filepath.Join(lead.store.Dir, "state.json"), []byte("{not json"), 0o644)
 				}
 				in := c.in(w)
-				in["hook_event_name"], in["session_id"] = c.event, w.sid
+				in["hook_event_name"], in["session_id"], in["agent_id"], in["agent_type"], in["cwd"] = c.event, w.sid, w.agent, state.PhaseAgent, w.cwd
 				raw, _ := json.Marshal(in)
 				var out, errb bytes.Buffer
 				code := Dispatch(c.event, bytes.NewReader(raw), &out, &errb, w.env(w.inst), w.clock, Handlers(Deps{Open: open}))
@@ -473,14 +445,6 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 		t.Errorf("handed over twice:\n%s", ctx)
 	}
 
-	// The worker's own session is handed its own, and nothing of the lead's.
-	w.set(func(st *state.State) {
-		state.AddNote(st, "pinned the version", "unpin it", w.now)
-	})
-	if ctx := additionalContext(w.fire("UserPromptSubmit", map[string]any{"prompt": "what did you do?"})); !strings.Contains(ctx, "P2.d2") || strings.Contains(ctx, "skipped the flaky test") {
-		t.Errorf("the worker was handed:\n%s", ctx)
-	}
-
 	lead.compacted("auto")
 	if ctx := additionalContext(lead.fire("UserPromptSubmit", map[string]any{"prompt": "and now?"})); !strings.Contains(ctx, "- P2.d1 (P2, ") {
 		t.Errorf("the lead's brief after a compaction:\n%s", ctx)
@@ -490,7 +454,7 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 	st.Mode = state.ModeComplete
 	pl, _ := lead.store.LoadPlan()
 	d := decideStop(&st, pl, lead.now, decide.Words{}, lead.store.WorkerDecisions(st))
-	if msg, _ := d.output["systemMessage"].(string); msg != "baton: plan complete — all 3 phases done · 3 decisions made without you — /baton status" {
+	if msg, _ := d.output["systemMessage"].(string); msg != "baton: plan complete — all 3 phases done · 2 decisions made without you — /baton status" {
 		t.Errorf("said %q", msg)
 	}
 }

@@ -18,13 +18,12 @@ type Lanes interface {
 	Down() []int
 }
 
-// Coordinator drives a run from its host: a Loop for each of the run's sessions, and what belongs to the
-// run as a whole. Each Loop is ticked with its own session's View and injector: the lead's on the lead's
-// tick (Tick), and each worker's on its hidden session's (Worker), so that one session typing never holds
-// up another. A panic in one session's tick leaves the others ticking. After the lead's Loop, the
-// coordinator does the run's own duties: the lanes every session shares are swept once, and brought down
-// once the run's plan is complete (a worker's sub-run completing is only its phase done), and the run's
-// workers are started, watched and ended (fleet.go). With no workers it is the lead's Loop alone.
+// Coordinator drives a run from its host: the lead's Loop, ticked with the lead's View and injector on the
+// lead's tick (Tick), and what belongs to the run as a whole. After the lead's Loop, the coordinator does
+// the run's own duties: the lanes every session shares are swept once, and brought down once the run's plan
+// is complete (a worker's sub-run completing is only its phase done), and the run's phase agents are
+// started, watched and ended (fleet.go), each with a loop of its own (Agent). A panic in one part of the
+// tick leaves the others going. With no workers it is the lead's Loop alone.
 type Coordinator struct {
 	Lead  *Loop
 	Lanes Lanes  // the project's lanes (nil: none)
@@ -35,7 +34,7 @@ type Coordinator struct {
 	Home    string
 
 	mu      sync.Mutex
-	workers map[string]*worker // by phase
+	workers map[string]*worker // by phase: the phase agents this host started
 
 	leadPanic, runPanic time.Time // when a panic in the lead's tick, or in the run's duties, was last logged
 	swept               bool      // the lanes were swept
@@ -46,23 +45,22 @@ type Coordinator struct {
 	fleetBusy atomic.Bool    // a step is under way
 	fleetWG   sync.WaitGroup // and Ended waits for it
 	// Only a step touches these: when a panic in one was last logged, whether the host is ending, why no
-	// worker starts in this host any more, how many workers in a row did not start, and when one may start
-	// again after a failure.
-	fleetPanic   time.Time
-	closing      bool
-	off          string
-	failedStarts int
-	retryAt      time.Time
-	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+	// worker starts in this host any more, when one may start again after a failure, and whether this host
+	// has claimed the run's bridge (the commands an earlier host left are void).
+	fleetPanic time.Time
+	closing    bool
+	off        string
+	retryAt    time.Time
+	claimed    bool
+	landAt     map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
 	// Whether baton's mod has said hello in the lead's claude, and since when the host has waited for it
 	// while a plan runs (mod.go). Only a step touches them.
 	modReady bool
 	modSince time.Time
-	// The machine's swap readings of the last minute, why it had no room for another session at the last
-	// step ("" if it had), and when this host last started a worker's session (room.go).
-	swaps   []swapAt
-	noRoom  string
-	started time.Time
+	// The machine's swap readings of the last minute, and why it had no room for another worker at the
+	// last step ("" if it had) (room.go).
+	swaps  []swapAt
+	noRoom string
 	// genRun and gen are the host's run and its plan's generation as the lead's tick last saw them; a
 	// plan attached since owes a sweep of the workers other runs left behind (sweep.go). Only the lead's
 	// tick touches them.
@@ -78,16 +76,16 @@ type Coordinator struct {
 	retireStep, resumeStep func(step string)
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
-	// pending says a newer baton waits for the lead's restart, which ends the workers: no new one starts.
-	// stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the host
-	// ends, and so do its workers' sessions, which Ended suspends.
+	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
+	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
+	// host ends, and so do the phase agents in it, which Ended suspends.
 	pending, stopping atomic.Bool
 }
 
 // Tick is the lead's tick: its Loop, then the run's duties.
 func (c *Coordinator) Tick(v host.View, in host.Injector) {
 	if c.Fleet != nil && c.Lead.RestartHold == nil {
-		c.Lead.RestartHold = c.restartHold // a restart ends the workers' sessions too
+		c.Lead.RestartHold = c.restartHold // a restart ends the phase agents too
 	}
 	c.Lead.Workers = c.Fleet != nil
 	guarded(c.Lead, v, "lead", &c.leadPanic, func() { c.Lead.Tick(v, in) })
@@ -116,45 +114,20 @@ func (c *Coordinator) duties(v host.View) {
 	c.fleet(v, s, st)
 }
 
-// Worker makes the Loop of the worker on phase, and returns the controller its hidden session ticks it
-// through (host.Spec.Controller). The Loop drives the sub-run its session is bound to, with the lead's
-// settings; it never leaves, switches or restarts (RoleWorker). Its pushes name its phase beside the
-// project, since its session is not the one the human watches.
-func (c *Coordinator) Worker(phase string) host.Controller { return c.worker(phase) }
-
-func (c *Coordinator) worker(phase string) *worker {
-	lead := c.Lead
-	w := &worker{phase: phase, loop: &Loop{Role: RoleWorker, Notify: lead.Notify, Project: lead.Project + " · " + phase, Timing: lead.Timing,
-		Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
-		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }}}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.workers == nil {
-		c.workers = map[string]*worker{}
-	}
-	c.workers[phase] = w
-	return w
-}
-
-// worker is a worker's Loop, as its session ticks it, and the session the coordinator started it in.
+// worker is a phase agent this host asked baton's mod to start in the lead's claude: its roster entry, its
+// sub-run, and its loop (Agent). spawn is the bridge's command starting it until the mod has acked it, issued
+// at launched; ending is why baton is ending it ("" while it is not), since endAt, and stop the command
+// stopping it, until acked.
 type worker struct {
 	phase    string
-	loop     *Loop
-	panicked time.Time // when its last panic was logged
-
-	// sess is its session (nil until the coordinator starts one), started as entry, whose sub-run is
-	// store, at launched. ending is why baton is ending it ("" while it is not), and quick says nothing
-	// may be typed into it to end it: it never started, and whatever is on its screen would take the keys.
-	sess     Hidden
 	entry    state.Worker
 	store    *state.Store
+	agent    *Agent
 	launched time.Time
+	spawn    int
 	ending   string
-	quick    bool
-}
-
-func (w *worker) Tick(v host.View, in host.Injector) {
-	guarded(w.loop, v, w.phase, &w.panicked, func() { w.loop.Tick(v, in) })
+	endAt    time.Time
+	stop     int
 }
 
 // guarded runs fn, a part of a session's tick, so that a panic in it is logged, in l's log and at most

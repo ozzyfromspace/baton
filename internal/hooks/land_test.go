@@ -92,7 +92,7 @@ func TestAWorkersToolCallsAreNotRecorded(t *testing.T) {
 // landing puts a worker of the lead's run in the merge queue.
 func landing(f *fixture) {
 	f.set(func(st *state.State) {
-		st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "sess-1/P1", Session: "w", Status: state.WorkerLanding})
+		st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "sess-1/P1", Status: state.WorkerLanding})
 	})
 }
 
@@ -321,7 +321,7 @@ func TestTheLeadsLandingHooksFailOpen(t *testing.T) {
 		git   bool
 	}{
 		{"a call waiting for a landing", "PreToolUse", call(bash("ls"), "t1"), func(st *state.State, _ time.Time) {
-			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "sess-1/P1", Session: "w", Status: state.WorkerLanding})
+			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "sess-1/P1", Status: state.WorkerLanding})
 		}, false},
 		{"a rewrite of landed work refused", "PreToolUse", bash("git commit --amend --no-edit"), nil, true},
 		{"a landing told", "PostToolUse", bash("ls"), func(st *state.State, _ time.Time) {

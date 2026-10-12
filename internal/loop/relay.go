@@ -116,7 +116,7 @@ func (c *Coordinator) subStore(st state.State, phase string) *state.Store {
 	if w := c.session(*e); w != nil {
 		return w.store
 	}
-	sub, err := c.Project.ExistingRun(e.Ref, e.Instance)
+	sub, err := c.Project.ExistingRun(e.Ref, "")
 	if err != nil {
 		return nil
 	}

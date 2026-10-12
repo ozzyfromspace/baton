@@ -12,20 +12,21 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// fleet is a coordinator for run sess-1, whose lead works on P0 while a worker works on P1: each session
-// with a run, a terminal and a view of its own. Runners and lanes are fake.
+// fleet is a coordinator for run sess-1, whose lead works on P0 while a phase agent works on P1: the lead
+// with a run, a terminal and a view of its own, the agent with its sub-run and its loop (Agent). Runners
+// and lanes are fake.
 type fleet struct {
-	t              *testing.T
-	now            time.Time
-	c              *Coordinator
-	worker         host.Controller
-	lead, work     *state.Store
-	leadIn, workIn *typed
-	f              *runners
+	t          *testing.T
+	now        time.Time
+	c          *Coordinator
+	agent      *Agent
+	lead, work *state.Store
+	leadIn     *typed
+	f          *runners
 }
 
 func newFleet(t *testing.T) *fleet {
-	x := &fleet{t: t, now: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), leadIn: &typed{}, workIn: &typed{}, f: &runners{dead: map[int]bool{}}}
+	x := &fleet{t: t, now: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), leadIn: &typed{}, f: &runners{dead: map[int]bool{}}}
 	p, err := state.OpenProject(filepath.Join(t.TempDir(), ".baton"), func() time.Time { return x.now })
 	if err != nil {
 		t.Fatal(err)
@@ -39,25 +40,22 @@ func newFleet(t *testing.T) *fleet {
 		*st = state.Attach(pl, x.now, state.Origin{})
 		return state.Claim(st, "inst", 1, x.now)
 	})
-	if x.work, err = p.NewWorker(x.lead.Ref, "P1", "wsess", "inst", t.TempDir()); err != nil {
+	if x.work, err = p.NewWorker(x.lead.Ref, "P1", "inst", t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	only, _ := pl.Only("P1")
 	x.work.WritePlan(only)
 	x.work.Update(func(st *state.State) error { *st = state.AttachWorker(*st, "P1"); return nil })
 	x.c = &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming, Runners: x.f}, Lanes: x.f}
-	x.worker = x.c.Worker("P1")
+	x.agent = x.c.newAgent("P1", x.work)
 	return x
 }
 
-// tick advances the clock by d and ticks every session, the lead first.
+// tick advances the clock by d and ticks the lead, then the agent's loop, as the coordinator's step does.
 func (x *fleet) tick(d time.Duration) {
 	x.now = x.now.Add(d)
-	view := func(s *state.Store) host.View {
-		return host.View{Now: x.now, Store: s, Owner: true, LastOutput: x.now.Add(-time.Hour), LastHumanKey: x.now.Add(-time.Hour)}
-	}
-	x.c.Tick(view(x.lead), x.leadIn)
-	x.worker.Tick(view(x.work), x.workIn)
+	x.c.Tick(host.View{Now: x.now, Store: x.lead, Owner: true, LastOutput: x.now.Add(-time.Hour), LastHumanKey: x.now.Add(-time.Hour)}, x.leadIn)
+	x.agent.Tick(x.now)
 }
 
 func (x *fleet) set(s *state.Store, fn func(*state.State)) {
@@ -79,7 +77,7 @@ func (bomb) Notify(project, kind, detail string) error {
 	return nil
 }
 
-// Each session's jobs are started for its own run, and recorded there.
+// Each loop's jobs are started for its own run, and recorded there.
 func TestEachSessionsJobsRunAgainstItsOwnStore(t *testing.T) {
 	x := newFleet(t)
 	x.set(x.lead, func(st *state.State) {
@@ -106,13 +104,13 @@ func TestEachSessionsJobsRunAgainstItsOwnStore(t *testing.T) {
 	}
 }
 
-// A panic in one session's tick is logged in its run, once a minute, and every other session goes on
-// ticking, as do the run's own duties.
+// A panic in one loop's tick is logged in its run, once a minute, and every other loop goes on ticking,
+// as do the run's own duties.
 func TestAPanicInOneSessionLeavesTheOthersTicking(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		lead bool // the lead panics; otherwise the worker does
-	}{{"the lead panics", true}, {"a worker panics", false}} {
+	}{{"the lead panics", true}, {"a phase agent's loop panics", false}} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newFleet(t)
 			bad, good, in, spawned := x.work, x.lead, "P1", "sess-1 j1"
@@ -165,63 +163,5 @@ func TestLanesComeDownOnceTheRunsPlanIsComplete(t *testing.T) {
 	}
 	if x.f.downs.Load() != 1 || strings.Contains(x.events(x.work), "lanes_down") {
 		t.Errorf("brought down %d times; the worker's events:\n%s", x.f.downs.Load(), x.events(x.work))
-	}
-}
-
-// asWorker makes the rig tick a worker's Loop, as the coordinator makes it, on the rig's run.
-func (r *rig) asWorker() *rig {
-	w := r.coord.Worker("P1").(*worker)
-	w.loop.Store = r.loop.Store
-	r.loop, r.ctl = w.loop, w
-	return r
-}
-
-// A worker does what the lead would, except leave, set its phase aside or restart: the coordinator ends
-// it, and it has no other phase to go to.
-func TestAWorkerNeverLeavesSwitchesOrRestarts(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		rig  func(*testing.T) *rig
-		run  time.Duration
-		then func(*rig) string // what went wrong, or ""
-	}{
-		{"leaving baton", func(t *testing.T) *rig {
-			r := newRig(t).asWorker()
-			r.set(func(st *state.State) { st.Mode, st.Run.ExitAt, st.Run.LastStop = state.ModePaused, r.now, r.now })
-			return r
-		}, time.Minute, func(r *rig) string {
-			if r.in.quit != 0 {
-				return "it quit"
-			}
-			return ""
-		}},
-		{"a long wait on its job", func(t *testing.T) *rig { return switchRig(t).asWorker() }, DefaultTiming.SwitchAfter + time.Minute, func(r *rig) string {
-			if st := r.state(); st.Current != "P0" || st.Run.Compaction.Status != "" || len(r.in.text) != 0 {
-				return "it switched: in hand " + st.Current + ", typed " + strings.Join(r.in.text, ",")
-			}
-			return ""
-		}},
-		{"a newer baton at a compaction", func(t *testing.T) *rig {
-			r, _ := upgradeRig(t)
-			r.asWorker()
-			r.loop.Newer = func() string { return "v0.3.2" }
-			return r
-		}, time.Second, func(r *rig) string {
-			if r.restarted() || r.in.quit != 0 || len(r.in.text) != 1 || r.in.text[0] != "/compact" {
-				return "it restarted, or did not compact: typed " + strings.Join(r.in.text, ",")
-			}
-			return ""
-		}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			r := c.rig(t)
-			if r.loop.Role != RoleWorker {
-				t.Fatal("Coordinator.Worker made a Loop that is not a worker's")
-			}
-			r.run(c.run)
-			if what := c.then(r); what != "" {
-				t.Error(what)
-			}
-		})
 	}
 }

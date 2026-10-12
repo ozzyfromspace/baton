@@ -36,7 +36,7 @@ func (h *handlers) workerStart(c Context, s *state.Store, pl plan.Plan, ann stri
 	if started {
 		s.Event("phase_started", map[string]any{"phase": st.Current})
 	}
-	text := h.workerBrief(c, s, pl, st)
+	text := h.workerBrief(c, s, pl, st, false)
 	return Result{Output: map[string]any{
 		"systemMessage": lines(ann, "baton: worker on "+phaseTitle(pl, st.Current)+" — it starts now, with its brief"),
 		"hookSpecificOutput": map[string]any{
@@ -47,11 +47,11 @@ func (h *handlers) workerStart(c Context, s *state.Store, pl plan.Plan, ann stri
 }
 
 // workerBrief is the brief a worker starts its phase from, in its sub-run s, and logs it.
-func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state.State) string {
+func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state.State, again bool) string {
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
 	in := brief.Input{Kind: brief.Worker, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s),
-		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current), Decisions: s.Decisions(st)}
+		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current), Decisions: s.Decisions(st), Again: again}
 	text := brief.Write(in)
 	s.Event("brief", map[string]any{"type": brief.Worker, "phase": st.Current, "chars": len(text)})
 	return text

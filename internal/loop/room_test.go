@@ -25,7 +25,6 @@ func autoCrew(t *testing.T, pl plan.Plan, m machine.Reading) *crew {
 	n := config.AutoWorkers(m)
 	x := newCrewOn(t, n, pl)
 	x.machine = m
-	x.c.Fleet.Auto = true
 	if n == 0 {
 		x.c.Fleet = nil
 	}
@@ -33,23 +32,17 @@ func autoCrew(t *testing.T, pl plan.Plan, m machine.Reading) *crew {
 }
 
 // spawned lists the phases workers took up, in order.
-func (x *crew) spawned() []string {
-	var out []string
-	for _, s := range x.specs {
-		out = append(out, s.Name)
-	}
-	return out
-}
+func (x *crew) spawned() []string { return x.spawns() }
 
-// With workers: auto, a plan four phases wide gets a worker on each phase beside the lead's, one a minute
-// apart, on a machine with room for them; one on a laptop with room for one; and none on a machine too
-// small for any, where the lead works through every phase.
+// With workers: auto, a plan four phases wide gets a worker on each phase beside the lead's, one at a time,
+// on a machine with room for them; one on a laptop with room for one; and none on a machine too small for
+// any, where the lead works through every phase.
 func TestAutoWorkersFollowThePlanAndTheMachine(t *testing.T) {
 	const gib = 1 << 30
 	for _, c := range []struct {
 		name string
 		m    machine.Reading
-		want [][]string // the phases taken up after each minute
+		want [][]string // the phases taken up after each second
 	}{
 		{"a roomy machine", roomy, [][]string{{"P1"}, {"P1", "P2"}, {"P1", "P2", "P3"}, {"P1", "P2", "P3"}}},
 		{"an 8 GB, 8-core laptop", machine.Reading{CPUs: 8, MemTotal: 8 * gib, MemAvailablePct: 50, Load1: 1, Known: true}, [][]string{{"P1"}, {"P1"}, {"P1"}, {"P1"}}},
@@ -57,16 +50,11 @@ func TestAutoWorkersFollowThePlanAndTheMachine(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := autoCrew(t, wide, c.m)
-			x.tick(time.Second)
-			for minute, want := range c.want {
-				for _, p := range x.spawned() {
-					x.started(p)
-				}
-				x.tick(59 * time.Second)
-				if got := x.spawned(); len(got) != len(want) || strings.Join(got, " ") != strings.Join(want, " ") {
-					t.Fatalf("after %d minutes: workers on %v, want %v", minute+1, got, want)
-				}
+			for second, want := range c.want {
 				x.tick(time.Second)
+				if got := x.spawned(); len(got) != len(want) || strings.Join(got, " ") != strings.Join(want, " ") {
+					t.Fatalf("after %d seconds: workers on %v, want %v", second+1, got, want)
+				}
 			}
 			if c.want[0] == nil && (len(x.state().Workers) != 0 || strings.Contains(x.events(), "worker_")) {
 				t.Errorf("workers on a machine with no room for one: %+v\n%s", x.state().Workers, x.events())
@@ -81,7 +69,6 @@ func TestAutoWorkersFollowThePlanAndTheMachine(t *testing.T) {
 func TestNoRoomOnTheMachineHoldsNewWorkersBack(t *testing.T) {
 	x := autoCrew(t, wide, roomy)
 	x.tick(time.Second)
-	x.started("P1")
 	x.machine.Load1 = 15
 	for range 5 {
 		x.tick(time.Minute)
@@ -130,8 +117,8 @@ func TestAHoldEndsWhenNoPhaseWaits(t *testing.T) {
 	x := newCrew(t, 3) // P1 and P2 can go ahead beside the lead's P0
 	x.lead.Update(func(st *state.State) error { st.Usage = &state.Usage{UsedPct: 90}; return nil })
 	x.tick(time.Second)
-	if h := x.state().Hold; len(x.specs) != 0 || h == nil || h.Kind != state.HoldUsage || h.Phase != "P1" {
-		t.Fatalf("%d workers; hold %+v", len(x.specs), h)
+	if h := x.state().Hold; len(x.spawns()) != 0 || h == nil || h.Kind != state.HoldUsage || h.Phase != "P1" {
+		t.Fatalf("%d workers; hold %+v", len(x.spawns()), h)
 	}
 	x.lead.Update(func(st *state.State) error { st.Mode = state.ModePaused; return nil })
 	x.tick(time.Second)
@@ -161,16 +148,15 @@ func TestSwapGrowingFastHoldsWorkersBack(t *testing.T) {
 	m.Pressure, m.SwapUsed = machine.PressureWarn, 1<<30
 	x := autoCrew(t, wide, m)
 	x.tick(time.Second) // no growth yet: P1 starts
-	x.started("P1")
 	x.machine.SwapUsed = 1<<30 + 512<<20
-	x.tick(30 * time.Second)
-	x.tick(31 * time.Second) // past the ramp, swap grew 512 MiB since the reading a minute ago
+	x.tick(30 * time.Second) // P1 is at work; swap grew 512 MiB since the reading a minute ago
 	if got := x.spawned(); len(got) != 1 {
 		t.Fatalf("workers on %v", got)
 	}
 	if h := x.state().Hold; h == nil || h.Why != "the machine is swapping (512 MiB in the last minute)" {
 		t.Fatalf("hold %+v", h)
 	}
+	x.tick(31 * time.Second)
 	x.tick(28 * time.Second) // swap steady, but the reading a minute ago was before it grew
 	if got := x.spawned(); len(got) != 1 {
 		t.Fatalf("workers on %v", got)
@@ -181,34 +167,30 @@ func TestSwapGrowingFastHoldsWorkersBack(t *testing.T) {
 	}
 }
 
-// A suspended worker resumes as soon as the machine has room for it: neither the ramp nor the usage that
-// holds new workers back holds it.
+// A suspended worker starts again as soon as the machine has room for it: the usage that holds new workers
+// back does not hold it.
 func TestAResumeWaitsOnlyForRoom(t *testing.T) {
 	x := autoCrew(t, wide, roomy)
-	x.tick(time.Second)
-	x.started("P1")
-	x.tick(time.Second)
-	_, f := x.last()
-	f.exit(0)
-	x.c.Ended("the baton session ended")
-	x.proj.Unbind("inst-P1")
+	x.c.Fleet.Max = 1
+	x.atWork("P1")
+	x.c.Ended("the baton session ended", nil)
 	x.proj.Unbind("inst")
 
 	x.c = x.coordinator("next", config.AutoWorkers(roomy))
-	x.c.Fleet.Auto = true
 	x.machine.Load1 = 20
 	x.lead.Update(func(st *state.State) error { st.Usage = &state.Usage{UsedPct: 95}; return nil })
 	x.tick(time.Second)
 	x.tick(time.Minute)
-	if len(x.specs) != 1 || x.worker("P1").Status != state.WorkerSuspended {
-		t.Fatalf("resumed on a busy machine: %d sessions, P1's %+v", len(x.specs), x.worker("P1"))
+	if len(x.spawns()) != 1 || x.worker("P1").Status != state.WorkerSuspended {
+		t.Fatalf("resumed on a busy machine: %d sessions, P1's %+v", len(x.spawns()), x.worker("P1"))
 	}
 	x.machine.Load1 = 3
 	x.tick(time.Second)
-	if spec, _ := x.last(); len(x.specs) != 2 || spec.Name != "P1" || x.worker("P1").Status != state.WorkerStarting {
-		t.Errorf("%d sessions; P1's worker %+v", len(x.specs), x.worker("P1"))
+	if got := x.spawns(); len(got) != 2 || got[1] != "P1" || x.worker("P1").Status != state.WorkerStarting {
+		t.Errorf("spawned %v; P1's worker %+v", got, x.worker("P1"))
 	}
-	if h := x.state().Hold; h == nil || h.Kind != state.HoldUsage {
+	x.tick(time.Second) // its agent at work, the next phase waits for room under the usage
+	if h := x.state().Hold; h == nil || h.Kind != state.HoldUsage || x.worker("P1").Status != state.WorkerWorking {
 		t.Errorf("new workers are held by the usage: %+v", h)
 	}
 }
@@ -240,7 +222,6 @@ func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 	if got := x.spawned(); len(got) != 1 || got[0] != "P1" || x.state().Hold != nil {
 		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
 	}
-	x.started("P1")
 	x.tick(time.Second)
 	held("P2")
 	waits(x.lead, "j1", time.Time{}, state.JobRunning) // it holds a lane now
@@ -248,7 +229,6 @@ func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 	if got := x.spawned(); len(got) != 2 || got[1] != "P2" || x.state().Hold != nil {
 		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
 	}
-	x.started("P2")
 
 	waits(x.sub("P1"), "P1.j1", x.now.Add(-2*time.Minute), state.JobRunning) // a worker's gate
 	x.tick(time.Second)
@@ -270,14 +250,11 @@ func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 // one lands: the plan's phases touch the same files, and another worker would only add to it. A
 // verification that turns red on the rebased branch is no conflict.
 func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
-	x := newCrewOn(t, 3, wide)
-	x.c.Fleet.Auto = true // a worker a minute
+	x := newCrewOn(t, 1, wide) // until the landings conflict
 	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
 		t.Setenv(k, v)
 	}
-	x.tick(time.Second)
-	x.started("P1")
-	x.tick(time.Second)
+	x.atWork("P1")
 	x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
 	for i, content := range []string{"the worker's\n", "the worker's, again\n"} {
 		x.finish("P1", map[string]string{"a.txt": content}, false)
@@ -286,9 +263,9 @@ func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 			t.Fatalf("after landing %d: %d in a row conflicted; P1's worker %+v\n%s", i+1, n, x.worker("P1"), x.events())
 		}
 	}
-	conflicted := x.now
-	x.tick(time.Minute) // past the ramp: P2 could start
-	if h := x.state().Hold; len(x.spawned()) != 1 || h == nil || *h != (state.Hold{Phase: "P2", Kind: state.HoldConflicts, Why: "2 landings in a row conflicted", Since: conflicted}) {
+	x.c.Fleet.Max = 3 // P2 could start
+	x.tick(time.Minute)
+	if h := x.state().Hold; len(x.spawned()) != 1 || h == nil || *h != (state.Hold{Phase: "P2", Kind: state.HoldConflicts, Why: "2 landings in a row conflicted", Since: x.now}) {
 		t.Fatalf("workers on %v; hold %+v", x.spawned(), h)
 	}
 	if !x.has("worker_deferred", `"held":"conflicts"`, `"phase":"P2"`) {

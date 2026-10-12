@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,18 +17,13 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// suspended leaves the run with a worker on P1 whose session ended with its host, and no host: what a
-// host that was stopped leaves behind.
+// suspended leaves the run with a worker on P1 whose agent ended with its host, and no host: what a host
+// that was stopped leaves behind.
 func (x *crew) suspended() state.Worker {
 	x.t.Helper()
-	x.tick(time.Second)
-	x.started("P1")
-	x.tick(time.Second)
-	_, f := x.last()
-	f.exit(0)
-	x.c.Ended("the baton session ended")
+	x.atWork("P1")
+	x.c.Ended("the baton session ended", nil)
 	w := x.worker("P1")
-	x.proj.Unbind(w.Instance)
 	x.proj.Unbind("inst")
 	if w.Status != state.WorkerSuspended {
 		x.t.Fatalf("worker %+v", w)
@@ -155,9 +151,15 @@ func TestRetireWorker(t *testing.T) {
 				r.Entry = w
 			}
 			before := x.state()
+			if !slices.Contains(x.tracked(), w.AgentID) {
+				t.Fatalf("its agent %q is none of baton's: %v", w.AgentID, x.tracked())
+			}
 			got := RetireWorker(r)
 			if got.Skipped != "" {
 				t.Fatalf("skipped: %s", got.Skipped)
+			}
+			if slices.Contains(x.tracked(), w.AgentID) {
+				t.Errorf("its agent is still one of baton's: %v", x.tracked())
 			}
 			st := x.state()
 			after := x.worker("P1")
@@ -170,9 +172,6 @@ func TestRetireWorker(t *testing.T) {
 			if st.Current != before.Current || st.BoundaryOwed != before.BoundaryOwed || !reflect.DeepEqual(st.Run.Compaction, before.Run.Compaction) {
 				t.Errorf("the lead's phase %q (was %q), boundary %v, compaction %+v", st.Current, before.Current, st.BoundaryOwed, st.Run.Compaction)
 			}
-			if x.proj.HostRun(w.Instance) != "" {
-				t.Error("its instance still drives its sub-run")
-			}
 			if ev := x.events(); !strings.Contains(ev, `"kind":"worker_ended"`) || !strings.Contains(ev, `"by":"baton clean"`) || !strings.Contains(ev, `"why":"baton clean"`) {
 				t.Errorf("events:\n%s", ev)
 			}
@@ -184,21 +183,21 @@ func TestRetireWorker(t *testing.T) {
 // mark records that by began to retire worker w at at.
 func mark(x *crew, w *state.Worker, by string, at time.Time) {
 	x.lead.Update(func(st *state.State) error {
-		e := rosterEntry(st, w.Ref, w.Session)
+		e := st.Entry(*w)
 		e.Retiring, e.Retirer = at, by
 		*w = *e
 		return nil
 	})
 }
 
-// A worker is left alone when its session runs elsewhere, when someone else is retiring it, or when it
+// A worker is left alone when its sub-run is held elsewhere, when someone else is retiring it, or when it
 // changed since the caller looked at it.
 func TestRetireWorkerLeavesAlone(t *testing.T) {
 	for _, c := range []struct {
 		name, why string
 		setup     func(x *crew, w *state.Worker)
 	}{
-		{"its sub-run's owner is live", "its session runs in another baton session", func(x *crew, w *state.Worker) {
+		{"its sub-run's owner is live", "it works in another baton session", func(x *crew, w *state.Worker) {
 			x.sub("P1").Update(func(st *state.State) error { return state.Claim(st, "other-P1", 1, x.now) })
 		}},
 		{"someone else is retiring it", "a new host is retiring it", func(x *crew, w *state.Worker) {
@@ -208,7 +207,7 @@ func TestRetireWorkerLeavesAlone(t *testing.T) {
 			w.Since = w.Since.Add(-time.Hour)
 		}},
 		{"it is not on the roster", "it is no longer on its run's roster", func(x *crew, w *state.Worker) {
-			w.Session = "another"
+			w.Assigned = w.Assigned.Add(-time.Hour) // another worker on its phase
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -268,7 +267,7 @@ func TestResumeAndRetireNeverBoth(t *testing.T) {
 			w := x.suspended()
 			gittest.Write(t, w.Worktree, "draft.txt", "not committed\n")
 			x.c = x.coordinator("next", 1) // its first look at the workers resumes P1's
-			sessions := len(x.specs)
+			sessions := len(x.spawns())
 			r := x.retirement(w)
 			var retired Retired
 			side, step, _ := strings.Cut(c.at, ":")
@@ -289,16 +288,16 @@ func TestResumeAndRetireNeverBoth(t *testing.T) {
 				x.tick(time.Second)
 			}
 			st := x.state()
-			old := rosterEntry(&st, w.Ref, w.Session)
+			old := st.Entry(w)
 			resumed := strings.Count(x.events(), `"kind":"worker_resumed"`) == 1
 			switch {
 			case resumed != c.resumed:
 				t.Errorf("resumed %v, want %v", resumed, c.resumed)
-			case resumed && (old.Status != state.WorkerStarting || retired.Skipped == "" || len(x.specs) != sessions+1):
+			case resumed && (old.Status != state.WorkerStarting || retired.Skipped == "" || len(x.spawns()) != sessions+1):
 				t.Errorf("resumed, and retired too (%q): entry %+v", retired.Skipped, old)
-			case !resumed && (old.Status != state.WorkerFailed || retired.Skipped != "" || len(x.specs) != sessions+btoi(c.fresh)):
-				t.Errorf("retired (%q), with %d sessions started: entry %+v", retired.Skipped, len(x.specs)-sessions, old)
-			case !resumed && !c.fresh && x.proj.HostRun("next-P1") != "":
+			case !resumed && (old.Status != state.WorkerFailed || retired.Skipped != "" || len(x.spawns()) != sessions+btoi(c.fresh)):
+				t.Errorf("retired (%q), with %d sessions started: entry %+v\n%s", retired.Skipped, len(x.spawns())-sessions, old, x.events())
+			case !resumed && !c.fresh && x.held("P1") == state.WorkerInstance("next", "P1"):
 				t.Error("the resume that gave way still holds the sub-run")
 			}
 		})
@@ -323,8 +322,8 @@ func TestAResumeGivesWayToARetiringMark(t *testing.T) {
 		}
 	}
 	x.tick(time.Second)
-	if after := x.worker("P1"); len(x.specs) != 1 || after.Status != state.WorkerSuspended || after.Retirer != "baton clean" || x.proj.HostRun("next-P1") != "" {
-		t.Errorf("%d sessions; entry %+v", len(x.specs), after)
+	if after := x.worker("P1"); len(x.spawns()) != 1 || after.Status != state.WorkerSuspended || after.Retirer != "baton clean" || x.held("P1") != "" {
+		t.Errorf("%d sessions; entry %+v", len(x.spawns()), after)
 	}
 }
 
@@ -335,8 +334,8 @@ func TestAStaleMarkDoesNotHoldAResume(t *testing.T) {
 	mark(x, &w, "baton clean", x.now.Add(-state.RetireStale-time.Second))
 	x.c = x.coordinator("next", 1)
 	x.tick(time.Second)
-	if after := x.worker("P1"); len(x.specs) != 2 || after.Status != state.WorkerStarting || !after.Retiring.IsZero() || after.Retirer != "" {
-		t.Errorf("%d sessions; entry %+v", len(x.specs), after)
+	if after := x.worker("P1"); len(x.spawns()) != 2 || after.Status != state.WorkerStarting || !after.Retiring.IsZero() || after.Retirer != "" {
+		t.Errorf("%d sessions; entry %+v", len(x.spawns()), after)
 	}
 }
 
@@ -347,16 +346,14 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		suspended bool
-	}{{"its session runs in this host", false}, {"it was suspended with its host", true}} {
+	}{{"its agent works in this host", false}, {"it was suspended with its host", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			x := newCrew(t, 1)
 			var w state.Worker
 			if c.suspended {
 				w = x.suspended()
 			} else {
-				x.tick(time.Second)
-				x.started("P1")
-				x.tick(time.Second)
+				x.atWork("P1")
 				w = x.worker("P1")
 			}
 			gittest.Write(t, w.Worktree, "old.txt", "the old plan's\n")
@@ -375,11 +372,9 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 			}
 			x.tick(time.Second)
 			if !c.suspended {
-				_, f := x.last()
-				if f.ended != 1 {
-					t.Fatalf("its session was not ended: %d", f.ended)
+				if len(x.stopped) != 1 || x.stopped[0] != w.AgentID {
+					t.Fatalf("its agent was not stopped: %v", x.stopped)
 				}
-				f.exit(0)
 				x.tick(time.Second)
 			}
 			st := x.state()
@@ -415,13 +410,13 @@ func TestAHostWithoutWorkersRetiresTheRunsWorkers(t *testing.T) {
 	x.c.fleetWG.Wait()
 	st := x.state()
 	after := x.worker("P1")
-	if after.Status != state.WorkerFailed || after.Why != "workers are off in this session" || isDir(w.Worktree) || len(x.specs) != 1 {
-		t.Fatalf("entry %+v; worktree there %v; %d sessions", after, isDir(w.Worktree), len(x.specs))
+	if after.Status != state.WorkerFailed || after.Why != "workers are off in this session" || isDir(w.Worktree) || len(x.spawns()) != 1 {
+		t.Fatalf("entry %+v; worktree there %v; %d sessions", after, isDir(w.Worktree), len(x.spawns()))
 	}
 	if st.Current != "P1" || st.Run.Compaction.Status != state.CompactQueued {
 		t.Errorf("the lead's phase %q, compaction %+v", st.Current, st.Run.Compaction)
 	}
-	if ev := x.events(); !strings.Contains(ev, `"next":"P1"`) || !strings.Contains(strings.Join(st.Run.Announce, "\n"), "the worker on P1 ended: workers are off in this session") {
+	if ev := x.events(); !strings.Contains(ev, `"next":"P1"`) || !strings.Contains(strings.Join(st.Run.Announce, "\n"), "the phase agent on P1 ended: workers are off in this session") {
 		t.Errorf("events:\n%s", ev)
 	}
 

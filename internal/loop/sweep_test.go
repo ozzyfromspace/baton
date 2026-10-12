@@ -1,7 +1,6 @@
 package loop
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,21 +20,8 @@ import (
 // P1's with a commit that never landed, and no host. It returns when the host ended.
 func (x *crew) abandoned() time.Time {
 	x.t.Helper()
-	x.tick(time.Second)
-	x.tick(time.Second)
-	x.started("P1")
-	x.started("P2")
-	x.tick(time.Second)
-	if len(x.sessions) != 2 {
-		x.t.Fatalf("%d workers started, want 2", len(x.sessions))
-	}
-	for _, f := range x.sessions {
-		f.exit(0)
-	}
-	x.c.Ended("the baton session ended")
-	for _, w := range x.state().Workers {
-		x.proj.Unbind(w.Instance)
-	}
+	x.atWork("P1", "P2")
+	x.c.Ended("the baton session ended", nil)
 	x.proj.Unbind("inst")
 	p1 := x.worker("P1")
 	gittest.Write(x.t, p1.Worktree, "one.txt", "committed\n")
@@ -128,8 +114,7 @@ func TestANewRunRetiresTheWorkersOthersLeft(t *testing.T) {
 			c2, s2 := x.newHost("inst2", 4242)
 			c2.AbandonAfter = c.quiet
 			if c.fleet {
-				c2.Fleet = &Fleet{Max: 1, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return roomy },
-					Spawn: func(host.Spec) (Hidden, error) { return nil, errors.New("no sessions here") }}
+				c2.Fleet = &Fleet{Max: 1, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return roomy }}
 			}
 			x.tickHost(c2, s2) // the host starts with no plan
 			if st := x.state(); st.Workers[0].Status != state.WorkerSuspended || st.Workers[1].Status != state.WorkerSuspended {

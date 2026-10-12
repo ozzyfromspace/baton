@@ -43,9 +43,8 @@ func (h *handlers) spawned(c Context) (Result, error) {
 
 // agentStart is SubagentStart for the phase agent of s, the sub-run OpenRun opened for it: a turn of its
 // own begins. The first time this agent starts, it is briefed: a worker's brief, with its phase started,
-// or, for an agent that takes up a phase another agent left unfinished, the phase's brief as a fresh
-// conversation gets it (freshContext). A message that starts it again, idle, finds it briefed: it keeps its
-// conversation.
+// or, for an agent that takes up a phase another agent left unfinished, told so and to check what is done
+// first. A message that starts it again, idle, finds it briefed: it keeps its conversation.
 func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
 	brief, started := false, false
@@ -68,15 +67,10 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	if err != nil {
 		return Result{}, nil // a sub-run with no plan has nothing to brief
 	}
-	var text string
 	if started {
 		s.Event("phase_started", map[string]any{"phase": st.Current, "agent": s.Agent})
-		text = h.workerBrief(c, s, pl, st)
-	} else {
-		var n int
-		text, n = freshContext(c, s, pl, st)
-		s.Event("brief", map[string]any{"type": "fresh", "phase": st.Current, "chars": n})
 	}
+	text := h.workerBrief(c, s, pl, st, !started)
 	return Result{Output: map[string]any{
 		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
 	}}, nil

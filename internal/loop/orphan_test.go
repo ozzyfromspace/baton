@@ -16,7 +16,7 @@ import (
 
 // orphan describes the sub-run of worker w as baton clean finds it with no entry on the roster.
 func orphan(w state.Worker) state.Worker {
-	return state.Worker{Phase: w.Phase, Ref: w.Ref, Session: w.Session, Instance: w.Instance, Worktree: w.Worktree,
+	return state.Worker{Phase: w.Phase, Ref: w.Ref, Worktree: w.Worktree,
 		Branch: w.Branch, Generation: -1}
 }
 
@@ -78,9 +78,6 @@ func TestRetireOrphan(t *testing.T) {
 			got := RetireOrphan(r)
 			if got.Skipped != "" {
 				t.Fatalf("skipped: %s", got.Skipped)
-			}
-			if x.proj.HostRun(w.Instance) != "" {
-				t.Error("its instance still drives its sub-run")
 			}
 			c.check(t, x, w, got)
 		})

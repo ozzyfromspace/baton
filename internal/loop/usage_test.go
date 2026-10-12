@@ -29,8 +29,8 @@ func TestAUsageLimitHitInAnySessionHoldsTheRun(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			x := newCrew(t, 2)
 			x.tick(time.Second)
-			if len(x.specs) != 1 {
-				t.Fatalf("%d workers started, want P1's", len(x.specs))
+			if len(x.spawns()) != 1 {
+				t.Fatalf("%d workers started, want P1's", len(x.spawns()))
 			}
 			hit := x.now
 			if c.used > 0 {
@@ -75,12 +75,12 @@ func TestAUsageLimitHitInAnySessionHoldsTheRun(t *testing.T) {
 				x.tick(time.Minute)
 			}
 			x.tick(until.Sub(x.now) - time.Second)
-			if len(x.specs) != 1 || strings.Count(x.events(), `"kind":"usage_limited"`) != 1 {
-				t.Fatalf("%d workers started during the limit; events:\n%s", len(x.specs), x.events())
+			if len(x.spawns()) != 1 || strings.Count(x.events(), `"kind":"usage_limited"`) != 1 {
+				t.Fatalf("%d workers started during the limit; events:\n%s", len(x.spawns()), x.events())
 			}
 			x.tick(2 * time.Second)
-			if len(x.specs) != 2 || x.specs[1].Name != "P2" {
-				t.Fatalf("no worker started once the limit reset: %d", len(x.specs))
+			if got := x.spawns(); len(got) != 2 || got[1] != "P2" {
+				t.Fatalf("no worker started once the limit reset: %d", len(x.spawns()))
 			}
 
 			// The next turn that ends on the limit is a new hit.
@@ -123,33 +123,23 @@ func TestLimitHit(t *testing.T) {
 func TestTheWatchdogStaysQuietWhileTheRunIsLimited(t *testing.T) {
 	const limit = 50 * time.Minute
 	for _, c := range []struct {
-		name   string
-		worker bool
-		set    func(r *rig, st *state.State)
-		after  string // what baton types once the hold is over ("": it escalates the stall)
+		name  string
+		set   func(r *rig, st *state.State)
+		after string // what baton types once the hold is over ("": it escalates the stall)
 	}{
-		{"the lead's turn ended on the limit", false, func(r *rig, st *state.State) {
+		{"the lead's turn ended on the limit", func(r *rig, st *state.State) {
 			st.Run.LastError = &state.StopError{Error: "rate_limit", At: r.now}
 		}, "API error (rate_limit)"},
-		{"the lead, idle", false, nil, "No activity"},
-		{"a worker's turn ended on the limit", true, func(r *rig, st *state.State) {
-			st.Run.LastError = &state.StopError{Error: "rate_limit", At: r.now}
-		}, "API error (rate_limit)"},
-		{"a worker, idle", true, nil, "No activity"},
-		{"the lead, idle, reminded as often as it is", false, func(r *rig, st *state.State) { st.Run.IdleNudges = MaxIdleNudges }, ""},
-		{"a compaction queued", false, func(r *rig, st *state.State) {
+		{"the lead, idle", nil, "No activity"},
+		{"the lead, idle, reminded as often as it is", func(r *rig, st *state.State) { st.Run.IdleNudges = MaxIdleNudges }, ""},
+		{"a compaction queued", func(r *rig, st *state.State) {
 			st.Run.Compaction = state.Compaction{Epoch: 2, Status: state.CompactQueued, Reason: "boundary", Queued: r.now}
 		}, "/compact"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newIdleRig(t)
 			until := r.now.Add(limit)
-			if c.worker {
-				r.asWorker()
-				r.coord.limited.Store(until.UnixNano())
-			} else {
-				r.set(func(st *state.State) { st.Usage = &state.Usage{Limited: until, Hit: r.now, By: "lead"} })
-			}
+			r.set(func(st *state.State) { st.Usage = &state.Usage{Limited: until, Hit: r.now, By: "lead"} })
 			if c.set != nil {
 				r.set(func(st *state.State) { c.set(r, st) })
 			}

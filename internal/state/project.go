@@ -381,10 +381,14 @@ func (p *Project) WorktreeOf(run, dir string) string {
 		dir = real
 	}
 	for _, w := range p.Workers(run) {
-		if w.Worktree == "" {
+		tree := w.Worktree
+		if tree == "" {
 			continue
 		}
-		if rel, err := filepath.Rel(w.Worktree, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if real, err := filepath.EvalSymlinks(tree); err == nil {
+			tree = real // the worktree did not exist yet when its worker was made (NewWorker)
+		}
+		if rel, err := filepath.Rel(tree, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			_, phase, _ := splitRef(w.ID)
 			return phase
 		}
@@ -576,16 +580,15 @@ func (p *Project) info(ref, dir string, sessions map[string][]string) RunInfo {
 	return info
 }
 
-// NewWorker makes the sub-run of a worker on phase of run, before the worker's session starts: its
-// directory, the worktree it works in (by its real path), and the links that find it from session and
-// from the worker's instance (WorkerInstance of the host instance), which it claims. The worker's hooks
-// and CLI then find the sub-run by their session id, and never bind anything (Bind). Making it again, for
-// a worker started anew on the same phase, relinks it and keeps what it holds.
-func (p *Project) NewWorker(run, phase, session, instance, worktree string) (*Store, error) {
+// NewWorker makes the sub-run of a worker on phase of run, before its phase agent starts: its directory
+// and the worktree it works in (by its real path, made later by the worktree hook), claimed by the worker's
+// instance (WorkerInstance of the host instance), as which the agent's hooks and its baton commands write
+// (OpenRun, PhaseAt). Making it again, for an agent started anew on the same phase, keeps what it holds.
+func (p *Project) NewWorker(run, phase, instance, worktree string) (*Store, error) {
 	ref, inst := WorkerRef(run, phase), WorkerInstance(instance, phase)
 	switch {
-	case !isWorker(ref) || !validID(session) || !validID(instance) || !validID(inst):
-		return nil, fmt.Errorf("unusable worker %q (session %q, instance %q)", ref, session, instance)
+	case !isWorker(ref) || !validID(instance) || !validID(inst):
+		return nil, fmt.Errorf("unusable worker %q (instance %q)", ref, instance)
 	case !p.runExists(run):
 		return nil, fmt.Errorf("no run %q here", run)
 	case worktree == "":
@@ -606,21 +609,13 @@ func (p *Project) NewWorker(run, phase, session, instance, worktree string) (*St
 		if err := writeAtomic(filepath.Join(dir, treeFile), []byte(worktree+"\n")); err != nil {
 			return err
 		}
-		if err := writeAtomic(filepath.Join(dir, sessionFile), []byte(session+"\n")); err != nil {
-			return err
-		}
 		var err error
 		if s, err = p.Run(ref, inst); err != nil {
 			return err
 		}
 		now := p.Now()
-		if _, err := s.Update(func(st *State) error { return Claim(st, inst, os.Getpid(), now) }); err != nil {
-			return err
-		}
-		if err := p.writeLink(ref, sessionsDir, session); err != nil {
-			return err
-		}
-		return p.writeLink(ref, hostsDir, inst)
+		_, err = s.Update(func(st *State) error { return Claim(st, inst, os.Getpid(), now) })
+		return err
 	})
 	if err != nil {
 		return nil, err

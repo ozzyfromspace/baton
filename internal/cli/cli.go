@@ -30,11 +30,22 @@ type IO struct {
 	// Machine reads the machine (nil: machine.Read): with workers: auto, it decides how many workers run
 	// at once, and no worker starts while it has no room for another session.
 	Machine func() machine.Reading
+	// Dir is the directory the command runs in ("": the process's working directory). In a phase agent, it
+	// says which phase's the command is (inPhase).
+	Dir string
 }
 
 // StdIO is the real process environment.
 func StdIO() IO {
 	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now, Machine: machine.Read}
+}
+
+// wd is the directory the command runs in (IO.Dir).
+func (io IO) wd() (string, error) {
+	if io.Dir != "" {
+		return io.Dir, nil
+	}
+	return os.Getwd()
 }
 
 // reading reads the machine now (IO.Machine).

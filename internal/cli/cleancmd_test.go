@@ -195,7 +195,7 @@ func (x *cleanRig) run(id, instance string, pid int, beat time.Time, workers []r
 		t.Fatal(err)
 	}
 	for _, w := range workers {
-		sub, err := x.proj.NewWorker(id, w.phase, id+"-"+w.phase, instance, w.tree)
+		sub, err := x.proj.NewWorker(id, w.phase, instance, w.tree)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +211,7 @@ func (x *cleanRig) run(id, instance string, pid int, beat time.Time, workers []r
 				continue
 			}
 			ref := state.WorkerRef(id, w.phase)
-			if err := state.Assign(st, x.pl, state.Worker{Phase: w.phase, Ref: ref, Session: id + "-" + w.phase, Instance: state.WorkerInstance(instance, w.phase),
+			if err := state.Assign(st, x.pl, state.Worker{Phase: w.phase, Ref: ref,
 				Worktree: w.tree, Branch: "baton/" + ref, Base: gitx.RevParse(x.repo, "refs/heads/main")}, w.since); err != nil {
 				t.Fatal(err)
 			}
@@ -325,9 +325,9 @@ func TestCleanEndsWhatNoLiveSessionUses(t *testing.T) {
 		{"only the process under baton's home is stopped", reflect.DeepEqual(x.stopped, []int{5001})},
 		{"run-live's worker, worktree and job survive", live.Workers[0].Status == state.WorkerWorking && exists(x.live) && live.Jobs[0].Status == state.JobRunning},
 		{"run-recent's worker, worktree and job survive", recent.Workers[0].Status == state.WorkerSuspended && exists(x.recent) && recent.Jobs[0].Status == state.JobRunning},
-		{"the live run's sub-run survives", x.proj.HostRun("host-live-P1") != "" && exists(x.live)},
-		{"the links of the run that ended a minute ago survive", x.proj.HostRun("host-recent") == "run-recent" && x.proj.HostRun("host-recent-P1") == "run-recent/P1"},
-		{"the links of the abandoned run's hosts are removed", x.proj.HostRun("host-a") == "" && x.proj.HostRun("host-a-P2") == ""},
+		{"the live run's sub-run survives", len(x.proj.Workers("run-live")) == 1 && exists(x.live)},
+		{"the run that ended a minute ago keeps its links and its sub-run", x.proj.HostRun("host-recent") == "run-recent" && len(x.proj.Workers("run-recent")) == 1},
+		{"the links of the abandoned run's host are removed", x.proj.HostRun("host-a") == ""},
 	} {
 		if !check.ok {
 			t.Errorf("%s", check.name)

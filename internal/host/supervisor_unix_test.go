@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // hidden is a hidden session started on fakeclaude, and the directory where it records what it got.
@@ -247,61 +245,6 @@ func TestSignalsEndEverySession(t *testing.T) {
 	}
 }
 
-// Keys typed into a permission prompt pick one of its options, so a session with a dialog open is never
-// ended by typing /exit: it gets SIGTERM.
-func TestEndNeverTypesIntoADialog(t *testing.T) {
-	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond })
-	sub, err := r.proj.NewWorker("sess-1", "P3", "sess-w", "inst-1", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	sub.Update(func(st *state.State) error {
-		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Since: time.Now()})
-		return nil
-	})
-	h := spawn(t, r.sv, "P3", nil)
-	h.s.End()
-	if code := h.wait(); code != 128+int(syscall.SIGTERM) || strings.Contains(h.input(), "/exit") {
-		t.Errorf("exit %d, input %q; want SIGTERM and nothing typed", code, h.input())
-	}
-	r.quit()
-}
-
-// Every session has its own keys, draft and run: what is typed into one is never another's.
-func TestEachSessionHasItsOwnView(t *testing.T) {
-	lead, worker := &recordingController{typed: true}, &recordingController{typed: true}
-	r := startRig(t, func(c *Config) { c.Controller = lead })
-	if _, err := r.proj.NewWorker("sess-1", "P3", "sess-w", "inst-1", t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	h := spawn(t, r.sv, "P3", worker)
-
-	r.stdinW.Write([]byte("draft"))
-	h.s.Keys([]byte("abc"))
-	time.Sleep(3 * TickInterval)
-	lv, wv := lead.last(), worker.last()
-	if !lv.Draft || lv.DraftText != "draft" || lv.Store == nil || lv.Store.Ref != "sess-1" {
-		t.Errorf("the lead's view: %+v", lv)
-	}
-	if !wv.Draft || wv.DraftText != "abc" || !wv.Owner || wv.Store == nil || wv.Store.Ref != "sess-1/P3" {
-		t.Errorf("the worker's view: %+v", wv)
-	}
-
-	h.s.ClearInput()
-	time.Sleep(3 * TickInterval)
-	if lv, wv := lead.last(), worker.last(); !lv.Draft || wv.Draft {
-		t.Errorf("clearing the worker's input: lead draft %v, worker draft %v", lv.Draft, wv.Draft)
-	}
-	r.quit()
-	h.wait()
-	if got := h.input(); got != "abc\x03/exit\r" {
-		t.Errorf("the worker got %q", got)
-	}
-	if got := r.input(); strings.Contains(got, "abc") || !strings.HasPrefix(got, "draft") {
-		t.Errorf("the lead got %q", got)
-	}
-}
-
 func TestSpawnRefuses(t *testing.T) {
 	r := startRig(t, nil)
 	spawn(t, r.sv, "P3", nil)
@@ -320,29 +263,5 @@ func TestSpawnRefuses(t *testing.T) {
 	r.quit()
 	if _, err := r.sv.Spawn(Spec{Name: "P5", Instance: "inst-1-P5"}); !errors.Is(err, ErrClosed) {
 		t.Errorf("after the lead ended: %v", err)
-	}
-}
-
-// A run's events stay its own: the worker's session logs to its sub-run, never to the lead's run.
-func TestAWorkersHostEventsGoToItsSubRun(t *testing.T) {
-	r := startRig(t, nil)
-	if _, err := r.proj.NewWorker("sess-1", "P3", "sess-w", "inst-1", t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	h := spawn(t, r.sv, "P3", nil)
-	time.Sleep(3 * TickInterval)
-	r.quit()
-	h.wait()
-	sub, _ := r.proj.Run("sess-1/P3", "")
-	lead, _ := r.proj.Run("sess-1", "")
-	read := func(s *state.Store) string {
-		b, _ := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
-		return string(b)
-	}
-	if got := strings.Count(read(lead), `"kind":"host_started"`); got != 1 {
-		t.Errorf("the lead's run logged host_started %d times:\n%s", got, read(lead))
-	}
-	if ev := read(sub); !strings.Contains(ev, `"kind":"host_started"`) || !strings.Contains(ev, fmt.Sprintf(`"worker":%q`, "P3")) {
-		t.Errorf("the worker's sub-run:\n%s", ev)
 	}
 }

@@ -28,6 +28,9 @@ type fixture struct {
 	machine machine.Reading
 	// tp is the session's transcript, which a hook names unless its input names another (leadTranscript).
 	tp string
+	// agent is the phase agent whose hooks the fixture fires, in its worktree cwd ("" for the session's
+	// own): a hook whose input names no agent is that agent's.
+	agent, cwd string
 }
 
 // roomy is a machine with room for workers: 14 CPUs and 48 GiB, little load. With workers: auto, it
@@ -89,6 +92,14 @@ func (f *fixture) fireAs(instance, event string, input map[string]any) map[strin
 	}
 	if _, ok := input["transcript_path"]; !ok {
 		input["transcript_path"] = f.leadTranscript()
+	}
+	if f.agent != "" {
+		if _, ok := input["agent_id"]; !ok {
+			input["agent_id"], input["agent_type"] = f.agent, state.PhaseAgent
+		}
+		if _, ok := input["cwd"]; !ok {
+			input["cwd"] = f.cwd
+		}
 	}
 	raw, _ := json.Marshal(input)
 	var out, errb bytes.Buffer
@@ -1089,19 +1100,11 @@ func TestTheHumanTakesPartByTyping(t *testing.T) {
 	}
 }
 
-// A worker's session is linked to its sub-run before it starts: every hook of it acts there, as the
-// worker's own instance, and never on the lead's run or the lead's links. An unlinked worker session
-// binds nothing at all.
+// A phase agent is linked to its sub-run before it starts: every hook of it acts there, as the worker's own
+// instance, and never on the lead's run or the lead's links.
 func TestAWorkersHooksStayInItsSubRun(t *testing.T) {
 	f := newFixture(t, true)
-	p, err := state.OpenProject(f.dir, f.clock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, err := p.NewWorker(f.store.Ref, "P1", "wsess", f.inst, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	sub, tree := f.withAgent()
 	read := func(path string) string { b, _ := os.ReadFile(path); return string(b) }
 	leadFiles := []string{
 		filepath.Join(f.store.Dir, "state.json"), filepath.Join(f.store.Dir, "events.jsonl"),
@@ -1111,40 +1114,25 @@ func TestAWorkersHooksStayInItsSubRun(t *testing.T) {
 	for _, path := range leadFiles {
 		before = append(before, read(path))
 	}
-	runs, _ := os.ReadDir(filepath.Join(f.dir, "runs"))
-
-	f.vars = map[string]string{"BATON_ROLE": "worker"}
-	inst := state.WorkerInstance(f.inst, "P1")
+	f.now = f.now.Add(time.Minute)
 	for _, h := range []struct {
 		event string
 		input map[string]any
 	}{
-		{"SessionStart", map[string]any{"source": "startup"}},
-		{"UserPromptSubmit", map[string]any{"prompt": "[baton] Begin P1"}},
+		{"SubagentStart", map[string]any{}},
 		{"PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}},
 		{"PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}},
-		{"Stop", map[string]any{"stop_hook_active": false}},
-		{"SessionEnd", map[string]any{"reason": "other"}},
+		{"SubagentStop", map[string]any{"stop_hook_active": false}},
 	} {
-		h.input["session_id"] = "wsess"
 		h.input["permission_mode"] = "acceptEdits"
-		f.fireAs(inst, h.event, h.input)
+		f.fire(h.event, phaseAgent(h.input, tree))
 	}
 	for i, path := range leadFiles {
 		if got := read(path); got != before[i] {
-			t.Errorf("a worker's hook changed %s:\n%s\nwas:\n%s", path, got, before[i])
+			t.Errorf("a phase agent's hook changed %s:\n%s\nwas:\n%s", path, got, before[i])
 		}
 	}
-	if st, _ := w.Load(); st.Run.SessionID != "wsess" || st.Run.PermissionMode != "acceptEdits" {
-		t.Errorf("the worker's hooks did not act in its sub-run: %+v", st.Run)
-	}
-
-	raw, _ := json.Marshal(map[string]any{"hook_event_name": "SessionStart", "session_id": "stray", "source": "startup"})
-	var out, errb bytes.Buffer
-	if code := Dispatch("SessionStart", bytes.NewReader(raw), &out, &errb, f.env(inst), f.clock, Handlers(Deps{Open: OpenRun(f.clock)})); code != 0 {
-		t.Fatalf("an unlinked worker session's hook exited %d", code)
-	}
-	if after, _ := os.ReadDir(filepath.Join(f.dir, "runs")); len(after) != len(runs) || read(filepath.Join(f.dir, "sessions", "stray")) != "" {
-		t.Errorf("an unlinked worker session bound a run: %v", after)
+	if st, _ := sub.Load(); !st.Run.LastActivity.Equal(f.now) || st.Run.PermissionMode != "" || st.Run.SessionID != "" || st.Owner == nil || st.Owner.Instance != state.WorkerInstance(f.inst, "P1") {
+		t.Errorf("the phase agent's hooks did not act in its sub-run, as its worker: %+v (owner %+v)", st.Run, st.Owner)
 	}
 }

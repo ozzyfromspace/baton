@@ -108,7 +108,7 @@ func (c *Coordinator) merge(now time.Time, s *state.Store) {
 		return
 	}
 	for _, w := range c.launched() {
-		e := rosterEntry(&st, w.entry.Ref, w.entry.Session)
+		e := st.Entry(w.entry)
 		if e == nil || e.Status != state.WorkerWorking {
 			continue
 		}
@@ -132,10 +132,10 @@ func (c *Coordinator) merge(now time.Time, s *state.Store) {
 	}
 }
 
-// session is the worker this host runs as e, or nil.
+// session is the phase agent of this host that works for e, or nil.
 func (c *Coordinator) session(e state.Worker) *worker {
 	for _, w := range c.launched() {
-		if w.entry.Ref == e.Ref && w.entry.Session == e.Session {
+		if w.entry.Is(e) {
 			return w
 		}
 	}
@@ -178,7 +178,7 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 		return false // its session is still at work, in its worktree
 	}
 	if !isDir(e.Worktree) {
-		c.end(w, "its worktree is gone")
+		c.end(now, s, c.bridge(s), w, "its worktree is gone")
 		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
@@ -516,7 +516,7 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		c.announce(s, "baton: plan complete — "+done)
 	}
 	if w := c.session(e); w != nil {
-		c.end(w, "its work landed")
+		c.end(now, s, c.bridge(s), w, "its work landed")
 	}
 }
 
@@ -533,7 +533,7 @@ func filesLine(files []string) string {
 // toward the landings in a row that conflicted (State.Conflicts), which hold new workers back.
 func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, why string, paths []string) {
 	s.Update(func(st *state.State) error {
-		if x := rosterEntry(st, e.Ref, e.Session); x != nil {
+		if x := st.Entry(e); x != nil {
 			x.Status, x.Since, x.Merge = state.WorkerWorking, now, nil
 			if len(paths) > 0 {
 				st.Conflicts++

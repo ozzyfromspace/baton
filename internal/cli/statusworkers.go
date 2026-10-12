@@ -37,16 +37,13 @@ func printWorkers(io IO, s *state.Store, st state.State) {
 	for i, w := range st.Workers {
 		switch {
 		case w.Live():
-			line := fmt.Sprintf("  %-6s %s · branch %s · session %s", w.Phase, workerState(w, now), w.Branch, short(w.Session))
-			if w.Resumes > 0 {
-				line += fmt.Sprintf(" · resumed %d %s", w.Resumes, plural(w.Resumes, "time", "times"))
+			line := fmt.Sprintf("  %-6s %s · branch %s", w.Phase, workerState(w, now), w.Branch)
+			if w.AgentID != "" {
+				line += " · agent " + w.AgentID
 			}
 			lines = append(lines, line, "         worktree: "+w.Worktree)
-			switch {
-			case w.Needs != "":
-				lines = append(lines, fmt.Sprintf("         needs you: %s — answer it in its session: baton view %s", w.Needs, w.Phase))
-			case w.Status == state.WorkerSuspended:
-				lines = append(lines, "         "+w.Why+"; the next baton session of this run resumes it")
+			if w.Status == state.WorkerSuspended {
+				lines = append(lines, "         "+w.Why+"; the next baton session of this run starts its agent again")
 			}
 		case w.Status == state.WorkerFailed && w.Unlanded > 0 && !slices.ContainsFunc(st.Workers[i+1:], func(o state.Worker) bool { return o.Phase == w.Phase }) &&
 			gitx.RevParse(s.Checkout, "refs/heads/"+w.Branch) != "":
@@ -57,7 +54,7 @@ func printWorkers(io IO, s *state.Store, st state.State) {
 	if len(lines) == 0 {
 		return
 	}
-	fmt.Fprintln(io.Out, "workers (each in a worktree of its own; baton view <phase>, in another terminal, shows one):")
+	fmt.Fprintln(io.Out, "workers (each an agent in a worktree of its own; the agent panel below the prompt shows them):")
 	for _, l := range lines {
 		fmt.Fprintln(io.Out, l)
 	}

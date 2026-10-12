@@ -38,3 +38,16 @@ func ModMismatch(version, running string) string {
 	}
 	return fmt.Sprintf("Claude Code loaded baton's mod from plugin %s, which does not work with this session's baton (%s)", version, running)
 }
+
+// AgentDescription is a phase agent's line in Claude Code's agent panel: the phase and its title.
+func AgentDescription(phase, title string) string {
+	if title == "" {
+		return phase
+	}
+	return phase + " — " + title
+}
+
+// AgentBegin is the task a phase agent is started with. Its brief reaches it as it starts (SubagentStart).
+func AgentBegin(phase string) string {
+	return fmt.Sprintf("[baton] Begin %s. baton's brief, given to you as you start, has your instructions.", phase)
+}

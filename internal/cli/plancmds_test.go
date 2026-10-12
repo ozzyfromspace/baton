@@ -20,6 +20,7 @@ type session struct {
 	env     map[string]string
 	now     time.Time
 	machine *machine.Reading // what the machine reads (nil: roomy)
+	dir     string           // where its commands run ("": the test's working directory)
 }
 
 func newSession(t *testing.T) (*session, string) {
@@ -35,17 +36,17 @@ func newSession(t *testing.T) (*session, string) {
 		now: time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)}, planFile
 }
 
-// store is the session's run, as the hooks would have bound it: a worker's, its sub-run.
+// store is the session's run, as the hooks would have bound it: a phase agent's, its sub-run.
 func (s *session) store() *state.Store {
 	s.t.Helper()
 	p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	if s.env["BATON_ROLE"] == "worker" {
-		sub, ok := p.Lookup(s.env["CLAUDE_CODE_SESSION_ID"], "")
+	if s.dir != "" {
+		sub, ok := p.PhaseAt(s.env["CLAUDE_CODE_SESSION_ID"], s.env["BATON_INSTANCE"], s.dir)
 		if !ok {
-			s.t.Fatal("the worker's session has no sub-run")
+			s.t.Fatal("the phase agent has no sub-run")
 		}
 		return sub
 	}
@@ -58,7 +59,7 @@ func (s *session) store() *state.Store {
 
 func (s *session) run(stdin string, args ...string) (int, string, string) {
 	io, out, errb := testIO(stdin, s.env)
-	io.Now = func() time.Time { return s.now }
+	io.Now, io.Dir = func() time.Time { return s.now }, s.dir
 	if m := s.machine; m != nil {
 		io.Machine = func() machine.Reading { return *m }
 	}
@@ -375,8 +376,8 @@ func TestDropSetsThePlanAside(t *testing.T) {
 
 	// The run's workers go with it: the host ends them, and the roster stays for it to find them.
 	s.set(func(st *state.State) {
-		st.Workers = []state.Worker{{Phase: "P1", Ref: "sess-1/P1", Session: "w", Status: state.WorkerWorking},
-			{Phase: "P2", Ref: "sess-1/P2", Session: "v", Status: state.WorkerFailed}}
+		st.Workers = []state.Worker{{Phase: "P1", Ref: "sess-1/P1", Status: state.WorkerWorking},
+			{Phase: "P2", Ref: "sess-1/P2", Status: state.WorkerFailed}}
 	})
 	if out := s.must("", "drop"); !strings.Contains(out, "baton: baton also ends the workers on P1 (") || strings.Contains(out, "P2 (") {
 		t.Fatalf("drop with a worker: %s", out)
@@ -449,7 +450,7 @@ func TestExitLeavesARecordForTheShell(t *testing.T) {
 	}
 }
 
-// Inside a worker's session, baton's commands find the worker's sub-run by its session id.
+// Inside a phase agent's worktree, baton's commands find the worker's sub-run by where they run.
 func TestAWorkersCommandsFindItsSubRun(t *testing.T) {
 	s, _ := newSession(t)
 	lead := s.store()
@@ -457,11 +458,11 @@ func TestAWorkersCommandsFindItsSubRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := p.NewWorker(lead.Ref, "P1", "wsess", "inst", t.TempDir())
+	w, err := p.NewWorker(lead.Ref, "P1", "inst", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.env["CLAUDE_CODE_SESSION_ID"], s.env["BATON_INSTANCE"], s.env["BATON_ROLE"] = "wsess", state.WorkerInstance("inst", "P1"), "worker"
+	s.dir = w.Root
 	var got map[string]any
 	if err := json.Unmarshal([]byte(s.must("", "status", "--json")), &got); err != nil {
 		t.Fatal(err)

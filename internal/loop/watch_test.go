@@ -307,8 +307,7 @@ func TestARefusalAfterAnotherErrorIsEscalatedAsOne(t *testing.T) {
 	}
 }
 
-// With workers, a refusal of the lead's turn says what goes on without it and which phases wait; a
-// worker's says so for the worker, in its session, while the rest of the run goes on.
+// With workers, a refusal of the lead's turn says what goes on without it and which phases wait.
 func TestARefusalSaysWhatWaits(t *testing.T) {
 	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "a", After: []string{}}, {ID: "P1", Title: "b", After: []string{}},
 		{ID: "P2", Title: "c", After: []string{"P1"}}, {ID: "P3", Title: "d", After: []string{"P2"}}}}
@@ -325,30 +324,6 @@ func TestARefusalSaysWhatWaits(t *testing.T) {
 		r.tick(10 * time.Second)
 		if e := r.state().Run.Escalation; e == nil || !strings.HasSuffix(e.Reason, "from P1's brief. Meanwhile workers carry on with every phase that does not need P1. P2 and P3 wait for it.") {
 			t.Fatalf("escalation %+v", e)
-		}
-	})
-	t.Run("a worker", func(t *testing.T) {
-		x := newFleet(t)
-		x.lead.WritePlan(pl)
-		x.set(x.lead, func(st *state.State) {
-			*st = state.Attach(pl, x.now, state.Origin{})
-			state.Claim(st, "inst", 1, x.now)
-		})
-		x.set(x.work, func(st *state.State) {
-			st.Run.LastActivity, st.Run.LastStop = x.now, x.now
-			refused(st, x.now)
-		})
-		x.tick(10 * time.Second)
-		st, _ := x.work.Load()
-		want := "P1 stopped: the model's safeguards declined the last turn of its worker (cyber), and that conversation will not go on as it is. " +
-			"baton does not retry it. To go on, in the worker's session (baton view P1), rewind (Esc Esc) to before the flagged turn and take a different approach, " +
-			"as Claude Code advises, or /clear for a fresh conversation from P1's brief. Meanwhile the rest of the run carries on with every phase that does not need P1. " +
-			"P2 and P3 wait for it."
-		if e := st.Run.Escalation; e == nil || e.Kind != "refused" || e.Reason != want {
-			t.Fatalf("escalation %+v", e)
-		}
-		if len(x.workIn.text) != 0 {
-			t.Fatalf("typed into the worker's refused conversation: %q", x.workIn.text)
 		}
 	})
 }

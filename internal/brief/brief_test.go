@@ -290,6 +290,26 @@ func TestWorkerBrief(t *testing.T) {
 	}
 }
 
+// An agent taking up a phase where an agent before it left it is told so, and checks what is done before
+// it goes on; the rest of its brief is a worker's.
+func TestAWorkerTakingUpItsPhase(t *testing.T) {
+	pl, doc, st := worker(t)
+	in := Input{Kind: Worker, Plan: pl, Doc: doc, State: st, Handoff: handoff, Words: decide.Words{Git: true, Timeout: 5 * time.Minute, Worker: true},
+		Tree: "/home/me/.baton/worktrees/k/R1", Branch: "baton/run/R1", Needs: []string{"P0"}}
+	first := Write(in)
+	in.Again = true
+	b := Write(in)
+	for _, want := range []string{decide.WorkerTakesUp("R1"), "Now: continue R1 — The roster can grow. Some of it may be done already: check what is (`git log`",
+		"Notes left by the phases R1 builds on", "Report progress only with these commands"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the brief lacks %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "Begin it now") || strings.Contains(first, decide.WorkerTakesUp("R1")) {
+		t.Errorf("taken up:\n%s\nfirst:\n%s", b, first)
+	}
+}
+
 // After a compaction a worker is reminded what it is, and how its phase ends.
 func TestAWorkersBriefAfterACompaction(t *testing.T) {
 	pl, doc, st := worker(t)

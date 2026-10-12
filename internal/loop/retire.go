@@ -8,15 +8,16 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// Retiring a worker ends it for good, with no session running it: its run's own host does it once the
-// worker's session has ended (or when it has none), and so may any other baton process, for a worker no
-// live session hosts. Every step can be taken again, and a worker is retired by one process at a time:
+// Retiring a worker ends it for good, with no agent working for it: its run's own host does it once the
+// worker's agent has ended (or when it has none), and so may any other baton process, for a worker no live
+// host runs. Every step can be taken again, and a worker is retired by one process at a time:
 // the first marks it on the run's roster (Worker.Retiring), and nothing resumes a worker so marked.
 //
 //  0. the mark, under the run's lock: the worker must still be on the roster as the caller read it, not
@@ -30,10 +31,12 @@ import (
 //     kept/ when the run's plan was replaced or the run dropped, so that no later worker on a phase with
 //     the same id carries on from it. A worker retired while its plan stands keeps its branch's name, and
 //     the phase's next worker carries on from its commits;
-//  5. its phase goes back to the run, guarded by the mark: the run's own host takes it back as it always
+//  5. its agent is none of baton's any more (bridge.Forget): nothing is ever sent to it again (a message
+//     would start it again), and the phase's next agent may start;
+//  6. its phase goes back to the run, guarded by the mark: the run's own host takes it back as it always
 //     has (state.Unassign), and anyone else only frees it (state.ReleaseWorker), so the run's next host
 //     takes it up;
-//  6. its instance lets go of its sub-run.
+//  7. a worker session's instance of v0.7 or before lets go of its sub-run.
 
 // Retirement is a worker to retire (RetireWorker), and who retires it.
 type Retirement struct {
@@ -82,7 +85,7 @@ func RetireWorker(r Retirement) Retired {
 	steps := []struct {
 		name string
 		fn   func()
-	}{{"snapshot", x.snapshot}, {"jobs", x.stopJobs}, {"worktree", x.removeWorktree}, {"branch", x.branch}, {"release", x.release}}
+	}{{"snapshot", x.snapshot}, {"jobs", x.stopJobs}, {"worktree", x.removeWorktree}, {"branch", x.branch}, {"forget", x.forget}, {"release", x.release}}
 	if x.out.Skipped = x.mark(); x.out.Skipped != "" {
 		return x.out
 	}
@@ -91,9 +94,28 @@ func RetireWorker(r Retirement) Retired {
 		s.fn()
 		hook(x.between, s.name)
 	}
-	r.Project.Unbind(x.entry.Instance)
+	x.unbind()
 	x.event()
 	return x.out
+}
+
+// forget makes the worker's agent none of baton's agents: it has ended.
+func (x *retirement) forget() {
+	if id := x.entry.AgentID; id != "" {
+		if err := bridge.Open(x.Run.Dir, x.Run.Now, nil).Forget(id); err != nil {
+			x.Logf("loop: %s: forgetting its agent %s: %v", x.entry.Phase, id, err)
+		}
+	}
+}
+
+// unbind lets go of the link a worker's session of v0.7 or before had from its instance to its sub-run
+// (a phase agent's sub-run has none).
+func (x *retirement) unbind() {
+	if sub, err := x.Project.ExistingRun(x.entry.Ref, ""); err == nil {
+		if st, err := sub.Load(); err == nil && st.Owner != nil {
+			x.Project.Unbind(st.Owner.Instance)
+		}
+	}
 }
 
 type retirement struct {
@@ -113,14 +135,14 @@ func (x *retirement) mark() string {
 	if !x.Host {
 		if sub, err := x.Project.ExistingRun(e.Ref, ""); err == nil {
 			if sst, err := sub.Load(); err == nil && sst.Owner.Live(x.Now) {
-				return "its session runs in another baton session"
+				return "it works in another baton session"
 			}
 		}
 	}
 	var why string
 	_, err := x.Run.Update(func(st *state.State) error {
 		x.replaced, x.dropped, x.into = e.Generation < st.Generation, st.Mode == state.ModeIdle, st.RunBranch
-		cur := rosterEntry(st, e.Ref, e.Session)
+		cur := st.Entry(e)
 		switch {
 		case cur == nil && x.Host:
 			x.entry = e
@@ -150,7 +172,7 @@ func (x *retirement) mark() string {
 
 // sub is the worker's sub-run, or nil when it has none: events about the worker's own work go there.
 func (x *retirement) sub() *state.Store {
-	sub, err := x.Project.ExistingRun(x.entry.Ref, x.entry.Instance)
+	sub, err := x.Project.ExistingRun(x.entry.Ref, x.By)
 	if err != nil {
 		return nil
 	}
@@ -297,14 +319,14 @@ func (x *retirement) release() {
 		pl, _ = x.Run.LoadPlan()
 	}
 	x.Run.Update(func(st *state.State) error {
-		cur := rosterEntry(st, e.Ref, e.Session)
+		cur := st.Entry(e)
 		if cur == nil || cur.Retirer != x.By {
 			return errKept // gone, or another took the mark over
 		}
 		switch {
 		case !cur.Live():
 		case !x.Host:
-			state.ReleaseWorker(st, e.Ref, e.Session, x.Why, x.Now)
+			state.ReleaseWorker(st, e, x.Why, x.Now)
 		case len(pl.Phases) > 0 && st.WorkerOn(e.Phase) == cur:
 			x.out.Next, _ = state.Unassign(st, pl, e.Phase, x.Why, x.Now)
 		default:

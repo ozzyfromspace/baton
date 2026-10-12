@@ -179,29 +179,15 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		controller.Newer = w.Newer
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io)}
-	var sv *host.Supervisor
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
-		ramp := loop.DefaultRamp
-		if d, err := time.ParseDuration(io.Env("BATON_WORKER_RAMP")); err == nil && d > 0 {
-			ramp = d // for tests
-		}
-		// Workers start the way the lead did, with its own flags, beside it in worktrees of their own.
-		coordinator.Fleet = &loop.Fleet{Max: workers, Auto: auto, Ramp: ramp, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Machine: io.Machine,
-			Launch: loop.Launch{Args: elevate.KeepUserArgs(args), Autocompact: autocompact, Settings: host.SettingsJSON(exe),
-				Env: env, BatonEnv: batonEnv, Bin: exe, Version: version.Version, ScreenDump: io.Env("BATON_SCREEN_DUMP") == "1"},
-			Spawn: func(spec host.Spec) (loop.Hidden, error) {
-				s, err := sv.Spawn(spec)
-				if err != nil {
-					return nil, err
-				}
-				return s, nil
-			}}
+		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Machine: io.Machine}
 	}
 	leadEnv := slices.Clip(batonEnv)
 	if why := io.Env("BATON_RECOVER"); why != "" {
 		leadEnv = append(leadEnv, "BATON_RECOVER="+why) // this host brings the lead back: its session says so, once
 	}
-	sv = host.NewSupervisor(host.Config{
+	sv := host.NewSupervisor(host.Config{
 		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator, ViewSocket: host.ViewSocket(instance),
@@ -211,10 +197,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	code := exit.Code
 	to, resumed, restarting := controller.Restart()
 	if restarting && err == nil {
-		// The workers' jobs go on, as the lead's do: the restarted host watches them, and resumes the workers.
-		for _, w := range coordinator.Ended("baton restarted on baton " + to) {
-			proj.Unbind(w.Instance)
-		}
+		// The phase agents ended with claude; their jobs go on, as the lead's do: the restarted host watches
+		// them, and starts the agents again.
+		coordinator.Ended("baton restarted on baton "+to, nil)
 		host.Release(proj, instance)
 		controller.Flush()
 		return restartOn(io, to, resumed, args, logf)
@@ -230,14 +215,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		stop = why
 	}
 	defer host.Release(proj, instance)
-	// The workers ended with the lead: the next host for the run resumes them, and nothing would see
-	// their jobs' results meanwhile.
-	for _, w := range coordinator.Ended("the baton session ended") {
-		if ws, err := proj.ExistingRun(w.Ref, w.Instance); err == nil {
-			endJobs(io, ws, w.Instance)
-		}
-		proj.Unbind(w.Instance)
-	}
+	// The phase agents ended with the lead: the next host for the run starts them again, and nothing would
+	// see their jobs' results meanwhile.
+	coordinator.Ended("the baton session ended", func(ws *state.Store) { endJobs(io, ws, ws.Instance) })
 	controller.Ended() // save uncommitted work as the session ends
 	if st, ok := proj.Lookup("", instance); ok {
 		leftBaton(io, st)

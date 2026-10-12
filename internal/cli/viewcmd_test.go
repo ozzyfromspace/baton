@@ -15,9 +15,9 @@ func withWorkers(t *testing.T) *session {
 	s := attached(t)
 	s.set(func(x *state.State) {
 		x.Workers = []state.Worker{
-			{Phase: "P1", Ref: "sess-1/P1", Instance: state.WorkerInstance("inst", "P1"), Status: state.WorkerWorking, Since: s.now.Add(-14 * time.Minute)},
-			{Phase: "R1", Ref: "sess-1/R1", Instance: state.WorkerInstance("inst", "R1"), Status: state.WorkerSuspended, Since: s.now.Add(-time.Hour)},
-			{Phase: "P5", Ref: "sess-1/P5", Instance: state.WorkerInstance("inst", "P5"), Status: state.WorkerLanded, Since: s.now},
+			{Phase: "P1", Ref: "sess-1/P1", Status: state.WorkerWorking, Since: s.now.Add(-14 * time.Minute)},
+			{Phase: "R1", Ref: "sess-1/R1", Status: state.WorkerSuspended, Since: s.now.Add(-time.Hour)},
+			{Phase: "P5", Ref: "sess-1/P5", Status: state.WorkerLanded, Since: s.now},
 		}
 	})
 	return s
@@ -130,21 +130,18 @@ func TestPickViewable(t *testing.T) {
 	}
 }
 
-// A worker whose run's host is gone, or whose instance is not that host's, is not running.
+// A worker whose run's host is gone is not running.
 func TestAWorkerRunsOnlyUnderItsRunsLiveHost(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		later   time.Duration // how long after the host's last heartbeat
-		inst    string        // the worker's instance
 		running bool
 	}{
-		{"the host is live", 0, state.WorkerInstance("inst", "P1"), true},
-		{"the host is gone", 2 * state.OwnerTTL, state.WorkerInstance("inst", "P1"), false},
-		{"another host's worker", 0, state.WorkerInstance("old", "P1"), false},
+		{"the host is live", 0, true},
+		{"the host is gone", 2 * state.OwnerTTL, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := withWorkers(t)
-			s.set(func(x *state.State) { x.Workers[0].Instance = tc.inst })
 			p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
 			if err != nil {
 				t.Fatal(err)

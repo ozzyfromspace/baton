@@ -104,14 +104,11 @@ func usage(st state.State, now time.Time, usageMax float64) string {
 	return ""
 }
 
-// worker is one of the run's workers, by its phase: "! P3 needs you" while something in its own session
-// waits on the human, "? P3" while the lead has its question for them, "P3 landing" while its work waits
-// in the merge queue ("P3 waits to land" while it is held back), and otherwise "W P3" with how long it has
-// worked on its phase, or how it stands.
+// worker is one of the run's workers, by its phase: "? P3" while the lead has its question for them, "P3
+// landing" while its work waits in the merge queue ("P3 waits to land" while it is held back), and
+// otherwise "W P3" with how long it has worked on its phase, or how it stands.
 func worker(st state.State, w state.Worker, now time.Time) string {
 	switch {
-	case w.Needs != "":
-		return "! " + w.Phase + " needs you"
 	case slices.ContainsFunc(st.Relay, func(r state.Relay) bool { return r.Phase == w.Phase && r.Answered == nil }):
 		return "? " + w.Phase
 	case w.Status == state.WorkerLanding && w.Merge != nil && w.Merge.Deferred != "":

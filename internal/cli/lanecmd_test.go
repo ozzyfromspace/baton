@@ -314,7 +314,7 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := p.NewWorker(lead.Ref, "P1", "wsess", "inst", tree)
+	w, err := p.NewWorker(lead.Ref, "P1", "inst", tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 	} else if _, err := os.Stat(pool.LaneDir(1)); err != nil {
 		t.Errorf("no lane 1 in the project's pool: %v", err)
 	}
-	if e := events(t, w)["job_finished"]; e["worker"] != "P1" || e["session"] != "wsess" {
+	if e := events(t, w)["job_finished"]; e["worker"] != "P1" || e["phase"] != "P1" {
 		t.Errorf("job_finished: %v", e)
 	}
 	if _, err := os.Stat(filepath.Join(lead.Dir, "jobs")); err == nil {

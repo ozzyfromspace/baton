@@ -22,7 +22,7 @@ func (f *fixture) withAgent() (*state.Store, string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	sub, err := p.NewWorker(f.store.Ref, "P1", "agent-session", f.inst, tree)
+	sub, err := p.NewWorker(f.store.Ref, "P1", f.inst, tree)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -48,8 +48,9 @@ func loaded(t *testing.T, s *state.Store) state.State {
 }
 
 // Every hook knows its loop before anything else: a phase agent's hooks are its sub-run's, a subagent the
-// lead's model started is the lead's, and Claude Code's own fork of a phase agent (an id baton did not
-// link, working in the agent's worktree) is nobody's. Agents are found by id, so a /clear, which gives
+// lead's model started is the lead's, one the phase agent's model started (an id baton did not link, with
+// a type, working in the agent's worktree) is the phase's, and Claude Code's own fork of a phase agent (the
+// same, with no type) is nobody's. Agents are found by id, so a /clear, which gives
 // their hooks the next session's id, changes nothing. Only the session's own hooks say what the session is.
 func TestEveryHookKnowsItsLoop(t *testing.T) {
 	for _, c := range []struct {
@@ -58,15 +59,16 @@ func TestEveryHookKnowsItsLoop(t *testing.T) {
 		session        string // "" for the lead's
 		inTree         bool   // its working directory is in the phase agent's worktree
 		lead, phase    bool   // whose state its hooks change
-		leadSubagents  int    // the lead's count of its own subagents after SubagentStart
+		subagents      [2]int // the lead's and the phase's counts of their models' subagents after SubagentStart
 		sessionWritten bool   // it says what the lead's session is (its permission mode)
 	}{
-		{"the lead's own", "", "", "", false, true, false, 0, true},
-		{"a phase agent", "agent-p1", state.PhaseAgent, "", true, false, true, 0, false},
-		{"a phase agent after /clear", "agent-p1", state.PhaseAgent, "sess-cleared", true, false, true, 0, false},
-		{"a subagent of the lead's model", "sub-1", "Explore", "", false, true, false, 1, false},
-		{"Claude Code's fork of a phase agent", "fork-1", "", "", true, false, false, 0, false},
-		{"a fork after /clear", "fork-2", "", "sess-cleared", true, false, false, 0, false},
+		{"the lead's own", "", "", "", false, true, false, [2]int{}, true},
+		{"a phase agent", "agent-p1", state.PhaseAgent, "", true, false, true, [2]int{}, false},
+		{"a phase agent after /clear", "agent-p1", state.PhaseAgent, "sess-cleared", true, false, true, [2]int{}, false},
+		{"a subagent of the lead's model", "sub-1", "Explore", "", false, true, false, [2]int{1, 0}, false},
+		{"a subagent of the phase agent's model", "sub-2", "Explore", "", true, false, true, [2]int{0, 1}, false},
+		{"Claude Code's fork of a phase agent", "fork-1", "", "", true, false, false, [2]int{}, false},
+		{"a fork after /clear", "fork-2", "", "sess-cleared", true, false, false, [2]int{}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, true)
@@ -101,8 +103,8 @@ func TestEveryHookKnowsItsLoop(t *testing.T) {
 			if touched := !subAfter.Run.LastActivity.Equal(subBefore.Run.LastActivity); touched != c.phase {
 				t.Errorf("the phase's sub-run touched %v, want %v", touched, c.phase)
 			}
-			if after.Run.Subagents != c.leadSubagents || subAfter.Run.Subagents != 0 {
-				t.Errorf("subagents: lead %d, phase %d; want %d, 0", after.Run.Subagents, subAfter.Run.Subagents, c.leadSubagents)
+			if got := [2]int{after.Run.Subagents, subAfter.Run.Subagents}; got != c.subagents {
+				t.Errorf("subagents (lead, phase): %v, want %v", got, c.subagents)
 			}
 			if written := after.Run.PermissionMode == "acceptEdits"; written != c.sessionWritten {
 				t.Errorf("the lead's permission mode %q", after.Run.PermissionMode)

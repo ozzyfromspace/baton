@@ -175,10 +175,9 @@ func recoverLead(io IO, proj *state.Project, instance, exe string, args []string
 	}
 	s.Update(func(st *state.State) error { noteRecovery(st, r, now, line); return nil })
 	s.Event("lead_exited", map[string]any{"code": x.Code, "why": exitWhy(x.Code), "then": then, "session": session})
-	// The workers' jobs go on, as the lead's do: the next host watches them, and resumes the workers.
-	for _, w := range coordinator.Ended("the lead's " + exitWhy(x.Code)) {
-		proj.Unbind(w.Instance)
-	}
+	// The phase agents ended with the lead's claude; their jobs go on, as the lead's do: the next host
+	// watches them, and starts the agents again.
+	coordinator.Ended("the lead's "+exitWhy(x.Code), nil)
 	host.Release(proj, instance)
 	controller.Flush()
 	if r.Fresh {

@@ -11,32 +11,34 @@ import (
 )
 
 // A run can work on several phases at once. The lead session works on the phase in hand (Current) in
-// the project's checkout, as a run always has. Worker sessions each take another phase that can go
-// ahead, in a git worktree and a sub-run of their own (Project.NewWorker). The run sees a worker's phase
-// go only from working to done: everything in between belongs to the sub-run, and the phase is done once
-// its work has landed on the run's branch (Landed), so the phases that need it wait until then. The
-// host's coordinator writes the fields below and keeps them in step with the sessions it runs
-// (docs/research/workers.md). Another baton process writes them only to retire a worker no live session
-// hosts (loop.RetireWorker), and only once it has marked it as retiring (Worker.Retiring).
+// the project's checkout, as a run always has. Phase agents, background subagents of the lead's session
+// that baton's mod starts in its claude (docs/research/visible-workers.md), each take another phase that
+// can go ahead, in a git worktree and a sub-run of their own (Project.NewWorker). The run sees a worker's
+// phase go only from working to done: everything in between belongs to the sub-run, and the phase is done
+// once its work has landed on the run's branch (Landed), so the phases that need it wait until then. The
+// host's coordinator writes the fields below and keeps them in step with the agents it runs. The worktree
+// hook records the agent it placed (Worker.AgentID). Another baton process writes them only to retire a
+// worker no live host runs (loop.RetireWorker), and only once it has marked it as retiring
+// (Worker.Retiring).
 
 // Worker statuses. A worker goes starting → working → landing → landed. Two statuses are off that path:
-// suspended is a worker whose session ended with its host (exit, a hang-up), which the next host for the
-// run resumes; failed is one that could not go on, whose phase went back to the scheduler (Unassign).
+// suspended is a worker whose agent ended with the lead's claude (exit, a hang-up), which the next host for
+// the run starts again in its worktree; failed is one that could not go on, whose phase went back to the
+// scheduler (Unassign).
 const (
-	WorkerStarting  = "starting"  // its session is launched, and has not sent its first prompt yet
-	WorkerWorking   = "working"   // its session works on the phase
+	WorkerStarting  = "starting"  // baton's mod was asked to start its agent, which has not started yet
+	WorkerWorking   = "working"   // its agent works on the phase
 	WorkerLanding   = "landing"   // its sub-run is complete, and its work waits in the merge queue
 	WorkerLanded    = "landed"    // its work is on the run's branch, and its phase is done
-	WorkerSuspended = "suspended" // its session ended with the host
+	WorkerSuspended = "suspended" // its agent ended with the lead's claude
 	WorkerFailed    = "failed"    // its phase was taken back
 )
 
-// Worker is one worker session on the run's roster: the phase it works on, and where.
+// Worker is one worker on the run's roster: the phase it works on, and where. A phase agent works on it,
+// or, while it is starting or suspended, none. Its entry is the one assigned at Assigned (Is).
 type Worker struct {
 	Phase    string `json:"phase"`
 	Ref      string `json:"ref"`      // its sub-run (WorkerRef)
-	Session  string `json:"session"`  // its Claude Code session id, picked by baton before launch
-	Instance string `json:"instance"` // its BATON_INSTANCE (WorkerInstance)
 	Worktree string `json:"worktree"` // its git worktree, outside the checkout
 	Branch   string `json:"branch"`   // its own branch in that worktree
 	Base     string `json:"base"`     // the commit of the run's branch it started from
@@ -45,14 +47,12 @@ type Worker struct {
 	AgentID string `json:"agent,omitempty"`
 	Status  string `json:"status"`
 	Why     string `json:"why,omitempty"` // why it is suspended or failed
-	// Assigned is when it was given its phase, Since when it took its status, Started when its session
-	// sent its first prompt, and Ended when its session last ended.
+	// Assigned is when it was given its phase, Since when it took its status, Started when its first agent
+	// started, and Ended when its agent last ended.
 	Assigned time.Time `json:"assigned"`
 	Since    time.Time `json:"since"`
 	Started  time.Time `json:"started,omitzero"`
 	Ended    time.Time `json:"ended,omitzero"`
-	// Resumes counts the times its session was resumed after it ended unexpectedly.
-	Resumes int `json:"resumes,omitempty"`
 	// Generation is the run's generation it was assigned under (State.Generation).
 	Generation int `json:"generation,omitempty"`
 	// Retiring is when Retirer (a host's instance, or a command) began to retire it (loop.RetireWorker).
@@ -67,12 +67,11 @@ type Worker struct {
 	// not be saved), or "" when it was removed.
 	WorktreeKept string `json:"worktree_kept,omitempty"`
 	Merge        *Merge `json:"merge,omitempty"`
-	// Needs says what in its own session waits on the human (a permission prompt, an escalation, its
-	// question they chose to answer there), since NeedsSince. Nobody watches a worker's session: the lead's
-	// says so.
-	Needs      string    `json:"needs,omitempty"`
-	NeedsSince time.Time `json:"needs_since,omitzero"`
 }
+
+// Is reports whether w and o are the same entry of the roster: the same sub-run, assigned at the same
+// time. A phase is assigned again, to an entry of its own, once its worker has failed.
+func (w Worker) Is(o Worker) bool { return w.Ref == o.Ref && w.Assigned.Equal(o.Assigned) }
 
 // Live reports a worker the run still counts on: one not landed and not failed.
 func (w Worker) Live() bool { return w.Status != WorkerLanded && w.Status != WorkerFailed }
@@ -118,8 +117,8 @@ type Landing struct {
 }
 
 // Usage is how much of the account's five-hour allowance is used, as a session's status line last
-// reported it (At). Limited is set when a session hit the limit (By: "lead", or a worker's phase), at Hit:
-// no worker starts, and nothing is typed into the run's sessions, until then.
+// reported it (At). Limited is set when the lead or a phase agent hit the limit (By: "lead", or a worker's
+// phase), at Hit: no worker starts, and nothing is typed into the lead, until then.
 type Usage struct {
 	UsedPct float64   `json:"used_pct"`
 	Resets  time.Time `json:"resets_at,omitzero"`
@@ -173,8 +172,8 @@ func Limit(st *State, by string, at, until time.Time) bool {
 	return true
 }
 
-// AttachWorker is the state a worker's sub-run starts from, before its session does: phase is in hand,
-// in the run's plan narrowed to it (plan.Only), and becomes active when the worker's brief is delivered
+// AttachWorker is the state a worker's sub-run starts from, before its agent does: phase is in hand, in
+// the run's plan narrowed to it (plan.Only), and becomes active when the worker's brief is delivered
 // (Start). Its decisions and jobs are numbered under the phase (P3.d1, P3.j2), so that no id is used
 // twice across the run. Like Reattach, it keeps prev's owner, and its job numbers.
 func AttachWorker(prev State, phase string) State {
@@ -237,7 +236,10 @@ func (st State) LiveWorkers() []Worker {
 // to the worker that has it already changes nothing.
 func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 	id := w.Phase
-	if cur := st.WorkerOn(id); cur != nil && cur.Session == w.Session && cur.Ref == w.Ref {
+	if w.Assigned.IsZero() {
+		w.Assigned = now
+	}
+	if cur := st.WorkerOn(id); cur != nil && cur.Is(w) {
 		return nil
 	}
 	ps := st.Phases[id]
@@ -246,8 +248,8 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 		return fmt.Errorf("workers start only while a plan runs (mode: %s)", st.Mode)
 	case p.Index(id) < 0:
 		return fmt.Errorf("unknown phase %q (phases: %s)", id, phaseList(p))
-	case w.Ref == "" || w.Session == "":
-		return errors.New("a worker needs its sub-run and its session")
+	case w.Ref == "":
+		return errors.New("a worker needs its sub-run")
 	case st.WorkerOn(id) != nil:
 		return fmt.Errorf("phase %s has a worker already", id)
 	case st.retiring(id):
@@ -259,7 +261,7 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 	case !ready(*st, p, id):
 		return fmt.Errorf("phase %s waits for phases not done yet", id)
 	}
-	w.Status, w.Assigned, w.Since, w.Why, w.Generation = WorkerStarting, now, now, "", st.Generation
+	w.Status, w.Since, w.Why, w.Generation = WorkerStarting, now, "", st.Generation
 	st.Phases[id] = &PhaseState{Status: PhaseWorking, StartedAt: now, Worker: w.Ref}
 	st.Workers = append(st.Workers, w)
 	return nil
@@ -286,27 +288,31 @@ func Unassign(st *State, p plan.Plan, phase, why string, now time.Time) (string,
 	return takeUp(st, p, now), nil
 }
 
-// ReleaseWorker takes the phase back from the worker on the roster as ref and session, which cannot go
-// on (why), for a process other than the run's own host: the worker has failed, and its phase, if it
-// is still the worker's, is pending again. Unlike Unassign, nothing else of the run changes (the phase
-// in hand, a compaction): the run's next host takes the phase up. It reports whether the worker was on
-// the roster, live.
-func ReleaseWorker(st *State, ref, session, why string, now time.Time) bool {
-	var w *Worker
-	for i := len(st.Workers) - 1; i >= 0 && w == nil; i-- {
-		if e := &st.Workers[i]; e.Ref == ref && e.Session == session {
-			w = e
-		}
-	}
+// ReleaseWorker takes the phase back from the roster's entry e, a worker that cannot go on (why), for a
+// process other than the run's own host: the worker has failed, and its phase, if it is still the
+// worker's, is pending again. Unlike Unassign, nothing else of the run changes (the phase in hand, a
+// compaction): the run's next host takes the phase up. It reports whether the worker was on the roster,
+// live.
+func ReleaseWorker(st *State, e Worker, why string, now time.Time) bool {
+	w := st.Entry(e)
 	if w == nil || !w.Live() {
 		return false
 	}
-	if ps := st.Phases[w.Phase]; ps != nil && ps.Status == PhaseWorking && ps.Worker == ref && w.Generation == st.Generation {
+	if ps := st.Phases[w.Phase]; ps != nil && ps.Status == PhaseWorking && ps.Worker == w.Ref && w.Generation == st.Generation {
 		st.Phases[w.Phase] = &PhaseState{Status: PhasePending}
 	}
 	w.Status, w.Since, w.Why, w.Merge = WorkerFailed, now, why, nil
-	w.Needs, w.NeedsSince = "", time.Time{}
 	return true
+}
+
+// Entry is the roster's entry that is e (Worker.Is), or nil.
+func (st *State) Entry(e Worker) *Worker {
+	for i := len(st.Workers) - 1; i >= 0; i-- {
+		if w := &st.Workers[i]; w.Is(e) {
+			return w
+		}
+	}
+	return nil
 }
 
 // AbandonAfter is how long a run must have shown no sign of life before Abandoned says so: a host that

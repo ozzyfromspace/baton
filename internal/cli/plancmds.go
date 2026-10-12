@@ -99,7 +99,7 @@ func inPhase(io IO, p *state.Project) (*state.Store, bool) {
 	if !hosted(io) || io.Env("BATON_ROLE") == "worker" {
 		return nil, false
 	}
-	cwd, err := os.Getwd()
+	cwd, err := io.wd()
 	if err != nil {
 		return nil, false
 	}
@@ -248,8 +248,8 @@ func workersAttached(io IO, checkout string, pl plan.Plan) string {
 	if err != nil {
 		return ""
 	}
-	mode, local := config.WorkerMode(io.Env, checkout)
-	return decide.WorkersAttached(n, auto, pl.Width(), mode, local)
+	mode := config.WorkerMode(io.Env, checkout)
+	return decide.WorkersAttached(n, auto, pl.Width(), mode)
 }
 
 func errSuffix(err error) string {
