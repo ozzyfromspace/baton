@@ -140,7 +140,9 @@ func jobs(st state.State, now time.Time) string {
 }
 
 // doing is what job j's phase is doing while j runs: verifying (done was claimed, or it is the phase in
-// hand and j its gate), parked (set aside until j ends), or awaiting (something outside the project).
+// hand and j its gate), parked (set aside until j ends), or awaiting (something outside the project). The
+// phase in hand whose session ended its turn "waits on its gate": nothing is needed from the human, though
+// Claude Code's idle notice says otherwise.
 func doing(st state.State, j state.Job) string {
 	if ps := st.Phases[j.Phase]; ps != nil {
 		switch ps.Status {
@@ -150,8 +152,11 @@ func doing(st state.State, j state.Job) string {
 			return "parked"
 		}
 	}
-	if j.Kind == state.JobAwait {
+	switch {
+	case j.Kind == state.JobAwait:
 		return "awaiting"
+	case j.Phase == st.Current && !st.Run.TurnOpen:
+		return "waits on its gate"
 	}
 	return "verifying"
 }

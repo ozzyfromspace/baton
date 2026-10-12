@@ -263,17 +263,17 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		// Every phase left waits for a job, so there is nothing to work on; baton takes the next phase up
 		// as soon as one can start.
 		st.Run.StopBlocks = 0
-		msg := "baton: no phase can start yet; baton takes the next one up as soon as one can"
+		waiting := ""
 		if jobs := st.Unfinished(); len(jobs) > 0 {
-			msg = "baton: no phase can start until " + waitingOn(jobs) + " finishes; baton takes the next one up then"
+			waiting = waitingOn(jobs)
 		}
-		d.say(msg)
+		d.say(decide.NoPhaseYet(waiting))
 	case st.CurrentJob() != nil:
 		// The phase in hand waits on its job, and nothing else is owed: the session idles in place. The
 		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.
 		st.Run.StopBlocks = 0
 		j := st.CurrentJob()
-		d.say(fmt.Sprintf("baton: %s waits on job %s (`%s`); Claude is given its result when it ends", cur, j.ID, j.Command))
+		d.say(decide.GateWait(cur, *j))
 		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
 	case len(st.Run.BusyBackground()) > 0:
 		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.

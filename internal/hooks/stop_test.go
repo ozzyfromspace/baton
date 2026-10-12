@@ -125,7 +125,7 @@ func TestStopDecisionTable(t *testing.T) {
 				st.Phases["P0"].Status, st.Current = state.PhaseVerifying, ""
 				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
 			}},
-		{name: "the phase's job running: the session idles in place", say: "P0 (First) waits on job j1 (`make test`); Claude is given its result when it ends",
+		{name: "the phase's job running: the session idles in place", say: "P0 (First) waits on job j1 (`make test`) — nothing is needed from you: Claude is given its result when it ends",
 			setup: func(st *state.State) {
 				st.Run.StopBlocks = 2
 				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}

@@ -79,8 +79,16 @@ func TestSegment(t *testing.T) {
 		}, true, "◆ baton · P0 1/2 The overlay · ctx 412k/810k"},
 		{"the gate of the phase in hand", func() state.State {
 			s := withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+			s.Run.TurnOpen = true
 			return s
 		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 12m · ctx 41%"},
+		// The turn over, the phase waits on its gate, which needs nothing from the human.
+		{"the phase in hand waits on its gate", func() state.State {
+			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+		}, true, "◆ baton · P0 1/2 The overlay · P0 waits on its gate 12m · ctx 41%"},
+		{"the phase in hand awaits", func() state.State {
+			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+		}, true, "◆ baton · P0 1/2 The overlay · P0 awaiting 12m · ctx 41%"},
 		{"a worker's question", func() state.State {
 			s := run
 			state.QueueRelay(&s, state.Relay{Phase: "P3", Kind: state.RelayBlocked, Since: now}, now)
@@ -113,7 +121,7 @@ func TestSegment(t *testing.T) {
 		{"no phase in hand and no job", func() state.State { s := run; s.Current = ""; return s }, true, "◆ baton · ctx 41%"},
 		{"a job queued a moment from now, by another clock", func() state.State {
 			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobQueued, Queued: now.Add(time.Second)})
-		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 0s · ctx 41%"},
+		}, true, "◆ baton · P0 1/2 The overlay · P0 waits on its gate 0s · ctx 41%"},
 	}
 	for _, c := range cases {
 		if got := Segment(c.st(), pl, c.plan, now, 0); got != c.want {
