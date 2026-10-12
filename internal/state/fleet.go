@@ -349,8 +349,14 @@ func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 		l.At = now
 	}
 	st.Landed = append(st.Landed, l)
-	st.Run.Progress()
-	return takeUp(st, p, now), nil
+	// The landing is the lead's progress only when it hands the lead a phase. A lead that holds one keeps
+	// its escalation: a worker's work landing does not answer a turn that failed or a lead gone quiet, and
+	// clearing it would only have the watchdog raise it again, and push it to the human again.
+	next := takeUp(st, p, now)
+	if next != "" {
+		st.Run.Progress()
+	}
+	return next, nil
 }
 
 // TakeLandings returns the landings the lead has not been told about, and records them as told. None is

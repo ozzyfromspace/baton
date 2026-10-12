@@ -199,6 +199,37 @@ func TestLanded(t *testing.T) {
 	}
 }
 
+// A worker's landing leaves the lead's escalation and counters alone while the lead holds a phase: the
+// watchdog would raise the escalation again at once, and push it to the human again. It counts as the
+// lead's progress only when it hands the lead its next phase.
+func TestLandingKeepsTheLeadsEscalation(t *testing.T) {
+	p := graph("P0:", "P1:", "P2:P1")
+	t1 := t0.Add(time.Hour)
+	for _, c := range []struct {
+		name, lead, kind string
+		statuses         map[string]string
+		kept             bool
+	}{
+		{"the lead's turn failed", "P0", "api_error", nil, true},
+		{"the lead went quiet", "P0", "stalled", nil, true},
+		{"the landing hands the lead its next phase", "", "stalled", map[string]string{"P0": PhaseDone}, false},
+	} {
+		st := assigned(t, p, c.lead, c.statuses, "P1")
+		st.Run.Escalation = &Escalation{Kind: c.kind, Reason: "r", Since: t0, Watchdog: true, Reminded: 1}
+		st.Run.IdleNudges, st.Run.StopBlocks = 1, 2
+		if _, err := Landed(&st, p, Landing{Phase: "P1", Commits: []string{"c1"}, Head: "c1"}, t1); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		e := st.Run.Escalation
+		if kept := e != nil && e.Kind == c.kind && e.Since.Equal(t0) && e.Reminded == 1; kept != c.kept {
+			t.Errorf("%s: escalation kept %v, want %v (%+v)", c.name, kept, c.kept, e)
+		}
+		if kept := st.Run.IdleNudges == 1 && st.Run.StopBlocks == 2; kept != c.kept {
+			t.Errorf("%s: the lead's counters kept %v, want %v", c.name, kept, c.kept)
+		}
+	}
+}
+
 // The plan is complete only once no phase is working, whatever the lead has finished.
 func TestCompletionWaitsForWorkingPhases(t *testing.T) {
 	p := graph("P0:", "P1:")
