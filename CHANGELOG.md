@@ -4,6 +4,8 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
 v0.6 ran a plan unattended until something stopped the lead in a way baton couldn't retry. A turn the
 model's safeguards refused looked like any API error, a claude that crashed took the run with it, and a
 rewind or a `/clear` left baton and the model remembering different things. Now a refusal says what
@@ -681,7 +683,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/ozzyfromspace/baton/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ozzyfromspace/baton/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ozzyfromspace/baton/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ozzyfromspace/baton/compare/v0.3.7...v0.4.0
