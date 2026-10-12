@@ -132,7 +132,7 @@ func (st *State) RelayToAsk() *Relay {
 // compaction is owed or underway (the question would be lost in it), and nothing of the lead's own
 // waits on the human, which goes first.
 func (st *State) relayAskable() bool {
-	return st.Mode == ModeRunning && !st.compacting() && !st.OwnQuestion()
+	return st.Mode == ModeRunning && !st.Compacting() && !st.OwnQuestion()
 }
 
 // OwnQuestion reports something of the lead session's own that the human is asked, or is to be asked:

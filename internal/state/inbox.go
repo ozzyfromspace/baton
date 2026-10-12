@@ -9,12 +9,16 @@ type Message struct {
 	Kind string    `json:"kind"`
 	Text string    `json:"text"`
 	At   time.Time `json:"at"`
+	// Phase is the phase it is about, if only that one: once the run has moved on to another, it is
+	// dropped untold.
+	Phase string `json:"phase,omitempty"`
 }
 
 // Message kinds.
 const (
 	MessageLand   = "land"   // a worker's work did not land, and the worker must act on why
 	MessageAnswer = "answer" // the human answered a worker's question, which the lead session put to them
+	MessageRewind = "rewind" // the human rewound the conversation past what baton recorded, which stands
 )
 
 // Tell leaves m for the session's model.
@@ -24,24 +28,33 @@ func Tell(st *State, m Message, now time.Time) {
 }
 
 // Mail lists the messages the model should be given now. None is given while a compaction is owed or
-// underway: it would be lost in it, so it comes after.
+// underway: it would be lost in it, so it comes after. One about a phase the run is no longer on is not
+// given at all.
 func (st State) Mail() []Message {
-	if st.compacting() {
+	if st.Compacting() {
 		return nil
 	}
-	return st.Inbox
-}
-
-// TakeMail returns the messages the model should be given now (Mail), and records them as given.
-func TakeMail(st *State) []Message {
-	mail := st.Mail()
-	if len(mail) > 0 {
-		st.Inbox = nil
+	var mail []Message
+	for _, m := range st.Inbox {
+		if m.Phase == "" || m.Phase == st.Current {
+			mail = append(mail, m)
+		}
 	}
 	return mail
 }
 
-// compacting reports a compaction owed or underway.
-func (st State) compacting() bool {
+// TakeMail returns the messages the model should be given now (Mail), and records them as given. Those
+// about a phase the run is no longer on are dropped.
+func TakeMail(st *State) []Message {
+	if st.Compacting() {
+		return nil
+	}
+	mail := st.Mail()
+	st.Inbox = nil
+	return mail
+}
+
+// Compacting reports a compaction owed or underway.
+func (st State) Compacting() bool {
 	return st.BoundaryOwed || st.CheckpointOwed || st.CheckpointDue || st.Run.Compaction.InFlight()
 }

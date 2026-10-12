@@ -98,6 +98,7 @@ func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) er
 	}
 	instance := c.Env("BATON_INSTANCE")
 	var owner bool
+	var rewind []event
 	st, err := s.Update(func(st *state.State) error {
 		if owner = st.IsOwner(instance, c.Now); !owner {
 			return errNotOwner
@@ -109,10 +110,16 @@ func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) er
 		if pm := str(c.Input, "permission_mode"); pm != "" {
 			st.Run.PermissionMode = pm
 		}
+		rewind = noticeRewind(c, st, s)
 		return fn(st, s)
 	})
 	if err == errNotOwner {
 		return nil, st, errNotOwner
+	}
+	if err == nil {
+		for _, e := range rewind {
+			s.Event(e.kind, e.fields)
+		}
 	}
 	return s, st, err
 }
@@ -428,7 +435,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 			st.Run.Restart = nil
 		}
 		if source != "compact" {
-			st.Run.TurnOpen, st.Run.Subagents, st.Run.Tools = false, 0, nil
+			st.Run.TurnOpen, st.Run.Subagents, st.Run.Tools, st.Run.Mark = false, 0, nil, nil
 			st.Run.Dialogs.Clear()
 			events, _ = vanished(st, c.Now, false)
 		}
@@ -691,6 +698,7 @@ func TurnSource(prompt string) string {
 
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"))
+	mark := markOf(str(c.Input, "transcript_path")) // read before the lock: the turn's next hook looks at the prompt (rewind.go)
 	var events []event
 	var tell, staleSkill, ann string
 	var told []string
@@ -700,6 +708,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, by, c.Now
 		st.Run.ToolsEnded("") // a prompt starts a turn: no call of the last one runs
+		st.Run.Mark = nil
+		if st.Mode == state.ModeRunning {
+			st.Run.Mark = mark
+		}
 		ann = announced(st)
 		staleSkill, st.Run.StaleSkill = st.Run.StaleSkill, ""
 		st.Run.Dialogs.CloseMain() // a prompt was submitted, so no dialog of the main agent is on screen

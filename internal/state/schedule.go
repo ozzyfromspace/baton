@@ -167,7 +167,7 @@ func (st State) Red() []Job {
 // it. None is due while a compaction is owed or underway: the result comes after it.
 func (st State) Due() []Job {
 	switch {
-	case st.compacting():
+	case st.Compacting():
 		return nil
 	case st.Mode == ModeComplete:
 		if st.Run.CompleteNotified {

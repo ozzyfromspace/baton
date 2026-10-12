@@ -362,7 +362,7 @@ func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 // TakeLandings returns the landings the lead has not been told about, and records them as told. None is
 // told while a compaction is owed or underway: the lead hears of them after it.
 func TakeLandings(st *State) []Landing {
-	if st.compacting() {
+	if st.Compacting() {
 		return nil
 	}
 	var out []Landing

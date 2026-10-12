@@ -99,6 +99,18 @@ type Runtime struct {
 	// in the conversation are that version's, and the next prompt is handed the current ones.
 	StaleSkill string `json:"stale_skill,omitempty"`
 	Ended      *Ended `json:"ended,omitempty"`
+	// Mark is where the session's transcript stood when the last prompt was submitted, until a hook of its
+	// turn has seen whether the prompt goes on from there: one that does not came after a rewind
+	// (docs/research/recovery.md).
+	Mark *Mark `json:"mark,omitempty"`
+}
+
+// Mark is where a session's transcript stood when a prompt was submitted (transcript.Mark): the file, its
+// size, and the uuid of its last entry in the conversation.
+type Mark struct {
+	Path   string `json:"path"`
+	Offset int64  `json:"offset"`
+	Leaf   string `json:"leaf"`
 }
 
 // Restart is a host restarting its session on another version of baton (package upgrade).
