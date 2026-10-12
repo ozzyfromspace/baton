@@ -89,12 +89,11 @@ func TestSegment(t *testing.T) {
 		{"the phase in hand awaits", func() state.State {
 			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
 		}, true, "◆ baton · P0 1/2 The overlay · P0 awaiting 12m · ctx 41%"},
-		{"a worker's question", func() state.State {
+		{"a phase agent's question is on baton's band, not here", func() state.State {
 			s := run
 			state.QueueRelay(&s, state.Relay{Phase: "P3", Kind: state.RelayBlocked, Since: now}, now)
-			state.QueueRelay(&s, state.Relay{Phase: "P4", Kind: state.RelayBlocked, Since: now}, now)
 			return s
-		}, true, "◆ baton · P0 1/2 The overlay · ? P3 · ctx 41%"},
+		}, true, "◆ baton · P0 1/2 The overlay · ctx 41%"},
 		{"a wait on something outside", func() state.State {
 			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobQueued, Queued: now.Add(-40 * time.Second)})
 		}, true, "◆ baton · P0 1/2 The overlay · P0 awaiting 40s · ctx 41%"},
@@ -124,15 +123,16 @@ func TestSegment(t *testing.T) {
 		}, true, "◆ baton · P0 1/2 The overlay · P0 waits on its gate 0s · ctx 41%"},
 	}
 	for _, c := range cases {
-		if got := Segment(c.st(), pl, c.plan, now, 0); got != c.want {
+		if got := Segment(c.st(), pl, c.plan, now); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }
 
-// The run's workers follow the phase in hand, each by its phase and how it stands, after a usage limit
-// the run waits on, or a reading that holds new workers back.
-func TestWorkerSegments(t *testing.T) {
+// The status line is the lead's: the run's phase agents, how they land, what holds another back and the
+// usage reading that does are on baton's band (internal/board). A usage limit the run waits on holds the
+// lead too, and stays.
+func TestNoWorkerSegments(t *testing.T) {
 	pl := plan.Plan{Version: 1, Phases: []plan.Phase{{ID: "P0", Title: "The overlay", After: []string{}}, {ID: "P1", Title: "One", After: []string{}},
 		{ID: "P2", Title: "Two", After: []string{}}, {ID: "P3", Title: "Three", After: []string{}}}}
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.Local)
@@ -149,96 +149,48 @@ func TestWorkerSegments(t *testing.T) {
 		}
 		return st
 	}
-	const head = "◆ baton · P0 1/4 The overlay · "
+	const lead = "◆ baton · P0 1/4 The overlay · ctx 41%"
 	for _, c := range []struct {
-		name     string
-		st       func() state.State
-		usageMax float64
-		want     string
+		name string
+		st   func() state.State
+		want string
 	}{
-		{"a worker at work, by how long", func() state.State { return with(worker("P1", state.WorkerWorking, 14*time.Minute)) }, 0, head + "W P1 14m · ctx 41%"},
-		{"one starting", func() state.State { return with(worker("P1", state.WorkerStarting, 0)) }, 0, head + "W P1 starting · ctx 41%"},
-		{"several, in the order they started", func() state.State {
-			return with(worker("P2", state.WorkerWorking, time.Hour+5*time.Minute), worker("P1", state.WorkerWorking, 3*time.Minute))
-		}, 0, head + "W P2 1h05m · W P1 3m · ctx 41%"},
+		{"agents at work", func() state.State {
+			return with(worker("P2", state.WorkerWorking, time.Hour), worker("P1", state.WorkerStarting, 0))
+		}, lead},
 		{"one whose work waits to land", func() state.State {
-			w := worker("P1", state.WorkerLanding, time.Hour)
-			w.Merge = &state.Merge{Queued: now}
-			return with(w)
-		}, 0, head + "P1 landing · ctx 41%"},
-		{"one whose landing is held back", func() state.State {
 			w := worker("P1", state.WorkerLanding, time.Hour)
 			w.Merge = &state.Merge{Queued: now, Deferred: "the lead changed a.go too", DeferredAt: now}
 			return with(w)
-		}, 0, head + "P1 waits to land · ctx 41%"},
-		{"one with a question the lead puts to the human", func() state.State {
-			st := with(worker("P2", state.WorkerWorking, time.Hour), worker("P1", state.WorkerWorking, time.Hour))
+		}, lead},
+		{"one with a question for the human", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Hour))
 			state.QueueRelay(&st, state.Relay{Phase: "P1", Kind: state.RelayBlocked, Since: now}, now)
 			return st
-		}, 0, head + "W P2 1h00m · ? P1 · ctx 41%"},
-		{"landed and failed workers are gone", func() state.State {
-			st := with(worker("P1", state.WorkerLanded, time.Hour), worker("P2", state.WorkerFailed, time.Hour))
-			st.Phases["P1"].Status, st.Phases["P2"].Status = state.PhaseDone, state.PhasePending
-			return st
-		}, 0, head + "ctx 41%"},
-		{"a usage limit the run waits on", func() state.State {
-			st := with(worker("P1", state.WorkerWorking, time.Minute))
-			st.Usage = &state.Usage{UsedPct: 100, Limited: now.Add(40 * time.Minute), Hit: now}
-			return st
-		}, 80, head + "usage limit until " + now.Add(40*time.Minute).Format("15:04") + " · W P1 1m · ctx 41%"},
-		{"a limit that is over", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 12, Limited: now, Hit: now.Add(-time.Hour)}
-			return st
-		}, 80, head + "ctx 41%"},
-		{"a reading that holds new workers back", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 84.6, Resets: now.Add(time.Hour)}
-			return st
-		}, 80, head + "5h 85% · ctx 41%"},
-		{"a reading at it", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 80, Resets: now.Add(time.Hour)}
-			return st
-		}, 80, head + "5h 80% · ctx 41%"},
-		{"a reading under it", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 79, Resets: now.Add(time.Hour)}
-			return st
-		}, 80, head + "ctx 41%"},
-		{"a reading of a window gone by", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 95, Resets: now.Add(-time.Minute)}
-			return st
-		}, 80, head + "ctx 41%"},
-		{"no workers: no reading", func() state.State {
-			st := with()
-			st.Usage = &state.Usage{UsedPct: 95, Resets: now.Add(time.Hour)}
-			return st
-		}, 0, head + "ctx 41%"},
-		{"no room on the machine for another", func() state.State {
+		}, lead},
+		{"a phase held back", func() state.State {
 			st := with(worker("P1", state.WorkerWorking, time.Minute))
 			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldBusy, Why: "memory pressure is critical", Since: now}
 			return st
-		}, 0, head + "W P1 1m · W held: busy · ctx 41%"},
-		{"gates queue for lanes", func() state.State {
-			st := with(worker("P1", state.WorkerWorking, time.Minute))
-			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldLanes, Why: "a gate waits for a lane", Since: now}
-			return st
-		}, 0, head + "W P1 1m · W held: lanes · ctx 41%"},
-		{"landings keep conflicting", func() state.State {
-			st := with(worker("P1", state.WorkerWorking, time.Minute))
-			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldConflicts, Why: "2 landings in a row conflicted", Since: now}
-			return st
-		}, 0, head + "W P1 1m · W held: conflicts · ctx 41%"},
-		{"held by the usage, which shows already", func() state.State {
+		}, lead},
+		{"a usage reading that holds agents back", func() state.State {
 			st := with(worker("P1", state.WorkerWorking, time.Minute))
 			st.Usage = &state.Usage{UsedPct: 90, Resets: now.Add(time.Hour)}
 			st.Hold = &state.Hold{Phase: "P2", Kind: state.HoldUsage, Why: "90% of the five-hour usage is used (worker_usage_max 80%)", Since: now}
 			return st
-		}, 80, head + "5h 90% · W P1 1m · ctx 41%"},
+		}, lead},
+		{"a usage limit the run waits on", func() state.State {
+			st := with(worker("P1", state.WorkerWorking, time.Minute))
+			st.Usage = &state.Usage{UsedPct: 100, Limited: now.Add(40 * time.Minute), Hit: now}
+			return st
+		}, "◆ baton · P0 1/4 The overlay · usage limit until " + now.Add(40*time.Minute).Format("15:04") + " · ctx 41%"},
+		{"a limit that is over", func() state.State {
+			st := with()
+			st.Usage = &state.Usage{UsedPct: 12, Limited: now, Hit: now.Add(-time.Hour)}
+			return st
+		}, lead},
 	} {
-		if got := Segment(c.st(), pl, true, now, c.usageMax); got != c.want {
+		if got := Segment(c.st(), pl, true, now); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
 		}
 	}

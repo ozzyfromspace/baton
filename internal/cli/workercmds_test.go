@@ -282,34 +282,17 @@ func TestTheStatusLineRecordsTheAccountsUsageInTheRun(t *testing.T) {
 	}
 }
 
-// The status line shows the account's usage where it holds new workers back: at or above
-// worker_usage_max, as the sessions' host set it, and never with no workers.
-func TestTheStatusLineShowsUsageThatHoldsWorkersBack(t *testing.T) {
-	for _, c := range []struct {
-		name     string
-		env      map[string]string
-		used     float64
-		shown    bool
-		wantText string
-	}{
-		{"no check, the default", nil, 99, false, ""},
-		{"as the host set it", map[string]string{"BATON_WORKER_USAGE_MAX": "80"}, 81, true, "5h 81%"},
-		{"under it", map[string]string{"BATON_WORKER_USAGE_MAX": "80"}, 79, false, ""},
-		{"no check", map[string]string{"BATON_WORKER_USAGE_MAX": "0"}, 99, false, ""},
-		{"no workers", map[string]string{"BATON_WORKERS": "0", "BATON_WORKER_USAGE_MAX": "80"}, 99, false, ""},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			s := attached(t)
-			s.env["HOME"] = t.TempDir()
-			for k, v := range c.env {
-				s.env[k] = v
-			}
-			in := fmt.Sprintf(`{"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":%v,"resets_at":%d}}}`, c.used, s.now.Add(time.Hour).Unix())
-			out := s.must(in, "statusline")
-			if strings.Contains(out, "5h ") != c.shown || c.shown && !strings.Contains(out, c.wantText) {
-				t.Errorf("status line %q", out)
-			}
-		})
+// The status line is the lead's: a usage reading that holds new phase agents back is on baton's band (the
+// phase it holds, and on the board why), never on the status line. It records the reading all the same.
+func TestTheStatusLineLeavesTheUsageReadingToTheBand(t *testing.T) {
+	s := attached(t)
+	s.env["HOME"], s.env["BATON_WORKER_USAGE_MAX"] = t.TempDir(), "80"
+	in := fmt.Sprintf(`{"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":81,"resets_at":%d}}}`, s.now.Add(time.Hour).Unix())
+	if out := s.must(in, "statusline"); strings.Contains(out, "5h ") || strings.Contains(out, "81%") {
+		t.Errorf("status line %q", out)
+	}
+	if u := s.state().Usage; u == nil || u.UsedPct != 81 {
+		t.Errorf("usage recorded: %+v", u)
 	}
 }
 

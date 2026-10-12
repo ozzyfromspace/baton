@@ -402,22 +402,8 @@ func cmdStatusline(_ []string, io IO) int {
 	if cmd := statusline.UserCommand(projectDir, home); cmd != "" {
 		user = statusline.RunUser(cmd, raw, projectDir, 3*time.Second)
 	}
-	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now(), usageShown(io)), user))
+	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now()), user))
 	return 0
-}
-
-// usageShown is the share of the five-hour usage at or above which the status line shows it: no new
-// worker starts above it (worker_usage_max). 0, for none shown, with no check or no workers.
-func usageShown(io IO) float64 {
-	cfg := config.Load(batonRoot(io), io.Env)
-	f, err := cfg.WorkerUsage()
-	if err != nil || f == 0 {
-		return 0
-	}
-	if n, _, err := cfg.WorkerCap(io.reading); err != nil || n == 0 {
-		return 0
-	}
-	return f
 }
 
 // contextSettings works out the --autocompact value baton launches claude with, and the context valve
