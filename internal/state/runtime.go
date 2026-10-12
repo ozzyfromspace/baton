@@ -249,6 +249,8 @@ type Task struct {
 	Type        string `json:"type"` // shell (a Monitor too), subagent, workflow, …
 	Status      string `json:"status"`
 	Description string `json:"description,omitempty"`
+	// AgentType is a subagent's type: PhaseAgent for one of baton's own phase agents.
+	AgentType string `json:"agent_type,omitempty"`
 	// Since is when a Stop first reported the task: Claude Code does not say when it started.
 	Since time.Time `json:"since,omitzero"`
 }
@@ -400,11 +402,28 @@ var humanDecides = map[string]bool{"blocked": true, "decision": true, "review": 
 // session look busy.
 var waitable = map[string]bool{"shell": true, "subagent": true, "workflow": true, "MCP task": true, "teammate": true, "cloud session": true}
 
-// BusyBackground reports background work that can still wake the session.
+// PhaseAgent is the agent type of baton's phase agents, which the mod in baton's plugin registers and
+// spawns (docs/research/visible-workers.md).
+const PhaseAgent = "baton:phase"
+
+// BusyBackground reports background work that can still wake the session. baton's own phase agents are
+// not the session's work: their reports never reach its model, and each phase has a loop of its own.
 func (r Runtime) BusyBackground() []Task {
 	var out []Task
 	for _, t := range r.Background {
-		if waitable[t.Type] && !slices.Contains(r.Monitors, t.ID) {
+		if waitable[t.Type] && t.AgentType != PhaseAgent && !slices.Contains(r.Monitors, t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// PhaseAgents reports baton's phase agents among the background work: they live in the session's claude,
+// and end with it.
+func (r Runtime) PhaseAgents() []Task {
+	var out []Task
+	for _, t := range r.Background {
+		if t.AgentType == PhaseAgent {
 			out = append(out, t)
 		}
 	}

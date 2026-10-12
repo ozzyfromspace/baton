@@ -146,8 +146,11 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 		}
 		b.off()
 	}
-	// A background shell (say, a dev server) does not hold a compaction.
-	r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "shell", Status: "running"}} })
+	// Nor does a background shell (say, a dev server), nor one of baton's own phase agents: neither is the
+	// lead's work, and each goes on across its compaction.
+	r.set(func(st *state.State) {
+		st.Run.Background = []state.Task{{Type: "shell", Status: "running"}, {Type: "subagent", Status: "running", AgentType: state.PhaseAgent}}
+	})
 	r.tick(100 * time.Millisecond)
 	if len(r.in.text) != 1 || r.in.text[0] != "/compact" {
 		t.Fatalf("typed %q", r.in.text)

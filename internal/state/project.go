@@ -23,6 +23,7 @@ import (
 //	                         worktree of its own (named in the sub-run's worktree file; see NewWorker)
 //	.baton/sessions/<id>     the run a session belongs to (one line: the run's ref)
 //	.baton/hosts/<instance>  the run a baton host drives (one line: the run's ref)
+//	.baton/agents/<agent>    the sub-run a phase agent works in (one line: the sub-run's ref; LinkAgent)
 //	.baton/pending           a run attached outside any session, for the next baton session started here
 //	.baton/lock              held while sessions and hosts are bound to runs
 //	.baton/baton.log         the hosts' log, each line tagged with its instance
@@ -42,6 +43,7 @@ const (
 	runsDir     = "runs"
 	sessionsDir = "sessions"
 	hostsDir    = "hosts"
+	agentsDir   = "agents"
 	pendingFile = "pending"
 	workersDir  = "workers"
 	treeFile    = "worktree" // in a worker's sub-run: the worktree it works in
@@ -340,6 +342,56 @@ func (p *Project) Link(session, run string) error {
 	})
 }
 
+// LinkAgent links agentID, the phase agent of the lead's session working on phase of run, to that
+// phase's sub-run, which must exist, so that every hook the agent fires finds the sub-run by the agent's
+// id (AgentRun) and writes as its worker instance (WorkerInstance). Agents are linked by id, never by
+// session: they share the lead's session, and /clear gives their hooks the next session's id (spike 32).
+// Linking another agent to a phase (one started again) leaves the first linked as well.
+func (p *Project) LinkAgent(run, phase, agentID string) error {
+	ref := WorkerRef(run, phase)
+	if !validID(agentID) || !isWorker(ref) {
+		return fmt.Errorf("cannot link agent %q to %q", agentID, ref)
+	}
+	return p.withLock(func() error {
+		if !p.runExists(ref) {
+			return fmt.Errorf("no worker %q here", ref)
+		}
+		return p.writeLink(ref, agentsDir, agentID)
+	})
+}
+
+// AgentRun returns the ref of the sub-run the phase agent agentID is linked to (LinkAgent), or "".
+func (p *Project) AgentRun(agentID string) string {
+	if !validID(agentID) {
+		return ""
+	}
+	if ref := p.readLink(agentsDir, agentID); isWorker(ref) && p.runExists(ref) {
+		return ref
+	}
+	return ""
+}
+
+// WorktreeOf returns the phase of run whose sub-run's worktree holds dir (a real path, or one that
+// resolves to it), or "" for none.
+func (p *Project) WorktreeOf(run, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	for _, w := range p.Workers(run) {
+		if w.Worktree == "" {
+			continue
+		}
+		if rel, err := filepath.Rel(w.Worktree, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			_, phase, _ := splitRef(w.ID)
+			return phase
+		}
+	}
+	return ""
+}
+
 // Lookup returns the run session (or else the host instance) belongs to, without binding anything.
 func (p *Project) Lookup(session, instance string) (*Store, bool) {
 	id := p.RunOf(session)
@@ -614,11 +666,12 @@ const sweepAge = 10 * time.Minute
 
 // Sweep removes what no one can use any more: runs that never had a plan, drafts or notes and that no
 // host drives (every hosted session starts one), links to runs (workers' sub-runs among them) that are
-// gone, and links to hosts that no longer drive their run. Hosts call it when they start.
+// gone, from sessions and from phase agents, and links to hosts that no longer drive their run. Hosts call
+// it when they start.
 func (p *Project) Sweep() { p.Swept(false, nil) }
 
 // Swept is Sweep, saying what it removed, each as its path under the project's .baton directory, with
-// forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>). With dry, it removes nothing, and says what Sweep
+// forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>, agents/<agent>). With dry, it removes nothing, and says what Sweep
 // would remove. keep (nil: none) names hosts whose links stay, though they do not drive their run now.
 func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 	var out []string
@@ -639,7 +692,7 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 				os.RemoveAll(dir)
 			}
 		}
-		for _, sub := range []string{sessionsDir, hostsDir} {
+		for _, sub := range []string{sessionsDir, hostsDir, agentsDir} {
 			links, _ := os.ReadDir(p.path(sub))
 			for _, l := range links {
 				id := p.readLink(sub, l.Name())

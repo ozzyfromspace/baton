@@ -310,13 +310,13 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // restartable reports a safe point to restart the session: the moment is the human's and the model's
 // to lose nothing in. Nothing may be on its way (a turn, a dialog, a compaction), and nothing that lives
 // only inside this claude process may be running, because it would end with it: background work of any
-// kind, monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
+// kind (baton's phase agents too), monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
 // restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
 // about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
 // human reading its last answer is not interrupted. The restart ends the run's workers too, so each of
 // them must be at such a point as well (workersIdle).
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
-	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.Watching()) > 0 {
+	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
 	}
 	switch st.Run.Compaction.Status {

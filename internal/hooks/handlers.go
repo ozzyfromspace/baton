@@ -33,9 +33,13 @@ type Deps struct {
 	Machine func() machine.Reading
 }
 
-// OpenRun returns the run a hook's session belongs to, in the project the host named in BATON_DIR,
-// binding the session to its host first (state.Project.Bind). A SessionStart after /clear, or after a
-// plan approved with "clear context", carries the host's run into the new session id.
+// OpenRun returns the run a hook belongs to, in the project the host named in BATON_DIR. Every hook knows
+// its loop first (docs/research/visible-workers.md): one from a phase agent (its agent_id linked,
+// state.Project.LinkAgent) is its phase's sub-run's, written as the sub-run's worker instance; one from an
+// agent baton did not start, working in a phase agent's worktree, is Claude Code's own fork of that agent
+// (errFork: it changes nothing, for the lead or the phase); any other is the session's, its session bound
+// to its host first (state.Project.Bind). A SessionStart after /clear, or after a plan approved with "clear
+// context", carries the host's run into the new session id.
 func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 	return func(c Context) (*state.Store, error) {
 		dir := c.Env("BATON_DIR")
@@ -46,14 +50,37 @@ func OpenRun(now func() time.Time) func(c Context) (*state.Store, error) {
 		if err != nil {
 			return nil, err
 		}
+		session, instance := str(c.Input, "session_id"), c.Env("BATON_INSTANCE")
+		if agent := str(c.Input, "agent_id"); agent != "" {
+			if ref := p.AgentRun(agent); ref != "" {
+				_, phase, _ := strings.Cut(ref, "/")
+				s, err := p.Run(ref, state.WorkerInstance(instance, phase))
+				if err == nil {
+					s.Agent = agent
+				}
+				return s, err
+			}
+			run := p.RunOf(session)
+			if run == "" {
+				run = p.HostRun(instance)
+			}
+			if run != "" && !strings.Contains(run, "/") && p.WorktreeOf(run, str(c.Input, "cwd")) != "" {
+				return nil, errFork
+			}
+		}
 		return p.Bind(state.Binding{
-			Session:  str(c.Input, "session_id"),
-			Instance: c.Env("BATON_INSTANCE"),
+			Session:  session,
+			Instance: instance,
 			Carry:    c.Event == "SessionStart" && str(c.Input, "source") == "clear",
 			Worker:   c.Env("BATON_ROLE") == "worker",
 		})
 	}
 }
+
+// errFork is a hook of Claude Code's own fork of a phase agent (about every 30 s while one runs, with an
+// id of its own, no agent type and the agent's worktree for its working directory: spike 32), which is
+// nobody's to act on.
+var errFork = fmt.Errorf("a hook of a fork Claude Code made of a phase agent")
 
 // Handlers returns baton's handler for each hook event.
 func Handlers(d Deps) map[string]Handler {
@@ -82,33 +109,51 @@ func Handlers(d Deps) map[string]Handler {
 		read = machine.Read
 	}
 	for event, fn := range m {
-		m[event] = func(c Context) (Result, error) { c.Machine = read; return fn(c) }
+		m[event] = func(c Context) (Result, error) {
+			c.Machine = read
+			if agent := str(c.Input, "agent_id"); agent != "" && d.Open != nil {
+				// A subagent's hook: its loop comes first. A phase agent's hooks are its sub-run's own, a fork's
+				// are nobody's, and any other subagent is one its loop's model started.
+				s, err := d.Open(c)
+				if err == errFork {
+					return Result{}, nil
+				}
+				if c.Agent = agent; err == nil && s.Agent == agent {
+					c.Agent = ""
+				}
+			}
+			return fn(c)
+		}
 	}
 	return m
 }
 
 type handlers struct{ d Deps }
 
-// update applies fn to the state of the session's run if this host drives it; otherwise (the same
-// conversation resumed in another terminal while the first still runs it) the hook is dormant.
+// update applies fn to the state of the hook's run (its loop's: OpenRun) if this host drives it;
+// otherwise (the same conversation resumed in another terminal while the first still runs it) the hook is
+// dormant. Only a session's main agent says what the session is (its id, its permission mode): a
+// subagent's hook, a phase agent's among them, carries the lead's session.
 func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
 	s, err := h.d.Open(c)
 	if err != nil {
 		return nil, state.State{}, err
 	}
-	instance := c.Env("BATON_INSTANCE")
+	main := str(c.Input, "agent_id") == ""
 	var owner bool
 	var rewind []event
 	st, err := s.Update(func(st *state.State) error {
-		if owner = st.IsOwner(instance, c.Now); !owner {
+		if owner = st.IsOwner(s.Instance, c.Now); !owner {
 			return errNotOwner
 		}
 		st.Run.LastActivity = c.Now
-		if sid := str(c.Input, "session_id"); sid != "" {
-			st.Run.SessionID = sid
-		}
-		if pm := str(c.Input, "permission_mode"); pm != "" {
-			st.Run.PermissionMode = pm
+		if main {
+			if sid := str(c.Input, "session_id"); sid != "" {
+				st.Run.SessionID = sid
+			}
+			if pm := str(c.Input, "permission_mode"); pm != "" {
+				st.Run.PermissionMode = pm
+			}
 		}
 		rewind = noticeRewind(c, st, s)
 		return fn(st, s)
@@ -127,10 +172,33 @@ func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) er
 var errNotOwner = fmt.Errorf("this session does not own the project")
 
 func ok(err error) error {
-	if err == errNotOwner {
+	if err == errNotOwner || err == errFork {
 		return nil
 	}
 	return err
+}
+
+// onScreen applies fn to the state of the run whose session's screen shows what the phase agent of s (a
+// sub-run OpenRun opened for one of its hooks) asks the human: the lead's. Its permission prompts are drawn
+// there and hold baton's typing there like any dialog (docs/research/visible-workers.md), so they are
+// recorded there, under the agent's id. It changes nothing for any other store.
+func (h *handlers) onScreen(c Context, s *state.Store, fn func(st *state.State)) (*state.Store, error) {
+	if s == nil || s.Agent == "" {
+		return nil, nil
+	}
+	up, err := s.ParentRun()
+	if err != nil {
+		return nil, err
+	}
+	up.Instance = c.Env("BATON_INSTANCE")
+	_, err = up.Update(func(st *state.State) error {
+		if !st.IsOwner(up.Instance, c.Now) {
+			return errNotOwner
+		}
+		fn(st)
+		return nil
+	})
+	return up, err
 }
 
 // preToolUse does two things.
@@ -147,8 +215,12 @@ func ok(err error) error {
 // Once a phase's decisions without the human reach the cap, the turn must end for
 // the human to review them. And a proposal must be put to the human before anything else happens. So
 // until then every main-agent tool call except baton's own CLI (and the questions baton issued) is
-// denied, with the reason. Subagents are not held: they cannot end the main turn.
+// denied, with the reason. Subagents are not held: they cannot end the main turn. Nor are the calls baton's
+// mod makes in the lead's session to spawn, message and stop phase agents: they are how the host acts.
 func (h *handlers) preToolUse(c Context) (Result, error) {
+	if modCall(c.Input) {
+		return Result{}, nil
+	}
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
 		if baton, verdict := batonShell(str(ti, "command")); baton {
@@ -213,7 +285,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 					}
 				}
 			}
-			if st.Mode != state.ModeRunning || str(c.Input, "agent_id") != "" || isBatonCommand(c.Input) {
+			if st.Mode != state.ModeRunning || c.Agent != "" || isBatonCommand(c.Input) {
 				return
 			}
 			hold = holdCall(st, own)
@@ -221,7 +293,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		if holds(); refuseWorker == "" && refuseHere == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
 			// The call runs, in the lead's checkout: no worker's work lands there until it has ended, and
 			// it waits for any landing under way.
-			st.Run.ToolStarted(state.ToolCall{ID: str(c.Input, "tool_use_id"), Agent: str(c.Input, "agent_id"), Tool: str(c.Input, "tool_name"), Since: c.Now})
+			st.Run.ToolStarted(state.ToolCall{ID: str(c.Input, "tool_use_id"), Agent: c.Agent, Tool: str(c.Input, "tool_name"), Since: c.Now})
 			landing = st.Landing()
 		}
 		return nil
@@ -400,6 +472,16 @@ func permission(decision, reason string) Result {
 			"permissionDecisionReason": reason,
 		},
 	}}
+}
+
+// modCall reports a call baton's mod made in the lead's session (its tool_use_id says a plugin made it) to
+// spawn, message or stop a phase agent (spike 32).
+func modCall(in map[string]any) bool {
+	switch str(in, "tool_name") {
+	case "Agent", "SendMessage", "TaskStop":
+		return str(in, "agent_id") == "" && strings.HasPrefix(str(in, "tool_use_id"), "toolu_plugin_")
+	}
+	return false
 }
 
 // isBatonCommand reports a Bash call that runs baton's own CLI (always allowed).
@@ -878,9 +960,24 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 }
 
 // permissionRequest records a dialog joining Claude Code's queue. It fires when the dialog is requested,
-// which is not when it is shown: a dialog requested earlier is shown first.
+// which is not when it is shown: a dialog requested earlier is shown first. A phase agent's is drawn on
+// the lead's screen, and recorded there.
 func (h *handlers) permissionRequest(c Context) (Result, error) {
-	tool, agent := str(c.Input, "tool_name"), str(c.Input, "agent_id")
+	tool, agent := str(c.Input, "tool_name"), c.Agent
+	if s, err := h.d.Open(c); err != nil || s.Agent != "" {
+		if err != nil {
+			return Result{}, ok(err)
+		}
+		var open int
+		up, err := h.onScreen(c, s, func(st *state.State) {
+			st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: s.Agent, Key: dialogKey(c.Input), Since: c.Now})
+			open = len(st.Run.Dialogs)
+		})
+		if err == nil {
+			up.Event("dialog_open", map[string]any{"tool": tool, "dialog": "", "open": open, "agent": s.Agent, "phase": s.Worker()})
+		}
+		return Result{}, ok(err)
+	}
 	kind := ""
 	var open int
 	var proposal event
@@ -965,8 +1062,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var dl delivery
 	var news news
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
-		st.Run.ToolEnded(str(c.Input, "tool_use_id"), str(c.Input, "agent_id"), tool)
-		closed, _ := st.Run.Dialogs.CloseExact(str(c.Input, "agent_id"), tool, dialogKey(c.Input))
+		st.Run.ToolEnded(str(c.Input, "tool_use_id"), c.Agent, tool)
+		closed, _ := st.Run.Dialogs.CloseExact(c.Agent, tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" {
 			if path := editedPath(c.Input, s.Root); path != "" {
 				st.Touched(path)
@@ -976,7 +1073,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				st.Run.Watch(str(resp, "taskId"))
 			}
 		}
-		if str(c.Input, "agent_id") != "" {
+		if c.Agent != "" {
 			return nil
 		}
 		if c.Event == "PostToolUse" {
@@ -1024,6 +1121,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	if err != nil {
 		return Result{}, ok(err)
 	}
+	h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseExact(s.Agent, tool, dialogKey(c.Input)) })
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
@@ -1198,13 +1296,14 @@ func warnQuestion(used int, lim valve.Limits, timeout time.Duration) issued {
 // notification records Claude Code's notifications. One of them is authoritative about the session:
 // idle_prompt ("Claude is waiting for your input") fires about a minute after a turn ends, and never
 // while a dialog is on screen. It corrects a turn or dialog that baton still thinks is open because the
-// hook that would have closed it never ran (the Stop hook does not run for an interrupted turn).
+// hook that would have closed it never ran (the Stop hook does not run for an interrupted turn). It is the
+// session's: one an agent's hook brings says nothing about the session's turn.
 func (h *handlers) notification(c Context) (Result, error) {
 	kind := str(c.Input, "notification_type")
 	var fixed bool
 	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if kind == "idle_prompt" && (st.Run.TurnOpen || st.Run.Dialogs.AnyOpen()) {
+		if kind == "idle_prompt" && str(c.Input, "agent_id") == "" && (st.Run.TurnOpen || st.Run.Dialogs.AnyOpen()) {
 			st.Run.TurnOpen, fixed = false, true
 			st.Run.Dialogs.Clear()
 			events, _ = vanished(st, c.Now, false)
@@ -1220,20 +1319,35 @@ func (h *handlers) notification(c Context) (Result, error) {
 	return Result{}, ok(err)
 }
 
+// subagentStart counts a subagent the loop's model started. A phase agent's own start is its sub-run's,
+// and none of the lead's (nor is one baton has not linked yet: its type says what it is).
 func (h *handlers) subagentStart(c Context) (Result, error) {
-	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error { st.Run.Subagents++; return nil })
+	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if c.Agent != "" && str(c.Input, "agent_type") != state.PhaseAgent {
+			st.Run.Subagents++
+		}
+		return nil
+	})
 	return Result{}, ok(err)
 }
 
+// subagentStop counts a subagent of the loop's model ended. A phase agent's stop is its sub-run's own; it
+// asks nothing on the lead's screen any more.
 func (h *handlers) subagentStop(c Context) (Result, error) {
-	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if c.Agent == "" {
+			return nil
+		}
 		if st.Run.Subagents > 0 {
 			st.Run.Subagents--
 		}
-		st.Run.Dialogs.CloseAgent(str(c.Input, "agent_id")) // a subagent that has stopped asks nothing, and runs nothing
-		st.Run.ToolsEnded(str(c.Input, "agent_id"))
+		st.Run.Dialogs.CloseAgent(c.Agent) // a subagent that has stopped asks nothing, and runs nothing
+		st.Run.ToolsEnded(c.Agent)
 		return nil
 	})
+	if err == nil {
+		h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseAgent(s.Agent) })
+	}
 	return Result{}, ok(err)
 }
 
@@ -1247,7 +1361,7 @@ func recordStop(st *state.State, c Context) {
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
 	for _, t := range st.Run.Background {
-		if t.Type == "subagent" || t.Type == "workflow" {
+		if (t.Type == "subagent" || t.Type == "workflow") && t.AgentType != state.PhaseAgent {
 			st.Run.Subagents++
 		}
 	}
@@ -1274,9 +1388,12 @@ func refusalIn(path string) (r *transcript.Refusal) {
 	return r
 }
 
+// stopFailure records a turn that ended in an API error: the loop's own (the lead's, or a phase agent's in
+// its sub-run), or a subagent's of its model, which ends that subagent (no SubagentStop follows) and not
+// the turn.
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
-	if e.Error == "invalid_request" {
+	if e.Error == "invalid_request" && str(c.Input, "agent_id") == "" {
 		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
 		// the transcript says which it was (docs/research/recovery.md).
 		if r := refusalIn(str(c.Input, "transcript_path")); r != nil {
@@ -1285,6 +1402,14 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 	}
 	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
+		if c.Agent != "" {
+			if st.Run.Subagents > 0 {
+				st.Run.Subagents--
+			}
+			st.Run.Dialogs.CloseAgent(c.Agent)
+			st.Run.ToolsEnded(c.Agent)
+			return nil
+		}
 		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents, st.Run.History = false, &e, 0, true
 		st.Run.Dialogs.CloseMain()
 		st.Run.ToolsEnded("")
@@ -1292,9 +1417,13 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		return nil
 	})
 	if err == nil {
+		h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseAgent(s.Agent) })
 		fields := map[string]any{"error": e.Error}
 		if e.Error == state.ErrRefusal {
 			fields["category"] = e.Category
+		}
+		if c.Agent != "" {
+			fields["agent"] = c.Agent
 		}
 		s.Event("stop_failure", fields)
 		for _, e := range events {
@@ -1392,7 +1521,7 @@ func tasks(v any) []state.Task {
 		if m == nil {
 			continue
 		}
-		out = append(out, state.Task{ID: str(m, "id"), Type: str(m, "type"), Status: str(m, "status"), Description: str(m, "description")})
+		out = append(out, state.Task{ID: str(m, "id"), Type: str(m, "type"), Status: str(m, "status"), Description: str(m, "description"), AgentType: str(m, "agent_type")})
 	}
 	return out
 }

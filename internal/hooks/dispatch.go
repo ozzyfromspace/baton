@@ -28,6 +28,10 @@ type Context struct {
 	Now   time.Time
 	// Machine reads the machine (Deps.Machine; nil: machine.Read).
 	Machine func() machine.Reading
+	// Agent is the subagent the hook comes from, within its loop (Handlers routes it): "" for the loop's
+	// own agent (the lead's main agent, a worker session's, or a phase agent in its sub-run), otherwise
+	// the id of a subagent that loop's model started itself.
+	Agent string
 }
 
 // Result is what a handler asks Dispatch to send back to Claude Code.

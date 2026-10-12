@@ -75,6 +75,9 @@ func TestBackgroundWorkHoldsARestartButNotThePlan(t *testing.T) {
 		},
 		"a session-scoped cron":  func(st *state.State) { st.Run.Crons = 1 },
 		"a background subagent ": func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent"}} },
+		"one of baton's phase agents": func(st *state.State) {
+			st.Run.Background = []state.Task{{Type: "subagent", AgentType: state.PhaseAgent}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _ := upgradeRig(t)

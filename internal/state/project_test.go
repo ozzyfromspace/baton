@@ -584,3 +584,61 @@ func TestAWorkersEventsNameItsPhaseAndSession(t *testing.T) {
 		t.Errorf("the lead's event: %v", rec)
 	}
 }
+
+// A phase agent is linked to its phase's sub-run by its id (it shares the lead's session), and its hooks
+// find the sub-run by that id alone. A working directory inside a sub-run's worktree names its phase. A
+// link to a sub-run that is gone is swept.
+func TestAPhaseAgentIsLinkedByItsID(t *testing.T) {
+	p, _ := newProject(t)
+	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
+	withPlan(t, lead, "Plan")
+	w := newWorker(t, p, lead, "P1", "wsess")
+	gone := newWorker(t, p, lead, "P2", "gsess")
+	for _, c := range []struct{ run, phase, agent string }{
+		{"lead", "P1", ""}, {"lead", "", "a1"}, {"lead", "P1", "../a1"}, {"lead", "P9", "a1"}, {"nobody", "P1", "a1"},
+	} {
+		if err := p.LinkAgent(c.run, c.phase, c.agent); err == nil {
+			t.Errorf("linked %+v", c)
+		}
+	}
+	if err := p.LinkAgent("lead", "P1", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.LinkAgent("lead", "P2", "a2"); err != nil {
+		t.Fatal(err)
+	}
+	if p.AgentRun("a1") != "lead/P1" || p.AgentRun("unknown") != "" || p.AgentRun("../a1") != "" {
+		t.Errorf("found %q %q", p.AgentRun("a1"), p.AgentRun("unknown"))
+	}
+	if p.RunOf("lead") != "lead" {
+		t.Error("linking an agent moved the lead's session")
+	}
+	sub := filepath.Join(w.Root, "pkg", "deep")
+	os.MkdirAll(sub, 0o755)
+	for dir, want := range map[string]string{w.Root: "P1", sub: "P1", p.Root: "", filepath.Dir(w.Root): "", w.Root + "-other": "", "": ""} {
+		if got := p.WorktreeOf("lead", dir); got != want {
+			t.Errorf("WorktreeOf(%q) = %q, want %q", dir, got, want)
+		}
+	}
+
+	os.Remove(filepath.Join(gone.Dir, treeFile)) // P2's sub-run is gone
+	if p.AgentRun("a2") != "" {
+		t.Error("an agent found a sub-run that is gone")
+	}
+	p.Sweep()
+	if exists(p.path(agentsDir, "a2")) || !exists(p.path(agentsDir, "a1")) {
+		t.Errorf("swept: a2 %v a1 %v", exists(p.path(agentsDir, "a2")), exists(p.path(agentsDir, "a1")))
+	}
+
+	// An agent's events are its sub-run's, and say which agent wrote them.
+	s, err := p.Run("lead/P1", WorkerInstance("host", "P1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Agent = "a1"
+	s.Event("dialog_open", nil)
+	b, _ := os.ReadFile(filepath.Join(s.Dir, "events.jsonl"))
+	if !strings.Contains(string(b), `"agent":"a1"`) || !strings.Contains(string(b), `"worker":"P1"`) {
+		t.Errorf("events: %s", b)
+	}
+}
