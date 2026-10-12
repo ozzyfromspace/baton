@@ -55,6 +55,11 @@ var relayWhat = map[string]string{RelayProposal: "a proposal", RelayBlocked: "it
 // worker's own session, or the worker is gone.
 const ByWithdrawn = "withdrawn"
 
+// ByLeadStopped settles a worker's question the lead session cannot put to the human: its last turn
+// failed in a way baton cannot retry, and it asks nothing until the human acts. Like a question that went
+// away unanswered, it waits for the human in the worker's own session.
+const ByLeadStopped = "lead_stopped"
+
 // Same reports the same question: the same phase's question of the same kind, about the same proposal,
 // block or review.
 func (r Relay) Same(o Relay) bool {

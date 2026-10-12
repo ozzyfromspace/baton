@@ -58,6 +58,41 @@ func TestTheIdleLeadIsWokenForAWorkersQuestion(t *testing.T) {
 	}
 }
 
+// A lead whose last turn failed in a way baton cannot retry asks nothing until the human acts: the
+// workers' questions are left for the human in each worker's own session, at once, and so are those
+// queued after. An error baton retries leaves them queued for the lead.
+func TestALeadThatStoppedLeavesWorkersQuestions(t *testing.T) {
+	second := state.Relay{Phase: "P4", Kind: state.RelayBlocked, Because: "need a key", Since: time.Date(2026, 10, 4, 11, 0, 0, 0, time.UTC)}
+	for _, c := range []struct {
+		err  string
+		left bool
+	}{{"invalid_request", true}, {"authentication_failed", true}, {"overloaded", false}} {
+		t.Run(c.err, func(t *testing.T) {
+			r := newIdleRig(t)
+			r.set(func(st *state.State) {
+				state.QueueRelay(st, relayed, r.now)
+				st.Run.LastError = &state.StopError{Error: c.err, At: r.now}
+			})
+			r.tick(5 * time.Second)
+			r.set(func(st *state.State) { state.QueueRelay(st, second, r.now) })
+			r.tick(5 * time.Second)
+			for _, q := range r.state().Relay {
+				if left := q.Answered != nil && q.Answered.By == state.ByLeadStopped; left != c.left {
+					t.Errorf("%s's question left for the human: %v, want %v (%+v)", q.Phase, left, c.left, q.Answered)
+				}
+			}
+			if n := strings.Count(r.events(), `"by":"lead_stopped"`); c.left && n != 2 || !c.left && n != 0 {
+				t.Errorf("%d relay_answered events:\n%s", n, r.events())
+			}
+			for _, s := range r.in.text {
+				if s == decide.RelayTyped("P3") {
+					t.Fatalf("typed %q", r.in.text)
+				}
+			}
+		})
+	}
+}
+
 // issuedRig is an idle lead with worker question q given to it and asked: its dialog is the only one
 // open.
 func issuedRig(t *testing.T, q state.Relay) (*rig, state.Relay) {
@@ -171,6 +206,11 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 				t.Errorf("decision %+v", d)
 			}
 		}, "Its question went away unanswered"},
+		{"the lead stopped", relayed, "", state.ByLeadStopped, 0, "waits for the human in the worker's session", func(t *testing.T, st state.State) {
+			if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.By != state.ByDeclined || len(st.Run.Notices) != 1 {
+				t.Errorf("decision %+v, notices %+v", d, st.Run.Notices)
+			}
+		}, "The lead session stopped before it could put it to the human"},
 		{"paused", relayed, "Pause baton", state.ByHuman, 0, "waits for the human in the worker's session", nil, "The human paused the run"},
 		{"untimed, nobody answered", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "x", Untimed: "outward"},
 			"Wait for me", state.ByTimeout, 0, "waits for the human in the worker's session", func(t *testing.T, st state.State) {

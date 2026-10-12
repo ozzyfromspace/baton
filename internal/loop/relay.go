@@ -53,6 +53,29 @@ func (l *Loop) relayLine(v host.View, st state.State, in host.Injector) bool {
 	return true
 }
 
+// leaveRelays leaves the workers' questions the lead has not put to the human for them in each worker's
+// own session (state.ByLeadStopped): the lead's last turn failed in a way baton cannot retry, so it asks
+// nothing until the human acts, and a worker must not wait on it unseen. The coordinator applies each as
+// a question that went unanswered: the worker's phase waits for the human there, and they are pushed
+// about it. A question on the lead's screen stays, for the human to answer there.
+func (l *Loop) leaveRelays(now time.Time) {
+	if l.Role != RoleLead {
+		return
+	}
+	var left []state.Relay
+	l.update(func(st *state.State) {
+		for i := range st.Relay {
+			if r := &st.Relay[i]; r.Answered == nil && !(r.Asked && st.Run.Dialogs.Has("relay")) {
+				state.AnswerRelay(r, state.ByLeadStopped, "", now)
+				left = append(left, *r)
+			}
+		}
+	})
+	for _, r := range left {
+		l.Store.Event("relay_answered", relayFields(r, map[string]any{"by": state.ByLeadStopped}))
+	}
+}
+
 // relayOnScreen is the worker's question whose dialog key is key: the one the lead was given, or one
 // settled meanwhile whose dialog is still open (its answer then changes nothing, but it must go).
 func relayOnScreen(st state.State, key string) *state.Relay {
@@ -195,6 +218,8 @@ func applyRelay(st *state.State, r state.Relay, maxAuto int, now time.Time) stri
 			by, why = state.ByDeclined, "Nobody answered it"
 		case a.By == state.ByDeclined:
 			by, why = state.ByDeclined, "Its question went away unanswered"
+		case a.By == state.ByLeadStopped:
+			by, why = state.ByDeclined, "The lead session stopped before it could put it to the human"
 		}
 		state.Resolve(st, p.ID, by, a.Answer, now)
 		reason := fmt.Sprintf("proposal %s waits for you: %s", p.ID, p.What)

@@ -255,6 +255,7 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 			}
 			l.escalate("api_error", decide.CannotGoOn(st.Current, why, l.waitingOn(st), l.Workers))
 		}
+		l.leaveRelays(v.Now)
 		return
 	}
 	var wait time.Duration
