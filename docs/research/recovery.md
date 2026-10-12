@@ -22,6 +22,12 @@ baton as `StopFailure` with `error: invalid_request`, and baton escalated it as 
   `subtype: model_refusal_no_fallback` with `apiRefusalCategory: "cyber"` and `apiRefusalExplanation` ("This request
   triggered restrictions on violative cyber content…"), and an assistant entry with `isApiErrorMessage: true` and
   `stop_reason: "refusal"`.
+- **Claude Code goes on once by itself.** When the safeguards stop a response, its assistant entry carries
+  `stop_reason: "refusal"` (with `message.stop_details`: `category`, `explanation`), and Claude Code writes a system
+  entry `subtype: informational` ("…safeguards stopped the response above · continuing once with that noted") and a
+  meta user entry, and the model goes on. Only when it will not go on does it write the two entries above. So a
+  `stop_reason: "refusal"` alone is not the end of a turn: one later stop in the same project went on after that
+  single retry. baton reads only the two final entries, and adds no retry of its own.
 - **The conversation stays refused.** In one conversation the human's next turn, 12 minutes later, was refused too.
   Compacting would not help: `/compact` sends the refused conversation to the same model to summarize.
 - **A fresh start from the brief was refused too.** At the next phase boundary, baton compacted and briefed the phase

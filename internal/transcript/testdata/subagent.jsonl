@@ -1,0 +1,3 @@
+{"parentUuid":"a0","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Fix the parser."},"uuid":"u1","timestamp":"2026-10-11T12:00:00.000Z"}
+{"parentUuid":"m1","isSidechain":false,"message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"},"type":"assistant","uuid":"a2","timestamp":"2026-10-11T12:00:20.000Z"}
+{"parentUuid":"x1","isSidechain":true,"type":"system","subtype":"model_refusal_no_fallback","content":"Declined.","apiRefusalCategory":"cyber","apiRefusalExplanation":"x","uuid":"x2","timestamp":"2026-10-11T12:00:21.000Z"}

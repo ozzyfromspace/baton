@@ -1,0 +1,5 @@
+{"parentUuid":"a0","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Fix the parser."},"uuid":"u1","timestamp":"2026-10-11T12:00:00.000Z"}
+{"parentUuid":"u1","isSidechain":false,"message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"thinking","thinking":"…"}],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber","explanation":"Declined."}},"type":"assistant","uuid":"a1","timestamp":"2026-10-11T12:00:05.000Z"}
+{"parentUuid":"a1","isSidechain":false,"type":"system","subtype":"informational","content":"Opus 5.5's safeguards stopped the response above · continuing once with that noted","level":"info","uuid":"s1","timestamp":"2026-10-11T12:00:05.010Z"}
+{"parentUuid":"s1","isSidechain":false,"type":"user","message":{"role":"user","content":"(the response above was stopped)"},"isMeta":true,"uuid":"m1","timestamp":"2026-10-11T12:00:05.010Z"}
+{"parentUuid":"m1","isSidechain":false,"message":{"model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"},"type":"assistant","uuid":"a2","timestamp":"2026-10-11T12:00:20.000Z"}
