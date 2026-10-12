@@ -46,8 +46,8 @@ func CheckpointNow(title string) string {
 // AgentBriefAgain is the message that wakes the phase agent on phase, idle, for the brief baton gives it
 // again after its context was compacted: its start hands the brief over.
 func AgentBriefAgain(phase string) string {
-	return fmt.Sprintf("[baton] Your context was compacted, so baton gives you the brief of %s again, with your next tool call or as you end this turn: "+
-		"read it, then go on with the phase from where it stands.", phase)
+	return fmt.Sprintf("[baton] Your context was compacted, so baton gives you the brief of %s again. %sit to you then%s "+
+		"Read it, then go on with the phase from where it stands.", phase, endTurnFor, orToolCall)
 }
 
 // AgentResumed is the message that starts the phase agent on phase again, with its conversation, once the

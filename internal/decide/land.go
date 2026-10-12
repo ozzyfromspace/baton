@@ -94,10 +94,10 @@ func MailTyped(kinds []string) string {
 }
 
 // AgentMail is the message that wakes an idle phase agent for the messages baton has for it, which come
-// with its next tool call, or as it ends the turn: Claude Code gives a resumed agent nothing of baton's
-// hooks as it starts.
+// as it ends the turn (no tool call needed, so no permission prompt in the way), or with its next tool
+// call: Claude Code gives a resumed agent nothing of baton's hooks as it starts.
 func AgentMail(kinds []string) string {
-	const comes = " baton gives it to you with your next tool call, or as you end this turn."
+	const comes = " " + endTurnFor + "it to you then" + orToolCall
 	for _, k := range kinds {
 		switch k {
 		case state.MessageLand:
@@ -132,3 +132,10 @@ func short7(commit string) string {
 	}
 	return commit
 }
+
+// endTurnFor and orToolCall frame what a phase agent woken by a message is told to do to be given what
+// baton has for it: end the turn, which needs no permission, or make a tool call first.
+const (
+	endTurnFor = "End this turn, and baton gives "
+	orToolCall = " (or with your next tool call, if you make one first)."
+)

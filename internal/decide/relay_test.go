@@ -89,7 +89,7 @@ func TestRelayAnswersForTheWorker(t *testing.T) {
 		t.Errorf("typed %q", got)
 	}
 	for kind, want := range map[string]string{state.MessageAnswer: "Your question has its answer.", state.MessageLand: "Your work did not land yet", "": "baton has a message for you."} {
-		if got := AgentMail([]string{kind}); !strings.Contains(got, want) || !strings.HasSuffix(got, "with your next tool call, or as you end this turn.") || strings.Contains(got, "attached") {
+		if got := AgentMail([]string{kind}); !strings.Contains(got, want) || !strings.HasSuffix(got, "End this turn, and baton gives it to you then (or with your next tool call, if you make one first).") || strings.Contains(got, "attached") {
 			t.Errorf("an agent's %q: %q", kind, got)
 		}
 	}

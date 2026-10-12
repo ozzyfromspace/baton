@@ -148,11 +148,10 @@ func JobsFinished(jobs []state.Job) string {
 }
 
 // AgentJobsFinished is the message that wakes an idle phase agent for the results of jobs. Claude Code
-// gives a resumed agent nothing of baton's hooks as it starts, so they come with its next tool call, or as
-// it ends the turn.
+// gives a resumed agent nothing of baton's hooks as it starts, so they come as it ends the turn, or with
+// its next tool call.
 func AgentJobsFinished(jobs []state.Job) string {
-	return fmt.Sprintf("[baton] %s finished. baton gives you %s with your next tool call, or as you end this turn.",
-		jobsNamed(jobs), plural(len(jobs), "its result", "their results"))
+	return fmt.Sprintf("[baton] %s finished. %syou %s then%s", jobsNamed(jobs), endTurnFor, plural(len(jobs), "its result", "their results"), orToolCall)
 }
 
 // jobsNamed names jobs and their phases: "Job j4 (P3)", "Jobs j4, j5 (P3, P1)".

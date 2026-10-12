@@ -83,7 +83,7 @@ func TestAnIdleAgentIsWokenForItsResult(t *testing.T) {
 	if len(x.sent) != 1 || x.sent[0].agent != a.id || !strings.Contains(x.sent[0].text, "[baton] Job "+id+" (P1) finished") {
 		t.Fatalf("sent %+v", x.sent)
 	}
-	if len(x.resumes) != 1 || !strings.Contains(x.sent[0].text, "with your next tool call, or as you end this turn") {
+	if len(x.resumes) != 1 || !strings.Contains(x.sent[0].text, "End this turn, and baton gives you its result then") {
 		t.Fatalf("the agent started again %d times, with %q", len(x.resumes), x.sent[0].text)
 	}
 	if got := x.endTurn("P1"); !strings.Contains(got, id) {
