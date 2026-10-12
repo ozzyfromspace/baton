@@ -192,3 +192,31 @@ func TestAModReportPanicFailsOpen(t *testing.T) {
 		t.Errorf("reply %q (%v)", out, err)
 	}
 }
+
+// The mod's report of a compaction of the lead is a proof of it (state.Reported), counted as it comes: one
+// begun moves the /compact baton typed to under way, and one over is kept for the rewake. A compaction a
+// hook vetoed proves nothing.
+func TestTheModsCompactionReportsCount(t *testing.T) {
+	m := newModRun(t)
+	m.report(modHelloJSON)
+	m.run.Update(func(st *state.State) error {
+		st.Run.Compaction.Queue("boundary", m.run.Now())
+		st.Run.Compaction.Status, st.Run.Compaction.Typed = state.CompactTyped, m.run.Now()
+		return nil
+	})
+	m.report(`{"seq":1,"kind":"compacting","session":"sess","trigger":"manual","skipped":true}`)
+	if st, _ := m.run.Load(); st.Run.Compaction.Status != state.CompactTyped || !st.Run.ModReports.IsZero() {
+		t.Errorf("a vetoed compaction counted: %+v", st.Run.Compaction)
+	}
+	m.report(`{"seq":2,"kind":"compacting","session":"sess","trigger":"manual"}`)
+	if st, _ := m.run.Load(); st.Run.Compaction.Status != state.CompactActive || st.Run.ModReports.IsZero() {
+		t.Errorf("begun: %+v", st.Run.Compaction)
+	}
+	m.report(`{"seq":3,"kind":"compacted","session":"sess","trigger":"manual"}`)
+	if st, _ := m.run.Load(); st.Run.Compaction.Reported == nil || st.Run.Compaction.Reported.Trigger != "manual" {
+		t.Errorf("over: %+v", st.Run.Compaction)
+	}
+	if n := strings.Count(m.events(), `"kind":"compact_reported"`); n != 2 {
+		t.Errorf("%d compact_reported events:\n%s", n, m.events())
+	}
+}

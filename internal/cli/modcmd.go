@@ -104,6 +104,19 @@ func recordModReport(io IO) modReply {
 	case dup:
 		return modReply{OK: true, Ignored: "recorded already"}
 	}
+	if (rep.Kind == bridge.Compacting || rep.Kind == bridge.Compacted) && !rep.Skipped {
+		// The mod's word on a compaction of the lead is a proof of it (state.Reported), counted as it comes,
+		// with the bridge's lock let go.
+		over, now := rep.Kind == bridge.Compacted, io.Now()
+		var changed bool
+		s.Update(func(st *state.State) error {
+			changed = state.Report(st, state.Reported(over, rep.Trigger, now), now)
+			return nil
+		})
+		if changed {
+			s.Event("compact_reported", map[string]any{"over": over, "trigger": rep.Trigger})
+		}
+	}
 	return modReply{OK: true}
 }
 
