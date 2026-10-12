@@ -131,6 +131,16 @@ baton still in control, deterministically and with no model judgment, and its re
   command waits for the turn to end, so the board also has a command of its own, `/baton-board`, which is
   `immediate`.
 
+## What spike 34 found
+
+- **baton's question can be settled at its deadline with no key typed**
+  ([`spikes/34-ask-deadline`](../../spikes/34-ask-deadline)). The mod's own `tool.call` hook for
+  `AskUserQuestion` sees a question the mod asks from inside its band's render hook (never one asked from a
+  timer), and the model's own; returning at the deadline, with the tool's output shape, closes the dialog, and the
+  question resolves to that answer (the model reads it as the human's). No `PostToolUse` fires then, so the answer
+  reaches baton through the mod's report. A question asked from the render is never asked while a permission prompt
+  or any other dialog is open: the band is not drawn then.
+
 ## What it means for baton
 
 The control baton needs exists, and none of it is model judgment. A mod in baton's plugin does what only something
@@ -190,7 +200,8 @@ which a mod may not make. baton can draw the same grouping in its own band or pa
   (`allowManagedModsOnly`), baton runs the plan serially in the lead.
 - **Compaction hooks without `agent_id`.** Answered for baton by the transcripts (spike 32), but worth reporting to
   Claude Code: a settings hook cannot tell whose compaction it is.
-- **A deadline on baton's question** with no key typed: P4 of v0.8 decides how.
+- **A deadline on baton's question** with no key typed: answered by spike 34, where baton's mod runs. Where it
+  does not (serial mode), v0.7's typed answer stays, guarded by baton's question being the only dialog open.
 - **Not yet seen:** phases that run for hours, and a real usage limit (spike 32 injected one).
 - **One process.** Every phase agent lives in the lead's claude: one crash takes them all down (and v0.7 brings them
   back), and they share its memory and its rate limits.
