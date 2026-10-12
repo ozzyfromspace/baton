@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,7 +38,9 @@ func (f *fixture) session(file, upTo string) *session {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	text := strings.ReplaceAll(string(data), "/work/demo", filepath.Dir(f.dir))
+	// The path goes into JSON strings, as Claude Code writes it: escaped (Windows' backslashes).
+	dir, _ := json.Marshal(filepath.Dir(f.dir))
+	text := strings.ReplaceAll(string(data), "/work/demo", string(dir[1:len(dir)-1]))
 	ss := &session{t: f.t, path: filepath.Join(f.t.TempDir(), "transcript.jsonl"), lines: strings.SplitAfter(text, "\n")}
 	ss.write(upTo)
 	return ss
