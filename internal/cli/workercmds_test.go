@@ -412,7 +412,7 @@ func TestBatonStatusShowsTheWorkers(t *testing.T) {
 		"workers (each an agent in a worktree of its own; the agent panel below the prompt shows them):\n" +
 			"  P1     suspended · branch baton/sess-1/P1\n" +
 			"         worktree: " + tree + "\n" +
-			"         baton exited; the next baton session of this run starts its agent again\n" +
+			"         baton exited; a fresh agent takes it up as soon as one may start (with the lead's baton session)\n" +
 			"  R1     ended: its agent never started · its branch baton/sess-1/R1 keeps 2 commits that never landed",
 		"usage limit: the worker on P1 hit it at " + at(-10*time.Minute) + " → no worker starts, and baton types nothing into the run's sessions, until " + at(time.Hour),
 	} {
@@ -546,5 +546,59 @@ func TestTheBatonCommandInAPhaseAgentIsItsPhases(t *testing.T) {
 	lead.must("", "note", "the lead's own", "--undo", "nothing")
 	if ls := lead.state(); len(ls.Decisions) != 1 || ls.Decisions[0].ID != "d1" {
 		t.Errorf("the lead's decisions %+v", ls.Decisions)
+	}
+}
+
+// /baton run asks for a fresh phase agent on a phase that waits for the human because of its agent: one
+// they stopped (held), or one whose last turn was refused, whose escalation it clears. The host starts it
+// (the worker is suspended). With neither, the run is running, as before.
+func TestBatonRunAsksForAFreshAgent(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  func(e *state.Worker, sub *state.State)
+		why  string // "" for none
+	}{
+		{"held", func(e *state.Worker, _ *state.State) { e.Status = state.WorkerHeld }, "you stopped the agent before it"},
+		{"refused", func(_ *state.Worker, sub *state.State) {
+			sub.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped"}
+			sub.Run.LastError = &state.StopError{Error: state.ErrRefusal}
+		}, "the model's safeguards declined the last turn of the agent before it"},
+		{"at work", func(*state.Worker, *state.State) {}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, lead := asWorker(t)
+			p, _ := state.OpenProject(lead.env["BATON_DIR"], nil)
+			sub, err := p.ExistingRun(state.WorkerRef(lead.store().Ref, "P1"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var e state.Worker
+			sub.Update(func(x *state.State) error {
+				lead.set(func(st *state.State) {
+					st.Workers[0].Status, st.Workers[0].AgentID = state.WorkerWorking, "a1"
+					c.set(&st.Workers[0], x)
+					e = st.Workers[0]
+				})
+				return nil
+			})
+			out := lead.must("", "run")
+			got := lead.state().Workers[0]
+			sst, _ := sub.Load()
+			if c.why == "" {
+				if !strings.Contains(out, "is already running") || got.Status != state.WorkerWorking {
+					t.Errorf("%s: %s; %+v", c.name, out, got)
+				}
+				return
+			}
+			if !strings.Contains(out, decide.AgentAfresh("P1", c.why)) || strings.Contains(out, "already running") {
+				t.Errorf("out: %s", out)
+			}
+			if got.Status != state.WorkerSuspended || got.Why != "the human asked for a fresh agent: "+c.why || !got.Since.Equal(lead.now) || !got.Is(e) {
+				t.Errorf("the worker %+v", got)
+			}
+			if sst.Run.Escalation != nil || sst.Run.LastError != nil {
+				t.Errorf("the sub-run still waits: %+v %+v", sst.Run.Escalation, sst.Run.LastError)
+			}
+		})
 	}
 }

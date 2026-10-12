@@ -9,8 +9,8 @@ import (
 type Stop struct {
 	// Phase is the phase it held ("" for a lead that held none).
 	Phase string
-	// Worker says it is the session of the worker on Phase, which the human answers in that session
-	// (baton view), not the lead's.
+	// Worker says it is the phase agent on Phase, which the human answers in its own transcript (Claude
+	// Code's agent panel), not the lead's.
 	Worker bool
 	// Workers says the run has workers beside the lead: while the lead is stopped, the phases that do not
 	// need its phase go on. (While a worker is stopped, the rest of the run always goes on.)
@@ -26,7 +26,8 @@ func CannotGoOn(s Stop, why string) string {
 	var b strings.Builder
 	switch {
 	case s.Worker:
-		fmt.Fprintf(&b, "%s stopped: %s. Only you can decide how %s goes on, in the worker's session (baton view %s)", s.Phase, why, s.Phase, s.Phase)
+		fmt.Fprintf(&b, "%s stopped: %s. Only you can decide how %s goes on: tell its phase agent (open it from the agent panel below the prompt), "+
+			"or /baton run for a fresh agent on it", s.Phase, why, s.Phase)
 	case s.Phase == "":
 		fmt.Fprintf(&b, "the lead session stopped: %s. Only you can decide how it goes on", why)
 	default:
@@ -48,8 +49,10 @@ func Refused(s Stop, category string) string {
 	var b strings.Builder
 	switch {
 	case s.Worker:
-		fmt.Fprintf(&b, "%s stopped: the model's safeguards declined the last turn of its worker%s, and that conversation will not go on as it is. "+
-			"baton does not retry it. To go on, in the worker's session (baton view %s), ", s.Phase, category, s.Phase)
+		fmt.Fprintf(&b, "%s stopped: the model's safeguards declined the last turn of its phase agent%s, and that conversation will not go on as it is. "+
+			"baton does not retry it. To go on, open the agent from the agent panel below the prompt and tell it how to go on another way, "+
+			"or /baton run for a fresh agent on %s from its notes. %s", s.Phase, category, s.Phase, s.meanwhileSentence())
+		return b.String()
 	case s.Phase == "":
 		fmt.Fprintf(&b, "the lead session stopped: the model's safeguards declined the last turn%s, and this conversation will not go on as it is. "+
 			"baton does not retry it. To go on, ", category)
@@ -61,9 +64,14 @@ func Refused(s Stop, category string) string {
 	if s.Phase != "" {
 		fmt.Fprintf(&b, " from %s's brief", s.Phase)
 	}
-	m := s.meanwhile()
-	b.WriteString(". " + strings.ToUpper(m[:1]) + m[1:])
+	b.WriteString(". " + s.meanwhileSentence())
 	return b.String()
+}
+
+// meanwhileSentence is meanwhile, as a sentence.
+func (s Stop) meanwhileSentence() string {
+	m := s.meanwhile()
+	return strings.ToUpper(m[:1]) + m[1:]
 }
 
 // meanwhile is what the rest of the run does while the session is stopped, as a clause: for a worker,

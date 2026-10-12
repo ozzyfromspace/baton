@@ -38,6 +38,27 @@ func AgentIsBatons(tool, phase string) string {
 		"and lands its work once %s is done. Leave the agent and %s to baton, and go on with your own work.", tool, phase, phase, phase)
 }
 
+// AgentGoOn is the one message a phase agent on phase gets after its turn was interrupted (Esc in its
+// transcript view, in the lead's terminal): an interrupted agent takes the interruption for a rejection of
+// its task (spike 32), and its phase is not over.
+func AgentGoOn(phase string) string {
+	return fmt.Sprintf("[baton] Your last turn was interrupted, but nothing was rejected: %s is still yours, and goes on. "+
+		"Carry on from where you were, and report as usual when it is done.", phase)
+}
+
+// AgentHeld tells the human that they stopped the phase agent on phase (x on its row in the agent panel):
+// the phase is theirs now, and waits for them, its work kept in its worktree.
+func AgentHeld(phase string) string {
+	return fmt.Sprintf("baton: the phase agent on %s was stopped from the agent panel, so %s waits for you, its work kept in its worktree; "+
+		"/baton run starts a fresh agent on it", phase, phase)
+}
+
+// AgentAfresh tells the human that a fresh phase agent takes phase up, as they asked (why: what became of
+// the one before it).
+func AgentAfresh(phase, why string) string {
+	return fmt.Sprintf("baton: a fresh phase agent takes %s up, from its notes and in its worktree (%s)", phase, why)
+}
+
 // AgentWaits is the notice that the phase agent on phase waits for the human to answer a dialog of tool's
 // (a permission prompt, mostly), in the lead's terminal.
 func AgentWaits(phase, tool string) string {

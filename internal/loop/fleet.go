@@ -260,7 +260,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		}
 		if why := unwanted(st, pl, &e); why != "" {
 			c.retire(now, s, e, why)
-		} else if c.mayLaunch(now, s, st) == "" && c.noRoom == "" {
+		} else if e.Status != state.WorkerHeld && c.mayLaunch(now, s, st) == "" && c.noRoom == "" {
 			why := e.Why
 			if why == "" {
 				why = "its agent ended with the baton session that ran it"
@@ -403,7 +403,7 @@ func (c *Coordinator) reports(now time.Time, s *state.Store, b *bridge.Bridge) {
 				}
 			}
 		case bridge.Turn:
-			c.turned(r)
+			c.turned(s, r)
 		}
 	}
 }
@@ -449,19 +449,38 @@ func (c *Coordinator) spawnAcked(now time.Time, s *state.Store, b *bridge.Bridge
 	}
 }
 
-// turned closes the turn of the agent r reports on, in its sub-run, unless its hooks did: a turn that ends
-// interrupted or in an error has no SubagentStop. A turn that started since is another.
-func (c *Coordinator) turned(r bridge.Report) {
+// turned takes the mod's report r of the end of a turn of one of this host's agents. It closes the turn in
+// the agent's sub-run, unless its hooks did: a turn that ends interrupted or in an error has no
+// SubagentStop (a turn that started since is another). A turn that ended in an error or a refusal is
+// recorded as the lead's is at its StopFailure (Runtime.LastError), for the agent's watchdog to retry or
+// escalate as it does the lead's: an agent's StopFailure names the error, and the mod's report the refusal.
+// One baton did not end itself that was interrupted is given one message to go on (decide.AgentGoOn).
+func (c *Coordinator) turned(s *state.Store, r bridge.Report) {
 	for _, w := range c.launched() {
 		if w.entry.AgentID == "" || w.entry.AgentID != r.Agent {
 			continue
 		}
 		w.store.Update(func(st *state.State) error {
+			fresh := st.Run.LastError == nil || st.Run.LastError.At.Before(st.Run.TurnStarted)
+			switch {
+			case r.Reason == "refusal" && fresh:
+				st.Run.LastError = &state.StopError{Error: state.ErrRefusal, Category: r.Refusal, At: r.At}
+			case r.Reason == "refusal":
+				st.Run.LastError.Error, st.Run.LastError.Category = state.ErrRefusal, r.Refusal
+			case r.Reason == "error" && fresh:
+				st.Run.LastError = &state.StopError{Error: "unknown", Details: "its turn ended in an error the mod saw, with no StopFailure", At: r.At}
+			}
 			if st.Run.TurnOpen && !st.Run.TurnStarted.After(r.At) {
 				st.Run.TurnOpen, st.Run.LastStop = false, r.At
 			}
 			return nil
 		})
+		if r.Reason == "aborted" && w.ending == "" && w.stop == 0 && w.agent.in != nil {
+			w.store.Event("agent_interrupted", map[string]any{"agent": r.Agent})
+			if err := c.send(s, w, decide.AgentGoOn(w.phase)); err != nil {
+				c.Lead.logf("loop: %s: telling its agent to go on: %v", w.phase, err)
+			}
+		}
 	}
 }
 
@@ -476,6 +495,8 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		}
 	case why != "":
 		c.end(now, s, b, w, why)
+	case e.Status == state.WorkerSuspended:
+		c.afresh(now, s, b, w, *e) // its agent is gone for good, or the human asked for a fresh one
 	case w.spawn != 0 && now.Sub(w.launched) > c.Lead.Timing.AgentStart:
 		// Taken back, the spawn cannot start an agent any more: its worktree would be refused.
 		b.Void(s.Instance, w.spawn)
@@ -602,6 +623,42 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 	pl, _ := s.LoadPlan()
 	e.Status, e.Since, e.AgentID = state.WorkerStarting, now, ""
 	c.issue(now, s, b, e, sub, pl, why)
+}
+
+// afresh lets go of w, whose agent a fresh one replaces in its worktree (e, its entry, is suspended, and
+// says why): its agent is gone for good, as a message could not start it again, or the human asked for a
+// fresh one (baton run). The agent before it is stopped, should it still run, and is none of baton's any
+// more; the roster's suspended worker, which no agent of this host works on now, is then taken up again
+// as soon as an agent may start (step: respawn).
+func (c *Coordinator) afresh(now time.Time, s *state.Store, b *bridge.Bridge, w *worker, e state.Worker) {
+	c.unregister(w)
+	w.agent.in = nil
+	w.agent.Ended()
+	if agent := c.agentOf(s, w); agent != "" {
+		b.Issue(bridge.Command{Kind: bridge.Stop, Instance: s.Instance, Phase: w.phase, Agent: agent})
+		b.Forget(agent)
+	}
+	c.Lead.logf("loop: %s: a fresh agent takes it up: %s", w.phase, e.Why)
+	s.Event("worker_ended", map[string]any{"phase": w.phase, "why": e.Why, "suspended": true})
+}
+
+// holdAgent sets w's phase aside for the human, who stopped its agent from the agent panel: a message to
+// it is refused as stopped by the user, and Claude Code says to start a new agent for it only if the user
+// asks (spike 32). Its worker is held, its work kept in its worktree, until `baton run` asks for a fresh agent
+// on it; meanwhile its loop goes on watching its jobs, and nothing is sent to it.
+func (c *Coordinator) holdAgent(s *state.Store, b *bridge.Bridge, w *worker) {
+	now := s.Now()
+	w.agent.in = nil
+	if agent := c.agentOf(s, w); agent != "" {
+		b.Forget(agent)
+	}
+	c.setEntry(s, w.entry, func(e *state.Worker) {
+		if e.Live() {
+			e.Status, e.Since, e.Why = state.WorkerHeld, now, "the human stopped its agent"
+		}
+	})
+	s.Event("worker_held", map[string]any{"phase": w.phase, "why": "the human stopped its agent"})
+	c.announce(s, decide.AgentHeld(w.phase))
 }
 
 // retire ends a worker for good, once its agent has ended (or with none running), for why (RetireWorker):

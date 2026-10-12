@@ -21,10 +21,11 @@ func TestCannotGoOn(t *testing.T) {
 			"the lead session stopped: " + why + ". Only you can decide how it goes on; meanwhile workers carry on with the rest of the plan."},
 		// A worker stopped leaves the lead running: the rest of the run always goes on.
 		{"a worker, nothing waits", Stop{Phase: "P3", Worker: true},
-			"P3 stopped: " + why + ". Only you can decide how P3 goes on, in the worker's session (baton view P3); meanwhile the rest of the run carries on."},
+			"P3 stopped: " + why + ". Only you can decide how P3 goes on: tell its phase agent (open it from the agent panel below the prompt), or /baton run for a fresh agent on it; " +
+				"meanwhile the rest of the run carries on."},
 		{"a worker, phases wait", Stop{Phase: "P3", Worker: true, Dependents: []string{"P9", "P10"}},
-			"P3 stopped: " + why + ". Only you can decide how P3 goes on, in the worker's session (baton view P3); meanwhile the rest of the run carries on " +
-				"with every phase that does not need P3. P9 and P10 wait for it."},
+			"P3 stopped: " + why + ". Only you can decide how P3 goes on: tell its phase agent (open it from the agent panel below the prompt), or /baton run for a fresh agent on it; " +
+				"meanwhile the rest of the run carries on with every phase that does not need P3. P9 and P10 wait for it."},
 	} {
 		if got := CannotGoOn(c.stop, why); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
@@ -53,9 +54,9 @@ func TestRefused(t *testing.T) {
 			"the lead session stopped: the model's safeguards declined the last turn (cyber), and this conversation will not go on as it is. baton does not retry it. " +
 				ways + ". Nothing else runs until then."},
 		{"a worker", Stop{Phase: "P3", Worker: true, Dependents: []string{"P9"}}, "cyber",
-			"P3 stopped: the model's safeguards declined the last turn of its worker (cyber), and that conversation will not go on as it is. baton does not retry it. " +
-				"To go on, in the worker's session (baton view P3), rewind (Esc Esc) to before the flagged turn and take a different approach, as Claude Code advises, " +
-				"or /clear for a fresh conversation from P3's brief. Meanwhile the rest of the run carries on with every phase that does not need P3, and P9 waits for it."},
+			"P3 stopped: the model's safeguards declined the last turn of its phase agent (cyber), and that conversation will not go on as it is. baton does not retry it. " +
+				"To go on, open the agent from the agent panel below the prompt and tell it how to go on another way, or /baton run for a fresh agent on P3 from its notes. " +
+				"Meanwhile the rest of the run carries on with every phase that does not need P3, and P9 waits for it."},
 	} {
 		if got := Refused(c.stop, c.category); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)

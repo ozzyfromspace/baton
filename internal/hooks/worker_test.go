@@ -497,3 +497,40 @@ func TestAModelMayNotSteerAPhaseAgent(t *testing.T) {
 		t.Errorf("baton's mod: %v", out)
 	}
 }
+
+// A phase agent's refused turn is told apart in its own transcript (subagents/agent-<id>.jsonl beside
+// the lead's, or the one its input names), never the lead's, and recorded in its sub-run.
+func TestAPhaseAgentsRefusalIsReadFromItsOwnTranscript(t *testing.T) {
+	refused, err := os.ReadFile(filepath.Join("..", "transcript", "testdata", "refused.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued := filepath.Join("..", "transcript", "testdata", "continued.jsonl")
+	for _, named := range []bool{false, true} {
+		w, lead, _ := newWorker(t)
+		dir := t.TempDir()
+		mine := filepath.Join(dir, "sess-1", "subagents", "agent-agent-p2.jsonl")
+		in := map[string]any{"error": "invalid_request", "error_details": "bad request", "transcript_path": filepath.Join(dir, "sess-1.jsonl")}
+		if named {
+			mine = filepath.Join(dir, "elsewhere.jsonl")
+			in["agent_transcript_path"] = mine
+		}
+		os.MkdirAll(filepath.Dir(mine), 0o755)
+		os.WriteFile(mine, refused, 0o644)
+		os.WriteFile(filepath.Join(dir, "sess-1.jsonl"), must(os.ReadFile(continued)), 0o644)
+		w.fire("StopFailure", in)
+		if e := w.state().Run.LastError; e == nil || e.Error != state.ErrRefusal || e.Category != "cyber" {
+			t.Errorf("named %v: the sub-run recorded %+v", named, e)
+		}
+		if e := lead.state().Run.LastError; e != nil {
+			t.Errorf("named %v: the lead recorded %+v", named, e)
+		}
+	}
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
+}

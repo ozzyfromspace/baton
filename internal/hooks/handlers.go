@@ -1470,10 +1470,15 @@ func refusalIn(path string) (r *transcript.Refusal) {
 // the turn.
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
-	if e.Error == "invalid_request" && str(c.Input, "agent_id") == "" {
+	if e.Error == "invalid_request" && c.Agent == "" {
 		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
-		// the transcript says which it was (docs/research/recovery.md).
-		if r := refusalIn(str(c.Input, "transcript_path")); r != nil {
+		// the loop's own transcript says which it was (docs/research/recovery.md): the lead's, or a phase
+		// agent's.
+		tp := str(c.Input, "transcript_path")
+		if str(c.Input, "agent_id") != "" {
+			tp = agentTranscript(c.Input)
+		}
+		if r := refusalIn(tp); r != nil {
 			e.Error, e.Category, e.Details = state.ErrRefusal, r.Category, r.Explanation
 		}
 	}
@@ -1511,6 +1516,20 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		}
 	}
 	return Result{}, ok(err)
+}
+
+// agentTranscript is the transcript of the agent a hook comes from: the one its input names, or the one
+// Claude Code keeps for it beside the lead's, subagents/agent-<id>.jsonl in the session's directory (spike
+// 32). "" when neither is known.
+func agentTranscript(in map[string]any) string {
+	if p := str(in, "agent_transcript_path"); p != "" {
+		return p
+	}
+	tp, id := str(in, "transcript_path"), str(in, "agent_id")
+	if tp == "" || id == "" {
+		return ""
+	}
+	return filepath.Join(strings.TrimSuffix(tp, ".jsonl"), "subagents", "agent-"+id+".jsonl")
 }
 
 func tasks(v any) []state.Task {

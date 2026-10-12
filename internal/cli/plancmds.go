@@ -1139,11 +1139,78 @@ func cmdRun(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "baton: %q is %s in this session, at %s. Running %s instead discards that run's progress: ask the human first, and only if they agree, attach %s with --replace.\n",
 			pl.Title, st.Mode, phaseLabel(pl, st.Current), name, name)
 		return 0
-	case !st.Resumable():
-		fmt.Fprintf(io.Out, "baton: %q is already running, at %s. Nothing to resume.\n", pl.Title, phaseLabel(pl, st.Current))
+	}
+	fresh := takeUp(io, s)
+	for _, line := range fresh {
+		fmt.Fprintln(io.Out, line)
+	}
+	if !st.Resumable() {
+		if len(fresh) == 0 {
+			fmt.Fprintf(io.Out, "baton: %q is already running, at %s. Nothing to resume.\n", pl.Title, phaseLabel(pl, st.Current))
+		}
 		return 0
 	}
 	return resume(io, s, pl, st)
+}
+
+// takeUp asks for a fresh phase agent on each of the run's phases that waits for the human because of its
+// agent: one they stopped from the agent panel (a held worker), or one whose last turn was refused or
+// failed in a way baton does not retry (its sub-run escalated refused or api_error), which /baton run is
+// one of the ways on from. The host starts each (a suspended worker: loop.Coordinator), in its worktree.
+// It returns a line for the human about each.
+func takeUp(io IO, s *state.Store) []string {
+	p, err := project(io)
+	if err != nil {
+		return nil
+	}
+	st, err := s.Load()
+	if err != nil {
+		return nil
+	}
+	now := io.Now()
+	var out []string
+	for _, w := range st.LiveWorkers() {
+		why := ""
+		switch w.Status {
+		case state.WorkerHeld:
+			why = "you stopped the agent before it"
+		case state.WorkerWorking:
+			sub, err := p.ExistingRun(w.Ref, instance(io))
+			if err != nil {
+				continue
+			}
+			var kind string
+			sub.Update(func(sst *state.State) error {
+				if e := sst.Run.Escalation; e != nil && (e.Kind == "refused" || e.Kind == "api_error") {
+					kind, sst.Run.Escalation, sst.Run.LastError = e.Kind, nil, nil
+				}
+				return nil
+			})
+			switch kind {
+			case "refused":
+				why = "the model's safeguards declined the last turn of the agent before it"
+			case "api_error":
+				why = "the agent before it stopped on an API error baton does not retry"
+			default:
+				continue
+			}
+			sub.Event("escalation_cleared", map[string]any{"type": kind, "by": "run"})
+		default:
+			continue
+		}
+		taken := false
+		s.Update(func(st *state.State) error {
+			if e := st.Entry(w); e != nil && e.Live() {
+				e.Status, e.Since, e.Why, taken = state.WorkerSuspended, now, "the human asked for a fresh agent: "+why, true
+			}
+			return nil
+		})
+		if taken {
+			s.Event("worker_afresh", map[string]any{"phase": w.Phase, "why": why})
+			out = append(out, decide.AgentAfresh(w.Phase, why))
+		}
+	}
+	return out
 }
 
 // runAdded runs the phases the human added to a plan after it finished: they start after a compaction,

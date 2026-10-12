@@ -42,8 +42,11 @@ func printWorkers(io IO, s *state.Store, st state.State) {
 				line += " · agent " + w.AgentID
 			}
 			lines = append(lines, line, "         worktree: "+w.Worktree)
-			if w.Status == state.WorkerSuspended {
-				lines = append(lines, "         "+w.Why+"; the next baton session of this run starts its agent again")
+			switch w.Status {
+			case state.WorkerSuspended:
+				lines = append(lines, "         "+w.Why+"; a fresh agent takes it up as soon as one may start (with the lead's baton session)")
+			case state.WorkerHeld:
+				lines = append(lines, "         "+w.Why+"; it waits for you: /baton run starts a fresh agent on it")
 			}
 		case w.Status == state.WorkerFailed && w.Unlanded > 0 && !slices.ContainsFunc(st.Workers[i+1:], func(o state.Worker) bool { return o.Phase == w.Phase }) &&
 			gitx.RevParse(s.Checkout, "refs/heads/"+w.Branch) != "":

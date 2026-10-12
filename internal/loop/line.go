@@ -2,6 +2,7 @@ package loop
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
@@ -56,12 +57,26 @@ func (c *Coordinator) send(s *state.Store, w *worker, text string) error {
 	return nil
 }
 
-// sendAcked deals with the mod's ack r of the message w's agent was sent.
+// sendAcked deals with the mod's ack r of the message w's agent was sent. Claude Code refuses one (its
+// words, spike 32) to an agent the human stopped from the agent panel, whose phase is then theirs (hold),
+// and to one that is gone for good (after /clear), which a fresh agent replaces in its worktree (afresh).
 func (c *Coordinator) sendAcked(s *state.Store, w *worker, r bridge.Report) {
 	w.sending = 0
 	if r.OK || r.Interrupted {
 		return // an interrupted one may or may not have gone: the loop sends again while it is due
 	}
-	c.Lead.logf("loop: %s: the message to its agent failed: %s", w.phase, r.Error)
-	w.store.Event("agent_message_failed", map[string]any{"error": r.Error})
+	said := strings.TrimSpace(r.Error + " " + r.Result)
+	c.Lead.logf("loop: %s: the message to its agent failed: %s", w.phase, said)
+	w.store.Event("agent_message_failed", map[string]any{"error": said})
+	switch {
+	case strings.Contains(said, "stopped by the user"):
+		c.holdAgent(s, c.bridge(s), w)
+	case strings.Contains(said, "could not be resumed"):
+		why := "its agent could not be started again: " + said
+		c.setEntry(s, w.entry, func(e *state.Worker) {
+			if e.Live() {
+				e.Status, e.Since, e.Why = state.WorkerSuspended, s.Now(), why
+			}
+		})
+	}
 }

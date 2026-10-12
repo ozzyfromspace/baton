@@ -21,16 +21,18 @@ import (
 // worker no live host runs (loop.RetireWorker), and only once it has marked it as retiring
 // (Worker.Retiring).
 
-// Worker statuses. A worker goes starting → working → landing → landed. Two statuses are off that path:
-// suspended is a worker whose agent ended with the lead's claude (exit, a hang-up), which the next host for
-// the run starts again in its worktree; failed is one that could not go on, whose phase went back to the
+// Worker statuses. A worker goes starting → working → landing → landed. Three statuses are off that path:
+// suspended is a worker whose agent ended (with the lead's claude, or for good) or is to be replaced, which
+// a fresh agent takes up again in its worktree; held is one whose agent the human stopped, which waits for
+// them (`baton run` takes it up again); failed is one that could not go on, whose phase went back to the
 // scheduler (Unassign).
 const (
 	WorkerStarting  = "starting"  // baton's mod was asked to start its agent, which has not started yet
 	WorkerWorking   = "working"   // its agent works on the phase
 	WorkerLanding   = "landing"   // its sub-run is complete, and its work waits in the merge queue
 	WorkerLanded    = "landed"    // its work is on the run's branch, and its phase is done
-	WorkerSuspended = "suspended" // its agent ended with the lead's claude
+	WorkerSuspended = "suspended" // its agent ended, or is to be replaced: a fresh one takes the phase up
+	WorkerHeld      = "held"      // the human stopped its agent: it waits for them
 	WorkerFailed    = "failed"    // its phase was taken back
 )
 
