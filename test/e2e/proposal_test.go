@@ -17,32 +17,57 @@ const proposeGreeting = `Before anything else, run exactly this one command with
 	`baton propose "write the word hello into greeting.txt with the Write tool" --because "the plan does not say which greeting to use" --undo "remove greeting.txt" ` +
 	`— then do exactly what baton tells you.`
 
-func startProposal(t *testing.T, timeout string) (*Session, string) {
+func startProposal(t *testing.T, timeout string, args ...string) (*Session, string) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
-	s := StartEnv(t, dir, []string{"BATON_ESCALATION_TIMEOUT=" + timeout}, "--model", "haiku", "--permission-mode", "acceptEdits", proposeGreeting)
+	s := StartEnv(t, dir, []string{"BATON_ESCALATION_TIMEOUT=" + timeout}, append(args, "--model", "haiku", "--permission-mode", "acceptEdits", proposeGreeting)...)
 	s.Trust()
 	return s, dir
 }
 
-// Nobody answers: at the deadline baton picks Go ahead itself (it types 3 once its question is alone on
-// screen), and the model does what it proposed.
+// Nobody answers: at the deadline baton picks Go ahead itself, and the model does what it proposed. Where
+// baton's mod runs, the mod answers the question itself, never sooner than a minute after it was shown,
+// and no key is typed into any dialog; where it does not, the host types 3 once its question is alone on
+// screen.
 func TestProposalGoesAheadWhenNobodyAnswers(t *testing.T) {
-	s, dir := startProposal(t, "20s")
-	waitSequence(t, s, 5*time.Minute,
-		func(e map[string]any) bool { return e["kind"] == "proposed" && e["id"] == "d1" },
-		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "proposal" },
-		func(e map[string]any) bool { return e["kind"] == "proposal_asked" && e["id"] == "d1" },
-		func(e map[string]any) bool {
-			return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "3"
-		},
-		func(e map[string]any) bool {
-			return e["kind"] == "proposal_resolved" && e["by"] == "timeout" && e["answer"] == "Go ahead"
-		},
-	)
-	greeting := filepath.Join(dir, "greeting.txt")
-	if !s.Until("greeting.txt", 2*time.Minute, func() bool { _, err := os.Stat(greeting); return err == nil }) {
-		t.Fatalf("the model did not do what it proposed; events: %v", s.Events())
+	for _, c := range []struct {
+		name string
+		mod  bool
+	}{{"the mod settles it", true}, {"with no mod, the host types its answer", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			var args []string
+			settled := func(e map[string]any) bool {
+				return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "3"
+			}
+			if !c.mod {
+				args = []string{"--plugin-dir", noModPlugin(t)}
+			} else {
+				settled = is("mod_deadline", "answer", "Go ahead")
+			}
+			s, dir := startProposal(t, "20s", args...)
+			waitSequence(t, s, 5*time.Minute,
+				func(e map[string]any) bool { return e["kind"] == "proposed" && e["id"] == "d1" },
+				func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "proposal" },
+				func(e map[string]any) bool { return e["kind"] == "proposal_asked" && e["id"] == "d1" },
+				settled,
+				func(e map[string]any) bool {
+					return e["kind"] == "proposal_resolved" && e["by"] == "timeout" && e["answer"] == "Go ahead"
+				},
+			)
+			greeting := filepath.Join(dir, "greeting.txt")
+			if !s.Until("greeting.txt", 2*time.Minute, func() bool { _, err := os.Stat(greeting); return err == nil }) {
+				t.Fatalf("the model did not do what it proposed; events: %v", s.Events())
+			}
+			ev := s.Events()
+			if !c.mod {
+				return
+			}
+			resolved := first(ev, is("proposal_resolved", "by", "timeout", "via", "mod"))
+			if asked := first(ev, is("proposal_asked")); resolved < 0 || eventTime(ev[resolved]).Sub(eventTime(ev[asked])) < time.Minute {
+				t.Errorf("not settled by the mod, a minute or more after it was asked:\n%s", eventLog(s))
+			}
+			none(t, s, "auto_answered")
+		})
 	}
 }
 

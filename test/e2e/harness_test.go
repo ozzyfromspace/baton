@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -61,10 +62,25 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", batonBin, "../../cmd/baton").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	stores := modStores()
 	code := m.Run()
+	// baton's mod keeps its place in Claude Code's store, one file for every session that loads this
+	// plugin with --plugin-dir: the ones the tests made go.
+	for _, p := range modStores() {
+		if !slices.Contains(stores, p) {
+			os.Remove(p)
+		}
+	}
 	os.RemoveAll(dir)
 	os.RemoveAll(scratch)
 	os.Exit(code)
+}
+
+// modStores are the files of Claude Code's plugin store that a --plugin-dir copy of baton's plugin keeps.
+func modStores() []string {
+	home, _ := os.UserHomeDir()
+	out, _ := filepath.Glob(filepath.Join(home, ".claude", "plugins", "store", "baton_inline*"))
+	return out
 }
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>78]`)
@@ -160,10 +176,38 @@ func Start(t *testing.T, dir string, args ...string) *Session {
 	return StartEnv(t, dir, nil, args...)
 }
 
-// StartEnv is Start with extra environment variables for baton (e.g. BATON_CHECKPOINT_PCT).
+// StartEnv is Start with extra environment variables for baton (e.g. BATON_CHECKPOINT_PCT). claude loads
+// this repository's plugin, baton's mod with it, in place of any baton plugin the developer installed
+// (a --plugin-dir plugin replaces an installed one of the same name for that session), unless args
+// name a plugin directory of their own (noModPlugin).
 func StartEnv(t *testing.T, dir string, env []string, args ...string) *Session {
 	t.Helper()
+	if !slices.Contains(args, "--plugin-dir") {
+		args = append([]string{"--plugin-dir", pluginDir(t)}, args...)
+	}
 	return StartProgram(t, dir, env, batonBin, args...)
+}
+
+// noModPlugin is a copy of this repository's plugin without baton's mod, as Claude Code loads it where an
+// organization turns plugins' mods off: baton runs the plan serially in the lead there.
+func noModPlugin(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "baton")
+	if out, err := exec.Command("cp", "-R", pluginDir(t), dir).CombinedOutput(); err != nil {
+		t.Fatalf("copying the plugin: %v\n%s", err, out)
+	}
+	path := filepath.Join(dir, "hooks", "hooks.json")
+	var hooks map[string]any
+	if b, err := os.ReadFile(path); err != nil || json.Unmarshal(b, &hooks) != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	delete(hooks, "modules")
+	b, _ := json.Marshal(hooks)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "hooks", "baton.js"))
+	return dir
 }
 
 // StartProgram runs any program (a shell, plain claude) the way Start runs baton. Every session gets its
@@ -179,9 +223,10 @@ func StartProgram(t *testing.T, dir string, env []string, prog string, args ...s
 		}
 	}
 	// Tests never notify the developer, and run one session at a time, as before v0.5, unless a scenario
-	// starts workers itself.
+	// starts phase agents itself; then whatever else the machine is doing does not hold them back
+	// (BATON_TEST_LOAD).
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=")
+		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=", "BATON_TEST_LOAD=0")
 	cmd.Env = append(cmd.Env, env...) // later entries win
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {
@@ -291,9 +336,9 @@ func (s *Session) PlanMode() bool {
 
 // AutoApprove plays a human who approves every dialog Claude Code opens in this session (permission
 // prompts, plan-mode entry and plan approval). Tests that let the model act freely need it whatever the
-// permission mode: the suite was written when Haiku had no auto mode (Haiku 5.5 has it). It never
-// answers a worker's dialogs, which are in the worker's own log, not the run's: a worker gets the lead's
-// flags, so a scenario with workers allows what they do up front.
+// permission mode: the suite was written when Haiku had no auto mode (Haiku 5.5 has it). A phase agent's
+// permission prompt is the lead's dialog too, shown in the lead's terminal, so it approves those as well;
+// and baton's own questions, where Enter picks the first option.
 func (s *Session) AutoApprove() {
 	go func() {
 		approved := 0

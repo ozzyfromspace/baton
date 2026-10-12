@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -100,7 +101,7 @@ func phaseStatus(t *testing.T, dir, run, phase string) string {
 func TestCleanEndsTheWorkerOfAKilledHost(t *testing.T) {
 	dir, home := listPlanProject(t), t.TempDir()
 	Attach(t, dir, dropPlan)
-	s := StartWorkers(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
+	s := StartAgents(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
 	s.AutoApprove()
 	worktree, branch, hold := workerHolds(t, s, dir)
 
@@ -161,7 +162,7 @@ Run echo bee, then report P0 done: baton done P0 --notes 'said bee'
 func TestANewRunRetiresTheWorkerAnEarlierRunLeft(t *testing.T) {
 	dir, home := listPlanProject(t), t.TempDir()
 	Attach(t, dir, dropPlan)
-	a := StartWorkers(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
+	a := StartAgents(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
 	a.AutoApprove()
 	worktree, branch, _ := workerHolds(t, a, dir)
 	stopHost(t, a)
@@ -231,7 +232,7 @@ Write the single word uno into a new file named uno.txt. Commit it: git add uno.
 func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 	dir, home := listPlanProject(t), t.TempDir()
 	Attach(t, dir, dropPlan)
-	s := StartWorkers(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
+	s := StartAgents(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
 	s.AutoApprove()
 	_, branch, hold := workerHolds(t, s, dir)
 	commitPlan(t, dir, "replace.md", replacePlan)
@@ -253,8 +254,8 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 		t.Errorf("the kept branch %s lost its commit: %s", kept, log)
 	}
 	spawns := filter(ev, is("worker_spawned", "phase", "P1"))
-	if len(spawns) != 2 || spawns[1]["branch"] != branch || first(ev, is("worker_spawned", "phase", "P1", "session", fmt.Sprint(spawns[1]["session"]))) < ended {
-		t.Errorf("the new plan's P1 worker did not start after the old one was retired: %v", spawns)
+	if len(spawns) != 2 || spawns[1]["branch"] != branch || slices.IndexFunc(ev, func(e map[string]any) bool { return e["kind"] == "worker_spawned" && e["command"] == spawns[1]["command"] }) < ended {
+		t.Errorf("the new plan's P1 agent did not start after the old one was retired: %v", spawns)
 	}
 	if landed := filter(ev, is("landed", "phase", "P1")); len(landed) != 1 || first(ev, is("landed", "phase", "P1")) < ended {
 		t.Errorf("P1 landed %d times, or before the old worker was retired", len(landed))
@@ -278,7 +279,7 @@ func TestAReplacedPlansWorkerIsRetired(t *testing.T) {
 func TestWithWorkersOffTheLeadTakesBackAWorkersPhase(t *testing.T) {
 	dir, home := listPlanProject(t), t.TempDir()
 	Attach(t, dir, dropPlan)
-	s := StartWorkers(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
+	s := StartAgents(t, dir, []string{"BATON_HOME=" + home}, workerTools...)
 	s.AutoApprove()
 	worktree, branch, _ := workerHolds(t, s, dir)
 	stopHost(t, s)

@@ -314,7 +314,7 @@ while [ ! -e "$common/go" ] && [ "$i" -lt 900 ]; do
 done
 echo "gate: passed"
 `
-	// afterGate waits, in a worker's worktree, until the lead's gate has started.
+	// afterGate waits, in a phase agent's worktree, until the lead's gate has started.
 	afterGate = `#!/bin/sh
 # Waits until the lead session's gate has started: it writes gate-pwd into the repository's git directory.
 common=$(git rev-parse --git-common-dir)
@@ -327,13 +327,13 @@ echo "after-gate: the gate has started"
 `
 )
 
-// The lead's gate runs in its checkout, with no lane (verify --here). A worker's work, ready to land
+// The lead's gate runs in its checkout, with no lane (verify --here). A phase agent's work, ready to land
 // meanwhile, waits for the gate, since landing it would change the files the gate reads: it lands once the
 // gate has ended. The gate's result reaches the lead, which finishes its phase.
 func TestAGateHereHoldsTheLanding(t *testing.T) {
 	dir := projectWith(t, map[string]string{"gate.sh": hereGate, "after-gate.sh": afterGate})
 	Attach(t, dir, herePlan)
-	s := StartWorkers(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(sh after-gate.sh)", "Write")
+	s := StartAgents(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(sh after-gate.sh)", "Write")
 	s.AutoApprove()
 
 	queued := s.WaitEvent("job_queued", 4*time.Minute)

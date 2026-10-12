@@ -73,9 +73,9 @@ func TestContextWarningAsksTheHuman(t *testing.T) {
 	)
 }
 
-// Nobody answers the context question: after the (shortened) timeout baton answers "Keep going" itself
-// by typing 3 (its third option), once the question is the only dialog open. The answer arrives through
-// the usual hook, so the run carries on instead of waiting all night.
+// Nobody answers the context question: after the (shortened) timeout, and never sooner than a minute
+// after it was shown, baton's mod answers "Keep going" itself, with no key typed. baton records it as it
+// would the answer from the dialog, so the run carries on instead of waiting all night.
 func TestContextQuestionTimesOut(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, warnPlan)
@@ -84,11 +84,10 @@ func TestContextQuestionTimesOut(t *testing.T) {
 	waitSequence(t, s, 5*time.Minute,
 		kind("context_warning"),
 		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["dialog"] == "context_warning" },
+		is("mod_deadline", "answer", "Keep going"),
 		func(e map[string]any) bool {
-			return e["kind"] == "auto_answered" && e["key"] == "3" && e["dialog"] == "context_warning"
-		},
-		func(e map[string]any) bool {
-			return e["kind"] == "answered" && e["answer"] == "Keep going" && e["by"] == "timeout"
+			return e["kind"] == "answered" && e["answer"] == "Keep going" && e["by"] == "timeout" && e["via"] == "mod"
 		},
 	)
+	none(t, s, "auto_answered")
 }
