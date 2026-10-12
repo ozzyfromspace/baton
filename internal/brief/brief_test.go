@@ -344,3 +344,61 @@ func TestTheBriefMarksTheWorkersPhases(t *testing.T) {
 		t.Errorf("listed decisions the run's record does not have:\n%s", b)
 	}
 }
+
+// A conversation that starts without its phase's context (a /clear, a rewind past the brief, a fresh
+// session after a crash) gets the phase's brief again: the phase goes on, and the model checks what is
+// done before it redoes anything, in words that fit the project.
+func TestFreshBrief(t *testing.T) {
+	pl, doc, st := setup(t)
+	at := time.Date(2026, 10, 4, 12, 30, 0, 0, time.UTC)
+	state.Start(&st, at, state.Origin{})
+	state.AddNote(&st, "skipped the flaky test", "re-enable it", at)
+	notes := "## P0 — 2026-10-04 12:00\n\nOverlay done in abc123.\n\n## P1 (checkpoint) — 2026-10-04 12:40\n\nHalf the one-liners in def456.\n"
+	for _, c := range []struct {
+		git   bool
+		check string
+	}{
+		{true, "Now: continue P1 — The one-liners. Some of it may be done already: check what is (`git log`, `git status`, and any notes the phase left below) before you redo anything, then go on from there.\n"},
+		{false, "Now: continue P1 — The one-liners. Some of it may be done already: check what is (the files the phase is about, and any notes it left below) before you redo anything, then go on from there.\n"},
+	} {
+		b := Write(Input{Kind: Fresh, Plan: pl, Doc: doc, State: st, Handoff: notes, Words: decide.Words{Git: c.git, Timeout: 5 * time.Minute}})
+		for _, want := range []string{
+			"[baton] This conversation started without the phase's context (a /clear, a rewind past baton's brief, or a fresh session after a crash), " +
+				"so baton gives you the phase's brief again: it goes on from the plan, the notes and the repository. You are running the plan \"The widget campaign\" (/work/plan.md).\n",
+			"✓ P0 — The overlay", "▶ P1 — The one-liners",
+			c.check,
+			"Standing rules (from the plan):", "Stop only for a decision with no fallback",
+			"Phase P1, from the plan:\n\n## P1 — The one-liners", "Small fixes.",
+			"Overlay done in abc123.", "Half the one-liners in def456.",
+			"Decisions made without the human so far", "noted: skipped the flaky test. Undo: re-enable it",
+			"When P1 is complete", "Never type /compact",
+		} {
+			if !strings.Contains(b, want) {
+				t.Errorf("git=%v: the brief lacks %q:\n%s", c.git, want, b)
+			}
+		}
+		for _, not := range []string{"compacted", "Begin it now", "Add people to a household"} {
+			if strings.Contains(b, not) {
+				t.Errorf("git=%v: the brief has %q:\n%s", c.git, not, b)
+			}
+		}
+	}
+}
+
+// A worker's fresh brief says what it is and where it works.
+func TestAWorkersFreshBrief(t *testing.T) {
+	pl, doc, st := worker(t)
+	b := Write(Input{Kind: Fresh, Plan: pl, Doc: doc, State: st, Handoff: handoff, Words: decide.Words{Git: true, Worker: true}, Tree: "/wt/R1", Needs: []string{"P0"}})
+	for _, want := range []string{
+		"so baton gives you the phase's brief again: it goes on from the plan, the notes and the repository. You are a worker on R1 of the plan \"The widget campaign\" (/work/plan.md), in a git worktree of your own (/wt/R1)",
+		"Now: continue R1 — The roster can grow. Some of it may be done already",
+		"Notes left by the phases R1 builds on", "Overlay done in abc123.", "baton then lands your work on the run's branch",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the brief lacks %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "You are running the plan") || strings.Contains(b, "One-liners shipped") {
+		t.Errorf("the brief reads as the lead's:\n%s", b)
+	}
+}

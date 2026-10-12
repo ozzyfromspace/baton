@@ -1,6 +1,6 @@
-// Package brief writes what the model reads right after a compaction: where the plan stands, the phase
-// it is on (quoted from the plan document), the standing rules, the notes earlier phases left, and the
-// decisions the run made without the human. The text is assembled by code from files, never summarized
+// Package brief writes what the model reads right after a compaction, or as a conversation starts
+// without its phase's context: where the plan stands, the phase it is on (quoted from the plan document),
+// the standing rules, the notes earlier phases left, and the decisions the run made without the human. The text is assembled by code from files, never summarized
 // by a model, so it is the same every time.
 package brief
 
@@ -22,6 +22,7 @@ const (
 	Checkpoint = "checkpoint" // the model asked to compact mid-phase
 	Auto       = "auto"       // Claude Code compacted on its own mid-phase
 	Worker     = "worker"     // a worker's session starts on its phase (no compaction: it starts afresh)
+	Fresh      = "fresh"      // a conversation started mid-phase without the phase's context (no compaction)
 )
 
 // Limits keep the brief a brief: sections are quoted in full only up to these sizes.
@@ -80,6 +81,8 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "[baton] The context was compacted, and you are taking up a phase that was set aside unfinished. %s\n\n", running)
 	case in.Kind == Checkpoint:
 		fmt.Fprintf(&b, "[baton] The context was compacted at your checkpoint, mid-phase. %s\n\n", running)
+	case in.Kind == Fresh:
+		fmt.Fprintf(&b, "[baton] %s\n\n", decide.FreshStart(running))
 	default:
 		fmt.Fprintf(&b, "[baton] Claude Code compacted the context automatically, mid-phase. %s\n\n", running)
 	}
@@ -128,6 +131,8 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "Now: resume %s. It was finished, but its verification ended without a verdict: check it again (in place if the lane cannot run it), then finish it again.\n\n", title)
 	case in.Kind == Resume:
 		fmt.Fprintf(&b, "Now: resume %s from where it stood. Other phases may have changed the repository since: check its state before you go on.\n\n", title)
+	case in.Kind == Fresh:
+		b.WriteString(in.Words.FreshNow(title) + "\n\n")
 	default:
 		fmt.Fprintf(&b, "Now: continue %s from where you left off (see your notes below and the repository's state).\n\n", title)
 	}

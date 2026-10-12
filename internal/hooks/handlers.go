@@ -412,6 +412,10 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 		// A new conversation (or one /clear started over) has nothing before its first turn; a resumed or
 		// compacted one has.
 		st.Run.History = source != "startup" && source != "clear"
+		if source == "clear" {
+			// The conversation that grew while baton was paused is gone: there is nothing to checkpoint.
+			st.CheckpointDue = false
+		}
 		if source == "resume" && st.Run.Restart != nil {
 			if c.Now.Sub(st.Run.Restart.At) < restartWindow {
 				restarted = st.Run.Restart
@@ -462,6 +466,9 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	}
 	if !havePlan {
 		return Result{Output: map[string]any{"systemMessage": lines(ann, note+"baton: hosting this session (no plan attached — /baton plan or /baton run)")}}, nil
+	}
+	if source == "clear" && st.InHand() {
+		return h.freshStart(c, s, pl, st, lines(ann, "baton: conversation cleared — "+phaseTitle(pl, st.Current)+" goes on, with its brief")), nil
 	}
 	return Result{Output: map[string]any{
 		"systemMessage": lines(ann, note+"baton: hosting · "+progressLine(pl, st)),

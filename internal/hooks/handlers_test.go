@@ -132,20 +132,23 @@ func TestSessionStartPrimer(t *testing.T) {
 		t.Errorf("a record with nothing in it:\n%s", ctx)
 	}
 
-	// After a /clear the model has none of the run in context: the primer brings the record back. The
-	// cleared conversation has a new session id, and keeps its run.
+	// After a restart the model has none of the run in context: the primer brings the record back.
 	f.store.Update(func(st *state.State) error {
 		_, err := state.AddNote(st, "committed P0 unsigned", "re-sign it", f.now)
 		return err
 	})
-	out = f.fire("SessionStart", map[string]any{"source": "clear", "session_id": "sess-after-clear"})
-	if f.state().Run.SessionID != "sess-after-clear" {
-		t.Errorf("the run did not follow the cleared session: %q", f.state().Run.SessionID)
-	}
+	out = f.fire("SessionStart", map[string]any{"source": "startup"})
 	ctx = out["hookSpecificOutput"].(map[string]any)["additionalContext"].(string)
 	if !strings.Contains(ctx, ".)\n\nDecisions made without the human so far (if they ask, each has its undo):\n\n- d1 (P0, ") ||
 		!strings.HasSuffix(ctx, "noted: committed P0 unsigned. Undo: re-sign it") {
-		t.Errorf("primer after /clear:\n%s", ctx)
+		t.Errorf("primer after a restart:\n%s", ctx)
+	}
+
+	// A conversation /clear started over has a new session id, and keeps its run (what it is given:
+	// TestAClearedConversationGetsItsPhasesBrief).
+	f.fire("SessionStart", map[string]any{"source": "clear", "session_id": "sess-after-clear"})
+	if f.state().Run.SessionID != "sess-after-clear" {
+		t.Errorf("the run did not follow the cleared session: %q", f.state().Run.SessionID)
 	}
 }
 

@@ -381,6 +381,13 @@ func Start(st *State, now time.Time, o Origin) {
 	st.Run.Progress()
 }
 
+// InHand reports a phase under way: the plan runs, its current phase is active, and no boundary is owed
+// before it (a phase that is done waits for the compaction, whose brief starts the next one).
+func (st State) InHand() bool {
+	ps := st.Phases[st.Current]
+	return st.Mode == ModeRunning && !st.BoundaryOwed && ps != nil && ps.Status == PhaseActive
+}
+
 // SetBlocked records that the model cannot continue without a human.
 func SetBlocked(st *State, reason string, now time.Time) error {
 	if st.Mode == ModeIdle {

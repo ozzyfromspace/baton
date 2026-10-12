@@ -55,6 +55,30 @@ func TestPhaseLifecycle(t *testing.T) {
 	}
 }
 
+// A phase is in hand while the plan runs, its current phase is active, and no boundary is owed.
+func TestInHand(t *testing.T) {
+	p := threePhases()
+	for _, c := range []struct {
+		name string
+		set  func(*State)
+		want bool
+	}{
+		{"attached", func(*State) {}, true},
+		{"done, its boundary owed", func(st *State) { Done(st, p, "P0", t0, DoneOpts{}) }, false},
+		{"the next started", func(st *State) { Done(st, p, "P0", t0, DoneOpts{}); Start(st, t0, Origin{}) }, true},
+		{"parked", func(st *State) { st.Phases["P0"].Status = PhaseParked }, false},
+		{"paused", func(st *State) { Pause(st) }, false},
+		{"complete", func(st *State) { st.Mode, st.Current = ModeComplete, "" }, false},
+		{"idle", func(st *State) { *st = New() }, false},
+	} {
+		st := Attach(p, t0, Origin{})
+		c.set(&st)
+		if got := st.InHand(); got != c.want {
+			t.Errorf("%s: InHand() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestBlockCheckpointPauseResume(t *testing.T) {
 	idle := New()
 	for name, err := range map[string]error{
