@@ -487,9 +487,13 @@ func runProgress(r state.RunInfo) string {
 	return r.State.Mode
 }
 
-// printWaitingOnYou shows what of the run's decisions waits on the human: a proposal, one held for them,
-// or a review.
+// printWaitingOnYou shows what waits on the human: what the watchdog escalated (a refused turn, an API
+// error baton cannot retry, a stall, …), and of the run's decisions, a proposal, one held for them, or a
+// review.
 func printWaitingOnYou(io IO, st *state.State) {
+	if e := st.Run.Escalation; e != nil && e.Watchdog {
+		fmt.Fprintf(io.Out, "waiting on you since %s (%s): %s\n", e.Since.Local().Format("15:04"), e.Kind, e.Reason)
+	}
 	if p := st.PendingProposal(); p != nil {
 		fmt.Fprintf(io.Out, "proposal %s: %s\n  because: %s\n", p.ID, p.What, p.Because)
 		switch {

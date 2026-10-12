@@ -66,7 +66,7 @@ func TestALeadThatStoppedLeavesWorkersQuestions(t *testing.T) {
 	for _, c := range []struct {
 		err  string
 		left bool
-	}{{"invalid_request", true}, {"authentication_failed", true}, {"overloaded", false}} {
+	}{{"invalid_request", true}, {"authentication_failed", true}, {state.ErrRefusal, true}, {"overloaded", false}} {
 		t.Run(c.err, func(t *testing.T) {
 			r := newIdleRig(t)
 			r.set(func(st *state.State) {

@@ -3,6 +3,7 @@ package loop
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,122 @@ func TestPermanentAPIErrorSaysWhatWaits(t *testing.T) {
 	if e := r.state().Run.Escalation; e == nil || e.Reason != want {
 		t.Fatalf("escalation %+v", e)
 	}
+}
+
+// A turn the model's safeguards declined is escalated at once as a refusal, with what only the human
+// decides, and baton never retries it: nothing is typed into that conversation, however long it waits.
+// The human is reminded on the usual schedule, and a later turn that ends well clears it.
+func TestARefusalIsEscalatedAndNeverRetried(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.LastError = &state.StopError{Error: state.ErrRefusal, Category: "cyber", Details: "declined", At: r.now}
+	})
+	r.tick(10 * time.Second)
+	want := "P1 stopped: the model's safeguards declined the last turn (cyber), and this conversation will not go on as it is. baton does not retry it. " +
+		"To go on, rewind (Esc Esc) to before the flagged turn and take a different approach, as Claude Code advises, or /clear for a fresh conversation " +
+		"from P1's brief. Nothing else runs until then."
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "refused" || e.Reason != want {
+		t.Fatalf("escalation %+v", e)
+	}
+	if ev := r.events(); !strings.Contains(ev, `"kind":"escalated"`) || !strings.Contains(ev, `"type":"refused"`) || !strings.Contains(ev, `"category":"cyber"`) {
+		t.Fatalf("events:\n%s", ev)
+	}
+	for range 2*60 + 10 { // past the second reminder, in ticks short enough not to look like a sleep
+		r.tick(time.Minute)
+	}
+	if len(r.in.text) != 0 || r.in.quit != 0 {
+		t.Fatalf("typed into a refused conversation: %q (quit %d)", r.in.text, r.in.quit)
+	}
+	if n := strings.Count(r.events(), `"type":"refused"`); n != 3 {
+		t.Fatalf("escalated and reminded %d times, want once and 2 reminders:\n%s", n, r.events())
+	}
+	if len(r.push.kinds) != 3 || r.push.kinds[0] != "refused" {
+		t.Fatalf("pushes %v", r.push.kinds)
+	}
+
+	// The human rewound and wrote, and the turn ended well.
+	r.set(func(st *state.State) {
+		st.Run.TurnStarted, st.Run.LastStop, st.Run.LastActivity = r.now, r.now.Add(time.Minute), r.now
+	})
+	r.tick(2 * time.Minute)
+	if e := r.state().Run.Escalation; e != nil {
+		t.Fatalf("still escalated after a turn that ended well: %+v", e)
+	}
+	if !slices.ContainsFunc(strings.Split(r.events(), "\n"), func(l string) bool {
+		return strings.Contains(l, `"kind":"escalation_cleared"`) && strings.Contains(l, `"type":"refused"`)
+	}) {
+		t.Fatalf("events:\n%s", r.events())
+	}
+}
+
+// An escalation of another API error gives way to a refusal that came after it, and a refusal open is
+// not escalated again on every tick.
+func TestARefusalAfterAnotherErrorIsEscalatedAsOne(t *testing.T) {
+	r := newIdleRig(t)
+	r.set(func(st *state.State) {
+		st.Run.LastError = &state.StopError{Error: "invalid_request", At: r.now}
+	})
+	r.tick(10 * time.Second)
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "api_error" {
+		t.Fatalf("escalation %+v", e)
+	}
+	r.set(func(st *state.State) {
+		st.Run.TurnStarted = r.now
+		st.Run.LastError = &state.StopError{Error: state.ErrRefusal, At: r.now.Add(time.Second)}
+	})
+	r.run(time.Minute)
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "refused" || !strings.Contains(e.Reason, "declined the last turn, and") {
+		t.Fatalf("escalation %+v", e)
+	}
+	if n := strings.Count(r.events(), `"kind":"escalated"`); n != 2 {
+		t.Fatalf("%d escalations:\n%s", n, r.events())
+	}
+}
+
+// With workers, a refusal of the lead's turn says what goes on without it and which phases wait; a
+// worker's says so for the worker, in its session, while the rest of the run goes on.
+func TestARefusalSaysWhatWaits(t *testing.T) {
+	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "a", After: []string{}}, {ID: "P1", Title: "b", After: []string{}},
+		{ID: "P2", Title: "c", After: []string{"P1"}}, {ID: "P3", Title: "d", After: []string{"P2"}}}}
+	refused := func(st *state.State, at time.Time) {
+		st.Run.LastError = &state.StopError{Error: state.ErrRefusal, Category: "cyber", At: at}
+	}
+	t.Run("the lead", func(t *testing.T) {
+		r := newIdleRig(t)
+		r.ctl, r.loop.Workers = r.loop, true
+		if err := r.loop.Store.SavePlan(pl); err != nil {
+			t.Fatal(err)
+		}
+		r.set(func(st *state.State) { refused(st, r.now) })
+		r.tick(10 * time.Second)
+		if e := r.state().Run.Escalation; e == nil || !strings.HasSuffix(e.Reason, "from P1's brief. Meanwhile workers carry on with every phase that does not need P1. P2 and P3 wait for it.") {
+			t.Fatalf("escalation %+v", e)
+		}
+	})
+	t.Run("a worker", func(t *testing.T) {
+		x := newFleet(t)
+		x.lead.WritePlan(pl)
+		x.set(x.lead, func(st *state.State) {
+			*st = state.Attach(pl, x.now, state.Origin{})
+			state.Claim(st, "inst", 1, x.now)
+		})
+		x.set(x.work, func(st *state.State) {
+			st.Run.LastActivity, st.Run.LastStop = x.now, x.now
+			refused(st, x.now)
+		})
+		x.tick(10 * time.Second)
+		st, _ := x.work.Load()
+		want := "P1 stopped: the model's safeguards declined the last turn of its worker (cyber), and that conversation will not go on as it is. " +
+			"baton does not retry it. To go on, in the worker's session (baton view P1), rewind (Esc Esc) to before the flagged turn and take a different approach, " +
+			"as Claude Code advises, or /clear for a fresh conversation from P1's brief. Meanwhile the rest of the run carries on with every phase that does not need P1. " +
+			"P2 and P3 wait for it."
+		if e := st.Run.Escalation; e == nil || e.Kind != "refused" || e.Reason != want {
+			t.Fatalf("escalation %+v", e)
+		}
+		if len(x.workIn.text) != 0 {
+			t.Fatalf("typed into the worker's refused conversation: %q", x.workIn.text)
+		}
+	})
 }
 
 // Overloads are retried with backoff, and the human hears about them if they persist.

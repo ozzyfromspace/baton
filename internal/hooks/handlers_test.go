@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/transcript"
 )
 
 type fixture struct {
@@ -367,6 +368,53 @@ func TestStopFailureAndSessionEnd(t *testing.T) {
 	r := f.state().Run
 	if r.LastError == nil || r.LastError.Error != "rate_limit" || r.Ended == nil || r.Ended.Reason != "prompt_input_exit" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// A turn the model's safeguards declined, and Claude Code would not go on with, is recorded as a refusal
+// with its category, from the transcript. Any other failure stays as Claude Code reported it, and so does
+// a refusal baton could not read, whatever went wrong reading it.
+func TestStopFailureTellsARefusalApart(t *testing.T) {
+	testdata := filepath.Join("..", "transcript", "testdata")
+	for _, c := range []struct {
+		name       string
+		err        string
+		transcript string
+		panics     bool
+		want       state.StopError
+	}{
+		{"a refusal", "invalid_request", "refused.jsonl", false,
+			state.StopError{Error: state.ErrRefusal, Category: "cyber", Details: "This request triggered restrictions."}},
+		{"a refusal of no category", "invalid_request", "refused-unnamed.jsonl", false,
+			state.StopError{Error: state.ErrRefusal, Details: "This request triggered restrictions."}},
+		{"a turn Claude Code went on with", "invalid_request", "continued.jsonl", false, state.StopError{Error: "invalid_request", Details: "bad request"}},
+		{"no transcript", "invalid_request", "", false, state.StopError{Error: "invalid_request", Details: "bad request"}},
+		{"another error", "rate_limit", "refused.jsonl", false, state.StopError{Error: "rate_limit", Details: "bad request"}},
+		{"a reader that panics", "invalid_request", "refused.jsonl", true, state.StopError{Error: "invalid_request", Details: "bad request"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.panics {
+				defer func(r func(string) (*transcript.Refusal, error)) { readRefusal = r }(readRefusal)
+				readRefusal = func(string) (*transcript.Refusal, error) { panic("boom") }
+			}
+			f := newFixture(t, true)
+			in := map[string]any{"error": c.err, "error_details": "bad request"}
+			if c.transcript != "" {
+				in["transcript_path"] = filepath.Join(testdata, c.transcript)
+			}
+			f.fire("StopFailure", in) // fails the test if it exits other than 0, or fails open
+			got := f.state().Run.LastError
+			if got == nil || got.Error != c.want.Error || got.Category != c.want.Category || got.Details != c.want.Details || !got.At.Equal(f.now) {
+				t.Fatalf("recorded %+v, want %+v", got, c.want)
+			}
+			fields := map[string]any{"error": c.want.Error}
+			if c.want.Error == state.ErrRefusal {
+				fields["category"] = c.want.Category
+			}
+			if !f.logged("stop_failure", fields) {
+				t.Fatalf("events:\n%s", f.eventLog())
+			}
+		})
 	}
 }
 

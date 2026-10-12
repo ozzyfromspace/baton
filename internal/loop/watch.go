@@ -25,7 +25,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	// An API error that ended the last turn is retried even while an older escalation is open: the
 	// escalation is about something else, and the error would otherwise leave the run parked.
 	if e := st.Run.LastError; e != nil && !st.Run.TurnStarted.After(e.At) {
-		if esc := st.Run.Escalation; esc == nil || esc.Kind == "api_error" || e.At.After(esc.Since) {
+		if esc := st.Run.Escalation; esc == nil || errorKinds[esc.Kind] || e.At.After(esc.Since) {
 			l.watchError(v, st, in, *e)
 			return
 		}
@@ -235,8 +235,13 @@ const ownAnswerKey = "3"
 const MinProposalWait = time.Minute
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
-// login, billing, a model that does not exist, a request Claude Code refuses to send) needs the human.
+// login, billing, a model that does not exist, a request Claude Code refuses to send, a turn the model's
+// safeguards declined) needs the human.
 var transientErrors = map[string]bool{"rate_limit": true, "overloaded": true, "server_error": true, "unknown": true, "max_output_tokens": true}
+
+// errorKinds are the escalations of an API error that ended the last turn: refused for a turn the model's
+// safeguards declined, api_error for any other.
+var errorKinds = map[string]bool{"api_error": true, "refused": true}
 
 // MaxErrorRetries is how many transient-error retries happen before the human is told (retries go on).
 const MaxErrorRetries = 6
@@ -246,14 +251,26 @@ const MaxErrorRetries = 6
 // errors are retried with backoff, and reported if they persist. Errors that will not pass on their
 // own are reported at once and not retried. A turn that starts on its own (Claude Code may resume by
 // itself) supersedes all of this.
+//
+// A refusal (a turn the model's safeguards declined, which Claude Code would not go on with) is never
+// retried, and nothing is typed into its conversation: the same model given the same conversation
+// usually declines again, and how the phase goes on is the human's to decide (decide.Refused).
 func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state.StopError) {
 	if !transientErrors[e.Error] {
-		if esc := st.Run.Escalation; esc == nil || esc.Kind != "api_error" {
-			why := fmt.Sprintf("the last turn failed with an API error baton cannot retry away (%s)", e.Error)
-			if e.Details != "" {
-				why += ": " + e.Details
+		kind := "api_error"
+		if e.Error == state.ErrRefusal {
+			kind = "refused"
+		}
+		if esc := st.Run.Escalation; esc == nil || esc.Kind != kind {
+			if kind == "refused" {
+				l.escalateWith(kind, decide.Refused(l.stopped(st), e.Category), map[string]any{"category": e.Category})
+			} else {
+				why := fmt.Sprintf("the last turn failed with an API error baton cannot retry away (%s)", e.Error)
+				if e.Details != "" {
+					why += ": " + e.Details
+				}
+				l.escalate(kind, decide.CannotGoOn(l.stopped(st), why))
 			}
-			l.escalate("api_error", decide.CannotGoOn(st.Current, why, l.waitingOn(st), l.Workers))
 		}
 		l.leaveRelays(v.Now)
 		return
@@ -289,23 +306,35 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 	in.Type(fmt.Sprintf("[baton] The last turn ended with an API error (%s). Continue %s.", e.Error, st.Current), true)
 }
 
-// waitingOn is the phases left that need the lead's phase, directly or not: they cannot start while it
-// is stopped.
-func (l *Loop) waitingOn(st state.State) []string {
+// stopped describes this session, stopped, for the escalation that says so: its phase, whether it is a
+// worker's, whether the run has workers, and the phases left that need its phase, directly or not, which
+// cannot start while it is stopped. A worker's plan is narrowed to its phase, so those come from its run's.
+func (l *Loop) stopped(st state.State) decide.Stop {
+	s := decide.Stop{Phase: st.Current, Worker: l.Role == RoleWorker, Workers: l.Workers}
 	if st.Current == "" {
-		return nil
+		return s
 	}
-	pl, err := l.Store.LoadPlan()
+	store, run := l.Store, st
+	if s.Worker {
+		parent, err := l.Store.ParentRun()
+		if err != nil {
+			return s
+		}
+		if run, err = parent.Load(); err != nil {
+			return s
+		}
+		store = parent
+	}
+	pl, err := store.LoadPlan()
 	if err != nil {
-		return nil
+		return s
 	}
-	var out []string
 	for _, id := range pl.Descendants(st.Current) {
-		if ps := st.Phases[id]; ps == nil || ps.Status != state.PhaseDone {
-			out = append(out, id)
+		if ps := run.Phases[id]; ps == nil || ps.Status != state.PhaseDone {
+			s.Dependents = append(s.Dependents, id)
 		}
 	}
-	return out
+	return s
 }
 
 func latest(ts ...time.Time) time.Time {

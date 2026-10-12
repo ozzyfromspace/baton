@@ -285,7 +285,7 @@ func (c ContextUse) Used() int {
 
 // Escalation records that baton brought the human in, and why.
 type Escalation struct {
-	Kind   string `json:"kind,omitempty"` // blocked, stalled, stuck, draft, compaction_failed, api_error, …
+	Kind   string `json:"kind,omitempty"` // blocked, stalled, stuck, draft, compaction_failed, api_error, refused, …
 	Reason string `json:"reason"`
 	// Question is the question baton told the model to put to the human, exactly as issued.
 	Question string    `json:"question,omitempty"`
@@ -302,12 +302,18 @@ type Escalation struct {
 	Snapshot string `json:"snapshot,omitempty"`
 }
 
-// StopError is the last API error that ended a turn (rate limit, overload, …).
+// StopError is the last API error that ended a turn (rate limit, overload, a refusal, …).
 type StopError struct {
-	Error   string    `json:"error"`
-	Details string    `json:"details,omitempty"`
-	At      time.Time `json:"at"`
+	Error   string `json:"error"`
+	Details string `json:"details,omitempty"`
+	// Category is a refusal's, as the API named it ("cyber", …; "" for none).
+	Category string    `json:"category,omitempty"`
+	At       time.Time `json:"at"`
 }
+
+// ErrRefusal is the error of a turn the model's safeguards declined, which Claude Code would not go on
+// with. StopFailure says invalid_request; the transcript says it was a refusal.
+const ErrRefusal = "refusal"
 
 // Notice is one message for the human, sent outside the session.
 type Notice struct {

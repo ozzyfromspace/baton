@@ -45,6 +45,8 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time, usageMa
 		return mark + " · ? proposal · goes ahead " + p.Deadline.Local().Format("15:04")
 	case p != nil || st.Run.Escalation != nil && st.Run.Escalation.Kind == "decision":
 		return mark + " · ? proposal · waiting on you"
+	case st.Run.Escalation != nil && st.Run.Escalation.Kind == "refused":
+		return mark + " · ⚠ refused · waiting on you"
 	case st.Run.Escalation != nil:
 		return mark + " · ⚠ waiting on you"
 	case st.Blocked != nil:

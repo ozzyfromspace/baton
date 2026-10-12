@@ -29,6 +29,10 @@ func TestTheLeadHearsWhatWaitsOnTheHumanInAWorkersSession(t *testing.T) {
 		{"its watchdog's escalation", func(x *crew, st *state.State) {
 			st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "no activity for 2h", Since: x.now, Watchdog: true}
 		}, nil, "no activity for 2h", true},
+		{"a refusal its watchdog escalated", func(x *crew, st *state.State) {
+			st.Run.LastError = &state.StopError{Error: state.ErrRefusal, At: x.now}
+			st.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped: declined. Meanwhile the rest of the run carries on.", Since: x.now, Watchdog: true}
+		}, nil, "P1 stopped: declined. Meanwhile the rest of the run carries on.", true},
 		{"a block the lead puts to the human", func(x *crew, st *state.State) {
 			st.Blocked = &state.Block{Reason: "needs a key", Since: x.now}
 			st.Run.Escalation = &state.Escalation{Kind: "blocked", Reason: "needs a key", Since: x.now, Asked: true}
@@ -57,7 +61,7 @@ func TestTheLeadHearsWhatWaitsOnTheHumanInAWorkersSession(t *testing.T) {
 			}
 			ev, ann := x.events(), strings.Join(x.state().Run.Announce, "\n")
 			n := strings.Count(ev, `"kind":"worker_waiting"`)
-			said := strings.Contains(ann, "baton: the worker on P1 waits for you: "+c.want+". Answer it in its session: baton view P1, in another terminal")
+			said := strings.Contains(ann, "baton: the worker on P1 waits for you: "+strings.TrimSuffix(c.want, ".")+". Answer it in its session: baton view P1, in another terminal")
 			if c.announced != (n == 1 && said) || !c.announced && (n > 0 || strings.Contains(ann, "waits for you")) {
 				t.Errorf("%d worker_waiting events, announced %q", n, ann)
 			}

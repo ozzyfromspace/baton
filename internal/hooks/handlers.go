@@ -16,6 +16,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/transcript"
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
@@ -1169,8 +1170,31 @@ func recordStop(st *state.State, c Context) {
 	}
 }
 
+// readRefusal reads a transcript for the refusal that ended its last turn (a variable, so a test can make it
+// fail).
+var readRefusal = transcript.Refused
+
+// refusalIn is the refusal that ended the last turn of the transcript at path, or nil. Reading is best
+// effort: whatever goes wrong, even a panic, leaves the failure as Claude Code reported it.
+func refusalIn(path string) (r *transcript.Refusal) {
+	defer func() {
+		if recover() != nil {
+			r = nil
+		}
+	}()
+	r, _ = readRefusal(path)
+	return r
+}
+
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
+	if e.Error == "invalid_request" {
+		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
+		// the transcript says which it was (docs/research/recovery.md).
+		if r := refusalIn(str(c.Input, "transcript_path")); r != nil {
+			e.Error, e.Category, e.Details = state.ErrRefusal, r.Category, r.Explanation
+		}
+	}
 	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.LastError, st.Run.Subagents, st.Run.History = false, &e, 0, true
@@ -1180,7 +1204,11 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		return nil
 	})
 	if err == nil {
-		s.Event("stop_failure", map[string]any{"error": e.Error})
+		fields := map[string]any{"error": e.Error}
+		if e.Error == state.ErrRefusal {
+			fields["category"] = e.Category
+		}
+		s.Event("stop_failure", fields)
 		for _, e := range events {
 			s.Event(e.kind, e.fields)
 		}

@@ -459,7 +459,7 @@ func (c *Coordinator) waiting(now time.Time, s *state.Store, st state.State, w *
 		return
 	}
 	s.Event("worker_waiting", map[string]any{"phase": w.phase, "what": what})
-	c.announce(s, fmt.Sprintf("baton: the worker on %s waits for you: %s. Answer it in its session: baton view %s, in another terminal", w.phase, what, w.phase))
+	c.announce(s, fmt.Sprintf("baton: the worker on %s waits for you: %s. Answer it in its session: baton view %s, in another terminal", w.phase, strings.TrimSuffix(what, "."), w.phase))
 }
 
 // needs says what in worker phase's own session waits on the human, from its sub-run sub and the run's

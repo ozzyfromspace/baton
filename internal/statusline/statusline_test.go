@@ -43,6 +43,11 @@ func TestSegment(t *testing.T) {
 			return s
 		}, true, "◆ baton · compact held: the human has a draft in the in…"},
 		{"escalated", func() state.State { s := run; s.Run.Escalation = &state.Escalation{}; return s }, true, "◆ baton · ⚠ waiting on you"},
+		{"refused", func() state.State {
+			s := run
+			s.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped: the model's safeguards declined the last turn (cyber)"}
+			return s
+		}, true, "◆ baton · ⚠ refused · waiting on you"},
 		{"paused", func() state.State { s := run; s.Mode = state.ModePaused; return s }, true, "◆ baton · paused"},
 		{"proposal", func() state.State {
 			s := run

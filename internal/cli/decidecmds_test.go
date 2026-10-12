@@ -406,3 +406,26 @@ func TestDoneListsTheDecisionsMadeWithoutTheHuman(t *testing.T) {
 		t.Errorf("no decisions:\n%s", out)
 	}
 }
+
+// What the watchdog escalated waits on the human too, and status says what it is: a turn the model's
+// safeguards declined names its category.
+func TestStatusSaysWhatTheWatchdogEscalated(t *testing.T) {
+	s := attached(t)
+	if out := s.must("", "status"); strings.Contains(out, "waiting on you") {
+		t.Fatalf("status with nothing escalated:\n%s", out)
+	}
+	reason := "P0 stopped: the model's safeguards declined the last turn (cyber), and this conversation will not go on as it is."
+	s.set(func(x *state.State) {
+		x.Run.Escalation = &state.Escalation{Kind: "refused", Reason: reason, Since: s.now, Watchdog: true}
+	})
+	if out, want := s.must("", "status"), "waiting on you since "+s.now.Local().Format("15:04")+" (refused): "+reason+"\n"; !strings.Contains(out, want) {
+		t.Errorf("status lacks %q:\n%s", want, out)
+	}
+	// One held for the human is said once, as before.
+	s.set(func(x *state.State) {
+		x.Run.Escalation = &state.Escalation{Kind: "decision", Reason: "proposal d1 waits for you", Since: s.now}
+	})
+	if out := s.must("", "status"); strings.Contains(out, "waiting on you since") {
+		t.Errorf("a decision held for the human is listed twice:\n%s", out)
+	}
+}

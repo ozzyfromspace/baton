@@ -712,13 +712,20 @@ func (l *Loop) fail(comp state.Compaction, reason string) {
 }
 
 // escalate records a watchdog escalation and queues a notice; the next tick sends it.
-func (l *Loop) escalate(kind, reason string) {
+func (l *Loop) escalate(kind, reason string) { l.escalateWith(kind, reason, nil) }
+
+// escalateWith is escalate, with more fields for its event.
+func (l *Loop) escalateWith(kind, reason string, fields map[string]any) {
 	now := l.Store.Now()
 	l.update(func(st *state.State) {
 		st.Run.Escalation = &state.Escalation{Kind: kind, Reason: reason, Since: now, Watchdog: true, LastPush: now}
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: kind, Text: reason, At: now})
 	})
-	l.Store.Event("escalated", map[string]any{"type": kind, "reason": reason})
+	ev := map[string]any{"type": kind, "reason": reason}
+	for k, v := range fields {
+		ev[k] = v
+	}
+	l.Store.Event("escalated", ev)
 }
 
 // resolve clears a watchdog escalation once its cause is gone, so it neither misleads the human nor
@@ -739,7 +746,7 @@ func (l *Loop) resolve(v host.View, st state.State) {
 		gone = l.why != gateAgents
 	case "compaction_failed":
 		gone = st.Run.Compaction.Status == state.CompactDone || !(st.BoundaryOwed || st.CheckpointOwed)
-	case "api_error":
+	case "api_error", "refused":
 		gone = st.Run.LastError == nil || st.Run.TurnStarted.After(st.Run.LastError.At) && st.Run.LastStop.After(st.Run.LastError.At)
 	}
 	if !gone {
