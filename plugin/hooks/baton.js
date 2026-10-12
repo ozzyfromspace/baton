@@ -310,13 +310,16 @@ async function run($, c) {
   }
 }
 
-// answer is what a tool call answered: whether it succeeded, and its message.
+// answer is what a tool call answered: whether it succeeded, and its message. A tool's error resolves
+// the call too (isError), and a refusal (SendMessage to an agent the human stopped) says success: false.
 function answer(r) {
-  const res = r && r.result
+  if (!r || r.deny) return { ok: false, error: cut(String((r && r.deny) || 'no answer'), CUT) }
+  const res = r.result
+  if (r.isError) return { ok: false, error: cut(String(r.text || (typeof res === 'string' ? res : JSON.stringify(res))), CUT) }
   if (res && typeof res === 'object') {
     return { ok: res.success !== false, result: cut(String(res.message || JSON.stringify(res)), CUT) }
   }
-  return { ok: true, result: cut(String((r && r.text) || ''), CUT) }
+  return { ok: true, result: cut(String(r.text || ''), CUT) }
 }
 
 // ask asks the human the host's question in Claude Code's own dialog, and reports the answer, or that the

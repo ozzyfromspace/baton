@@ -81,6 +81,7 @@ function world(on: any, o: Opts = {}) {
     }
     w.calls.push(`${e.tool} ${e.to ?? e.task_id}${e.message ? ' ' + e.message : ''}`)
     if (e.tool === 'SendMessage' && e.to === 'stopped') return { result: { success: false, message: 'was stopped by the user' } }
+    if (e.tool === 'TaskStop' && e.task_id === 'gone') return { result: 'No task found with ID: gone', isError: true }
     return { result: { success: true, message: e.tool === 'TaskStop' ? 'Successfully stopped task' : 'Message queued for delivery' } }
   })
   on('prompt.submit', async ($: any, e: any) => {
@@ -150,9 +151,10 @@ test("the host's commands run in order, once each, and only its own", async ($, 
       ...command({ id: 2, kind: 'send', agent: 'a1', text: 'The gate passed.' }),
       ...command({ id: 3, kind: 'stop', agent: 'a1' }),
       ...command({ id: 4, kind: 'send', agent: 'stopped', text: 'Go on.' }),
+      ...command({ id: 7, kind: 'stop', agent: 'gone' }),
       ...command({ id: 5, kind: 'ask', question: 'May P3 commit unsigned?', options: ['Go ahead', 'Wait'] }),
       ...command({ id: 6, kind: 'ask', question: "Another host's?", instance: 'inst-gone' }),
-      [DIR + '/out/.000007.json.tmp-1']: '{"id":7',
+      [DIR + '/out/.000008.json.tmp-1']: '{"id":8',
     },
   })
   await start($, w)
@@ -163,13 +165,15 @@ test("the host's commands run in order, once each, and only its own", async ($, 
     'TaskStop a1',
     'SendMessage stopped Go on.',
     'ask May P3 commit unsigned?',
+    'TaskStop gone',
   ])
-  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4', 'ack 5', 'answered 5'])
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4', 'ack 5', 'answered 5', 'ack 7'])
+  expect(w.reports[6]).toEqual(expect.objectContaining({ ok: false, error: 'No task found with ID: gone' }))
   expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false, error: 'no agent started' }))
-  expect(w.reports.map((r: any) => r.seq)).toEqual([1, 2, 3, 4, 5, 6])
+  expect(w.reports.map((r: any) => r.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
   expect(w.reports[3]).toEqual(expect.objectContaining({ ok: false, result: 'was stopped by the user' }))
   expect(w.reports[5]).toEqual(expect.objectContaining({ answer: 'Go ahead' }))
-  expect(Object.keys(w.files)).toEqual([cmdPath(6), DIR + '/out/.000007.json.tmp-1'])
+  expect(Object.keys(w.files)).toEqual([cmdPath(6), DIR + '/out/.000008.json.tmp-1'])
 })
 
 test('an ack the host has not recorded is reported again, never the command run again', async ($, on) => {
