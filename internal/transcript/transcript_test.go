@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,24 @@ func TestRefusedOnAMissingTranscript(t *testing.T) {
 	}
 	if got, err := Refused("", true); got != nil || err == nil {
 		t.Fatalf("no path: got %+v, %v", got, err)
+	}
+}
+
+// A path that names a directory is no transcript on any system: Windows opens one as an empty file.
+func TestADirectoryIsNoTranscript(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name string
+		read func() error
+	}{
+		{"Tail", func() error { _, err := Tail(dir, TailBytes); return err }},
+		{"Compacted", func() error { _, _, err := Compacted(dir, 0, false); return err }},
+		{"Leaf", func() error { _, err := Leaf(dir); return err }},
+		{"Forked", func() error { _, err := Forked(dir, Mark{}); return err }},
+	} {
+		if err := c.read(); !errors.Is(err, ErrNotFile) {
+			t.Errorf("%s: %v, want ErrNotFile", c.name, err)
+		}
 	}
 }
 

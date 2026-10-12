@@ -8,6 +8,7 @@ package transcript
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"time"
@@ -73,6 +74,10 @@ func Tail(path string, n int64) ([]Entry, error) {
 	return read(f, max(size-n, 0), size)
 }
 
+// ErrNotFile is a transcript path that names no regular file: a directory, say, which Windows opens as
+// if it were an empty file.
+var ErrNotFile = errors.New("transcript: not a file")
+
 // open opens the transcript at path, and says how long it is.
 func open(path string) (*os.File, int64, error) {
 	f, err := os.Open(path)
@@ -80,6 +85,9 @@ func open(path string) (*os.File, int64, error) {
 		return nil, 0, err
 	}
 	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = ErrNotFile
+	}
 	if err != nil {
 		f.Close()
 		return nil, 0, err
