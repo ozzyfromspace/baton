@@ -335,6 +335,16 @@ func TestRewoundFindsWhatStands(t *testing.T) {
 	if !reflect.DeepEqual(r.Files, []string{"src/a.go", "/elsewhere/b.go"}) {
 		t.Errorf("files %v", r.Files)
 	}
+
+	// A file named by another path to the root, as /var is to /private/var on macOS, even one now gone.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(filepath.Dir(f.dir), link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	b.Files = []string{filepath.Join(link, "src", "c.go"), filepath.Join(link, "new", "d.go")}
+	if r, _ := rewound(Context{Env: f.env(f.inst)}, st, f.store, b); !reflect.DeepEqual(r.Files, []string{"src/c.go", "new/d.go"}) {
+		t.Errorf("files by a link to the root: %v", r.Files)
+	}
 }
 
 // Every new path of the rewind check fails open: a reader that panics, or anything after it, leaves the

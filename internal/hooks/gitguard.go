@@ -257,22 +257,24 @@ func editedPath(in map[string]any, root string) string {
 			p = filepath.Join(cwd, p)
 		}
 	}
-	// The real path, through its deepest directory that exists: a new file may be in new directories.
-	real := func(path string) string {
-		for dir, rest := path, ""; ; dir, rest = filepath.Dir(dir), filepath.Join(filepath.Base(dir), rest) {
-			if r, err := filepath.EvalSymlinks(dir); err == nil {
-				return filepath.Join(r, rest)
-			}
-			if filepath.Dir(dir) == dir {
-				return path
-			}
-		}
-	}
-	rel, err := filepath.Rel(real(root), real(p))
+	rel, err := filepath.Rel(realPath(root), realPath(p))
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return ""
 	}
 	return filepath.ToSlash(rel)
+}
+
+// realPath is path with its symlinks resolved, through its deepest directory that exists: a new file may
+// be in new directories, and a file a rewind left behind may be gone.
+func realPath(path string) string {
+	for dir, rest := path, ""; ; dir, rest = filepath.Dir(dir), filepath.Join(filepath.Base(dir), rest) {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(dir) == dir {
+			return path
+		}
+	}
 }
 
 // A worker's work lands on the run's branch underneath the lead session (the merge queue). Its commits

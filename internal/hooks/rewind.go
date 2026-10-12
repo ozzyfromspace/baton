@@ -121,7 +121,7 @@ func rewound(c Context, st state.State, s *state.Store, b transcript.Branch) (r 
 		r.Blocked = st.Blocked.Reason
 	}
 	for _, f := range b.Files {
-		if rel, err := filepath.Rel(s.Root, f); err == nil && filepath.IsLocal(rel) {
+		if rel, err := filepath.Rel(realPath(s.Root), realPath(f)); err == nil && filepath.IsLocal(rel) {
 			f = filepath.ToSlash(rel)
 		}
 		r.Files = append(r.Files, f)
