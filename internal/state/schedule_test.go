@@ -47,6 +47,31 @@ func runState(p plan.Plan, statuses map[string]string, parks map[string]Park, jo
 	return st
 }
 
+// HereGate is the gate running in the working tree, queued or running; a lane gate or one that ended is
+// none.
+func TestHereGate(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		jobs []Job
+		want string
+	}{
+		{"no jobs", nil, ""},
+		{"a lane gate", []Job{{ID: "j1", Status: JobRunning}}, ""},
+		{"an await", []Job{{ID: "j1", Kind: JobAwait, Status: JobRunning}}, ""},
+		{"a gate here, running", []Job{{ID: "j1", Status: JobPassed, Here: true}, {ID: "j2", Status: JobRunning, Here: true}}, "j2"},
+		{"queued", []Job{{ID: "j1", Status: JobQueued, Here: true}}, "j1"},
+		{"ended", []Job{{ID: "j1", Status: JobInterrupted, Here: true}}, ""},
+	} {
+		got := ""
+		if j := (State{Jobs: c.jobs}).HereGate(); j != nil {
+			got = j.ID
+		}
+		if got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestNext(t *testing.T) {
 	chain := graph("P0:", "P1:P0", "P2:P1", "P3:P2")
 	old := graph("P0", "P1", "P2") // no After stored
@@ -87,6 +112,12 @@ func TestNext(t *testing.T) {
 			"P2": {Reason: ParkRed, Since: t0.Add(time.Hour)},
 		}, []Job{running}, "P2"},
 		{"nothing is left", chain, map[string]string{"P0": done, "P1": done, "P2": done, "P3": done}, nil, nil, ""},
+		// A gate running in the working tree holds every phase there, a parked one too, until it ends.
+		{"a gate here holds the next phase", wide, map[string]string{"P0": verifying}, nil, []Job{{ID: "j1", Phase: "P0", Status: JobRunning, Here: true}}, ""},
+		{"a queued gate here too", wide, map[string]string{"P0": verifying}, nil, []Job{{ID: "j1", Phase: "P0", Status: JobQueued, Here: true}}, ""},
+		{"and a parked phase", wide, map[string]string{"P0": parked, "P1": verifying}, map[string]Park{"P0": {Reason: ParkRed, Since: t0}},
+			[]Job{{ID: "j2", Phase: "P1", Status: JobRunning, Here: true}}, ""},
+		{"a gate here that ended holds nothing", wide, map[string]string{"P0": done}, nil, []Job{{ID: "j1", Phase: "P0", Status: JobFailed, Here: true}}, "P1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := Next(runState(c.p, c.statuses, c.parks, c.jobs...), c.p); got != c.want {

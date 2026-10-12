@@ -125,6 +125,11 @@ func TestStopDecisionTable(t *testing.T) {
 				st.Phases["P0"].Status, st.Current = state.PhaseVerifying, ""
 				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
 			}},
+		{name: "nothing in hand: a gate in the working tree holds the next phase", say: "baton: job j1 (`make e2e`, P0) runs its gate in this working tree, so no phase starts here until it ends — nothing is needed from you: baton takes the next one up then",
+			setup: func(st *state.State) {
+				st.Phases["P0"].Status, st.Current = state.PhaseVerifying, ""
+				st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make e2e", Here: true, Status: state.JobRunning}}
+			}},
 		{name: "the phase's job running: the session idles in place", say: "P0 (First) waits on job j1 (`make test`) — nothing is needed from you: Claude is given its result when it ends",
 			setup: func(st *state.State) {
 				st.Run.StopBlocks = 2

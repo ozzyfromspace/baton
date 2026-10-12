@@ -97,6 +97,37 @@ func TestLaneRunRunsAJob(t *testing.T) {
 	}
 }
 
+// A gate run --here runs in the checkout itself, on what is checked out there, with no lane: nothing is
+// checked out for it, and no lane is made.
+func TestLaneRunRunsAGateHere(t *testing.T) {
+	s, env := laneProject(t, "pwd -P > where.txt; test -f a.txt")
+	s.Update(func(st *state.State) error {
+		st.Jobs[0].Here = true
+		return nil
+	})
+	if code, errs := laneRun(env, "sess-1", "j1"); code != 0 {
+		t.Fatalf("lane-run: exit %d: %s", code, errs)
+	}
+	st, _ := s.Load()
+	j := st.Job("j1")
+	if j.Status != state.JobPassed || j.Lane != 0 {
+		t.Errorf("job: %+v", *j)
+	}
+	checkout, _ := filepath.EvalSymlinks(s.Checkout)
+	if b, _ := os.ReadFile(filepath.Join(s.Checkout, "where.txt")); strings.TrimSpace(string(b)) != checkout {
+		t.Errorf("the gate ran in %q, not the checkout %s", b, checkout)
+	}
+	if lanes := (lane.Pool{Home: env["BATON_HOME"], Root: s.Checkout}).Lanes(); len(lanes) != 0 {
+		t.Errorf("a gate run --here made lanes: %+v", lanes)
+	}
+	if log, _ := os.ReadFile(j.Log); !strings.Contains(string(log), "with no lane") {
+		t.Errorf("job log:\n%s", log)
+	}
+	if e := events(t, s)["job_started"]; e["here"] != true {
+		t.Errorf("job_started: %v", e)
+	}
+}
+
 // The job of a phase set aside while it ran: the human is told it ended, since nothing else says so until
 // the phase comes back.
 func TestLaneRunTellsOfAParkedPhasesJob(t *testing.T) {
@@ -293,10 +324,11 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 		st.Jobs = []state.Job{
 			{ID: "j1", Phase: "P1", Kind: state.JobAwait, Command: "pwd -P > where.txt", Status: state.JobQueued, Queued: now},
 			{ID: "j2", Phase: "P1", Kind: state.JobVerify, Command: "true", Commit: head, Status: state.JobQueued, Queued: now},
+			{ID: "j3", Phase: "P1", Kind: state.JobVerify, Command: "pwd -P > here.txt", Commit: head, Here: true, Status: state.JobQueued, Queued: now},
 		}
 		return nil
 	})
-	for _, id := range []string{"j1", "j2"} {
+	for _, id := range []string{"j1", "j2", "j3"} {
 		if code, errs := laneRun(env, w.Ref, id); code != 0 {
 			t.Fatalf("lane-run %s %s: exit %d: %s", w.Ref, id, code, errs)
 		}
@@ -310,6 +342,13 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 	}
 	if j := st.Job("j2"); j.Status != state.JobPassed || j.Lane != 1 {
 		t.Errorf("verify: %+v", *j)
+	}
+	// A gate run --here runs in the worker's own worktree too, with no lane.
+	if j := st.Job("j3"); j.Status != state.JobPassed || j.Lane != 0 {
+		t.Errorf("verify --here: %+v", *j)
+	}
+	if b, _ := os.ReadFile(filepath.Join(tree, "here.txt")); strings.TrimSpace(string(b)) != tree {
+		t.Errorf("the gate run --here ran in %q, not the worker's worktree %s", b, tree)
 	}
 	io, _, _ := testIO("", env)
 	if pool := lanePool(io, w); pool != lanePool(io, lead) || !strings.HasPrefix(pool.LaneDir(1), env["BATON_HOME"]) {

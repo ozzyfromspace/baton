@@ -260,14 +260,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which the lead session puts to them", cur, rp.ID))
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":
-		// Every phase left waits for a job, so there is nothing to work on; baton takes the next phase up
-		// as soon as one can start.
+		// Every phase left waits for a job, or a gate in the working tree holds the next one, so there is
+		// nothing to work on; baton takes the next phase up as soon as one can start.
 		st.Run.StopBlocks = 0
 		waiting := ""
 		if jobs := st.Unfinished(); len(jobs) > 0 {
 			waiting = waitingOn(jobs)
 		}
-		d.say(decide.NoPhaseYet(waiting))
+		d.say(decide.NoPhaseYet(waiting, st.HereGate()))
 	case st.CurrentJob() != nil:
 		// The phase in hand waits on its job, and nothing else is owed: the session idles in place. The
 		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.

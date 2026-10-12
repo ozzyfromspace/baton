@@ -794,6 +794,10 @@ func cmdDone(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "%s That was the last phase — the plan is complete. %s\n", finished, decide.PlanComplete(len(decide.WithoutHuman(st.Decisions))))
 		return 0
 	}
+	if next == "" && st.HereGate() != nil {
+		fmt.Fprintf(io.Out, "%s %s\n", finished, decide.HereHeld(*st.HereGate()))
+		return 0
+	}
 	if next == "" {
 		fmt.Fprintf(io.Out, "%s No other phase can start until a job finishes: every phase left waits for one. End your turn now; baton wakes you when there is something to do.\n", finished)
 		return 0

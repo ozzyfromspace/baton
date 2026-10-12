@@ -63,7 +63,8 @@ func SwitchAfter(st State, j Job, after time.Duration) time.Duration {
 // Switchable reports whether the session can be switched off the phase in hand: the phase is under way
 // and waits on its job, and nothing else is owed or asked of anyone. No compaction is due or under way
 // (and the session went on after baton's last one), no result is due, the human is not being asked
-// anything, and none of the session's own background work runs: its results belong to this phase.
+// anything, and none of the session's own background work runs: its results belong to this phase. Nor
+// does a gate run in the session's working tree (HereGate): the next phase would change what it reads.
 // Whether another phase can go on instead is Next's to say.
 func Switchable(st State) bool {
 	ps, comp := st.Phases[st.Current], st.Run.Compaction
@@ -75,6 +76,8 @@ func Switchable(st State) bool {
 	case comp.InFlight() || comp.Status == CompactFailed || comp.Status == CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished):
 		return false
 	case st.Blocked != nil || st.Run.Escalation != nil || st.ReviewDue != "" || st.Replan != nil || st.PendingProposal() != nil:
+		return false
+	case st.HereGate() != nil:
 		return false
 	}
 	return len(st.Run.BusyBackground()) == 0
@@ -156,10 +159,11 @@ func oldestParked(st State, p plan.Plan, ok func(*Park) bool) string {
 // something new to resume from (Returning), the phase in hand is set aside with the checkpoint's notes,
 // and the other is taken up again after the compaction this queues. The phase set aside waits on its own
 // job if one runs, and comes back at a later switch point. It returns the phase taken up, or "" when the
-// checkpoint stays a checkpoint: no notes to resume from, or no phase to go back to.
+// checkpoint stays a checkpoint: no notes to resume from, no phase to go back to, or a gate that runs in
+// the session's working tree (HereGate).
 func SwitchAtCheckpoint(st *State, p plan.Plan, notes string, now time.Time) string {
 	ps := st.Phases[st.Current]
-	if strings.TrimSpace(notes) == "" || st.Mode != ModeRunning || ps == nil || ps.Status != PhaseActive || st.BoundaryOwed || st.Run.Compaction.InFlight() {
+	if strings.TrimSpace(notes) == "" || st.Mode != ModeRunning || ps == nil || ps.Status != PhaseActive || st.BoundaryOwed || st.Run.Compaction.InFlight() || st.HereGate() != nil {
 		return ""
 	}
 	to := Returning(*st, p)

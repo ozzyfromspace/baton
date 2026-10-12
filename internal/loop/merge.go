@@ -24,9 +24,10 @@ import (
 //     verified again on the rebased commit (state.Reverify): red takes it up again in the worker;
 //  3. the branch's changed paths are checked against the lead's local changes, ignored files included,
 //     without taking git's locks: on an overlap, landing waits until the lead has committed those files;
-//  4. holding the project's landing lock, and only while no tool call of a lead in the checkout runs,
-//     the checkout fast-forwards to the branch (git merge --ff-only), all or nothing. The run's branch
-//     moving on meanwhile sends it back to 1; a locked index tries again shortly;
+//  4. holding the project's landing lock, and only while no tool call of a lead in the checkout runs, nor
+//     a gate a lead runs there (baton verify --here, state.HereGate), the checkout fast-forwards to the
+//     branch (git merge --ff-only), all or nothing. The run's branch moving on meanwhile sends it back
+//     to 1; a locked index tries again shortly;
 //  5. HEAD must be the branch's tip, and the lead's local changes as they were: anything else is
 //     reported (land_check);
 //  6. the phase is done (state.Landed), the lead is told what landed at its next hook, and the worker is
@@ -247,7 +248,7 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 	var q state.Job
 	_, err := w.store.Update(func(sub *state.State) error {
 		var err error
-		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: j.Command, Commit: tip, Notes: decide.ReverifyNotes(st.RunBranch, j.Notes)}, now)
+		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: j.Command, Commit: tip, Here: j.Here, Notes: decide.ReverifyNotes(st.RunBranch, j.Notes)}, now)
 		return err
 	})
 	if err != nil {
@@ -261,12 +262,16 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 }
 
 // fastForward lands worker e's branch, at tip, rebased onto the run's branch at onto: the checkout
-// fast-forwards to it, unless the lead's local changes are in its way, or a tool call of a lead in the
-// checkout is running. It reports whether it landed.
+// fast-forwards to it, unless the lead's local changes are in its way, or a tool call or a gate of a lead
+// in the checkout is running. It reports whether it landed.
 func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.Store, st state.State, e state.Worker, onto, tip string) bool {
 	g := c.Fleet.gitx()
 	if c.busy(now, s) != "" {
 		return false // checked again under the landing lock; until then, the probe can wait too
+	}
+	if gate := c.gate(s); gate != "" {
+		c.deferLanding(now, s, e, gate, nil, overlapRetry)
+		return false
 	}
 	if br := g.Branch(s.Checkout); br != st.RunBranch {
 		c.deferLanding(now, s, e, fmt.Sprintf("the lead's checkout is on %q, not on the run's branch %s", br, st.RunBranch), nil, overlapRetry)
@@ -298,6 +303,11 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	defer release()
 	if busy := c.busy(now, s); busy != "" {
 		c.Lead.logf("loop: %s: waits to land: %s", e.Phase, busy)
+		return false
+	}
+	if gate := c.gate(s); gate != "" {
+		release()
+		c.deferLanding(now, s, e, gate, nil, overlapRetry)
 		return false
 	}
 	local, _ := g.Dirty(s.Checkout)
@@ -375,6 +385,26 @@ func (c *Coordinator) busy(now time.Time, s *state.Store) string {
 		return ""
 	}
 	return fmt.Sprintf("a tool call (%s) runs in the checkout", calls[0].Tool)
+}
+
+// gate names a gate running in the checkout, by the lead of this run or of another live run of the
+// project (baton verify --here), or "" if none is: it reads the checkout's files as it runs, so nothing
+// lands under it.
+func (c *Coordinator) gate(s *state.Store) string {
+	st, err := s.Load()
+	if err != nil {
+		return err.Error()
+	}
+	j := st.HereGate()
+	for _, r := range c.Project.Others(s.Ref) {
+		if j == nil {
+			j = r.State.HereGate()
+		}
+	}
+	if j == nil {
+		return ""
+	}
+	return fmt.Sprintf("a gate runs in the checkout (job %s)", j.ID)
 }
 
 // landed records worker e's work landed (l): its phase is done, the lead is told, and the worker ends.

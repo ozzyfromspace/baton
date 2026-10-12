@@ -17,12 +17,12 @@ import (
 )
 
 // The model hands baton what it would otherwise sit and wait on, and works on while baton runs it: verify
-// runs a gate on the commit in hand, in a lane of its own (package lane), and await waits on something
-// outside the project. The host starts a runner for each (hostRunners), and `baton lane-run` runs it to
-// its end.
+// runs a gate on the commit in hand, in a lane of its own (package lane), or, with --here, in the
+// session's own working tree (state.HereGate), and await waits on something outside the project. The host
+// starts a runner for each (hostRunners), and `baton lane-run` runs it to its end.
 
 func init() {
-	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" --notes \"<where the phase stands>\"", cmdVerify)
+	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] --notes \"<where the phase stands>\"", cmdVerify)
 	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" --notes \"<where the phase stands>\"", cmdAwait)
 }
 
@@ -31,11 +31,17 @@ func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAw
 
 // queueJob queues a job of kind for the phase in hand.
 func queueJob(args []string, io IO, kind string) int {
-	p, err := parseArgs(args, []string{"notes"}, nil)
+	var bools []string
+	usage := ""
+	if kind == state.JobVerify {
+		bools, usage = []string{"here"}, " [--here]"
+	}
+	p, err := parseArgs(args, []string{"notes"}, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
 	if err != nil || command == "" {
-		return fail(io, "usage: baton %s \"<command>\" --notes \"<where the phase stands>\"%s", kind, errSuffix(err))
+		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\"%s", kind, usage, errSuffix(err))
 	}
+	here := p.bools["here"]
 	if !hosted(io) {
 		return fail(io, "not queued — the baton host runs jobs, and this session is not hosted by baton. Run the command yourself.")
 	}
@@ -63,6 +69,13 @@ func queueJob(args []string, io IO, kind string) int {
 		if commit = gitx.Head(s.Root); commit == "" {
 			return refused(io, s, kind, refusal{"no commit", fmt.Sprintf("not queued — the repository has no commit yet, so there is nothing to check. Commit %s's work, then verify again.", phase)})
 		}
+		if worker := s.Worker() != ""; (worker || !here) && namesCheckout(command, s.Checkout, io.Env("HOME")) {
+			worktree := ""
+			if worker {
+				worktree = s.Root
+			}
+			return refused(io, s, kind, refusal{"names the checkout", decide.CheckoutNamed(command, s.Checkout, worktree, lane.HasScript(s.Root))})
+		}
 		if work = checkWork(s, phase); len(work.fresh) > 0 {
 			s.Event("refused", map[string]any{"command": kind, "phase": phase, "why": "uncommitted work", "files": len(work.fresh)})
 			return fail(io, "not queued — verify checks HEAD (%s), and %d %s changed in %s %s not committed, so the gate would not see %s:\n%s\n"+
@@ -80,9 +93,12 @@ func queueJob(args []string, io IO, kind string) int {
 		if st.Current != phase {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
-		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Notes: notes}, io.Now())
+		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes}, io.Now())
 		line := fmt.Sprintf("baton: job %s queued for %s — `%s`, from the working tree", queued.ID, phase, command)
-		if kind == state.JobVerify {
+		switch {
+		case here:
+			line = fmt.Sprintf("baton: job %s queued for %s — `%s` on %s, in the working tree (no lane): edits there wait until it ends", queued.ID, phase, command, shortCommit(commit))
+		case kind == state.JobVerify:
 			line = fmt.Sprintf("baton: job %s queued for %s — `%s` on %s, in a lane", queued.ID, phase, command, shortCommit(commit))
 		}
 		if replaced != nil {
@@ -96,13 +112,19 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	pruneLogs(s, st)
 	queuedEvent := map[string]any{"job": queued.ID, "phase": phase, "type": kind, "command": command, "commit": commit}
+	if here {
+		queuedEvent["here"] = true
+	}
 	if replaced != nil {
 		queuedEvent["replaced"] = replaced.ID
 	}
 	s.Event("job_queued", queuedEvent)
 
 	where := "run from the working tree"
-	if kind == state.JobVerify {
+	switch {
+	case here:
+		where = fmt.Sprintf("on %s, in the working tree, with no lane", shortCommit(commit))
+	case kind == state.JobVerify:
 		where = fmt.Sprintf("on %s, in a lane of its own", shortCommit(commit))
 	}
 	fmt.Fprintf(io.Out, "baton: queued %s — `%s` (%s), %s. baton starts it within seconds; its output goes to %s.\n", queued.ID, command, phase, where, s.JobLog(queued.ID))
@@ -112,6 +134,16 @@ func queueJob(args []string, io IO, kind string) int {
 	cfg := config.Load(batonRoot(io), io.Env)
 	timeout, _ := cfg.JobTimeout()
 	after, _ := cfg.SwitchWait()
+	if here {
+		fmt.Fprintln(io.Out, "baton: "+decide.HereQueued(s.Worker() != "", decide.Span(timeout)))
+		if work.warn != "" {
+			fmt.Fprintln(io.Out, work.warn)
+		}
+		if n := len(work.kept); n > 0 {
+			fmt.Fprintln(io.Out, "baton: "+decide.HereKept(n, phase))
+		}
+		return 0
+	}
 	next := fmt.Sprintf("Keep working on what does not depend on its result; baton tells you when it ends, and baton status shows it meanwhile. "+
 		"With nothing left to do until then, commit your work and end your turn: if the job runs past %s (or is known to take that long) and another phase can go on, "+
 		"baton sets %s aside for it, and %s resumes from your notes once the job ends. If the job runs past %s, baton stops it and counts it as failed.",
@@ -148,6 +180,43 @@ func jobRefusal(io IO, st *state.State, notes string) error {
 			"if baton sets %s aside while the job runs, your notes are what it resumes from.", st.Current, st.Current)}
 	}
 	return nil
+}
+
+// namesCheckout reports whether command names the directory checkout, or a path in it: by its absolute
+// path, as given or with symlinks resolved, or from the home directory, home (~/…, $HOME/…). A gate
+// that does runs on the checkout's files, wherever baton runs it.
+func namesCheckout(command, checkout, home string) bool {
+	if checkout == "" {
+		return false
+	}
+	forms := []string{checkout}
+	if real, err := filepath.EvalSymlinks(checkout); err == nil && real != checkout {
+		forms = append(forms, real)
+	}
+	if home != "" {
+		if rel, err := filepath.Rel(home, checkout); err == nil && rel != "." && filepath.IsLocal(rel) {
+			rel = filepath.ToSlash(rel)
+			forms = append(forms, "~/"+rel, "$HOME/"+rel, "${HOME}/"+rel)
+		}
+	}
+	name := func(c byte) bool {
+		return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-'
+	}
+	for _, f := range forms {
+		for i := 0; i < len(command); {
+			k := strings.Index(command[i:], f)
+			if k < 0 {
+				break
+			}
+			at, end := i+k, i+k+len(f)
+			// Only the whole path, or one inside it: /a/foo names neither /a/foobar nor /x/a/foo.
+			if (at == 0 || !name(command[at-1]) && command[at-1] != '/') && (end == len(command) || !name(command[end])) {
+				return true
+			}
+			i = at + 1
+		}
+	}
+	return false
 }
 
 // pruneLogs removes the logs of jobs no longer on record: dropped to keep the record short, or left by a
@@ -330,6 +399,9 @@ func printJobs(io IO, s *state.Store, st state.State) {
 		what := "`" + j.Command + "`"
 		if j.Commit != "" {
 			what += " on " + shortCommit(j.Commit)
+		}
+		if j.Here {
+			what += " in the working tree"
 		}
 		log := j.Log
 		if log == "" {

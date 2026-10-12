@@ -322,6 +322,29 @@ func TestAJobWithNoCommitRunsInItsWorkDir(t *testing.T) {
 	}
 }
 
+// A gate run Here runs in its WorkDir with no lane, even with a lane script, and checks nothing out: it
+// runs on what the tree has, which is not the commit it names here.
+func TestAGateHereRunsInItsWorkDir(t *testing.T) {
+	root, head := project(t, true)
+	calls := calls(t)
+	gittest.Write(t, root, "a.txt", "changed\n")
+	r := testRunner(t, root)
+	r.WorkDir = root
+	got := r.Run(context.Background(), Job{ID: "j1", Command: "grep -q changed a.txt", Commit: head, Here: true})
+	if got.Status != Passed || got.Lane != 0 {
+		t.Fatalf("%+v", got)
+	}
+	if _, err := os.Stat(r.Pool.Dir()); err == nil {
+		t.Error("a gate run here made a lane")
+	}
+	if c := readCalls(calls); len(c) != 0 {
+		t.Errorf("a gate run here called the lane script: %q", c)
+	}
+	if log := logOf(t, r); !strings.Contains(log, "job j1: grep -q changed a.txt, on "+head[:12]+" in "+root+", with no lane") {
+		t.Errorf("log:\n%s", log)
+	}
+}
+
 func TestRunnerArgs(t *testing.T) {
 	for args, want := range map[string]bool{
 		"/home/x/.baton/bin/baton lane-run sess-1 j3":          true,

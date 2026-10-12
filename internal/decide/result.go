@@ -46,11 +46,15 @@ func Outcome(j state.Job) string {
 	return j.Status
 }
 
-// Ran is what a job ran: "`make test` on 3f2a9c1b04de".
+// Ran is what a job ran: "`make test` on 3f2a9c1b04de", and "in the working tree" for a gate run there
+// (--here).
 func Ran(j state.Job) string {
 	what := "`" + j.Command + "`"
 	if j.Commit != "" {
 		what += " on " + short(j.Commit)
+	}
+	if j.Here {
+		what += " in the working tree"
 	}
 	return what
 }
@@ -78,6 +82,9 @@ func JobResult(j state.Job, log, tail string, others []state.Job) string {
 		fmt.Fprintf(&b, "It checked %s: what you committed after it is not in this result.", short(j.Commit))
 	case j.Status == state.JobPassed:
 		b.WriteString("Carry on.")
+	case j.Status == state.JobLaneError && j.Here:
+		fmt.Fprintf(&b, "This is not a test result: the gate's command never ran, so do not look for a bug in %s's code because of it. "+
+			"Check the command, then verify again, or run the gate in place.", j.Phase)
 	case j.Status == state.JobLaneError:
 		fmt.Fprintf(&b, "This is not a test result: the gate never ran on its own terms, so do not look for a bug in %s's code because of it. "+
 			"Run the gate in place instead, and `baton note` that you did. (baton status says how to set lanes up with a %s script.)", j.Phase, ".baton-lane")

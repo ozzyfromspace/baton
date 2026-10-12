@@ -38,6 +38,9 @@ type Job struct {
 	// Commit is the commit to check out in a lane and run the command on. Without one, the command runs
 	// in the working tree itself, with no lane (a wait on something outside the project).
 	Commit string
+	// Here runs the command in the working tree itself, with no lane, on the commit checked out there
+	// (Commit, which nothing checks out): a gate that needs that tree.
+	Here bool
 }
 
 // Result is how a job ended.
@@ -63,8 +66,8 @@ const (
 // wanted, or when ctx ends (a SIGTERM). A stopped job's lane is brought down.
 type Runner struct {
 	Pool Pool
-	// WorkDir is where a job with no commit (await) runs: the working tree of the session it runs for,
-	// which is a worker's own worktree for a worker. "" is Pool.Root.
+	// WorkDir is where a job with no commit (await), or one run Here, runs: the working tree of the
+	// session it runs for, which is a worker's own worktree for a worker. "" is Pool.Root.
 	WorkDir string
 	Host    string    // the baton host the job runs for: a lane is brought up once per host
 	Log     io.Writer // where every process's output goes, and the runner's own account; safe for concurrent use
@@ -116,12 +119,16 @@ func (r *Runner) defaults() {
 func (r *Runner) Run(ctx context.Context, j Job) Result {
 	r.begin()
 	var res Result
-	if j.Commit == "" {
+	if j.Commit == "" || j.Here {
 		dir := r.WorkDir
 		if dir == "" {
 			dir = r.Pool.Root
 		}
-		r.say("job %s: %s, in %s", j.ID, j.Command, dir)
+		if j.Here {
+			r.say("job %s: %s, on %s in %s, with no lane", j.ID, j.Command, short(j.Commit), dir)
+		} else {
+			r.say("job %s: %s, in %s", j.ID, j.Command, dir)
+		}
 		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
 	} else {
 		res = r.inLane(ctx, j)

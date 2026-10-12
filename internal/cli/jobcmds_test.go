@@ -38,10 +38,13 @@ func TestVerifyAndAwaitRefusals(t *testing.T) {
 		want  string
 		why   string // the refused event's, if one is logged
 	}{
-		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" --notes`, ""},
+		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] --notes`, ""},
 		{"not hosted", func(s *session, _ string) { delete(s.env, "BATON_HOST") }, []string{"verify", "make test", notes}, "not queued — the baton host runs jobs, and this session is not hosted", ""},
 		{"no notes", nil, []string{"verify", "make test"}, `not queued — say where P0 stands with --notes "<what is done, what is left, what this job checks>"`, "no notes"},
 		{"blank notes", nil, []string{"await", "gh run watch", "--notes", " "}, "not queued — say where P0 stands", "no notes"},
+		{"await takes no --here", nil, []string{"await", "--here", "gh run watch", notes}, `unknown flag --here`, ""},
+		{"fresh work, here", func(s *session, root string) { gittest.Write(t, root, "src/new.go", "package src\n") },
+			[]string{"verify", "--here", "make e2e", notes}, "and 1 file changed in P0 is not committed, so the gate would not see it", "uncommitted work"},
 		{"fresh work", func(s *session, root string) { gittest.Write(t, root, "src/new.go", "package src\n") },
 			[]string{"verify", "make test", notes}, "and 1 file changed in P0 is not committed, so the gate would not see it:\n    src/new.go\nCommit them (by path), then verify again", "uncommitted work"},
 		{"blocked", func(s *session, _ string) { s.set(func(x *state.State) { state.SetBlocked(x, "need a key", s.now) }) },
@@ -123,6 +126,159 @@ func TestVerifyQueuesAGateOnHead(t *testing.T) {
 	}
 }
 
+// A gate that needs the checkout runs there, on HEAD, with no lane (--here): baton says what it holds
+// until the gate ends.
+func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
+	s, root := gitSession(t)
+	head := gittest.Git(t, root, "rev-parse", "HEAD")
+	out := s.must("", "verify", "--here", "make e2e", "--notes", "the server is up; this checks the pages")
+	for _, want := range []string{"baton: queued j1 — `make e2e` (P0), on " + head[:12] + ", in the working tree, with no lane.",
+		"The gate reads this working tree as it runs, so until it ends baton refuses edits to it, takes up no other phase here, and lands no worker's work in this checkout",
+		"If it runs past 3h00m, baton stops it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("verify --here says:\n%s\nwant %q", out, want)
+		}
+	}
+	if strings.Contains(out, "sets P0 aside") || strings.Contains(out, "worker's worktree") {
+		t.Errorf("verify --here promises what it does not do:\n%s", out)
+	}
+	j := s.state().Job("j1")
+	if j == nil || !j.Here || j.Kind != state.JobVerify || j.Commit != head || j.Command != "make e2e" || j.Status != state.JobQueued {
+		t.Fatalf("job: %+v", j)
+	}
+	if !s.logged("job_queued", map[string]any{"job": "j1", "type": "verify", "commit": head, "here": true}) {
+		t.Errorf("events: %s", s.events())
+	}
+	if want := []string{"baton: job j1 queued for P0 — `make e2e` on " + head[:12] + ", in the working tree (no lane): edits there wait until it ends"}; !slices.Equal(s.state().Run.Announce, want) {
+		t.Errorf("announced %q, want %q", s.state().Run.Announce, want)
+	}
+	// A plain verify queued over it is a lane gate again.
+	s.must("", "verify", "make test", "--notes", "x")
+	if j := s.state().Job("j2"); j == nil || j.Here {
+		t.Errorf("job: %+v", j)
+	}
+}
+
+// A gate whose command goes into the checkout runs on the checkout's files from a lane, while landings and
+// edits change them: verify refuses it, and says how to run it there. --here runs it there, so the lead
+// may name its checkout; a worker never may.
+func TestVerifyRefusesAGateNamingTheCheckout(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		command func(root, rel string) string
+		here    bool
+		refused bool
+	}{
+		{"cd into it", func(root, _ string) string { return "cd " + root + " && make e2e" }, false, true},
+		{"a script in it", func(root, _ string) string { return root + "/scripts/gate.sh" }, false, true},
+		{"quoted", func(root, _ string) string { return `make -C "` + root + `" e2e` }, false, true},
+		{"from home", func(_, rel string) string { return "cd ~/" + rel + "; make e2e" }, false, true},
+		{"from $HOME", func(_, rel string) string { return "make -C $HOME/" + rel }, false, true},
+		{"a sibling", func(root, _ string) string { return "cd " + root + "-other && make e2e" }, false, false},
+		{"elsewhere", func(string, string) string { return "make e2e" }, false, false},
+		{"here", func(root, _ string) string { return "cd " + root + " && make e2e" }, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, root := gitSession(t)
+			s.env["HOME"] = filepath.Dir(root)
+			args := []string{"verify", c.command(root, filepath.Base(root)), "--notes", "x"}
+			if c.here {
+				args = append(args, "--here")
+			}
+			if !c.refused {
+				s.must("", args...)
+				return
+			}
+			why := s.fails(args...)
+			for _, want := range []string{"names the checkout (" + root + "), but verify runs a gate in a lane",
+				"`baton verify --here \"<command>\" --notes \"…\"` runs it on HEAD from the checkout's root", "commit an executable .baton-lane script"} {
+				if !strings.Contains(why, want) {
+					t.Errorf("refusal %q, want it to mention %q", why, want)
+				}
+			}
+			if !s.logged("refused", map[string]any{"command": "verify", "why": "names the checkout"}) {
+				t.Errorf("events: %s", s.events())
+			}
+			if len(s.state().Jobs) != 0 {
+				t.Errorf("queued %+v", s.state().Jobs)
+			}
+		})
+	}
+}
+
+// A worker's gates check its own work: one naming the lead's checkout is refused, --here or not, and
+// --here runs in the worker's worktree, which no landing touches.
+func TestAWorkersGateHere(t *testing.T) {
+	lead, root := gitSession(t)
+	tree := filepath.Join(t.TempDir(), "P1")
+	gittest.Git(t, root, "worktree", "add", "-q", "-b", "baton/sess-1/P1", tree)
+	run := lead.store()
+	pl, _ := run.LoadPlan()
+	p, _ := state.OpenProject(lead.env["BATON_DIR"], nil)
+	sub, err := p.NewWorker(run.Ref, "P1", "wsess", "inst", tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	only, _ := pl.Only("P1")
+	sub.SavePlan(only)
+	sub.Update(func(x *state.State) error {
+		*x = state.AttachWorker(*x, "P1")
+		state.Start(x, lead.now, state.Origin{})
+		return nil
+	})
+	w := &session{t: t, now: lead.now, env: map[string]string{"BATON_DIR": lead.env["BATON_DIR"], "BATON_HOME": lead.env["BATON_HOME"], "BATON_HOST": "1",
+		"BATON_ROLE": "worker", "BATON_INSTANCE": state.WorkerInstance("inst", "P1"), "BATON_PHASE": "P1", "CLAUDE_CODE_SESSION_ID": "wsess"}}
+
+	for _, here := range []bool{false, true} {
+		args := []string{"verify", "cd " + root + " && make e2e", "--notes", "x"}
+		if here {
+			args = append(args, "--here")
+		}
+		why := w.fails(args...)
+		if want := "names the lead session's checkout (" + root + "), which a worker never touches: your gates check your own work. " +
+			"Leave the checkout's path out: verify runs the command on your commit in a lane of its own, or, with --here, in your worktree (" + w.store().Root + ")."; !strings.Contains(why, want) {
+			t.Errorf("refusal %q, want %q", why, want)
+		}
+	}
+	out := w.must("", "verify", "--here", "make e2e", "--notes", "x")
+	if want := "until it ends baton refuses edits to it, and takes up nothing else here: they would change what it checks."; !strings.Contains(out, want) {
+		t.Errorf("verify --here says:\n%s\nwant %q", out, want)
+	}
+	if j := w.state().Job("P1.j1"); j == nil || !j.Here || j.Commit != gittest.Git(t, tree, "rev-parse", "HEAD") {
+		t.Errorf("job: %+v", j)
+	}
+}
+
+// namesCheckout matches the checkout's path whole, or a path inside it, in any of the forms a shell takes
+// it in.
+func TestNamesCheckout(t *testing.T) {
+	const co, home = "/w/proj", "/w"
+	for _, c := range []struct {
+		command string
+		want    bool
+	}{
+		{"cd /w/proj && make", true},
+		{"/w/proj/gate.sh", true},
+		{"'/w/proj'", true},
+		{"make -C /w/proj", true},
+		{"cd ~/proj; make", true},
+		{"cd ${HOME}/proj/web; make", true},
+		{"cd /w/projects && make", false},
+		{"cd /w/proj.bak && make", false},
+		{"cd /x/w/proj && make", false},
+		{"cd /mnt//w/proj && make", false},
+		{"cd ~/projx", false},
+		{"make e2e", false},
+	} {
+		if got := namesCheckout(c.command, co, home); got != c.want {
+			t.Errorf("namesCheckout(%q) = %v, want %v", c.command, got, c.want)
+		}
+	}
+	if namesCheckout("cd / && make", "", home) {
+		t.Error("an empty checkout named")
+	}
+}
+
 // Work already uncommitted when the phase started is not the phase's, so it does not hold a gate up; but
 // the gate does not see it either, and verify says so.
 func TestVerifyNotesWorkFromBeforeThePhase(t *testing.T) {
@@ -132,6 +288,9 @@ func TestVerifyNotesWorkFromBeforeThePhase(t *testing.T) {
 	s.attach(planFile)
 	if out := s.must("", "verify", "make test", "--notes", "x"); !strings.Contains(out, "1 uncommitted file was already there when P0 started; the gate checks HEAD, without it.") {
 		t.Errorf("verify says:\n%s", out)
+	}
+	if out := s.must("", "verify", "--here", "make test", "--notes", "x"); !strings.Contains(out, "1 uncommitted file was already there when P0 started; the gate runs with it, as it is in the working tree.") {
+		t.Errorf("verify --here says:\n%s", out)
 	}
 }
 

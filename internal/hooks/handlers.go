@@ -167,7 +167,8 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	var pending []issued
 	var sweep string
 	var others []state.RunInfo
-	var refuseWorker, edited string
+	var refuseWorker, refuseHere, edited string
+	var gate state.Job
 	var rw *rewrite
 	if str(c.Input, "tool_name") == "Bash" {
 		ti, _ := c.Input["tool_input"].(map[string]any)
@@ -184,6 +185,13 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		holds := func() {
 			if phase := s.Worker(); phase != "" {
 				if refuseWorker, edited = workerRefusal(c.Input, s, phase); refuseWorker != "" {
+					return
+				}
+			}
+			if j := st.HereGate(); j != nil {
+				// A gate runs in this working tree (baton verify --here), and reads its files as it runs.
+				if edited = editedPath(c.Input, s.Root); edited != "" {
+					refuseHere, gate = decide.HereEdit(*j), *j
 					return
 				}
 			}
@@ -210,7 +218,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			}
 			hold = holdCall(st, own)
 		}
-		if holds(); refuseWorker == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
+		if holds(); refuseWorker == "" && refuseHere == "" && len(others) == 0 && refuseQuestion == "" && hold == "" && s.Worker() == "" {
 			// The call runs, in the lead's checkout: no worker's work lands there until it has ended, and
 			// it waits for any landing under way.
 			st.Run.ToolStarted(state.ToolCall{ID: str(c.Input, "tool_use_id"), Agent: str(c.Input, "agent_id"), Tool: str(c.Input, "tool_name"), Since: c.Now})
@@ -234,6 +242,12 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		s.Event("worker_refused", fields)
 		res := permission("deny", refuseWorker)
 		res.Output["systemMessage"] = say
+		return res, nil
+	}
+	if refuseHere != "" {
+		s.Event("edit_refused", map[string]any{"tool": str(c.Input, "tool_name"), "path": edited, "job": gate.ID, "why": "a gate runs here"})
+		res := permission("deny", refuseHere)
+		res.Output["systemMessage"] = "baton: refused an edit to " + edited + " — job " + gate.ID + "'s gate runs in this working tree until it ends"
 		return res, nil
 	}
 	if len(others) > 0 {

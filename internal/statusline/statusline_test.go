@@ -84,7 +84,7 @@ func TestSegment(t *testing.T) {
 		}, true, "◆ baton · P0 1/2 The overlay · P0 verifying 12m · ctx 41%"},
 		// The turn over, the phase waits on its gate, which needs nothing from the human.
 		{"the phase in hand waits on its gate", func() state.State {
-			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
+			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Here: true, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})
 		}, true, "◆ baton · P0 1/2 The overlay · P0 waits on its gate 12m · ctx 41%"},
 		{"the phase in hand awaits", func() state.State {
 			return withJobs(run, state.Job{ID: "j1", Phase: "P0", Kind: state.JobAwait, Status: state.JobRunning, Queued: now.Add(-12 * time.Minute)})

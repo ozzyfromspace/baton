@@ -16,8 +16,13 @@ func GateWait(cur string, j state.Job) string {
 }
 
 // NoPhaseYet is the session line when no phase is in hand because every phase left waits on a job
-// (waiting names them): no one needs to do anything.
-func NoPhaseYet(waiting string) string {
+// (waiting names them), or here, a gate that runs in the working tree, holds it: no one needs to do
+// anything.
+func NoPhaseYet(waiting string, here *state.Job) string {
+	if here != nil {
+		return fmt.Sprintf("baton: job %s (`%s`, %s) runs its gate in this working tree, so no phase starts here until it ends — "+
+			"nothing is needed from you: baton takes the next one up then", here.ID, here.Command, here.Phase)
+	}
 	if waiting == "" {
 		return "baton: no phase can start yet; baton takes the next one up as soon as one can"
 	}

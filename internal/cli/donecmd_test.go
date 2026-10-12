@@ -65,6 +65,26 @@ func TestDoneWhileItsGateRuns(t *testing.T) {
 	}
 }
 
+// Done while the phase's gate runs in the checkout (--here): the phase is verifying, and no other phase
+// starts there until the gate ends.
+func TestDoneWhileItsGateRunsHere(t *testing.T) {
+	s := afterSession(t)
+	s.job(state.JobRunning, 0)
+	s.set(func(x *state.State) { x.Jobs[0].Here = true })
+	out := s.must("", "done", "P0", "--notes", "the survey is in docs/")
+	if want := "is still running. baton marks P0 done when it passes; if it fails, P0 reopens, and is taken up again from your notes on that job. " +
+		"Job j1 runs in this working tree, so no other phase starts here until it ends. End your turn now; baton wakes you when there is something to do."; !strings.Contains(out, want) {
+		t.Errorf("done says:\n%s\nwant %q", out, want)
+	}
+	st, _ := s.store().Load()
+	if st.Phases["P0"].Status != state.PhaseVerifying || st.Current != "" || st.BoundaryOwed {
+		t.Fatalf("after done: P0 %s, in hand %q, boundary owed %v", st.Phases["P0"].Status, st.Current, st.BoundaryOwed)
+	}
+	if !s.logged("phase_verifying", map[string]any{"phase": "P0", "job": "j1", "next": ""}) {
+		t.Errorf("events:\n%s", s.events())
+	}
+}
+
 // A red verification refuses done, with the result the first time; --despite-red finishes the phase, as a
 // decision without the human.
 func TestDoneRefusesARedVerification(t *testing.T) {

@@ -74,6 +74,7 @@ func TestSwitchable(t *testing.T) {
 		{"a replan waits", func(st *State) { st.Replan = &Replan{File: "x"} }, false},
 		{"a proposal pending", func(st *State) { AddProposal(st, Decision{What: "x"}, t0) }, false},
 		{"background work of the session's own", func(st *State) { st.Run.Background = []Task{{ID: "b1", Type: "shell"}} }, false},
+		{"its gate runs in the working tree", func(st *State) { st.Jobs[0].Here = true }, false},
 		{"a Monitor is not work", func(st *State) {
 			st.Run.Background, st.Run.Monitors = []Task{{ID: "m1", Type: "shell"}}, []string{"m1"}
 		}, true},
@@ -197,9 +198,10 @@ func TestSwitchAtCheckpoint(t *testing.T) {
 		{"no notes, no switch", at(JobFailed, "j2", ParkJob, t0), " ", ""},
 		{"a phase set aside at a checkpoint has no news", at(JobRunning, "", ParkCheckpoint, t0), "x", ""},
 		{"the longest parked with news first", at(JobPassed, "", ParkRed, t0), "x", "P2"},
+		{"not while a gate runs in the working tree", at(JobFailed, "j2", ParkJob, t0), "here", ""},
 	} {
 		st := c.st
-		st.Jobs = append(st.Jobs, Job{ID: "j3", Phase: "P1", Status: JobRunning})
+		st.Jobs = append(st.Jobs, Job{ID: "j3", Phase: "P1", Status: JobRunning, Here: c.notes == "here"})
 		SetCheckpoint(&st)
 		to := SwitchAtCheckpoint(&st, p, c.notes, t1)
 		if to != c.want {

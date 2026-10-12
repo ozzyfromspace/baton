@@ -357,6 +357,68 @@ func TestALandingWaitsForTheLeadsToolCalls(t *testing.T) {
 	}
 }
 
+// Nothing lands in the checkout while a lead's gate runs there (--here), this run's lead's or another's:
+// the gate reads the checkout's files. The landing goes ahead at its next try once the gates have ended.
+// A gate in a lane holds nothing.
+func TestALandingWaitsForAGateInTheCheckout(t *testing.T) {
+	x := landingCrew(t)
+	x.lead.Update(func(st *state.State) error {
+		st.Jobs = append(st.Jobs, state.Job{ID: "j1", Phase: "P0", Kind: state.JobVerify, Command: "make lint", Status: state.JobRunning, Queued: x.now},
+			state.Job{ID: "j2", Phase: "P0", Kind: state.JobVerify, Command: "make e2e", Here: true, Status: state.JobRunning, Queued: x.now})
+		return nil
+	})
+	other, _ := x.proj.Bind(state.Binding{Session: "sess-2", Instance: "inst-2"})
+	other.WritePlan(x.pl)
+	other.Update(func(st *state.State) error {
+		*st = state.Reattach(*st, x.pl, x.now, state.Origin{})
+		st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Kind: state.JobVerify, Command: "make e2e", Here: true, Status: state.JobRunning, Queued: x.now}}
+		return nil
+	})
+	end := func(s *state.Store, id string) {
+		s.Update(func(st *state.State) error {
+			j := st.Job(id)
+			j.Status, j.Started, j.Ended = state.JobPassed, x.now, x.now
+			return nil
+		})
+	}
+	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if gitx.Head(x.repo) == tip {
+		t.Fatal("landed while the lead's gate ran in the checkout")
+	}
+	if !x.has("land_deferred", `"why":"a gate runs in the checkout (job j2)"`) || !strings.Contains(x.announced(), "baton: P1 waits to land: a gate runs in the checkout (job j2)") {
+		t.Errorf("events:\n%s", x.events())
+	}
+	end(x.lead, "j2")
+	x.tick(overlapRetry)
+	if gitx.Head(x.repo) == tip {
+		t.Fatal("landed while another run's lead's gate ran in the checkout")
+	}
+	end(other, "j1")
+	x.tick(overlapRetry)
+	if gitx.Head(x.repo) != tip {
+		t.Fatalf("not landed once no gate ran in the checkout (a lane's holds nothing)\n%s", x.events())
+	}
+	if !x.has("landed", `"phase":"P1"`) {
+		t.Errorf("events:\n%s", x.events())
+	}
+}
+
+// A gate a worker ran in its worktree (--here) runs there again on its rebased branch.
+func TestALandingIsVerifiedAgainInItsWorktree(t *testing.T) {
+	x := landingCrew(t)
+	x.leadCommits(map[string]string{"lead.txt": "lead\n"})
+	x.finish("P1", map[string]string{"one.txt": "one\n"}, true)
+	x.sub("P1").Update(func(st *state.State) error { st.Latest("P1").Here = true; return nil })
+	x.tick(time.Second) // rebased
+	x.tick(time.Second) // verified again
+	sst, _ := x.sub("P1").Load()
+	if j := sst.Latest("P1"); j == nil || j.Status != state.JobQueued || !j.Here || j.Commit != gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") {
+		t.Fatalf("job %+v", j)
+	}
+}
+
 // flaky is git whose fast-forwards fail as the test says, before they go through.
 type flaky struct {
 	landGit

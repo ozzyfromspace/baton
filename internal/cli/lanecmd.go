@@ -74,7 +74,11 @@ func cmdLaneRun(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: %v\n", err)
 		return 1
 	}
-	s.Event("job_started", map[string]any{"job": id, "phase": job.Phase, "type": job.Kind, "command": job.Command, "commit": job.Commit, "pid": job.PID, "log": job.Log})
+	started := map[string]any{"job": id, "phase": job.Phase, "type": job.Kind, "command": job.Command, "commit": job.Commit, "pid": job.PID, "log": job.Log}
+	if job.Here {
+		started["here"] = true
+	}
+	s.Event("job_started", started)
 
 	res := runJob(s, job, io)
 	ended := finishJob(s, job, res, io.Now())
@@ -141,7 +145,7 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 			})
 		},
 	}
-	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit})
+	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here})
 }
 
 // mine reports whether j, as the run's state has it now, is the job this runner took up: a job dropped

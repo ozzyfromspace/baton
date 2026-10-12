@@ -20,7 +20,8 @@ type Job struct {
 	Phase   string `json:"phase"`
 	Kind    string `json:"kind,omitempty"` // JobVerify or JobAwait
 	Command string `json:"command,omitempty"`
-	Commit  string `json:"commit,omitempty"` // the commit a verify job checks, in a lane
+	Commit  string `json:"commit,omitempty"` // the commit a verify job checks, in a lane, or checked out where it runs (Here)
+	Here    bool   `json:"here,omitempty"`   // a verify job run in the session's own working tree, with no lane (HereGate)
 	Notes   string `json:"notes,omitempty"`  // where the phase stood when the job was queued, in the model's words
 	Status  string `json:"status"`
 	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
@@ -198,6 +199,19 @@ func TakeDue(st *State, now time.Time) []Job {
 	return due
 }
 
+// HereGate is the job not finished yet that runs in the session's own working tree (Job.Here), or nil
+// when there is none. It reads that tree as it runs, so nothing else may change it until it ends: the
+// session takes up no other phase (Next) and is not switched, edits there are refused (hooks), and no
+// worker's work lands in a checkout a lead's gate runs in (loop).
+func (st State) HereGate() *Job {
+	for i := range st.Jobs {
+		if j := &st.Jobs[i]; j.Here && !j.Finished() {
+			return j
+		}
+	}
+	return nil
+}
+
 // Job returns the job with this id, or nil when there is none on record.
 func (st State) Job(id string) *Job {
 	for i := range st.Jobs {
@@ -212,8 +226,12 @@ func (st State) Job(id string) *Job {
 // one parked longest first), else the first pending phase, in document order, whose dependencies are all
 // done, else "": every phase left is verifying, parked while its job runs, a worker's, or waits for one
 // that is. In a run that never parked a phase this is the first phase not done, as phases have always
-// run.
+// run. While a gate runs in the session's working tree (HereGate), it is "" too: the next phase would
+// change the files the gate reads.
 func Next(st State, p plan.Plan) string {
+	if st.HereGate() != nil {
+		return ""
+	}
 	if next := oldestParked(st, p, st.resolved); next != "" {
 		return next
 	}
