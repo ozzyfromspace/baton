@@ -133,13 +133,22 @@ func recordModReport(io IO) modReply {
 		// The mod's word on a compaction of the lead is a proof of it (state.Reported), counted as it comes,
 		// with the bridge's lock let go.
 		over, now := rep.Kind == bridge.Compacted, io.Now()
-		var changed bool
+		var changed, started bool
+		var comp state.Compaction
 		s.Update(func(st *state.State) error {
+			was := st.Run.Compaction.Status
 			changed = state.Report(st, state.Reported(over, rep.Trigger, now), now)
+			comp = st.Run.Compaction
+			started = changed && !over && was != state.CompactActive && comp.Status == state.CompactActive
 			return nil
 		})
 		if changed {
 			s.Event("compact_reported", map[string]any{"over": over, "trigger": rep.Trigger})
+		}
+		if started {
+			// The start is proven here, so the compaction's end does not log it (state.After.Unseen): it is
+			// logged as the hooks' proof of it would be.
+			s.Event("compact_started", map[string]any{"trigger": comp.Trigger, "by_baton": comp.ByBaton, "epoch": comp.Epoch, "reason": comp.Reason, "proof": "mod"})
 		}
 	}
 	return modReply{OK: true}

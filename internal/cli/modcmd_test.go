@@ -274,4 +274,15 @@ func TestTheModsCompactionReportsCount(t *testing.T) {
 	if n := strings.Count(m.events(), `"kind":"compact_reported"`); n != 2 {
 		t.Errorf("%d compact_reported events:\n%s", n, m.events())
 	}
+	// Its start is logged once, as it is proven (the end logs a start only when nothing proved it).
+	started := ""
+	for _, line := range strings.Split(m.events(), "\n") {
+		if strings.Contains(line, `"kind":"compact_started"`) {
+			started += line
+		}
+	}
+	if n := strings.Count(m.events(), `"kind":"compact_started"`); n != 1 || !strings.Contains(started, `"by_baton":true`) || !strings.Contains(started, `"proof":"mod"`) ||
+		!strings.Contains(started, `"reason":"boundary"`) || !strings.Contains(started, `"trigger":"manual"`) {
+		t.Errorf("%d compact_started events:\n%s", n, m.events())
+	}
 }
