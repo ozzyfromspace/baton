@@ -40,8 +40,11 @@ type Worker struct {
 	Worktree string `json:"worktree"` // its git worktree, outside the checkout
 	Branch   string `json:"branch"`   // its own branch in that worktree
 	Base     string `json:"base"`     // the commit of the run's branch it started from
-	Status   string `json:"status"`
-	Why      string `json:"why,omitempty"` // why it is suspended or failed
+	// AgentID is the phase agent at work on it in the lead's claude, linked to its sub-run
+	// (Project.LinkAgent) as its worktree was made for it (WorktreeCreate); "" until then.
+	AgentID string `json:"agent,omitempty"`
+	Status  string `json:"status"`
+	Why     string `json:"why,omitempty"` // why it is suspended or failed
 	// Assigned is when it was given its phase, Since when it took its status, Started when its session
 	// sent its first prompt, and Ended when its session last ended.
 	Assigned time.Time `json:"assigned"`

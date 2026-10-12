@@ -22,3 +22,18 @@ func TestTheRewakeRunsAfterEveryCompaction(t *testing.T) {
 		t.Fatalf("%d rewakes after PostCompact", found)
 	}
 }
+
+// Every worktree the hosted session asks for is made by baton, which places phase agents in their phases'
+// worktrees (docs/research/visible-workers.md); checking a project out takes longer than a hook's usual
+// 30 seconds.
+func TestBatonMakesTheSessionsWorktrees(t *testing.T) {
+	hooks := Settings("/b/baton")["hooks"].(map[string]any)
+	entries, _ := hooks["WorktreeCreate"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("WorktreeCreate: %v", hooks["WorktreeCreate"])
+	}
+	h := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
+	if args := h["args"].([]any); args[1] != "WorktreeCreate" || h["timeout"] != 180 {
+		t.Errorf("the hook %v", h)
+	}
+}

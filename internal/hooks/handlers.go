@@ -103,6 +103,7 @@ func Handlers(d Deps) map[string]Handler {
 		"PostCompact":        h.compactSeen,
 		"PostCompactRewake":  h.postCompactRewake,
 		"SessionStartRewake": h.sessionStartRewake,
+		"WorktreeCreate":     h.worktreeCreate,
 	}
 	read := d.Machine
 	if read == nil {
@@ -223,6 +224,7 @@ func (h *handlers) onScreen(c Context, s *state.Store, fn func(st *state.State))
 // mod makes in the lead's session to spawn, message and stop phase agents: they are how the host acts.
 func (h *handlers) preToolUse(c Context) (Result, error) {
 	if modCall(c.Input) {
+		h.spawning(c)
 		return Result{}, nil
 	}
 	if str(c.Input, "tool_name") == "Bash" {
@@ -1063,6 +1065,10 @@ func questions(in map[string]any) []string {
 }
 
 func (h *handlers) toolDone(c Context) (Result, error) {
+	if modCall(c.Input) {
+		// A call baton's mod made: it is not the model's, and nothing given with its result reaches the model.
+		return h.spawned(c)
+	}
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	var dropped []event
@@ -1332,9 +1338,15 @@ func (h *handlers) notification(c Context) (Result, error) {
 	return Result{}, ok(err)
 }
 
-// subagentStart counts a subagent the loop's model started. A phase agent's own start is its sub-run's,
-// and none of the lead's (nor is one baton has not linked yet: its type says what it is).
+// subagentStart counts a subagent the loop's model started. A phase agent's own start is its sub-run's
+// (agentStart), and none of the lead's (nor is one baton has not linked yet: its type says what it is).
 func (h *handlers) subagentStart(c Context) (Result, error) {
+	if s, err := h.phaseAgent(c); s != nil || err != nil {
+		if err != nil {
+			return Result{}, ok(err)
+		}
+		return h.agentStart(c, s)
+	}
 	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if c.Agent != "" && str(c.Input, "agent_type") != state.PhaseAgent {
 			st.Run.Subagents++
@@ -1344,9 +1356,15 @@ func (h *handlers) subagentStart(c Context) (Result, error) {
 	return Result{}, ok(err)
 }
 
-// subagentStop counts a subagent of the loop's model ended. A phase agent's stop is its sub-run's own; it
-// asks nothing on the lead's screen any more.
+// subagentStop counts a subagent of the loop's model ended, and lets go of a plain worktree baton made for
+// it (plainStopped). A phase agent's stop is its sub-run's own (agentStop).
 func (h *handlers) subagentStop(c Context) (Result, error) {
+	if s, err := h.phaseAgent(c); s != nil || err != nil {
+		if err != nil {
+			return Result{}, ok(err)
+		}
+		return h.agentStop(c, s)
+	}
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		if c.Agent == "" {
 			return nil
@@ -1358,10 +1376,23 @@ func (h *handlers) subagentStop(c Context) (Result, error) {
 		st.Run.ToolsEnded(c.Agent)
 		return nil
 	})
-	if err == nil {
-		h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseAgent(s.Agent) })
+	if err == nil && c.Agent != "" {
+		h.plainStopped(c, s)
 	}
 	return Result{}, ok(err)
+}
+
+// phaseAgent is the sub-run of the phase agent a hook comes from (OpenRun linked it), or nil for any other
+// hook.
+func (h *handlers) phaseAgent(c Context) (*state.Store, error) {
+	if c.Agent != "" || str(c.Input, "agent_id") == "" {
+		return nil, nil
+	}
+	s, err := h.d.Open(c)
+	if err != nil || s.Agent == "" {
+		return nil, err
+	}
+	return s, nil
 }
 
 // recordStop notes what every Stop tells us; the decision about the stop is made in stop.go.
@@ -1431,6 +1462,9 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 	})
 	if err == nil {
 		h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseAgent(s.Agent) })
+		if c.Agent != "" {
+			h.plainStopped(c, s) // a subagent that ends in an API error has no SubagentStop
+		}
 		fields := map[string]any{"error": e.Error}
 		if e.Error == state.ErrRefusal {
 			fields["category"] = e.Category

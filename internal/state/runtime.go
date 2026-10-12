@@ -1,8 +1,11 @@
 package state
 
 import (
+	"path/filepath"
 	"slices"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/gitx"
 )
 
 // Runtime is what the hooks observe about the live session. The host's controller and the Stop
@@ -52,6 +55,17 @@ type Runtime struct {
 	// Tools are the tool calls whose results have not come back yet, oldest first: each may be changing
 	// files right now, so no worker's work lands in the checkout while one is (ToolCall).
 	Tools []ToolCall `json:"tools,omitempty"`
+	// Spawning is the phase agent baton's mod is starting in the lead's claude, from its call's PreToolUse
+	// until its worktree is made (WorktreeCreate) or the call ends (Spawning).
+	Spawning *Spawning `json:"spawning,omitempty"`
+	// Plain are the worktrees baton made in a hosted session for an agent that is not one of its phases
+	// (the model's own isolated subagents, a workflow's agents), where Claude Code would have, newest last:
+	// one still as it was made when its agent stops is removed, as Claude Code removes its own (PlainTree).
+	Plain []PlainTree `json:"plain,omitempty"`
+	// Briefed is, in a phase's sub-run, the phase agent its brief was given to (SubagentStart): a message
+	// starts an idle agent again with its conversation, and it is not briefed again; another agent on the
+	// phase is.
+	Briefed string `json:"briefed,omitempty"`
 
 	// StopBlocks counts consecutive Stops baton refused because the model reported no status.
 	StopBlocks int `json:"stop_blocks"`
@@ -503,6 +517,48 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 	r.Monitors = slices.DeleteFunc(r.Monitors, func(id string) bool {
 		return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id })
 	})
+}
+
+// Spawning is the call baton's mod makes in the lead's session to start the phase agent on Phase: the Agent
+// tool's call ToolUse, made at At, as PreToolUse saw it. Claude Code says neither the agent's type nor
+// the call at WorktreeCreate, only the prompt id of the event that made the call (Prompt): the model's own
+// calls run under its turn's prompt id, and each event of the mod has one of its own (spike 32), so a
+// worktree asked for under this one is the phase agent's.
+type Spawning struct {
+	Phase   string    `json:"phase"`
+	Prompt  string    `json:"prompt"`
+	ToolUse string    `json:"tool_use"`
+	At      time.Time `json:"at"`
+}
+
+// PlainTree is a worktree baton made for an agent of the model's own, at Path on Branch from commit Base.
+type PlainTree struct {
+	Path   string    `json:"path"`
+	Branch string    `json:"branch"`
+	Base   string    `json:"base"`
+	At     time.Time `json:"at"`
+}
+
+// maxPlain bounds the plain worktrees on record: one whose agent never stopped must not pile up.
+const maxPlain = 32
+
+// MadePlain records a plain worktree baton made.
+func (r *Runtime) MadePlain(t PlainTree) {
+	r.Plain = append(slices.DeleteFunc(r.Plain, func(o PlainTree) bool { return o.Path == t.Path }), t)
+	if n := len(r.Plain) - maxPlain; n > 0 {
+		r.Plain = slices.Delete(r.Plain, 0, n)
+	}
+}
+
+// PlainAt is the plain worktree baton made that holds dir, and lets go of it.
+func (r *Runtime) PlainAt(dir string) (PlainTree, bool) {
+	for i, t := range r.Plain {
+		if dir != "" && (filepath.Clean(dir) == filepath.Clean(t.Path) || gitx.Within(dir, t.Path)) {
+			r.Plain = slices.Delete(r.Plain, i, i+1)
+			return t, true
+		}
+	}
+	return PlainTree{}, false
 }
 
 // ToolCall is a tool the session called whose result has not come back. A call ends with its result

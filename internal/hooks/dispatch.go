@@ -41,6 +41,12 @@ type Result struct {
 	// Rewake, when non-empty, is written to stderr and the process exits 2. Only meaningful for hooks
 	// registered with "asyncRewake": true, where it wakes the idle model with this message.
 	Rewake string
+	// Stdout is written to stdout as it is, for a hook whose answer is not JSON: WorktreeCreate's is the
+	// worktree's path.
+	Stdout string
+	// Fail, when non-empty, is written to stderr and the process exits 1: for WorktreeCreate, the worktree
+	// is not made, and the agent that asked for it does not start. No other hook uses it.
+	Fail string
 }
 
 // Handler handles one event.
@@ -86,6 +92,13 @@ func Dispatch(event string, stdin io.Reader, stdout, stderr io.Writer, env func(
 			return 0
 		}
 		stdout.Write(out)
+	}
+	if res.Stdout != "" {
+		fmt.Fprintln(stdout, res.Stdout)
+	}
+	if res.Fail != "" {
+		fmt.Fprintln(stderr, "baton: "+res.Fail)
+		return 1
 	}
 	if res.Rewake != "" {
 		fmt.Fprintln(stderr, res.Rewake)

@@ -10,8 +10,12 @@ import (
 var hookEvents = []string{
 	"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest",
 	"PermissionDenied", "Notification", "Stop", "StopFailure", "SubagentStart", "SubagentStop",
-	"PreCompact", "PostCompact",
+	"PreCompact", "PostCompact", "WorktreeCreate",
 }
+
+// hookTimeouts are the hooks that may take longer than a hook's usual 30 seconds: WorktreeCreate checks the
+// project out.
+var hookTimeouts = map[string]int{"WorktreeCreate": 180}
 
 // rewakeHooks run in the background ("asyncRewake") and may wake the idle model by exiting 2. They are
 // separate from the synchronous hooks for the same events.
@@ -31,7 +35,11 @@ var rewakeHooks = []struct{ event, matcher, name string }{
 func Settings(batonBin string) map[string]any {
 	hooks := map[string]any{}
 	for _, ev := range hookEvents {
-		hooks[ev] = []any{map[string]any{"hooks": []any{execHook(batonBin, ev)}}}
+		h := execHook(batonBin, ev)
+		if t := hookTimeouts[ev]; t > 0 {
+			h["timeout"] = t
+		}
+		hooks[ev] = []any{map[string]any{"hooks": []any{h}}}
 	}
 	for _, r := range rewakeHooks {
 		h := execHook(batonBin, r.name)

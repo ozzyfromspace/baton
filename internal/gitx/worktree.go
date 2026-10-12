@@ -177,6 +177,22 @@ func RenameBranch(ctx context.Context, root, from, to string) error {
 	return err
 }
 
+// MainRoot returns the main working tree of the repository dir is in (a linked worktree's too), or "" for
+// none: no git, or a bare repository.
+func MainRoot(dir string) string {
+	if !Usable(dir) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := run(ctx, dir, nil, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common := strings.TrimSpace(string(out))
+	if err != nil || filepath.Base(common) != ".git" {
+		return ""
+	}
+	return filepath.Dir(common)
+}
+
 // RevParse returns the commit rev names in the repository at root, or "" (no git, or no such commit).
 func RevParse(root, rev string) string {
 	if !Usable(root) {
