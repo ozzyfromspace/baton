@@ -374,7 +374,7 @@ func TestAWorkerHasASubRunOfItsOwn(t *testing.T) {
 }
 
 // A worker's session finds its sub-run and nothing else: it never creates, adopts or claims a run, and
-// never touches a host link, least of all the lead's.
+// never touches a host link, least of all the lead's. A /clear in it keeps its sub-run.
 func TestAWorkerBindsOnlyItsOwnSubRun(t *testing.T) {
 	p, _ := newProject(t)
 	lead := bind(t, p, Binding{Session: "lead", Instance: "host"})
@@ -410,10 +410,10 @@ func TestAWorkerBindsOnlyItsOwnSubRun(t *testing.T) {
 	}
 	for _, b := range []Binding{
 		{Session: "fresh", Instance: "host-P1", Worker: true},
-		{Session: "fresh", Instance: "host-P1", Worker: true, Carry: true}, // /clear typed in a viewer
-		{Session: "fresh", Instance: "host-P1"},                            // and the role lost on the way
-		{Session: "fresh", Instance: "host-P1", Carry: true},
+		{Session: "fresh", Instance: "host-P1"}, // the role lost on the way
 		{Instance: "nobody", Worker: true},
+		{Session: "lead", Instance: "host-P1", Worker: true, Carry: true},  // a session of another run
+		{Session: "fresh", Instance: "host-P9", Worker: true, Carry: true}, // a worker's instance that drives nothing
 	} {
 		if _, err := p.Bind(b); !errors.Is(err, ErrNotLinked) {
 			t.Errorf("%+v: %v, want ErrNotLinked", b, err)
@@ -430,6 +430,18 @@ func TestAWorkerBindsOnlyItsOwnSubRun(t *testing.T) {
 	}
 	if ownerOf(t, w) != "host-P1" {
 		t.Errorf("the worker's owner is %q", ownerOf(t, w))
+	}
+	// A /clear typed in the worker's session (in a viewer) keeps its sub-run: the cleared session is linked
+	// to the sub-run the worker's host instance drives, as a lead's /clear keeps its run.
+	got, err := p.Bind(Binding{Session: "cleared-w", Instance: "host-P1", Worker: true, Carry: true})
+	if err != nil || got.Dir != w.Dir || got.Session != "cleared-w" || p.RunOf("cleared-w") != w.Ref || p.HostRun("host-P1") != w.Ref {
+		t.Errorf("a cleared worker got %v %v; its links: session %q, host %q", got, err, p.RunOf("cleared-w"), p.HostRun("host-P1"))
+	}
+	if got, err := p.Bind(Binding{Session: "cleared-w", Instance: "host-P1", Worker: true}); err != nil || got.Dir != w.Dir {
+		t.Errorf("the cleared worker's next hook got %v %v", got, err)
+	}
+	if now, _ := os.ReadFile(filepath.Join(lead.Dir, "state.json")); string(now) != string(leadState) || !exists(pend.Dir) || ownerOf(t, w) != "host-P1" {
+		t.Error("a cleared worker touched the lead's state, the pending run, or its owner")
 	}
 	// A cleared lead carries its own run.
 	if got := bind(t, p, Binding{Session: "cleared", Instance: "host", Carry: true}); got.Dir != lead.Dir || p.HostRun("host-P1") != w.Ref {

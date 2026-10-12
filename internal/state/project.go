@@ -223,7 +223,8 @@ var ErrNotLinked = errors.New("this worker's session has no run linked to it")
 // session (pending, hosted sessions only), or a new run of its own.
 //
 // A worker's sub-run is only ever found: its host links it before the worker starts and drives it, so
-// Bind never creates, adopts, claims or relinks one, and a worker's session never gets any other run.
+// Bind never creates, adopts or claims one, and a worker's session never gets any other run. The one link
+// it adds is a worker's /clear (b.Carry), which keeps the sub-run the worker's host instance drives.
 func (p *Project) Bind(b Binding) (*Store, error) {
 	if b.Session != "" && !validID(b.Session) {
 		return nil, fmt.Errorf("unusable session id %q", b.Session)
@@ -235,6 +236,8 @@ func (p *Project) Bind(b Binding) (*Store, error) {
 	switch {
 	case isWorker(id):
 		return p.Run(id, b.Instance)
+	case b.Carry && b.Session != "" && isWorker(host):
+		return p.carryWorker(b.Session, host, b.Instance)
 	case b.Worker || isWorker(host):
 		return nil, ErrNotLinked // a worker's instance never binds anything else
 	}
@@ -291,6 +294,29 @@ func (p *Project) Bind(b Binding) (*Store, error) {
 			}
 		}
 		return p.writeLink(id, hostsDir, b.Instance)
+	})
+	return s, err
+}
+
+// carryWorker links session, which /clear started in the conversation of the worker whose host instance
+// drives the sub-run ref, to that sub-run: a worker's conversation keeps its sub-run, as a lead's keeps its
+// run. The worker's roster entry keeps the session its host started it with.
+func (p *Project) carryWorker(session, ref, instance string) (*Store, error) {
+	var s *Store
+	err := p.withLock(func() error {
+		if p.HostRun(instance) != ref || p.RunOf(session) != "" && p.RunOf(session) != ref {
+			return ErrNotLinked
+		}
+		run, phase, _ := splitRef(ref)
+		if err := writeAtomic(filepath.Join(p.refDir(run, phase), sessionFile), []byte(session+"\n")); err != nil {
+			return err
+		}
+		if err := p.writeLink(ref, sessionsDir, session); err != nil {
+			return err
+		}
+		var err error
+		s, err = p.Run(ref, instance)
+		return err
 	})
 	return s, err
 }
