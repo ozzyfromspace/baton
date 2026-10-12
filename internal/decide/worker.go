@@ -71,6 +71,12 @@ func AgentIsBatons(tool, phase string) string {
 		"and lands its work once %s is done. Leave the agent and %s to baton, and go on with your own work.", tool, phase, phase, phase)
 }
 
+// PhaseTypeIsBatons is why a model may not start an agent of baton's type (baton:phase): Claude Code
+// offers the type, so that it resumes baton's agents by a message, but only baton starts one, for a phase
+// it hands out.
+const PhaseTypeIsBatons = "[baton] Not run: baton:phase agents are baton's alone. baton starts one for each phase it hands out, in a worktree of its own, " +
+	"and lands its work once the phase is done. For help of your own, use another agent type, and go on with your own work."
+
 // AgentGoOn is the one message a phase agent on phase gets after its turn was interrupted (Esc in its
 // transcript view, in the lead's terminal): an interrupted agent takes the interruption for a rejection of
 // its task (spike 32), and its phase is not over.

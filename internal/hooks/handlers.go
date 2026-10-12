@@ -220,11 +220,20 @@ func (h *handlers) onScreen(c Context, s *state.Store, fn func(st *state.State))
 // the human to review them. And a proposal must be put to the human before anything else happens. So
 // until then every main-agent tool call except baton's own CLI (and the questions baton issued) is
 // denied, with the reason. Subagents are not held: they cannot end the main turn. Nor are the calls baton's
-// mod makes in the lead's session to spawn, message and stop phase agents: they are how the host acts.
+// mod makes in the lead's session to spawn, message and stop phase agents: they are how the host acts. A
+// model's own call to spawn, message or stop one is refused, from the lead or from any agent.
 func (h *handlers) preToolUse(c Context) (Result, error) {
 	if modCall(c.Input) {
 		h.spawning(c)
 		return Result{}, nil
+	}
+	if ti, _ := c.Input["tool_input"].(map[string]any); str(c.Input, "tool_name") == "Agent" && str(ti, "subagent_type") == state.PhaseAgent {
+		// baton's agent type is offered in the session, since Claude Code resumes no agent by a message
+		// whose type it does not offer, but only baton's mod starts one.
+		if s, err := h.d.Open(c); err == nil && s != nil {
+			s.Event("refused", map[string]any{"tool": "Agent", "why": "baton's agent type"})
+		}
+		return permission("deny", decide.PhaseTypeIsBatons), nil
 	}
 	h.agentCall(c, false)
 	if s, phase := h.steersAgent(c); phase != "" {

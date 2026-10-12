@@ -312,12 +312,10 @@ test('a stale reply makes the mod say hello again, then send what it kept meanwh
   expect(kinds(w)).toEqual(['turn a1', 'turn a1'])
 })
 
-test('the model is never offered the phase agent type', async ($, on) => {
+test('the phase agent type stays offered, so that a message resumes its agents', async ($, on) => {
   world(on)
   const r = await $.agent.offer({ agent: 'baton:phase', description: 'x', source: 'plugin', provider: { plugin: 'baton', tier: 'user' } } as any)
-  const other = await $.agent.offer({ agent: 'Explore', description: 'x', source: 'built-in', provider: { plugin: 'engine', tier: 'core' } } as any)
-  expect((r as any).isOffered).toBe(false)
-  expect((other as any).isOffered).toBe(true)
+  expect((r as any).isOffered).toBe(true)
 })
 
 test('the band is the line baton words, read every second and fitted to the columns it is drawn in', async ($, on) => {

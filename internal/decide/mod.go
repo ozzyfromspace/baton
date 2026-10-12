@@ -6,8 +6,9 @@ import "fmt"
 // starts and steers the phase agents that work beside the lead, on the host's say-so (internal/bridge).
 // These are the words it and the host use about that. The mod words nothing itself.
 
-// PhaseAgentDescription is the baton:phase agent type's line in Claude Code's list of agent types.
-const PhaseAgentDescription = "A phase of a plan baton runs, in a git worktree of its own. Started by baton alone."
+// PhaseAgentDescription is the baton:phase agent type's line in Claude Code's list of agent types, which
+// the models of the session see (baton refuses their calls to it: decide.PhaseTypeIsBatons).
+const PhaseAgentDescription = "A phase of a plan baton runs, in a git worktree of its own. Only baton starts these: never use this type yourself."
 
 // PhaseAgentPrompt is the baton:phase agent type's system prompt. Its brief, which says what to do, comes
 // from baton when it starts.

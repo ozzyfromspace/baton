@@ -603,11 +603,6 @@ export function register(on) {
   on('ui.render', { component: 'Pane', requestId: PANE }, pane).catch(letThrough)
   on('command.run', { command: SKILL }, boardCommand).catch(letThrough)
   on('command.run', { command: BOARD }, boardCommand).catch(letThrough)
-  // Only baton starts phases: the model is never offered the type.
-  on('agent.offer', { agent: 'baton:phase' }, () => ({ isOffered: false })).catch(hidden)
-}
-
-// hidden is the type's offer when its hook fails: still not offered.
-function hidden($, e, next) {
-  return next.called ? next(e) : { isOffered: false }
+  // The phase agent type stays offered: Claude Code resumes no agent by a message whose type it does not
+  // offer. baton's own hook refuses the models' calls to it, so only baton starts phases.
 }

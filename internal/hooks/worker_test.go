@@ -459,9 +459,9 @@ func TestAWorkersDecisionsReachTheLead(t *testing.T) {
 	}
 }
 
-// baton's phase agents are the host's to steer: neither the lead's model nor an agent's may message one or
-// stop it (its id or its name, the phase), while baton's mod may, and so may a model with an agent of its
-// own.
+// baton's phase agents are the host's to steer: neither the lead's model nor an agent's may start one,
+// message one or stop it (its id or its name, the phase), while baton's mod may, and so may a model with
+// an agent of its own.
 func TestAModelMayNotSteerAPhaseAgent(t *testing.T) {
 	w, lead, _ := newWorker(t)
 	deny := func(f *fixture, tool string, in map[string]any) string {
@@ -495,6 +495,27 @@ func TestAModelMayNotSteerAPhaseAgent(t *testing.T) {
 	}
 	if out := lead.fire("PreToolUse", map[string]any{"tool_name": "SendMessage", "tool_use_id": "toolu_plugin_3", "tool_input": map[string]any{"to": "agent-p2", "message": "go on"}}); len(out) != 0 {
 		t.Errorf("baton's mod: %v", out)
+	}
+
+	// Nor may a model start an agent of baton's type, which Claude Code offers so that a message resumes
+	// baton's agents; a refused spawn holds no worktree back.
+	spawn := map[string]any{"subagent_type": state.PhaseAgent, "name": "P3", "description": "P3 — three", "prompt": "Do P3."}
+	for _, f := range []*fixture{lead, w} {
+		if why := deny(f, "Agent", spawn); why != decide.PhaseTypeIsBatons {
+			t.Errorf("a spawn of baton's type: %q", why)
+		}
+	}
+	if !lead.logged("refused", map[string]any{"tool": "Agent", "why": "baton's agent type"}) {
+		t.Errorf("no refused spawn logged:\n%s", lead.eventLog())
+	}
+	if calls := lead.state().Run.AgentCalls; len(calls) != 0 {
+		t.Errorf("a refused spawn holds the phases' worktrees: %+v", calls)
+	}
+	if why := deny(lead, "Agent", map[string]any{"subagent_type": "Explore", "prompt": "Look around."}); why != "" {
+		t.Errorf("an agent of another type: %q", why)
+	}
+	if out := lead.fire("PreToolUse", map[string]any{"tool_name": "Agent", "tool_use_id": "toolu_plugin_4", "tool_input": spawn}); len(out) != 0 {
+		t.Errorf("baton's mod's spawn: %v", out)
 	}
 }
 
