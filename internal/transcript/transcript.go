@@ -17,6 +17,7 @@ import (
 type Entry struct {
 	Type    string // user, assistant, system, attachment, …
 	Subtype string // a system entry's: compact_boundary, model_refusal_no_fallback, …
+	Trigger string // a compact boundary's: what started the compaction, "manual" or "auto"
 	UUID    string
 	// Parent is the entry this one follows: parentUuid, or a compact boundary's logicalParentUuid.
 	Parent string
@@ -164,8 +165,14 @@ type line struct {
 	RefusalCategory   string          `json:"apiRefusalCategory"`
 	RefusalWhy        string          `json:"apiRefusalExplanation"`
 	Timestamp         string          `json:"timestamp"`
+	CompactMetadata   compactMetadata `json:"compactMetadata"`
 	Attachment        json.RawMessage `json:"attachment"`
 	Message           json.RawMessage `json:"message"`
+}
+
+// compactMetadata is the part of a compact boundary's compactMetadata baton reads.
+type compactMetadata struct {
+	Trigger string `json:"trigger"`
 }
 
 // attachment is the part of an attachment entry's attachment baton reads.
@@ -204,7 +211,7 @@ func parse(raw []byte) (Entry, bool) {
 	if json.Unmarshal(raw, &l) != nil || l.Type == "" {
 		return Entry{}, false
 	}
-	e := Entry{Type: l.Type, Subtype: l.Subtype, UUID: l.UUID, Parent: l.ParentUUID, Source: l.PromptSource, Meta: l.IsMeta, Sidechain: l.IsSidechain}
+	e := Entry{Type: l.Type, Subtype: l.Subtype, Trigger: l.CompactMetadata.Trigger, UUID: l.UUID, Parent: l.ParentUUID, Source: l.PromptSource, Meta: l.IsMeta, Sidechain: l.IsSidechain}
 	if e.Parent == "" {
 		e.Parent = l.LogicalParentUUID
 	}
