@@ -308,6 +308,30 @@ section are in [`research/workers.md`](research/workers.md).
   one and never types through it, in a worker as in the lead. The lead is told, the human is pushed, and
   `baton status` names `baton view P3`. Only that phase waits.
 
+### 11. Refusals, crashes and rewinds (v0.7)
+
+Some stops are not the model's to report, and v0.6 told them apart badly. The evidence is in
+[`research/recovery.md`](research/recovery.md).
+
+- **A refused turn is escalated, never retried.** When the model's safeguards decline a turn and Claude
+  Code will not go on with it, `StopFailure` says only `invalid_request`. baton reads the refusal and its
+  category from the transcript and escalates it as `refused` (`decide.Refused`): which phase stopped, that
+  baton does not retry it, the two ways on that Claude Code's own guidance gives (rewind to before the
+  flagged turn and take a different approach, or `/clear` for a fresh conversation from the phase's
+  brief), and what goes on meanwhile and what waits. baton types nothing into the refused conversation,
+  starts no fresh one by itself, and never switches models. The human decides, every time.
+- **Any stop baton cannot retry says what only the human decides** (`decide.CannotGoOn`), and what goes
+  on meanwhile: with workers, every phase that does not need the stopped one, while the phases that need
+  it wait; without them, nothing. A worker's question the stopped lead has not asked is left in the
+  worker's own session, as one that went unanswered is, and the human is pushed with `baton view`.
+- **A crash is recovered without asking**, since there is no safety question in it: the host resumes the
+  conversation, at most twice in 30 minutes, then escalates `crashed` with the command to resume it by
+  hand. A conversation that cannot be resumed gets one fresh session per phase, from its brief.
+- **A rewind leaves baton's record standing.** The model forgets what came after the point rewound to;
+  baton does not roll anything back. It tells the model what still stands (`decide.Rewound`): decisions
+  with their undo, jobs and their results, a phase done, a block, the files edited there. Undoing a
+  decision stays the human's, through its undo, as in section 7.
+
 ## What this must not become
 
 Graduated escalation must be **scoped by reversibility**, or it is the worse failure in the opposite
@@ -323,6 +347,8 @@ Unchanged, and not negotiable:
 - **A secret only the human holds.** The incident is the boundary case worth noting: the *signature*
   needed the human, and committing did not. The way around existed because the two were separable. Where
   they are not, it is a hard block.
+- **A turn the model's safeguards refused.** No timer, no retry, no rephrasing, no other model: keeping a
+  run moving never means getting past a refusal. The human decides how the phase goes on.
 - **Anything baton cannot classify.** Default to hard.
 
 ## The open questions, answered

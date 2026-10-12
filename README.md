@@ -35,6 +35,7 @@ baton takes every one of those decisions away from the model. The model does the
 - **One exception, and it is deliberate: an open permission prompt.** Keystrokes landing in a prompt *select* an option, so a baton that typed through one could approve a tool call you never approved. That wait is escalated and pushed; it is never overridden.
 - **Drafts.** If an unsent draft is in the way of a compaction, baton saves it and clears the box rather than waiting. `baton drafts` hands it back. Each one is a file holding exactly the text, so `cat .baton/runs/*/drafts/*.txt` works even if baton will not start.
 - **Escalation.** When baton needs you, it asks in the session (a question that reaches every device signed in to Claude) and sends its own push notification. Whenever the run halts, baton first saves any uncommitted work.
+- **Recovery.** A turn the model's safeguards refuse is never retried: baton tells you which phase stopped, how you can go on, and what goes on meanwhile. A claude that exits by itself mid-plan is resumed by baton, in the same conversation. A rewind (Esc Esc) or a `/clear` mid-phase never leaves baton and the model remembering different things ([When the session itself stops](#when-the-session-itself-stops)).
 - **Status line.** A permanent `◆ baton · P6 6/23 <title> · W P3 14m · P4 verifying 12m · ctx 412k/810k` segment sits in front of your own status line. It shows each worker, the oldest job the run waits on (`+2` when there are more), the context size against the limit, and `? proposal · goes ahead 15:33` while a proposal waits on you.
 
 The design and the experiments behind it are in [`docs/plan.md`](docs/plan.md) and [`docs/research/`](docs/research).
@@ -141,7 +142,10 @@ A gate that takes more than about 2 minutes, or needs state of its own (a databa
 | The model runs | What baton does |
 |---|---|
 | `baton verify "<command>" --notes "<where the phase stands>"` | Runs the command on `HEAD` in a lane: a worktree of its own outside your checkout, so nothing the model edits meanwhile can disturb it. Needs git, and the phase's work committed. |
+| `baton verify --here "<command>" --notes "…"` | Runs the command on `HEAD` in the session's own working tree, with no lane, for a gate that needs your checkout itself: its running services, or files that aren't in git. Until it ends, baton refuses Claude's edits there, starts no other phase there, and lands no worker's work in your checkout, since the gate reads those files as it runs. |
 | `baton await "<command>" --notes "…"` | Waits on something outside the project the same way (a CI run: `gh run watch --exit-status`), from the working tree. No lane, and no git needed. |
+
+A gate in a lane never reaches back into your checkout: baton refuses a `verify` whose command names the checkout's path (a `cd` into it, say), since it would check your files as they are rather than the commit, while landings and edits change them under it. The refusal offers `--here`, or a [`.baton-lane`](#lanes) for gates that need services of their own.
 
 The command runs detached from the session, so it survives baton restarting itself. The notes are what the phase resumes from if baton sets it aside. A phase has one job at a time: a new `verify` replaces one still running. The result reaches the model with its next tool call, or at its next stop; if the session is idle, baton wakes it with a short `[baton] job j4 (P3) finished` line. A result quotes the end of the log, and names any other phase whose verification is red, so the model leaves failures in that phase's area alone.
 
@@ -153,7 +157,7 @@ The command runs detached from the session, so it survives baton restarting itse
 
 **Switching.** Sometimes the phase can't go on without the result: the model has committed, handed the gate over and ended its turn. Once the gate has run for `switch_after` (5 minutes; at once for a command whose earlier runs took that long), and another phase can start, baton sets the phase aside with its notes, compacts, and starts that phase from a fresh brief. When the gate ends, the phase set aside comes back at the next phase boundary or `baton checkpoint`, with the result in its brief. If the gate ends before the switch's compaction is typed, the switch is called off and the result is given in place. baton never sets a phase aside with its work uncommitted. In practice, a phase that is finished is reported done while its gate runs, so a switch happens only when the phase truly waits on the result.
 
-**When nothing can go ahead,** the session idles until a result is in, or until a worker's phase it needs has landed. A block in your session still stops the whole run, since its question is on screen; jobs and the workers already at work keep going meanwhile (though no worker starts and nothing lands), and the run picks up once you answer. A worker's block stops only its phase.
+**When nothing can go ahead,** the session idles until a result is in, or until a worker's phase it needs has landed. Claude Code's own idle notice then reads as if you were needed, so baton's line at that stop says you aren't (*"baton: P3 waits on job j3 (`make e2e`) — nothing is needed from you: Claude is given its result when it ends"*), and the status line shows `P3 waits on its gate 12m`. A block in your session still stops the whole run, since its question is on screen; jobs and the workers already at work keep going meanwhile (though no worker starts and nothing lands), and the run picks up once you answer. A worker's block stops only its phase.
 
 A job that runs past `verify_timeout` (3 hours) is stopped and counts as failed. `baton status` lists the jobs with their logs (`.baton/runs/<session>/jobs/`), and the lanes. `/baton drop` stops the run's jobs and removes their logs; `/baton exit` and the session ending stop them too.
 
@@ -161,7 +165,7 @@ A job that runs past `verify_timeout` (3 hours) is stopped and counts as failed.
 
 A lane is a detached git worktree of your project under `~/.baton/lanes/`, outside your checkout, so file watchers, hot reload and `git clean` never reach it. Each job checks out its commit in a free lane. A lane is reused from one job to the next, so ignored caches such as `node_modules` stay.
 
-Without a lane script, a gate runs with `sh -c` in the bare worktree, one at a time. Most projects need dependencies installed or services started first, so they commit an executable `.baton-lane` at the root:
+Without a lane script, a gate runs with `sh -c` in the bare worktree, one at a time; a gate that needs your checkout's running services then runs there, with `verify --here`. Most projects need dependencies installed or services started first, so they commit an executable `.baton-lane` at the root:
 
 ```sh
 #!/bin/sh
@@ -216,8 +220,8 @@ If a worker's session exits unexpectedly, baton resumes it in its worktree, at m
 When a worker's phase is done and its last verification passed, the phase joins the merge queue: first finished, first landed. The worker waits, idle, while baton:
 
 1. **rebases** the worker's branch onto your branch, in the worker's worktree. On a conflict, the phase goes back to the worker, which rebases and resolves it itself, then reports done again;
-2. **verifies it again** in a lane, with the phase's last verification command, if anything landed on your branch since the commit it verified. Red reopens the phase in the worker;
-3. **waits for your changes:** if the branch changes a file that is uncommitted, staged or untracked in your checkout (ignored files included), landing waits until the lead has committed it. It also waits while your checkout is on another branch than the one the plan was attached on;
+2. **verifies it again** in a lane, with the phase's last verification command, if your branch has commits the commit it verified lacks. Red reopens the phase in the worker. Another phase's landing in between always means verifying again, but commits made in your checkout (the lead's, or yours) mean it at most once: if more come in while that second gate runs, baton lands over them, names them, and tells the lead its next gate runs them together. So a lead that commits more often than the gate takes never holds a landing back;
+3. **waits for your changes:** if the branch changes a file that is uncommitted, staged or untracked in your checkout (ignored files included), landing waits until the lead has committed it. It also waits while your checkout is on another branch than the one the plan was attached on, and while a gate of the lead's runs in your checkout (`verify --here`);
 4. **lands it** with `git merge --ff-only` in your checkout, while no tool call of the lead's is running (the lead's next call waits for it, 10 seconds at most). A fast-forward changes only the files the branch changed, and leaves the lead's uncommitted work alone, or does nothing at all;
 5. **tells the lead** what landed (the phase, its commits and the files they changed), that `HEAD` moved, to read those files again before editing them, and never to amend, reset, rebase or revert commits it didn't make. baton refuses the lead's `git commit --amend`, `reset` and `rebase` over landed commits;
 6. **ends the worker**, removes its worktree and branch, and marks the phase done.
@@ -353,6 +357,50 @@ baton also asks the model to commit before it halts: `blocked` and `done` refuse
 
 The design and the experiments behind it are in [`docs/escalation.md`](docs/escalation.md).
 
+## When the session itself stops
+
+Some stops aren't the model's to report: the model's safeguards refuse a turn, claude exits, or you rewind the conversation or clear it. baton tells each apart, from Claude Code's hooks and the session's transcript, which it reads and never writes. The experiments behind this are in [`docs/research/recovery.md`](docs/research/recovery.md).
+
+### A refused turn
+
+When the model's safeguards decline a turn, Claude Code goes on once by itself. If it then won't go on, the turn ends, and baton reads why from the transcript (Claude Code reports only an invalid request). Then:
+
+- **baton never retries it.** It types nothing into that conversation, never starts a fresh one by itself, and never switches models. Sending the same conversation to the same model again usually earns another refusal, and a fresh conversation from the brief can be refused too: baton can't know which text tripped the safeguards.
+- **It asks you how to go on,** in the session and with a push: *"P3 stopped: the model's safeguards declined the last turn (cyber), and this conversation will not go on as it is. baton does not retry it. To go on, rewind (Esc Esc) to before the flagged turn and take a different approach, as Claude Code advises, or /clear for a fresh conversation from P3's brief. Meanwhile workers carry on with every phase that does not need P3, and P5 waits for it."* If your work needs it, Claude Code's guidance for flagged security work also offers the [Cyber Verification Program](https://support.claude.com/en/articles/14604842-cyber-verification-program).
+- **The rest of the run goes on where it can.** Workers carry on with every phase that doesn't need the stopped one. A worker's question can't wait for the lead to put it to you, so it's left in the worker's own session, and you're pushed with `baton view P3`. Without workers, nothing else runs.
+- The status line shows `⚠ refused · waiting on you`, `baton status` names the category, and `events.jsonl` logs `escalated` with type `refused`. The escalation clears once a turn ends well.
+
+A worker's refused turn stops only its phase: rewind or `/clear` in its session, with `baton view P3`.
+
+The same holds for any other error baton can't retry away: it says which phase stopped, that only you decide how it goes on, and what goes on meanwhile.
+
+### A rewind
+
+Rewinding (Esc Esc, or `/rewind`) fires no hook, and the model forgets everything after the point it goes back to, while baton still holds what it recorded there. So baton watches for one: at each prompt it notes the transcript's last entry, and at the turn's next hook it checks that the prompt follows on from it. When it doesn't, you rewound.
+
+**baton's record wins.** Nothing it recorded is rolled back: undoing a decision is still yours to ask for, through its undo. At the model's next tool call or stop, baton tells it that you rewound, and what still stands of what came after that point:
+
+- the decisions made there, each with its undo; the jobs handed over there, and their results; a phase done; a block;
+- the files Claude's edit tools wrote there, which are as they are on disk now, whether you restored the code with the rewind or not;
+- the phase's brief again, if the rewind dropped it (a rewind to the `/compact` entry does).
+
+The session says *"baton: noticed a rewind to before 14:02 — telling Claude what still stands of baton's record"*, and `events.jsonl` logs `rewound`. A rewind can't cross a compaction, so it never takes the model back into an earlier phase. While a compaction is owed, baton says nothing to the model: the brief after it gives the phase afresh.
+
+### `/clear` mid-phase
+
+A conversation you clear while a phase is in hand gets the phase's brief, as after a compaction (its section of the plan, the standing rules, the notes and decisions), and is told to check what's already done before redoing anything. Nothing wakes it: your next prompt does. `/clear` in a worker's session (through `baton view`) keeps the worker on its phase.
+
+### A crash
+
+When claude exits by itself mid-plan, baton brings it back in place, on the same binary, as an update restart does: it resumes the same conversation and tells the model that the turn under way was lost, and to check what's done before going on. The workers are suspended and resumed, and jobs go on. The session says *"baton: claude exited with code 137 mid-plan → resumed this conversation"*.
+
+- It doesn't for an exit anyone chose: code 0, Ctrl-C (130), a termination (143), a signal sent to baton itself, a closed terminal, `/exit` or `/baton exit`, a restart of baton's own; nor while the run is paused or complete.
+- **At most twice in 30 minutes.** A third time, baton stops and asks you to run `baton --resume <id>`.
+- **If the conversation can't be resumed** (claude exits before its session starts, as it does when the transcript is gone), baton starts a fresh session for the same run, from the phase's brief, once per phase.
+- `events.jsonl` logs `lead_exited`, then `lead_resumed` or `lead_fresh`. On Windows, where baton can't restart in place, the session ends as before, and you continue it with `baton --continue`.
+
+A worker that exits unexpectedly is resumed in its worktree, at most twice, as before.
+
 ## Configure
 
 Optional settings live in `~/.baton/config.json`. Environment variables override the file.
@@ -383,7 +431,8 @@ With the defaults on a 1M-token model, baton asks for a checkpoint at 486k token
 
 - **Typing.** baton types into the terminals it hosts, yours and its workers': `/compact` at boundaries, short `[baton] …` reminders when a session stalls, and `/exit` to end a worker. It never types while a dialog is open or you've typed in the last few seconds, with one exception: it answers its own question when nobody has, by typing `3`, and only while that question is the only dialog open (in a permission prompt, `3` means No). An unsent **draft** no longer holds it either: after a grace period baton saves the text among the run's drafts and clears the box (`baton drafts` gives it back), because a message nobody sent used to be able to park a whole run. It will not do that twice inside two minutes, however the flag reads. Every action is announced in the session and logged to the run's `events.jsonl`.
 - **Git.** baton never commits or stages your files. All it writes to a repository is its snapshot refs under `refs/baton/`, a line in `.git/info/exclude` that keeps `.baton/` out of git, and, once the model runs `baton verify`, the worktrees of its lanes under `~/.baton/lanes/` (`git worktree list` shows them). With workers, it also makes their worktrees under `~/.baton/worktrees/` and their branches (`baton/<run>/<phase>`), rebases those branches in their worktrees, and lands them on your branch with `git merge --ff-only`, which changes only the files the worker changed and only when none of them holds changes of yours. When it tidies worktrees away, it makes git forget only the ones it made under `~/.baton` whose directory is gone; a worktree of yours on a drive that isn't mounted is never forgotten. The only git commands it ever refuses are the ones above, while another baton session works in the same checkout, and an amend, reset or rebase over commits that landed from a worker.
-- **Running your code.** A gate handed to baton runs the command the model gave it, in a lane, through your `.baton-lane` if you committed one; baton itself runs only that script's `up`, `down` and `slots`.
+- **Running your code.** A gate handed to baton runs the command the model gave it, in a lane, through your `.baton-lane` if you committed one, or, with `verify --here`, in the session's own working tree; baton itself runs only that script's `up`, `down` and `slots`.
+- **Transcripts.** baton reads the session's transcript, Claude Code's own record of the conversation, to tell a refused turn apart and to notice a rewind. It never writes to it.
 - **Processes.** baton stops a process only when it is its own (a gate's runner, a worker's session), or when `baton clean` finds it left by a session of the project that is gone and running under `~/.baton`. It signals each process on its own (never a process group read from a file), and checks first that a pid on record still belongs to baton. Anything else it finds is listed, never stopped.
 - **Settings.** baton never edits your Claude Code settings. Its hooks, status line, an allow rule for its own CLI, and `"idleCompaction": false` (baton decides when a hosted session compacts) are passed to each hosted session, workers included, with `claude --settings`. claude also gets `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` (see `foreground_max`), unless you set it yourself.
 - **Notifications.** Pushes go to the ntfy topic you configure and say only that you're needed, unless you turn on `details`.

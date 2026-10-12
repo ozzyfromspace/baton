@@ -177,6 +177,15 @@ From the docs and the 2.1.296 bundle:
   lock-free probe of the branch's changed paths against the lead's dirty, staged, untracked and ignored files. It
   happens while no tool of the lead's is in flight, retries on `index.lock`, and defers on an overlap until the lead
   commits those files. Never `update-ref`, `branch -f` or `--autostash`.
+- **The lead's commits verify a landing again at most once** (v0.7, found in a real run on 2026-10-12). After
+  the rebase, a phase was verified again whenever the lead's branch had commits its verified commit lacked. Each
+  lead commit made during that run left it stale again: a 45-minute gate ran twice for a lead commit that touched
+  two markdown files, and a lead committing more often than the gate takes would hold the landing back for good.
+  The lead had noted not to commit while a phase lands; that is model judgment, so the rule is host code. A commit
+  another phase landed (a `Landing.Commits` of any run in the project) still means verifying again, since the merge
+  queue answers for each landing against the others. Commits made only in the checkout mean it once: if more come
+  while the queue's own re-verify runs (`state.Job.Requeue`), the phase lands over them, the `landed` event names
+  them (`unverified`), and the lead is told its next gate runs them together.
 - **baton's own git in the main checkout uses `--no-optional-locks`.**
 - **Every landing is announced to the lead**: what landed, that its own changes were untouched, to re-read those
   files before editing them, and never to amend, reset, rebase or revert commits it did not make. A guard refuses

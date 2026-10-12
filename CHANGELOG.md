@@ -4,6 +4,74 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+v0.6 ran a plan unattended until something stopped the lead in a way baton couldn't retry. A turn the
+model's safeguards refused looked like any API error, a claude that crashed took the run with it, and a
+rewind or a `/clear` left baton and the model remembering different things. Now a refusal says what
+happened, what only you decide and what goes on meanwhile; a crashed lead comes back by itself; and
+baton notices a rewind and tells the model what still stands. The experiments behind it are in
+[docs/research/recovery.md](docs/research/recovery.md).
+
+A session hosted by v0.6 stays on its version after you update (before 1.0, a minor release counts as a
+major one) and says so once: exit and run `baton --continue` to move it to v0.7.
+
+### Added
+- **A refused turn is told apart, and never retried.** When the model's safeguards decline a turn and
+  Claude Code won't go on with it, baton reads the refusal and its category from the session's
+  transcript (read-only) and escalates it as `refused`: which phase stopped, that baton won't retry it,
+  the two ways on (rewind to before the flagged turn and take a different approach, or `/clear` for a
+  fresh conversation from the phase's brief), what goes on meanwhile and what waits. baton types nothing
+  into a refused conversation, starts no fresh one by itself, and never switches models. The status line
+  shows `⚠ refused · waiting on you`, and `baton status` names the category.
+- **A crashed lead comes back.** When claude exits by itself mid-plan (not with 0, 130 or 143, not on a
+  signal sent to baton, a closed terminal, `/exit` or a restart of baton's own), the host resumes the
+  same conversation in place, tells the model the turn under way was lost and to check what's done, and
+  resumes the workers. At most twice in 30 minutes; a third time it stops and asks you to run
+  `baton --resume <id>`. A conversation that can't be resumed gets a fresh session for the same run,
+  from the phase's brief, once per phase. Events `lead_exited`, `lead_resumed` and `lead_fresh`. Not on
+  Windows.
+- **A rewind is noticed, and the model told what still stands.** baton marks the transcript's last entry
+  at each prompt and checks at the turn's next hook that the prompt follows on from it. After a rewind
+  (Esc Esc), the model is told, once, at its next tool call or stop: the decisions, jobs, phases done and
+  block recorded in the part rewound away, which still stand; the files its edit tools wrote there, which
+  are as they are on disk; and the brief again if the rewind dropped it. baton's record is never rolled
+  back. Event `rewound`.
+- **`/clear` mid-phase gets the phase's brief:** its section of the plan, the standing rules, the notes
+  and decisions, and a reminder to check what's already done.
+- **`baton verify --here "<command>"`** runs a gate on `HEAD` in the session's own working tree, with no
+  lane, for a gate that needs the checkout itself (its running services, files not in git). Until it
+  ends, baton refuses edits there, starts no other phase there, and lands no worker's work in the
+  checkout (`land_deferred`, why "a gate runs in the checkout").
+
+### Changed
+- **A gate wait says nothing is needed from you.** The stop line, once the lead's turn ends on a phase
+  that waits on its job, says so where Claude Code's idle notice reads otherwise, and the status line
+  shows `P3 waits on its gate 12m`.
+- **A stop baton can't retry says what only you decide,** and what the rest of the run does meanwhile:
+  with workers, every phase that doesn't need the stopped one goes on and the phases that need it wait;
+  without them, nothing runs.
+- **A `verify` whose command names the checkout is refused,** with `--here` or a `.baton-lane` as the
+  way on: run from a lane, it checked the checkout's files as they were, not the commit, while landings
+  and edits changed them under it.
+
+### Fixed
+- **A worker's phase lands while the lead keeps committing.** A landing was verified again whenever the
+  lead's branch had moved since its gate passed, so each lead commit during that run made it stale again,
+  and a lead committing more often than the gate takes held it back for good. Another phase's landing
+  still means verifying again; commits made in the checkout mean it at most once, and any that come in
+  while it runs are landed over and named (`landed` has `unverified`), and the lead is told its next gate
+  runs them together. `reverify_queued` says why (`landed` or `lead`).
+- **A worker's landing leaves the lead's escalation alone.** Each landing cleared the escalation of a lead
+  whose turn had failed, the watchdog raised it again, and you got the same push again.
+- **A worker's question never waits on a lead that stopped.** A question the lead had not put to you
+  when its turn failed sat in the queue unseen; it is now left in the worker's own session, and you're
+  pushed with `baton view P3`.
+- **A session baton starts again keeps your permission rules.** A restart on a newer baton started claude
+  without your `--allowedTools` and `--disallowedTools`.
+- **A worker's brief quotes the notes its own phase left,** so the brief after its own checkpoint no
+  longer leaves them out.
+- **A `/clear` in a worker's session keeps it in baton,** with its phase's brief. The new conversation's
+  hooks used to go dormant, and the worker dropped out of the run.
+
 ## [0.6.0] - 2026-10-11
 
 v0.5 ran workers beside the lead, but you picked how many, and what a run left behind waited for that same
