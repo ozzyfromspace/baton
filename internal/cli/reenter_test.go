@@ -144,7 +144,8 @@ func TestRunDecidesWhatRunningMeans(t *testing.T) {
 }
 
 // A phase the human adds to the plan file runs: next, if it is added before the last phase ends, and
-// after a compaction when /baton run finds it in a plan that had finished.
+// after a compaction when /baton run finds it in a plan that had finished, or resumes a paused run that
+// held no phase.
 func TestPhasesAddedToThePlanFileRun(t *testing.T) {
 	s, planFile := newSession(t)
 	s.attach(planFile)
@@ -189,4 +190,35 @@ func TestPhasesAddedToThePlanFileRun(t *testing.T) {
 		t.Errorf("run with a broken addition: %s", errs)
 	}
 	os.WriteFile(planFile, doc, 0o644)
+
+	// A run paused while it held no phase, every phase left waiting on a job, takes up a phase added
+	// meanwhile that can start as it resumes, rather than once the job ends. cur is the file with R2 and
+	// R3, as before the broken addition.
+	s.set(func(x *state.State) {
+		x.Mode, x.Current, x.BoundaryOwed = state.ModePaused, "", false
+		x.Phases["R3"].Status = state.PhaseVerifying
+		x.Jobs = append(x.Jobs, state.Job{ID: "j9", Phase: "R3", Kind: state.JobVerify, Command: "make test", Status: state.JobRunning, Started: s.now})
+	})
+	os.WriteFile(planFile, append(cur, []byte("\n## R5 — The roster is listed\nAfter: P0\n\nDo it.\n")...), 0o644)
+	out = s.must("", "run")
+	for _, want := range []string{"the plan file now adds R5 (The roster is listed).\n",
+		"resumed \"The widget campaign\". No phase was in hand, and R5 (The roster is listed) can start: end your turn now, so baton compacts this conversation, then R5 starts"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("run said:\n%s\nwant %q", out, want)
+		}
+	}
+	if st := s.state(); st.Mode != state.ModeRunning || st.Current != "R5" || !st.BoundaryOwed || st.Job("j9").Status != state.JobRunning {
+		t.Fatalf("after run: mode %s current %s boundary %v", st.Mode, st.Current, st.BoundaryOwed)
+	}
+	if !s.logged("resumed", map[string]any{"next": "R5"}) {
+		t.Errorf("events: %s", s.events())
+	}
+	// With nothing that can start, the model is told to end its turn.
+	s.set(func(x *state.State) {
+		x.Mode, x.Current, x.BoundaryOwed = state.ModePaused, "", false
+		x.Phases["R5"].Status = state.PhaseVerifying
+	})
+	if out := s.must("", "run"); !strings.Contains(out, "No phase can start yet") || s.state().Current != "" {
+		t.Errorf("run with nothing to start said:\n%s", out)
+	}
 }

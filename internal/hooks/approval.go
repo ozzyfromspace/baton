@@ -236,40 +236,54 @@ func replanQuestion(r *state.Replan) decide.Question {
 
 // planDrift checks the run's plan document against the text baton attached (plan.Recheck). A change that
 // keeps every phase still to run is followed; one that loses any pauses a running run, since baton
-// would brief the next phase from text that is no longer there. Each change is reported once.
-func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event) {
+// would brief the next phase from text that is no longer there. Each change is reported once. A run
+// that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
+// took: it starts after the boundary compaction this stop queues.
+func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
 	if pl.File == "" || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
-		return "", nil
+		return "", nil, ""
 	}
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(*st, pl))
 	if !changed {
-		return "", nil
+		return "", nil, ""
 	}
 	if err == nil {
 		if s.WritePlan(adopted) != nil {
-			return "", nil
+			return "", nil, ""
 		}
 		st.PlanDrift = ""
-		if added := state.Extend(st, adopted); len(added) > 0 {
-			return fmt.Sprintf("baton: the plan file changed and adds %s; baton follows the new text, and runs %s in turn", phaseList(adopted, added), plural(len(added), "it", "them")),
-				&event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added}}
+		var added []string
+		added, took = state.Extend(st, adopted)
+		ev = &event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true}}
+		if len(added) > 0 {
+			ev.fields["added"] = added
 		}
-		return "baton: the plan file changed; every phase still to run is there, so baton follows the new text",
-			&event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true}}
+		if took != "" {
+			ev.fields["next"] = took
+		}
+		switch {
+		case len(added) > 0 && took != "":
+			say = fmt.Sprintf("baton: the plan file changed and adds %s; baton follows the new text", phaseList(adopted, added))
+		case len(added) > 0:
+			say = fmt.Sprintf("baton: the plan file changed and adds %s; baton follows the new text, and runs %s in turn", phaseList(adopted, added), plural(len(added), "it", "them"))
+		default:
+			say = "baton: the plan file changed; every phase still to run is there, so baton follows the new text"
+		}
+		return say, ev, took
 	}
 	sha := pl.SHA()
 	if sha == "" {
 		sha = "gone"
 	}
 	if sha == st.PlanDrift {
-		return "", nil
+		return "", nil, ""
 	}
 	st.PlanDrift = sha
 	first := strings.SplitN(err.Error(), "\n", 2)[0]
 	ev = &event{"plan_changed", map[string]any{"plan": pl.File, "adopted": false, "why": first}}
 	if st.Mode != state.ModeRunning || state.Pause(st) != nil {
-		return "baton: the plan file changed, and baton can no longer follow it: " + first, ev
+		return "baton: the plan file changed, and baton can no longer follow it: " + first, ev, ""
 	}
 	notice(st, "plan_changed", fmt.Sprintf("%s paused: the plan file changed (%s)", pl.Title, first), now)
-	return fmt.Sprintf("baton: paused — the plan file changed, and baton can no longer follow it: %s. Fix %s, then /baton run", first, filepath.Base(pl.File)), ev
+	return fmt.Sprintf("baton: paused — the plan file changed, and baton can no longer follow it: %s. Fix %s, then /baton run", first, filepath.Base(pl.File)), ev, ""
 }

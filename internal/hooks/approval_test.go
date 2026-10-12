@@ -270,6 +270,37 @@ func TestAPhaseAddedToThePlanFileJoinsTheRun(t *testing.T) {
 	if !strings.Contains(f.eventLog(), `"added":["P3"]`) {
 		t.Errorf("events: %s", f.eventLog())
 	}
+	// P1 is in hand, so P3 waits its turn: nothing else changes.
+	if st := f.state(); st.Current != "P1" || st.BoundaryOwed || st.Run.Compaction.InFlight() || f.logged("plan_changed", map[string]any{"next": "P3"}) {
+		t.Errorf("with P1 in hand: current %q boundary %v compaction %+v", st.Current, st.BoundaryOwed, st.Run.Compaction)
+	}
+}
+
+// A phase added while the run holds none, every phase left waiting on a job, starts at the next stop,
+// after a compaction, rather than once the job ends.
+func TestAPhaseAddedWithNoneInHandStartsAtTheNextStop(t *testing.T) {
+	f := newFixture(t, false)
+	file := f.startRun()
+	f.set(func(st *state.State) {
+		st.Phases["P1"].Status, st.Current = state.PhaseVerifying, ""
+		st.Jobs = append(st.Jobs, state.Job{ID: "j1", Phase: "P1", Kind: state.JobVerify, Command: "make test", Status: state.JobRunning, Started: f.now})
+	})
+	doc, _ := os.ReadFile(file)
+	os.WriteFile(file, append(doc, []byte("\n## P3 — Fourth\nAfter: P0\n\nDo d.\n")...), 0o644)
+	msg := say(f.fire("Stop", map[string]any{}))
+	if want := "baton: the plan file changed and adds P3 (Fourth); baton follows the new text\nbaton: P3 can start → compacting, then P3 (Fourth) starts"; !strings.Contains(msg, want) {
+		t.Fatalf("stop said %q", msg)
+	}
+	st := f.state()
+	if st.Current != "P3" || !st.BoundaryOwed || st.Run.Compaction.Status != state.CompactQueued || st.Run.Compaction.Reason != "boundary" {
+		t.Fatalf("current %q boundary %v compaction %+v", st.Current, st.BoundaryOwed, st.Run.Compaction)
+	}
+	if st.Phases["P1"].Status != state.PhaseVerifying || st.Phases["P2"].Status != state.PhasePending || st.Job("j1").Status != state.JobRunning {
+		t.Errorf("phases %+v, job %+v", st.Phases, st.Job("j1"))
+	}
+	if !f.logged("plan_changed", map[string]any{"next": "P3"}) || !f.logged("compact_queued", map[string]any{"reason": "boundary", "next": "P3"}) {
+		t.Errorf("events: %s", f.eventLog())
+	}
 }
 
 // The approval says how many workers will work beside the session, and warns when a permission prompt

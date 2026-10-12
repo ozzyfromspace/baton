@@ -464,6 +464,83 @@ func TestReviseKeepsParkedAndVerifyingPhases(t *testing.T) {
 	}
 }
 
+// A phase the plan gains while the run holds none (every phase left waits on a job) is taken up at once,
+// after a compaction, rather than once the job ends; with a phase in hand, it runs in turn.
+func TestExtend(t *testing.T) {
+	p := graph("P0:", "P1:P0", "P2:P1")
+	verifying := Job{ID: "j1", Phase: "P1", Status: JobRunning}
+	noneInHand := func() State {
+		return runState(p, map[string]string{"P0": PhaseDone, "P1": PhaseVerifying}, nil, verifying)
+	}
+	for _, c := range []struct {
+		name      string
+		st        func() State
+		p         plan.Plan
+		added     string
+		took, cur string
+	}{
+		{name: "none in hand: an added phase that can start is taken up", st: noneInHand, p: graph("P0:", "P1:P0", "P2:P1", "P3:P0"),
+			added: "P3", took: "P3", cur: "P3"},
+		{name: "none in hand: an added phase that waits too waits", st: noneInHand, p: graph("P0:", "P1:P0", "P2:P1", "P3:P1"),
+			added: "P3"},
+		{name: "a phase in hand: the added one runs in turn", p: graph("P0:", "P1:P0", "P2:P1", "P3:P0"), added: "P3", cur: "P1",
+			st: func() State {
+				st := runState(p, map[string]string{"P0": PhaseDone, "P1": PhaseActive}, nil)
+				st.Current = "P1"
+				return st
+			}},
+		{name: "paused: nothing is taken up", p: graph("P0:", "P1:P0", "P2:P1", "P3:P0"), added: "P3",
+			st: func() State {
+				st := noneInHand()
+				st.Mode = ModePaused
+				return st
+			}},
+		{name: "nothing added: a phase free to start is taken up", p: graph("P0:", "P1:P0", "P2:P1", "P3:P0"), took: "P3", cur: "P3",
+			st: func() State {
+				st := noneInHand()
+				st.Phases["P3"] = &PhaseState{Status: PhasePending}
+				return st
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := c.st()
+			st.CheckpointDue = true
+			added, took := Extend(&st, c.p)
+			if strings.Join(added, ",") != c.added || took != c.took || st.Current != c.cur || st.BoundaryOwed != (c.took != "") {
+				t.Fatalf("added %v took %q: current %q boundary %v", added, took, st.Current, st.BoundaryOwed)
+			}
+			if st.Phases["P3"] == nil || st.Phases["P3"].Status != PhasePending || st.Job("j1") != nil && st.Job("j1").Status != JobRunning {
+				t.Errorf("phases %+v jobs %+v", st.Phases, st.Jobs)
+			}
+			if c.took != "" && (st.CheckpointDue || st.CheckpointOwed) {
+				t.Error("a checkpoint still owed once a boundary is")
+			}
+		})
+	}
+}
+
+// A revision that drops the phase in hand takes up at once a phase that can start, while a job runs; with
+// none that can, the run holds none, and a phase the plan gains then is taken up at once.
+func TestARevisionDroppingThePhaseInHand(t *testing.T) {
+	p := graph("P0:", "P1:P0", "P2:")
+	running := func() State {
+		st := runState(p, map[string]string{"P0": PhaseVerifying, "P2": PhaseActive}, nil, Job{ID: "j1", Phase: "P0", Status: JobRunning})
+		st.Current = "P2"
+		return st
+	}
+	st := running()
+	if next := Revise(&st, graph("P0:", "P1:P0", "P3:"), t0); next != "P3" || st.Current != "P3" || !st.BoundaryOwed || st.Phases["P2"] != nil {
+		t.Fatalf("dropping P2 for P3: next %q state %+v", next, st)
+	}
+	st = running()
+	if next := Revise(&st, graph("P0:", "P1:P0"), t0); next != "" || st.Current != "" || st.Mode != ModeRunning || st.Job("j1").Status != JobRunning {
+		t.Fatalf("dropping P2, with P1 waiting on P0's verification: next %q state %+v", next, st)
+	}
+	if added, took := Extend(&st, graph("P0:", "P1:P0", "P4:")); len(added) != 1 || took != "P4" || st.Current != "P4" || !st.BoundaryOwed {
+		t.Fatalf("P4 added with none in hand: added %v took %q state %+v", added, took, st)
+	}
+}
+
 func TestQueueJob(t *testing.T) {
 	var st State
 	q := func(phase string) (Job, *Job, []Job) {

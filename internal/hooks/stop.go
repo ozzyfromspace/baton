@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,10 +33,10 @@ func (h *handlers) stop(c Context) (Result, error) {
 		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to
 		// follow, and so is restarting on a newer baton.
 		worker := s.Worker() != ""
-		var drift string
+		var drift, took string
 		var ev *event
 		if !worker {
-			drift, ev = planDrift(st, s, pl, c.Now)
+			drift, ev, took = planDrift(st, s, pl, c.Now)
 		}
 		if ev != nil {
 			dropped = append(dropped, *ev)
@@ -45,6 +46,10 @@ func (h *handlers) stop(c Context) (Result, error) {
 		d.events = append(dropped, d.events...)
 		if drift != "" {
 			msg, _ := d.out()["systemMessage"].(string)
+			if took != "" && d.queued("boundary") {
+				// No phase was done: the phase the plan file's change let start is taken up.
+				msg = boundaryLine(st, pl, took+" can start")
+			}
 			d.say(strings.TrimSpace(drift + "\n" + msg))
 		}
 		if !worker {
@@ -113,6 +118,11 @@ func (d *decision) refuse(reason string) {
 	d.out()["reason"] = reason
 }
 
+// queued reports whether the stop queued a compaction for reason.
+func (d *decision) queued(reason string) bool {
+	return slices.ContainsFunc(d.events, func(e event) bool { return e.kind == "compact_queued" && e.fields["reason"] == reason })
+}
+
 // decideStop is the Stop decision table. Rows are checked in order; the first that applies wins. workers
 // is the decisions of the run's workers (Store.WorkerDecisions), which the plan-complete notice counts.
 func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, workers []state.Decision) decision {
@@ -178,15 +188,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 	case st.BoundaryOwed:
 		queueCompaction(st, "boundary", now)
 		st.Run.StopBlocks = 0
-		if started(st) {
-			verb := "starts"
-			if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
-				verb = "resumes"
-			}
-			d.say(fmt.Sprintf("baton: phase done → compacting, then %s %s", cur, verb))
-		} else {
-			d.say(fmt.Sprintf("baton: plan attached → compacting the conversation so far, then %s starts", cur))
-		}
+		d.say(boundaryLine(st, pl, "phase done"))
 		d.emit("compact_queued", map[string]any{"reason": "boundary", "epoch": st.Run.Compaction.Epoch, "next": st.Current})
 	case st.CheckpointOwed:
 		queueCompaction(st, "checkpoint", now)
@@ -357,6 +359,21 @@ func notice(st *state.State, kind, text string, now time.Time) {
 
 func queueCompaction(st *state.State, reason string, now time.Time) {
 	st.Run.Compaction.Queue(reason, now)
+}
+
+// boundaryLine tells the human what the boundary compaction a stop queued leads to: the phase in hand
+// starts after it (or resumes, set aside before), once what came first (after) happened; before any
+// phase has started, it compacts the conversation the plan was attached in.
+func boundaryLine(st *state.State, pl plan.Plan, after string) string {
+	cur := phaseTitle(pl, st.Current)
+	if !started(st) {
+		return fmt.Sprintf("baton: plan attached → compacting the conversation so far, then %s starts", cur)
+	}
+	verb := "starts"
+	if ps := st.Phases[st.Current]; ps != nil && ps.Status == state.PhaseParked {
+		verb = "resumes"
+	}
+	return fmt.Sprintf("baton: %s → compacting, then %s %s", after, cur, verb)
 }
 
 // started reports whether any phase of the run has started: before that, a boundary owed is the one

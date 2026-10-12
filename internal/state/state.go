@@ -229,16 +229,24 @@ func Revise(st *State, p plan.Plan, now time.Time) string {
 }
 
 // Extend adds the phases of p the run does not know yet, pending, and returns their ids: phases the
-// human added to the plan file while it ran (plan.Added).
-func Extend(st *State, p plan.Plan) []string {
-	var added []string
+// human added to the plan file while it ran (plan.Added). A running run that holds no phase (every
+// phase left waited for a job) then takes up the next one that can start, and returns it as took ("" for
+// none): it starts after a compaction, as at any phase boundary, rather than once a job ends.
+func Extend(st *State, p plan.Plan) (added []string, took string) {
 	for _, ph := range p.Phases {
 		if st.Phases[ph.ID] == nil {
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 			added = append(added, ph.ID)
 		}
 	}
-	return added
+	if st.Mode != ModeRunning || st.Current != "" {
+		return added, ""
+	}
+	if took = Next(*st, p); took != "" {
+		st.Current, st.BoundaryOwed = took, true
+		st.CheckpointOwed, st.CheckpointDue = false, false // the boundary compacts the conversation anyway
+	}
+	return added, took
 }
 
 // Remaining lists the phases of p not done yet, in order.
