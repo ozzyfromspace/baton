@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -232,6 +233,108 @@ func TestALandingWaitsForTheLeadsChanges(t *testing.T) {
 		t.Errorf("list.txt: %q", got)
 	}
 	none(t, s, "land_returned", "controller_panic", "worker_waiting", "worker_resumed")
+}
+
+// keepUpPlan: the worker's P1 hands baton a gate, which holds on its first two runs (the worker's own,
+// and the merge queue's again) until the test lets each go; P2 needs both phases.
+const keepUpPlan = `# Keep-up plan
+
+## P0 — Say zero
+After: none
+
+Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
+
+## P1 — Write one
+After: none
+
+1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
+2. Hand the gate to baton, exactly: baton verify 'sh gate.sh' --notes 'one committed'
+3. Report P1 done: baton done P1 --notes 'wrote one; the gate runs'
+
+## P2 — Say two
+After: P0, P1
+
+Run echo two, then report P2 done: baton done P2 --notes 'said two'
+`
+
+// countedGate counts its runs in the repository's git directory (gate-runs); the first two each say they
+// started (gate-started1, 2), then wait until the test lets them go (go1, go2).
+const countedGate = `#!/bin/sh
+# Counts its runs; the first two each wait until the test lets them go.
+common=$(git rev-parse --git-common-dir)
+n=$(( $(cat "$common/gate-runs" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$common/gate-runs"
+echo "gate: run $n"
+if [ "$n" -le 2 ]; then
+	touch "$common/gate-started$n"
+	i=0
+	while [ ! -e "$common/go$n" ] && [ "$i" -lt 900 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+fi
+echo "gate: passed"
+`
+
+// The checkout gets a commit of its own while the worker's gate runs, and another while the merge queue
+// verifies the phase again on its rebased branch. The first verifies it again, once; the second does not,
+// however long the gate takes: the phase lands over it, unverified with it, and the lead is told.
+func TestALandingKeepsUpWithTheLead(t *testing.T) {
+	dir := projectWith(t, map[string]string{"gate.sh": countedGate})
+	Attach(t, dir, keepUpPlan)
+	s := StartWorkers(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Write")
+	s.AutoApprove()
+	common := filepath.Join(dir, ".git")
+	commit := func(name string) string {
+		writeFile(t, dir, name, name+"\n")
+		Git(t, dir, "add", name)
+		Git(t, dir, "commit", "-q", "-m", "chore: the checkout's "+name)
+		return strings.TrimSpace(Git(t, dir, "rev-parse", "HEAD"))
+	}
+	started := func(n int) {
+		t.Helper()
+		if !s.Until(fmt.Sprintf("the gate's run %d", n), 8*time.Minute, func() bool {
+			_, err := os.Stat(filepath.Join(common, fmt.Sprintf("gate-started%d", n)))
+			return err == nil
+		}) {
+			t.Fatalf("the gate's run %d never started", n)
+		}
+	}
+
+	started(1)
+	commit("first.txt")
+	writeFile(t, common, "go1", "")
+	again := s.WaitEvent("reverify_queued", 6*time.Minute)
+	if again == nil || again["phase"] != "P1" || again["why"] != "lead" {
+		t.Fatalf("P1 was not verified again for the checkout's commit: %v", again)
+	}
+	started(2)
+	second := commit("second.txt")
+	writeFile(t, common, "go2", "")
+	s.Until("the plan to complete", 6*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })
+
+	ev := s.Events()
+	landed := first(ev, is("landed", "phase", "P1"))
+	if landed < 0 {
+		t.Fatalf("P1 did not land:\n%s", eventLog(s))
+	}
+	if got := fmt.Sprint(ev[landed]["unverified"]); got != "["+second+"]" || ev[landed]["verified"] != again["commit"] {
+		t.Errorf("landed over %s, verified on %v; want over %s, verified on %v", got, ev[landed]["verified"], second, again["commit"])
+	}
+	if n := len(slices.DeleteFunc(slices.Clone(ev), func(e map[string]any) bool { return e["kind"] != "reverify_queued" })); n != 1 {
+		t.Errorf("verified again %d times, want once", n)
+	}
+	if runs := strings.TrimSpace(readFile(common, "gate-runs")); runs != "2" {
+		t.Errorf("the gate ran %s times, want 2", runs)
+	}
+	if !before(ev, is("landed", "phase", "P1"), is("landed_told")) {
+		t.Error("the lead was never told what landed")
+	}
+	log := Git(t, dir, "log", "--format=%s")
+	if o, f, sc := strings.Index(log, "feat: one"), strings.Index(log, "first.txt"), strings.Index(log, "second.txt"); o < 0 || f < 0 || sc < 0 || o > sc || sc > f {
+		t.Errorf("the run's branch, newest first: %s", log)
+	}
+	none(t, s, "land_returned", "controller_panic", "escalated")
 }
 
 // conflictPlan: the worker's P1 changes the third line of list.txt, which the run's branch changes
