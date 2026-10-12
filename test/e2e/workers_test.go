@@ -85,7 +85,18 @@ func listPlanProject(t *testing.T) string {
 	dir := NewProject(t)
 	files := map[string]string{
 		"list.txt": "alpha\nbeta\ngamma\ndelta\nepsilon\n",
-		"hold.sh": `#!/bin/sh
+		"hold.sh":  holdScript,
+	}
+	for name, text := range files {
+		writeFile(t, dir, name, text)
+		Git(t, dir, "add", name)
+	}
+	Git(t, dir, "commit", "-q", "-m", "chore: the list, and the hold")
+	return dir
+}
+
+// holdScript waits until the test releases it (release), from a worktree too.
+const holdScript = `#!/bin/sh
 # Waits until the test releases it (the file go in the repository's git directory), from a worktree too.
 common=$(git rev-parse --git-common-dir)
 echo $$ >"$common/hold.pid"
@@ -96,15 +107,7 @@ while [ ! -e "$common/go" ] && [ "$i" -lt 900 ]; do
 	i=$((i + 1))
 done
 echo "hold: released"
-`,
-	}
-	for name, text := range files {
-		writeFile(t, dir, name, text)
-		Git(t, dir, "add", name)
-	}
-	Git(t, dir, "commit", "-q", "-m", "chore: the list, and the hold")
-	return dir
-}
+`
 
 func writeFile(t *testing.T, dir, name, text string) {
 	t.Helper()
