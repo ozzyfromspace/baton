@@ -20,8 +20,13 @@ import (
 //
 //  1. its branch is rebased onto the run's branch, in its worktree. A rebase that stops is aborted, and
 //     the phase goes back to the worker, which rebases it itself (state.Reopen);
-//  2. if anything landed on the run's branch since the commit its verification passed on, the phase is
-//     verified again on the rebased commit (state.Reverify): red takes it up again in the worker;
+//  2. if the run's branch has commits the one its verification passed on lacks, the phase is verified
+//     again on the rebased commit (state.Reverify): red takes it up again in the worker. Each landing is
+//     verified against the others: a commit a worker landed (of this run or another in the checkout)
+//     verifies it again every time. The checkout's own commits (the lead's, or the human's) verify it
+//     again once: those made while the merge queue's verification runs are landed over, unverified with
+//     it, and the lead is told that its next gate checks them together (Landing.Unverified), so a lead
+//     that commits more often than the gate takes cannot hold a landing up for good;
 //  3. the branch's changed paths are checked against the lead's local changes, ignored files included,
 //     without taking git's locks: on an overlap, landing waits until the lead has committed those files;
 //  4. holding the project's landing lock, and only while no tool call of a lead in the checkout runs, nor
@@ -190,13 +195,61 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 	} else if !ok {
 		return c.rebase(now, s, st, w, e, onto, tip)
 	}
+	var over unverified
 	if j := verified(sub, e.Phase); j != nil && j.Commit != tip {
 		if ok, err := g.IsAncestor(ctx, s.Checkout, onto, j.Commit); err == nil && !ok {
-			c.reverify(now, s, st, w, e, *j, tip)
-			return true
+			since, err := g.Commits(ctx, s.Checkout, j.Commit, onto)
+			if err != nil {
+				c.deferLanding(now, s, e, err.Error(), nil, failedRetry)
+				return false
+			}
+			if why := c.moved(s, st, since); why == movedLanded || !j.Requeue {
+				c.reverify(now, s, st, w, e, *j, tip, why)
+				return true
+			}
+			over = unverified{verified: j.Commit, commits: since}
 		}
 	}
-	return c.fastForward(ctx, now, s, st, e, onto, tip)
+	return c.fastForward(ctx, now, s, st, e, onto, tip, over)
+}
+
+// How the run's branch moved on since a verification passed (the event reverify_queued's why): a worker's
+// landing came, or only the checkout's own commits did.
+const (
+	movedLanded = "landed"
+	movedLead   = "lead"
+)
+
+// moved says how the run's branch moved on by commits: movedLanded if a worker's landing brought one of
+// them, in this run (st) or in another run of the checkout, else movedLead.
+func (c *Coordinator) moved(s *state.Store, st state.State, commits []string) string {
+	landed := map[string]bool{}
+	add := func(ls []state.Landing) {
+		for _, l := range ls {
+			for _, x := range l.Commits {
+				landed[x] = true
+			}
+		}
+	}
+	add(st.Landed)
+	for _, r := range c.Project.Runs() {
+		if r.ID != s.Ref {
+			add(r.State.Landed)
+		}
+	}
+	for _, x := range commits {
+		if landed[x] {
+			return movedLanded
+		}
+	}
+	return movedLead
+}
+
+// unverified are the checkout's own commits a landing goes over without its verification, which passed
+// on verified before them.
+type unverified struct {
+	verified string
+	commits  []string
 }
 
 // rebase rebases worker e's branch, at tip, onto the run's branch, at onto. A rebase that does not go
@@ -243,12 +296,13 @@ func verified(sub state.State, phase string) *state.Job {
 }
 
 // reverify verifies worker e's phase again in its sub-run, on its rebased branch at tip, with the
-// verification j it passed before the run's branch moved on.
-func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, j state.Job, tip string) {
+// verification j it passed before the run's branch moved on (why: moved).
+func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, j state.Job, tip, why string) {
 	var q state.Job
+	notes := decide.ReverifyNotes(st.RunBranch, j.Notes, why == movedLead)
 	_, err := w.store.Update(func(sub *state.State) error {
 		var err error
-		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: j.Command, Commit: tip, Here: j.Here, Notes: decide.ReverifyNotes(st.RunBranch, j.Notes)}, now)
+		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: j.Command, Commit: tip, Here: j.Here, Notes: notes}, now)
 		return err
 	})
 	if err != nil {
@@ -256,15 +310,19 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 		return
 	}
 	c.setEntry(s, e, func(x *state.Worker) { x.Merge.Reverify = q.ID })
-	s.Event("reverify_queued", map[string]any{"phase": e.Phase, "job": q.ID, "command": j.Command, "commit": tip, "verified": j.Commit})
-	c.announce(s, fmt.Sprintf("baton: other work landed on %s since %s was verified → verifying it again on its rebased branch (job %s, `%s`)",
-		st.RunBranch, e.Phase, q.ID, j.Command))
+	s.Event("reverify_queued", map[string]any{"phase": e.Phase, "job": q.ID, "command": j.Command, "commit": tip, "verified": j.Commit, "why": why})
+	came := "other work landed on " + st.RunBranch
+	if why == movedLead {
+		came = "commits were made on " + st.RunBranch + " in the checkout"
+	}
+	c.announce(s, fmt.Sprintf("baton: %s since %s was verified → verifying it again on its rebased branch (job %s, `%s`)", came, e.Phase, q.ID, j.Command))
 }
 
-// fastForward lands worker e's branch, at tip, rebased onto the run's branch at onto: the checkout
-// fast-forwards to it, unless the lead's local changes are in its way, or a tool call or a gate of a lead
-// in the checkout is running. It reports whether it landed.
-func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.Store, st state.State, e state.Worker, onto, tip string) bool {
+// fastForward lands worker e's branch, at tip, rebased onto the run's branch at onto, over the commits
+// there its verification did not see (over): the checkout fast-forwards to it, unless the lead's local
+// changes are in its way, or a tool call or a gate of a lead in the checkout is running. It reports
+// whether it landed.
+func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.Store, st state.State, e state.Worker, onto, tip string, over unverified) bool {
 	g := c.Fleet.gitx()
 	if c.busy(now, s) != "" {
 		return false // checked again under the landing lock; until then, the probe can wait too
@@ -335,7 +393,7 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	for _, ch := range changes {
 		files = append(files, ch.Path)
 	}
-	c.landed(now, s, e, state.Landing{Phase: e.Phase, Commits: commits, Files: files, Head: tip, At: now})
+	c.landed(now, s, e, state.Landing{Phase: e.Phase, Commits: commits, Files: files, Head: tip, At: now, Verified: over.verified, Unverified: over.commits})
 	if check != "" {
 		s.Event("land_check", map[string]any{"phase": e.Phase, "problem": check})
 		c.announce(s, fmt.Sprintf("baton: after %s landed, %s: look over the checkout", e.Phase, check))
@@ -437,8 +495,18 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 	if next != "" {
 		fields["next"] = next
 	}
+	over := ""
+	if len(l.Unverified) > 0 {
+		fields["verified"], fields["unverified"] = l.Verified, l.Unverified
+		var shorts []string
+		for _, x := range l.Unverified {
+			shorts = append(shorts, short(x))
+		}
+		over = fmt.Sprintf(", over the checkout's %s %s, which its gate did not run with: the lead's next gate runs them together",
+			plural(len(l.Unverified), "commit", "commits"), strings.Join(shorts, ", "))
+	}
 	s.Event("landed", fields)
-	c.announce(s, fmt.Sprintf("baton: %s landed on the run's branch: %d %s (%s)", e.Phase, len(l.Commits), plural(len(l.Commits), "commit", "commits"), filesLine(l.Files)))
+	c.announce(s, fmt.Sprintf("baton: %s landed on the run's branch: %d %s (%s)%s", e.Phase, len(l.Commits), plural(len(l.Commits), "commit", "commits"), filesLine(l.Files), over))
 	switch {
 	case next != "":
 		s.Event("compact_queued", map[string]any{"reason": "boundary", "next": next, "by": "landed"})

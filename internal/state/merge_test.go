@@ -43,7 +43,7 @@ func TestReverify(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if j.ID != "P3.j2" || j.Kind != JobVerify || j.Commit != "c2" || j.Status != JobQueued {
+			if j.ID != "P3.j2" || j.Kind != JobVerify || j.Commit != "c2" || j.Status != JobQueued || !j.Requeue || !st.Job(j.ID).Requeue {
 				t.Errorf("queued %+v", j)
 			}
 			if st.Mode != ModeRunning || st.Current != "" || st.Phases["P3"].Status != PhaseVerifying || Complete(st, p) {

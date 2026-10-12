@@ -20,9 +20,10 @@ type Job struct {
 	Phase   string `json:"phase"`
 	Kind    string `json:"kind,omitempty"` // JobVerify or JobAwait
 	Command string `json:"command,omitempty"`
-	Commit  string `json:"commit,omitempty"` // the commit a verify job checks, in a lane, or checked out where it runs (Here)
-	Here    bool   `json:"here,omitempty"`   // a verify job run in the session's own working tree, with no lane (HereGate)
-	Notes   string `json:"notes,omitempty"`  // where the phase stood when the job was queued, in the model's words
+	Commit  string `json:"commit,omitempty"`  // the commit a verify job checks, in a lane, or checked out where it runs (Here)
+	Here    bool   `json:"here,omitempty"`    // a verify job run in the session's own working tree, with no lane (HereGate)
+	Requeue bool   `json:"requeue,omitempty"` // a verify job the merge queue runs again on a worker's rebased branch (Reverify)
+	Notes   string `json:"notes,omitempty"`   // where the phase stood when the job was queued, in the model's words
 	Status  string `json:"status"`
 	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
 	Reason  string `json:"reason,omitempty"` // why, when the job ended without the command's own verdict

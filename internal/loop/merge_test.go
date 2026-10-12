@@ -199,7 +199,8 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 				sst.Phases["P1"].Status != state.PhaseVerifying || x.worker("P1").Merge.Reverify != j.ID {
 				t.Fatalf("job %+v; P1 %+v; worker %+v", j, sst.Phases["P1"], x.worker("P1"))
 			}
-			if !x.has("reverify_queued", `"job":"`+j.ID+`"`) || !strings.Contains(x.announced(), "verifying it again on its rebased branch") {
+			if !x.has("reverify_queued", `"job":"`+j.ID+`"`, `"why":"lead"`) || !j.Requeue ||
+				!strings.Contains(x.announced(), "commits were made on main in the checkout since P1 was verified → verifying it again on its rebased branch") {
 				t.Errorf("events:\n%s", x.events())
 			}
 			x.tick(time.Second)
@@ -416,6 +417,104 @@ func TestALandingIsVerifiedAgainInItsWorktree(t *testing.T) {
 	sst, _ := x.sub("P1").Load()
 	if j := sst.Latest("P1"); j == nil || j.Status != state.JobQueued || !j.Here || j.Commit != gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") {
 		t.Fatalf("job %+v", j)
+	}
+}
+
+// The merge queue verifies a landing again at most once for the checkout's own commits: those the lead
+// makes while that runs are landed over, unverified with it, and the lead is told. A worker's landing
+// meanwhile, of this run or of another in the checkout, verifies it again; a rebase that stops still hands
+// the phase back.
+func TestTheLeadsCommitsVerifyALandingAgainOnce(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// meanwhile is what came on the run's branch while the merge queue's verification ran: the lead's
+		// commit, recorded as a landing of this run's or of another run's when it says so.
+		landedBy string
+		files    map[string]string
+		want     string // landed, reverify (why landed), or returned
+	}{
+		{"the lead's", "", map[string]string{"lead2.txt": "lead\n"}, "landed"},
+		{"this run's landing", "this", map[string]string{"two.txt": "two\n"}, "reverify"},
+		{"another run's landing", "other", map[string]string{"two.txt": "two\n"}, "reverify"},
+		{"the lead's, in conflict", "", map[string]string{"one.txt": "the lead's\n"}, "returned"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := landingCrew(t)
+			x.leadCommits(map[string]string{"lead.txt": "lead\n"})
+			x.finish("P1", map[string]string{"one.txt": "one\n"}, true)
+			x.tick(time.Second) // rebased
+			x.tick(time.Second) // verified again: only the lead's commit came since the worker's own verification
+			sub := x.sub("P1")
+			sst, _ := sub.Load()
+			j := sst.Latest("P1")
+			if j == nil || !j.Requeue || !x.has("reverify_queued", `"why":"lead"`) {
+				t.Fatalf("job %+v\n%s", j, x.events())
+			}
+
+			meanwhile := x.leadCommits(c.files)
+			switch c.landedBy {
+			case "this":
+				x.lead.Update(func(st *state.State) error {
+					st.Landed = append(st.Landed, state.Landing{Phase: "P2", Commits: []string{meanwhile}, Head: meanwhile, At: x.now, Told: true})
+					return nil
+				})
+			case "other":
+				other, _ := x.proj.Bind(state.Binding{Session: "sess-2", Instance: "inst-2"})
+				other.WritePlan(x.pl)
+				other.Update(func(st *state.State) error {
+					*st = state.Reattach(*st, x.pl, x.now, state.Origin{})
+					st.Landed = []state.Landing{{Phase: "P2", Commits: []string{meanwhile}, Head: meanwhile, At: x.now}}
+					return nil
+				})
+			}
+			sub.Update(func(st *state.State) error {
+				j := st.Job(j.ID)
+				j.Status, j.Started, j.Ended = state.JobPassed, x.now, x.now
+				return nil
+			})
+			x.tick(time.Second) // the worker's own loop settles its job
+			x.tick(time.Second) // rebased again, onto the commit that came meanwhile
+			x.tick(time.Second)
+
+			reverified := strings.Count(x.events(), `"kind":"reverify_queued"`)
+			switch c.want {
+			case "landed":
+				st := x.state()
+				if x.worker("P1").Status != state.WorkerLanded || len(st.Landed) != 1 || reverified != 1 {
+					t.Fatalf("not landed after one verification again (%d)\n%s", reverified, x.events())
+				}
+				l := st.Landed[0]
+				if l.Verified != j.Commit || !slices.Equal(l.Unverified, []string{meanwhile}) || l.Head != gitx.Head(x.repo) {
+					t.Errorf("landing %+v; verified on %s, over %s", l, j.Commit, meanwhile)
+				}
+				if !x.has("landed", `"unverified":["`+meanwhile+`"]`, `"verified":"`+j.Commit+`"`) ||
+					!strings.Contains(x.announced(), "over the checkout's commit "+short(meanwhile)+", which its gate did not run with: the lead's next gate runs them together") {
+					t.Errorf("events:\n%s\nannounced %q", x.events(), x.announced())
+				}
+				told := decide.Landed(st.Landed, "main")
+				if want := "P1's gate passed on " + short(j.Commit) + ", before your commit " + short(meanwhile) + "; your next gate runs them together."; !strings.Contains(told, want) {
+					t.Errorf("the lead is told %q, want %q", told, want)
+				}
+			case "reverify":
+				sst, _ := sub.Load()
+				again := sst.Latest("P1")
+				if x.worker("P1").Status != state.WorkerLanding || reverified != 2 || again.ID == j.ID || !again.Requeue ||
+					again.Commit != gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") || !x.has("reverify_queued", `"job":"`+again.ID+`"`, `"why":"landed"`) {
+					t.Fatalf("not verified again after a landing (%d); job %+v\n%s", reverified, again, x.events())
+				}
+				if !strings.Contains(again.Notes, "since other work had landed on main meanwhile") || !strings.Contains(x.announced(), "other work landed on main since P1 was verified") {
+					t.Errorf("notes %q\nannounced %q", again.Notes, x.announced())
+				}
+			case "returned":
+				sst, _ := sub.Load()
+				if w := x.worker("P1"); w.Status != state.WorkerWorking || w.Merge != nil || sst.Current != "P1" || reverified != 1 || len(x.state().Landed) != 0 {
+					t.Fatalf("worker %+v; sub-run on %q\n%s", w, sst.Current, x.events())
+				}
+				if !x.has("land_returned", `"paths":["one.txt"]`) {
+					t.Errorf("events:\n%s", x.events())
+				}
+			}
+		})
 	}
 }
 

@@ -15,14 +15,16 @@ import (
 // maxFiles is how many changed files a landing names.
 const maxFiles = 20
 
-// Landed tells the lead what landed on branch (the run's branch) underneath it.
+// Landed tells the lead what landed on branch (the run's branch) underneath it, and which of its own
+// commits a landing was not verified with (Landing.Unverified), which its next gate checks with it.
 func Landed(ls []state.Landing, branch string) string {
-	var parts []string
+	var parts, gates []string
 	head := ""
 	for _, l := range ls {
-		var commits []string
-		for _, c := range l.Commits {
-			commits = append(commits, short7(c))
+		commits := shorts(l.Commits)
+		if len(l.Unverified) > 0 {
+			gates = append(gates, fmt.Sprintf("%s's gate passed on %s, before your %s %s", l.Phase, short7(l.Verified),
+				plural(len(l.Unverified), "commit", "commits"), strings.Join(shorts(l.Unverified), ", ")))
 		}
 		files := l.Files
 		more := ""
@@ -34,10 +36,14 @@ func Landed(ls []state.Landing, branch string) string {
 			strings.Join(commits, ", "), strings.Join(files, ", "), more))
 		head = l.Head
 	}
+	unverified := ""
+	if len(gates) > 0 {
+		unverified = strings.Join(gates, "; ") + "; your next gate runs them together. "
+	}
 	return fmt.Sprintf("[baton] While you worked, baton landed the work of another session on %s, underneath you: %s. A worker made %s, not you. "+
 		"Your own uncommitted changes were not touched, and git diff still shows only yours. HEAD is now %s, so your own last commit may no longer be HEAD. "+
-		"Read those files again before you edit them. Never amend, reset, rebase or revert commits you did not make; if your work seems to need that, stop and say so.",
-		branch, strings.Join(parts, "; "), plural(len(ls), "it", "them"), short7(head))
+		"Read those files again before you edit them. %sNever amend, reset, rebase or revert commits you did not make; if your work seems to need that, stop and say so.",
+		branch, strings.Join(parts, "; "), plural(len(ls), "it", "them"), short7(head), unverified)
 }
 
 // LandConflict tells a worker on phase that its branch conflicts with branch (the run's branch) in
@@ -58,10 +64,15 @@ func LandRefused(phase, branch, why string) string {
 }
 
 // ReverifyNotes are the notes of the verification baton runs again on a worker's branch, rebased onto
-// branch (the run's branch): why it runs again, and where the phase stood (notes, the model's own, from
-// the verification that passed). A worker whose phase it reopens resumes from them.
-func ReverifyNotes(branch, notes string) string {
-	n := fmt.Sprintf("baton rebased this phase's branch onto %s, the run's branch, to land it, and verified it again there, since other work had landed on %s meanwhile.", branch, branch)
+// branch (the run's branch): why it runs again (other work landed there, or, byLead, only the checkout's
+// own commits came), and where the phase stood (notes, the model's own, from the verification that
+// passed). A worker whose phase it reopens resumes from them.
+func ReverifyNotes(branch, notes string, byLead bool) string {
+	since := "other work had landed on " + branch + " meanwhile"
+	if byLead {
+		since = "commits had been made on " + branch + " in the checkout meanwhile"
+	}
+	n := fmt.Sprintf("baton rebased this phase's branch onto %s, the run's branch, to land it, and verified it again there, since %s.", branch, since)
 	if notes != "" {
 		n += " Before that: " + notes
 	}
@@ -85,13 +96,18 @@ func MailTyped(kinds []string) string {
 // LandedRewriteRefused is why the lead may not run cmd: it would rewrite commits that landed from the
 // run's workers (phases), which the lead did not make.
 func LandedRewriteRefused(cmd string, phases, commits []string) string {
-	var short []string
-	for _, c := range commits {
-		short = append(short, short7(c))
-	}
+	short := shorts(commits)
 	return fmt.Sprintf("[baton] Not run: `%s` would rewrite work baton landed on this branch from %s (%s %s), which you did not make. "+
 		"Never amend, reset, rebase or revert commits you did not make. Make a new commit of your own instead; if your task really needs that history rewritten, stop and say so.",
 		cmd, strings.Join(phases, ", "), plural(len(short), "commit", "commits"), strings.Join(short, ", "))
+}
+
+func shorts(commits []string) []string {
+	var out []string
+	for _, c := range commits {
+		out = append(out, short7(c))
+	}
+	return out
 }
 
 func short7(commit string) string {

@@ -107,6 +107,11 @@ type Landing struct {
 	Head    string    `json:"head"`            // the run's branch once they landed
 	At      time.Time `json:"at"`
 	Told    bool      `json:"told,omitempty"` // the lead was told
+	// Unverified are the commits of the checkout's own (not landed by baton) that it landed over without
+	// being verified with them, oldest first, its verification having passed on Verified before them: the
+	// merge queue verifies a landing again at most once for those (loop/merge.go).
+	Verified   string   `json:"verified,omitempty"`
+	Unverified []string `json:"unverified,omitempty"`
 }
 
 // Usage is how much of the account's five-hour allowance is used, as a session's status line last
@@ -498,13 +503,13 @@ func takeUp(st *State, p plan.Plan, now time.Time) string {
 // passed, run on the commit its branch was rebased to. The phase is verifying, as after `baton done`
 // with a verification running, so the sub-run completes again once j passes (without a word to the
 // worker, which was told its phase is done), or takes the phase up again, red, as after any
-// verification that fails. It returns j as queued.
+// verification that fails. j is marked as the merge queue's (Job.Requeue). It returns j as queued.
 func Reverify(st *State, j Job, now time.Time) (Job, error) {
 	ps := st.Phases[j.Phase]
 	if st.Mode != ModeComplete || ps == nil || ps.Status != PhaseDone {
 		return Job{}, fmt.Errorf("phase %s is not a finished worker's", j.Phase)
 	}
-	j.Kind = JobVerify
+	j.Kind, j.Requeue = JobVerify, true
 	q, _, _ := QueueJob(st, j, now)
 	ps.Status, ps.DoneAt = PhaseVerifying, time.Time{}
 	st.Mode, st.Current = ModeRunning, ""
