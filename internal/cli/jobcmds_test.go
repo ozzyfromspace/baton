@@ -127,6 +127,26 @@ func TestVerifyQueuesAGateOnHead(t *testing.T) {
 	}
 }
 
+// A job's command may be given as its words after --, as a phase agent gives it (Claude Code refuses an
+// isolated agent's command that hands a program text starting with a shell or git): baton runs those
+// words as they were given.
+func TestAJobsCommandMayBeItsWords(t *testing.T) {
+	s, root := gitSession(t)
+	gittest.Write(t, root, "check.sh", "exit 0\n")
+	gittest.Commit(t, root, "check", "check.sh")
+
+	words := []string{"sh", "-c", "sh check.sh && echo it's fine"}
+	s.must("", "verify", "--notes", "checked by hand", "--", words[0], words[1], words[2])
+	if j := s.state().Job("j1"); j == nil || j.Command != lane.Join(words) || j.Notes != "checked by hand" {
+		t.Fatalf("job: %+v, want the command %q", j, lane.Join(words))
+	}
+	s.must("", "await", "--notes", "pushed", "--", "gh", "run", "watch", "--exit-status")
+	if j := s.state().Job("j2"); j == nil || j.Command != "gh run watch --exit-status" {
+		t.Fatalf("job: %+v", j)
+	}
+	s.mustFail("-- <the command's words>", "verify", "--notes", "n", "--")
+}
+
 // A gate that needs the checkout runs there, on HEAD, with no lane (--here): baton says what it holds
 // until the gate ends.
 func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {

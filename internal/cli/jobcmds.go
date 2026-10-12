@@ -22,8 +22,8 @@ import (
 // starts a runner for each (hostRunners), and `baton lane-run` runs it to its end.
 
 func init() {
-	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] --notes \"<where the phase stands>\"", cmdVerify)
-	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" --notes \"<where the phase stands>\"", cmdAwait)
+	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] --notes \"<where the phase stands>\", or the command's words after --", cmdVerify)
+	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" --notes \"<where the phase stands>\", or the command's words after --", cmdAwait)
 }
 
 func cmdVerify(args []string, io IO) int { return queueJob(args, io, state.JobVerify) }
@@ -38,8 +38,13 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	p, err := parseArgs(args, []string{"notes"}, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
+	if p.dash >= 0 {
+		// The command as words, as a phase agent gives it: Claude Code refuses an isolated agent's
+		// command that hands a program text starting with a shell or git (`baton verify "sh check.sh"`).
+		command = strings.TrimSpace(strings.Join(p.pos[:p.dash], " ") + " " + lane.Join(p.pos[p.dash:]))
+	}
 	if err != nil || command == "" {
-		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\"%s", kind, usage, errSuffix(err))
+		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s", kind, usage, kind, usage, errSuffix(err))
 	}
 	here := p.bools["here"]
 	if !hosted(io) {

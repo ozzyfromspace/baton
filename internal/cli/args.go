@@ -5,9 +5,11 @@ import (
 	"strings"
 )
 
-// parsed holds positional arguments and --flags, which may appear in any order.
+// parsed holds positional arguments and --flags, which may appear in any order. Every argument after a
+// `--` is positional; dash is how many came before it (-1 without one).
 type parsed struct {
 	pos   []string
+	dash  int
 	vals  map[string]string
 	bools map[string]bool
 }
@@ -15,7 +17,7 @@ type parsed struct {
 // parseArgs accepts flags anywhere (the model writes `baton done P1 --notes "…"` as often as
 // `baton done --notes "…" P1`). valueFlags take an argument (--x v or --x=v); boolFlags do not.
 func parseArgs(args []string, valueFlags, boolFlags []string) (parsed, error) {
-	p := parsed{vals: map[string]string{}, bools: map[string]bool{}}
+	p := parsed{dash: -1, vals: map[string]string{}, bools: map[string]bool{}}
 	isValue := map[string]bool{}
 	for _, f := range valueFlags {
 		isValue[f] = true
@@ -27,6 +29,7 @@ func parseArgs(args []string, valueFlags, boolFlags []string) (parsed, error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
+			p.dash = len(p.pos)
 			p.pos = append(p.pos, args[i+1:]...)
 			break
 		}

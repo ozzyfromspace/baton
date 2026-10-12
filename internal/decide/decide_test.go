@@ -150,6 +150,25 @@ func TestWords(t *testing.T) {
 			}
 		}
 	}
+	// A phase agent gives a job's command as its words after --: Claude Code refuses a command of an agent
+	// isolated in a worktree that hands a program text starting with a shell or git.
+	worker := texts(Words{Git: true, Worker: true, Timeout: 5 * time.Minute})
+	verify := "`baton verify --notes \"<where the phase stands>\" -- <command>`"
+	for name, wants := range map[string][]string{
+		"reporting":       {verify, "Give a job's command as its words after `--`", "such as `baton verify \"sh check.sh\"`"},
+		"closing":         {verify, "Give a job's command as its words after `--`"},
+		"background stop": {verify},
+		"no status":       {"`baton await --notes \"<where the phase stands>\" -- <a command that ends when it is ready>`"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(worker[name], want) {
+				t.Errorf("a phase agent's %s lacks %q:\n%s", name, want, worker[name])
+			}
+		}
+		if strings.Contains(worker[name], `verify "<command>"`) || strings.Contains(worker[name], `await "<`) {
+			t.Errorf("a phase agent's %s gives a job's command quoted:\n%s", name, worker[name])
+		}
+	}
 	if plain := (Words{Timeout: time.Minute}).Closing("P4"); !strings.Contains(plain, "`baton await \"<command>\"") || strings.Contains(plain, "verify") {
 		t.Errorf("closing without git:\n%s", plain)
 	}

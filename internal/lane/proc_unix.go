@@ -16,6 +16,24 @@ import (
 // shell runs a command line the way a terminal would.
 func shell(command string) []string { return []string{"sh", "-c", command} }
 
+// Join is the command line that runs words as they are (a command given as words, `baton verify -- sh
+// check.sh`): each word quoted for shell where it would read it otherwise.
+func Join(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = w
+		if w == "" || strings.IndexFunc(w, func(r rune) bool { return !plain(r) }) >= 0 {
+			quoted[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+		}
+	}
+	return strings.Join(quoted, " ")
+}
+
+// plain is a character sh reads as itself anywhere in a word.
+func plain(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@%+=:,./_-", r)
+}
+
 // setGroup starts cmd in a process group of its own, so everything it starts can be stopped together.
 func setGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
 

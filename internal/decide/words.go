@@ -141,9 +141,23 @@ func (w Words) verifyHow() string {
 		return "`baton await \"<command>\" --notes \"<where the phase stands>\"` runs it from the working tree while you keep working on what does not depend on it, " +
 			"and baton gives you the result when it ends. Quick checks run in place."
 	}
-	return "`baton verify \"<command>\" --notes \"<where the phase stands>\"` runs it on HEAD (commit first) in a lane of its own while you keep working on what does not depend on it, " +
+	s := w.jobCall("verify", "<command>") + " runs it on HEAD (commit first) in a lane of its own while you keep working on what does not depend on it, " +
 		"and baton gives you the result when it ends; `baton await` does the same for something outside the project, such as a CI run. Quick checks run in place. " +
 		"Once the phase is complete and committed, run `baton done` even while its gate still runs: the phase is done when the gate passes, and reopens if it fails."
+	if w.Worker {
+		s += " Give a job's command as its words after `--`, as you would type it: Claude Code refuses a phase agent's command that hands a program text starting with a shell or git, such as `baton verify \"sh check.sh\"`."
+	}
+	return s
+}
+
+// jobCall is how the model hands baton the command what to run as a job of kind (verify, await). A phase
+// agent gives it as words after `--` (lane.Join quotes them again), since Claude Code refuses a command
+// of an agent isolated in a worktree that hands a program text starting with a shell or git.
+func (w Words) jobCall(kind, what string) string {
+	if w.Worker {
+		return "`baton " + kind + " --notes \"<where the phase stands>\" -- " + what + "`"
+	}
+	return "`baton " + kind + " \"" + what + "\" --notes \"<where the phase stands>\"`"
 }
 
 // NoStatus is why baton refuses a stop that reported nothing, and the statuses to report with.
@@ -159,7 +173,7 @@ func (w Words) NoStatus(id, title string) string {
 		"`baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"` "+
 		"(something is in the way and you have a reversible way around it: %s), "+
 		"`baton blocked \"<why>\" --tried \"<what you tried>\"` (only if every way forward is irreversible or needs a secret only the human holds), or "+
-		"`baton await \"<a command that ends when it is ready>\" --notes \"<where the phase stands>\"` (you are waiting on something outside you, such as a CI run or a deploy: baton runs it and gives you the result).", title, id, finished, w.proposeThen())
+		"%s (you are waiting on something outside you, such as a CI run or a deploy: baton runs it and gives you the result).", title, id, finished, w.proposeThen(), w.jobCall("await", "<a command that ends when it is ready>"))
 }
 
 // BackgroundStop is why baton refuses the first stop while background work of the model's own runs:
@@ -167,7 +181,7 @@ func (w Words) NoStatus(id, title string) string {
 func (w Words) BackgroundStop(what string) string {
 	s := "[baton] You stopped while your background work runs (" + what + "). Keep working on what does not depend on it: Claude Code wakes you when it ends. "
 	if w.Git {
-		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then `baton verify \"<command>\" --notes \"<where the phase stands>\"` runs it on that commit, and baton gives you the result. "
+		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then " + w.jobCall("verify", "<command>") + " runs it on that commit, and baton gives you the result. "
 	}
 	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until the work ends, end your turn again."
 }

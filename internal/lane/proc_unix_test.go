@@ -68,3 +68,30 @@ func TestIsRunner(t *testing.T) {
 		}
 	}
 }
+
+// A command given as words runs as those words: sh reads each back as it was given.
+func TestJoin(t *testing.T) {
+	for _, words := range [][]string{
+		{"sh", "hold.sh"},
+		{"go", "test", "./...", "-run=TestX", "-count=1"},
+		{"sh", "-c", "go test ./... && echo it's ok"},
+		{"printf", "%s", "a $HOME `b` \\c \"d\" *", ""},
+		{"gh", "run", "watch", "7", "--exit-status"},
+	} {
+		line := Join(words)
+		got, err := exec.Command("sh", "-c", `show() { for a in "$@"; do printf '[%s]' "$a"; done; }; show `+line).Output()
+		if err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		want := ""
+		for _, w := range words {
+			want += "[" + w + "]"
+		}
+		if string(got) != want {
+			t.Errorf("%q runs as %s, want %s", line, got, want)
+		}
+	}
+	if got := Join([]string{"go", "test", "./..."}); got != "go test ./..." {
+		t.Errorf("plain words are quoted: %q", got)
+	}
+}

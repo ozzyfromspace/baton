@@ -6,11 +6,26 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
 // shell runs a command line the way a terminal would.
 func shell(command string) []string { return []string{"cmd", "/C", command} }
+
+// Join is the command line that runs words as they are (a command given as words, `baton verify -- go
+// test ./...`): each word with a space or a character cmd reads otherwise is double-quoted, its quotes
+// escaped as a program's arguments are.
+func Join(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = w
+		if w == "" || strings.ContainsAny(w, " \t\"&|<>^()") {
+			quoted[i] = `"` + strings.ReplaceAll(w, `"`, `\"`) + `"`
+		}
+	}
+	return strings.Join(quoted, " ")
+}
 
 // Windows has no process groups to signal: a command is stopped on its own.
 func setGroup(*exec.Cmd) {}

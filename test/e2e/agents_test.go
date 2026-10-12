@@ -265,7 +265,7 @@ After: none
 
 list.txt already has a change of yours that is not committed yet: its first line is ALPHA now. Leave it uncommitted until step 3.
 
-1. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'the change to list.txt is not committed yet; commit it once the wait ends'
+1. Hand baton this wait, exactly: baton await --notes 'the change to list.txt is not committed yet; commit it once the wait ends' -- sh hold.sh
 2. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 3. When baton gives you the result, commit list.txt: git add list.txt, then git commit -m 'feat: alpha'. Then report P0 done: baton done P0 --notes 'alpha committed'
 
@@ -321,7 +321,7 @@ Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand the gate to baton, exactly: baton verify 'sh gate.sh' --notes 'one committed'
+2. Hand the gate to baton, exactly: baton verify --notes 'one committed' -- sh gate.sh
 3. Report P1 done: baton done P1 --notes 'wrote one; the gate runs'
 
 ## P2 — Say two
@@ -646,7 +646,7 @@ Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
+2. Hand baton this wait, exactly: baton await --notes 'one.txt committed; report P1 done once the wait ends' -- sh hold.sh
 3. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 
@@ -808,7 +808,7 @@ Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
+2. Hand baton this wait, exactly: baton await --notes 'one.txt committed; report P1 done once the wait ends' -- sh hold.sh
 3. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 `
@@ -889,7 +889,7 @@ const agentCrashPlan = `# Agent crash plan
 ## P0 — Wait for the release
 After: none
 
-1. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'waiting for the release'
+1. Hand baton this wait, exactly: baton await --notes 'waiting for the release' -- sh hold.sh
 2. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 3. When baton gives you the wait's result, report P0 done: baton done P0 --notes 'released'
 
@@ -944,7 +944,7 @@ const clearPlan = `# Clear plan
 ## P0 — Wait for the release
 After: none
 
-1. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'waiting for the release'
+1. Hand baton this wait, exactly: baton await --notes 'waiting for the release' -- sh hold.sh
 2. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it. Meanwhile, do what the human asks, and end your turn when that is done.
 3. When baton gives you the wait's result, report P0 done: baton done P0 --notes 'released'
 
@@ -952,7 +952,7 @@ After: none
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
+2. Hand baton this wait, exactly: baton await --notes 'one.txt committed; report P1 done once the wait ends' -- sh hold.sh
 3. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 `
@@ -1011,7 +1011,7 @@ const autoPlan = `# Auto plan
 ## P0 — Wait
 After: none
 
-1. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'nothing to commit; report P0 done once the wait ends'
+1. Hand baton this wait, exactly: baton await --notes 'nothing to commit; report P0 done once the wait ends' -- sh hold.sh
 2. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 3. When baton gives you the result, report P0 done: baton done P0 --notes 'waited'
 
