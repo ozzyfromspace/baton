@@ -78,6 +78,9 @@ type Runtime struct {
 	// runs, it reports each one as it begins, so a /compact baton typed that it says nothing of soon did
 	// not take; where it does not (this claude has not shown it yet), only the compaction's proof can say.
 	ModReports time.Time `json:"mod_reports,omitzero"`
+	// Serial is why the host that decided it runs the plan's phases one at a time in the lead: baton's mod
+	// did not say hello in its claude, or is another baton's (loop/mod.go). Another host decides afresh.
+	Serial *Serial `json:"serial,omitempty"`
 	// Proven is where the lead's transcript stood when baton last knew of every compaction in it: a compact
 	// boundary past it is a compaction baton has not counted yet (Boundary). nil until a hook of the lead's
 	// own marks it (Remark).
@@ -133,6 +136,23 @@ type Runtime struct {
 	// not be resumed: once per phase. nil: none yet.
 	Recoveries []Recovery `json:"recoveries,omitempty"`
 	FreshFor   *string    `json:"fresh_for,omitempty"`
+}
+
+// Serial is a host's decision to run the plan's phases one at a time in the lead (Runtime.Serial): the
+// host instance that made it, why, and when.
+type Serial struct {
+	Instance string    `json:"instance"`
+	Why      string    `json:"why"`
+	At       time.Time `json:"at"`
+}
+
+// SerialWhy is why the phases of the run go one at a time in the lead, as the host that owns it decided,
+// or "" when it decided no such thing.
+func (st State) SerialWhy() string {
+	if s := st.Run.Serial; s != nil && st.Owner != nil && st.Owner.Instance == s.Instance {
+		return s.Why
+	}
+	return ""
 }
 
 // Briefing is a brief baton owes the model after a compaction: of its kind (the brief package's: boundary,

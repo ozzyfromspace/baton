@@ -51,6 +51,7 @@ func (c *Coordinator) serial(now time.Time, s *state.Store, why string) {
 	s.Update(func(st *state.State) error {
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "workers", Text: line, At: now})
 		st.Run.Announce = append(st.Run.Announce, line)
+		st.Run.Serial = &state.Serial{Instance: s.Instance, Why: why, At: now} // baton's board says so
 		return nil
 	})
 	s.Event("serial", map[string]any{"why": why})

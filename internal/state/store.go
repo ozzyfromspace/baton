@@ -146,9 +146,9 @@ func (s *Store) Load() (State, error) {
 	return st, err
 }
 
-// peek reads state.json without the lock. Writes replace the file whole, so it is never torn; it may
+// Peek reads state.json without the lock. Writes replace the file whole, so it is never torn; it may
 // be a moment old, which is fine for a listing.
-func (s *Store) peek() (State, error) { return s.read() }
+func (s *Store) Peek() (State, error) { return s.read() }
 
 func (s *Store) read() (State, error) {
 	b, err := os.ReadFile(s.path("state.json"))

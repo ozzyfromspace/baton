@@ -671,7 +671,7 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 				stale := !p.runExists(id) || gone[run]
 				if !stale && sub == hostsDir && (keep == nil || !keep(l.Name())) {
 					if s, err := p.Run(id, ""); err == nil {
-						if st, err := s.peek(); err == nil && !(st.Owner != nil && st.Owner.Instance == l.Name() && st.Owner.Live(now)) {
+						if st, err := s.Peek(); err == nil && !(st.Owner != nil && st.Owner.Instance == l.Name() && st.Owner.Live(now)) {
 							stale = true
 						}
 					}

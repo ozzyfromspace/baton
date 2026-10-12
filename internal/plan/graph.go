@@ -273,6 +273,29 @@ func (p Plan) Width() int {
 	return width
 }
 
+// Steps groups the plan's phases by how far down the graph they are: a phase that waits for none is in
+// the first step, and any other in the step after the latest of the phases it waits for. So no phase of a
+// step waits for another of it, and a step's phases may run at once once the steps before it are done.
+// Each step lists its phases in document order.
+func (p Plan) Steps() [][]string {
+	step := make(map[string]int, len(p.Phases))
+	var out [][]string
+	for _, ph := range p.Phases {
+		n := 0
+		for _, d := range p.Deps(ph.ID) {
+			if k, ok := step[d]; ok && k+1 > n {
+				n = k + 1
+			}
+		}
+		step[ph.ID] = n
+		for len(out) <= n {
+			out = append(out, nil)
+		}
+		out[n] = append(out[n], ph.ID)
+	}
+	return out
+}
+
 // Sequential reports whether each phase waits for exactly the phase before it, as every plan did before
 // dependencies.
 func (p Plan) Sequential() bool {

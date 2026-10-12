@@ -292,6 +292,32 @@ func TestLongestChain(t *testing.T) {
 	}
 }
 
+// A step is a level of the graph: a phase is one step after the latest of the phases it waits for.
+func TestSteps(t *testing.T) {
+	none := []string{}
+	for _, c := range []struct {
+		name string
+		p    Plan
+		want string
+	}{
+		{"no phases", Plan{}, ""},
+		{"a chain", graph(nil, nil, nil), "P0 | P1 | P2"},
+		{"four apart", graph(none, none, none, none), "P0 P1 P2 P3"},
+		{"a diamond", graph(none, []string{"P0"}, []string{"P0"}, []string{"P1", "P2"}), "P0 | P1 P2 | P3"},
+		{"a chain beside one", graph(none, []string{"P0"}, []string{"P1"}, none), "P0 P3 | P1 | P2"},
+		{"after the latest it waits for", graph(none, []string{"P0"}, []string{"P0", "P1"}, []string{"P0"}), "P0 | P1 P3 | P2"},
+		{"after every phase before it", graph(none, none, []string{"P0", "P1"}), "P0 P1 | P2"},
+	} {
+		var steps []string
+		for _, s := range c.p.Steps() {
+			steps = append(steps, strings.Join(s, " "))
+		}
+		if got := strings.Join(steps, " | "); got != c.want {
+			t.Errorf("%s: Steps() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // Width is the most phases that can be worked on at once: phases none of which waits for another,
 // directly or through others.
 func TestWidth(t *testing.T) {

@@ -93,6 +93,9 @@ func TestARunIsSerialWithoutTheMod(t *testing.T) {
 					}
 				}
 			}
+			if got := st.SerialWhy(); got != c.serial {
+				t.Errorf("SerialWhy() = %q, want %q", got, c.serial) // what baton's board says
+			}
 			if c.serial == "" {
 				if announced != 0 || strings.Contains(ev, `"kind":"serial"`) {
 					t.Errorf("serial: announced %d; events:\n%s", announced, ev)
