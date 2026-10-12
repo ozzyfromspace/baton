@@ -375,6 +375,9 @@ func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) s
 	case !gitx.Usable(s.Checkout):
 		return "the project is not a git repository"
 	}
+	if why := c.modWait(now, s, st); why != "" {
+		return why
+	}
 	return launchable(st, now)
 }
 

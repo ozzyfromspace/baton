@@ -109,6 +109,7 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 		})
 	}
 	x.lead = lead
+	helloFrom(t, lead) // baton's mod is loaded in the lead's claude: workers may start
 	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}, Project: x.proj, Home: x.home}
 	t.Cleanup(c.snapshotsTaken) // before the test's directories are removed (cleanups run last first)
 	c.Fleet = &Fleet{Max: max, UsageMax: 80, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return x.machine },

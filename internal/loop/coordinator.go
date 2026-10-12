@@ -54,6 +54,10 @@ type Coordinator struct {
 	failedStarts int
 	retryAt      time.Time
 	landAt       map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+	// Whether baton's mod has said hello in the lead's claude, and since when the host has waited for it
+	// while a plan runs (mod.go). Only a step touches them.
+	modReady bool
+	modSince time.Time
 	// The machine's swap readings of the last minute, why it had no room for another session at the last
 	// step ("" if it had), and when this host last started a worker's session (room.go).
 	swaps   []swapAt

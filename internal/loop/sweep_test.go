@@ -58,6 +58,7 @@ func (x *crew) newHost(instance string, pid int) (*Coordinator, *state.Store) {
 	if err != nil {
 		x.t.Fatal(err)
 	}
+	helloFrom(x.t, s)
 	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}, Project: x.proj, Home: x.home,
 		isBaton: func(p int) bool { return p == pid }}
 	x.t.Cleanup(c.snapshotsTaken)
