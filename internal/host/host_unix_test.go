@@ -45,6 +45,7 @@ type rig struct {
 	screenMu sync.Mutex
 	done     chan struct{}
 	code     int
+	by       string // what ended the lead (Exit.By)
 	err      error
 }
 
@@ -79,7 +80,8 @@ func startRig(t *testing.T, cfgMod func(*Config), extraEnv ...string) *rig {
 	r.proj, r.sv = cfg.Project, NewSupervisor(cfg)
 	go func() {
 		defer close(r.done)
-		r.code, r.err = r.sv.Run()
+		exit, err := r.sv.Run()
+		r.code, r.by, r.err = exit.Code, exit.By, err
 		stdoutW.Close()
 	}()
 	r.waitScreen("fake-claude ready")
@@ -138,6 +140,9 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 	if code := r.quit(); code != 7 {
 		t.Fatalf("exit code %d, want the child's 7", code)
 	}
+	if r.by != EndedSelf {
+		t.Errorf("the lead ended by %q, want %q", r.by, EndedSelf)
+	}
 	if !strings.HasPrefix(r.input(), "hello\r") {
 		t.Fatalf("child received %q", r.input())
 	}
@@ -164,6 +169,21 @@ func TestPassthroughSettingsAndExitCode(t *testing.T) {
 	}
 	if env["BATON_DIR"] == "" {
 		t.Error("BATON_DIR not set")
+	}
+}
+
+// baton ending the lead itself (Quit: a restart, or the human leaving baton) is told apart from claude
+// exiting by itself, which is what the host recovers from.
+func TestTheLeadSaysWhatEndedIt(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond })
+	r.sv.Lead().Quit()
+	select {
+	case <-r.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lead outlived Quit")
+	}
+	if r.code != 128+int(syscall.SIGTERM) || r.by != EndedQuit {
+		t.Errorf("the lead ended with %d by %q, want %d by %q", r.code, r.by, 128+int(syscall.SIGTERM), EndedQuit)
 	}
 }
 
@@ -326,8 +346,8 @@ func TestASessionEndsWhenItsTerminalIsGone(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("the session outlived its terminal")
 			}
-			if r.code != tc.want {
-				t.Errorf("claude ended with %d, want %d", r.code, tc.want)
+			if r.code != tc.want || r.by != EndedHangup {
+				t.Errorf("claude ended with %d by %q, want %d by %q", r.code, r.by, tc.want, EndedHangup)
 			}
 			if b, _ := os.ReadFile(filepath.Join(store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"terminal_gone"`) {
 				t.Errorf("no terminal_gone event in:\n%s", b)

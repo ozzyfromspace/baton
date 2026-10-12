@@ -60,10 +60,16 @@ func NewSupervisor(cfg Config) *Supervisor {
 	return &Supervisor{cfg: cfg, hidden: map[string]*Session{}}
 }
 
-// Run starts the lead in the human's terminal and returns its exit code once it has exited. The hidden
+// Exit is how the lead ended: claude's exit code, and what ended it (Session.EndedBy).
+type Exit struct {
+	Code int
+	By   string
+}
+
+// Run starts the lead in the human's terminal and returns how it ended once it has exited. The hidden
 // sessions end then too (End), and Run waits for them. From a hang-up or a signal that ends the hidden
 // sessions on, none starts any more (ErrClosed): they end with the host.
-func (sv *Supervisor) Run() (int, error) {
+func (sv *Supervisor) Run() (Exit, error) {
 	cfg := sv.cfg
 	bind(cfg)
 	args := append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, cfg.Args...)
@@ -90,7 +96,7 @@ func (sv *Supervisor) Run() (int, error) {
 	lead, err := startSession(cfg, "", cmd, rows, cols, cfg.Stdout, "")
 	if err != nil {
 		sv.close()
-		return 1, err
+		return Exit{Code: 1, By: EndedSelf}, err
 	}
 	sv.mu.Lock()
 	sv.lead = lead
@@ -119,7 +125,7 @@ func (sv *Supervisor) Run() (int, error) {
 			sv.endHidden()
 		},
 		forward: func(sig os.Signal) {
-			lead.cmd.Process.Signal(sig)
+			lead.pass(sig)
 			sv.close()
 			sv.endHidden()
 		},
@@ -134,7 +140,7 @@ func (sv *Supervisor) Run() (int, error) {
 		<-s.Done()
 	}
 	sv.closeViews()
-	return lead.code, nil
+	return Exit{Code: lead.code, By: lead.EndedBy()}, nil
 }
 
 // pumpInput passes the human's keys to the lead.

@@ -202,7 +202,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: batonEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator, ViewSocket: host.ViewSocket(instance),
 	})
-	code, err := sv.Run()
+	exit, err := sv.Run()
+	code := exit.Code
 	if to, session, ok := controller.Restart(); ok && err == nil {
 		// The workers' jobs go on, as the lead's do: the restarted host watches them, and resumes the workers.
 		for _, w := range coordinator.Ended("baton restarted on baton " + to) {

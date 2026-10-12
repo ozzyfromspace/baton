@@ -49,6 +49,7 @@ type Session struct {
 	hangupOnce sync.Once
 	quitOnce   sync.Once
 	endOnce    sync.Once
+	endedBy    atomic.Pointer[string] // what ended claude, when baton did (EndedBy)
 
 	mu           sync.Mutex // serializes writes to the pty: keys typed by a human vs. baton's typing
 	lastOutput   atomic.Int64
@@ -138,6 +139,36 @@ func (s *Session) ExitCode() int {
 	default:
 		return -1
 	}
+}
+
+// How a session ended (Session.EndedBy).
+const (
+	EndedSelf   = "self"   // claude exited by itself
+	EndedHangup = "hangup" // its terminal went away: baton got SIGHUP, or reading or writing the terminal failed
+	EndedSignal = "signal" // baton passed on a termination signal it got (SIGTERM, SIGINT, SIGQUIT)
+	EndedQuit   = "quit"   // baton ended it (Quit, End): a restart, the human leaving baton, a worker baton ends
+)
+
+// EndedBy says what ended the session, once Done is closed: EndedSelf unless baton ended claude first,
+// and then how.
+func (s *Session) EndedBy() string {
+	if by := s.endedBy.Load(); by != nil {
+		return *by
+	}
+	return EndedSelf
+}
+
+// endingBy records what is ending claude, unless something already is, or claude has exited already.
+func (s *Session) endingBy(by string) {
+	if !s.ended() {
+		s.endedBy.CompareAndSwap(nil, &by)
+	}
+}
+
+// pass passes on a termination signal baton got.
+func (s *Session) pass(sig os.Signal) {
+	s.endingBy(EndedSignal)
+	s.cmd.Process.Signal(sig)
 }
 
 // Pid is claude's process id.
@@ -285,6 +316,7 @@ func (s *Session) ClearInput() error {
 // started) if it is still there HangupGrace later.
 func (s *Session) Quit() error {
 	s.quitOnce.Do(func() {
+		s.endingBy(EndedQuit)
 		s.logf("quitting %s", s.cfg.Claude)
 		go s.sendSignals(quitSignals, false)
 	})
@@ -303,6 +335,7 @@ func (s *Session) End() error {
 			return
 		default:
 		}
+		s.endingBy(EndedQuit)
 		s.logf("ending %s", s.cfg.Claude)
 		go func() {
 			if s.dialogMayBeOpen() {
@@ -342,6 +375,7 @@ func (s *Session) dialogMayBeOpen() bool {
 // it would go on holding the project, and the next baton there would run as plain claude.
 func (s *Session) hangUp(why string) {
 	s.hangupOnce.Do(func() {
+		s.endingBy(EndedHangup)
 		s.logf("the terminal is gone (%s); ending %s", why, s.cfg.Claude)
 		if st := s.runOf(); st != nil {
 			st.Event("terminal_gone", map[string]any{"why": why})

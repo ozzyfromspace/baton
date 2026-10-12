@@ -187,16 +187,32 @@ func (h *hidden) childPid() int {
 	return 0
 }
 
+// A hidden session baton ends says so; one whose claude exits by itself says that.
+func TestAHiddenSessionSaysWhatEndedIt(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond })
+	ended, exited := spawn(t, r.sv, "P3", nil), spawn(t, r.sv, "P4", nil)
+	ended.s.End()
+	exited.s.Keys([]byte("Q"))
+	if code := ended.wait(); code != 0 || ended.s.EndedBy() != EndedQuit {
+		t.Errorf("ended: %d by %q, want 0 by %q", code, ended.s.EndedBy(), EndedQuit)
+	}
+	if code := exited.wait(); code != 7 || exited.s.EndedBy() != EndedSelf {
+		t.Errorf("exited: %d by %q, want 7 by %q", code, exited.s.EndedBy(), EndedSelf)
+	}
+	r.quit()
+}
+
 // A hang-up or a termination signal ends the lead as before, and every hidden session with it.
 func TestSignalsEndEverySession(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sig  syscall.Signal
 		env  []string
-		want int // the lead's exit code
+		want int    // the lead's exit code
+		by   string // and what ended it
 	}{
-		{"SIGHUP", syscall.SIGHUP, []string{"FAKE_HUP=loop"}, 129},
-		{"SIGTERM", syscall.SIGTERM, nil, 128 + int(syscall.SIGTERM)},
+		{"SIGHUP", syscall.SIGHUP, []string{"FAKE_HUP=loop"}, 129, EndedHangup},
+		{"SIGTERM", syscall.SIGTERM, nil, 128 + int(syscall.SIGTERM), EndedSignal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := startRig(t, func(c *Config) { c.HangupGrace = 200 * time.Millisecond }, tc.env...)
@@ -219,8 +235,8 @@ func TestSignalsEndEverySession(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("the host outlived the signal")
 			}
-			if r.code != tc.want {
-				t.Errorf("the lead ended with %d, want %d", r.code, tc.want)
+			if r.code != tc.want || r.by != tc.by {
+				t.Errorf("the lead ended with %d by %q, want %d by %q", r.code, r.by, tc.want, tc.by)
 			}
 			for _, h := range workers {
 				if code := h.s.ExitCode(); code != 0 || h.input() != "/exit\r" {
