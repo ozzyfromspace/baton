@@ -1,0 +1,20 @@
+{"type":"last-prompt","lastPrompt":"","sessionId":"s"}
+{"parentUuid":null,"isSidechain":false,"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","hookEvent":"SessionStart"},"uuid":"h1","timestamp":"2026-10-12T12:00:00.000Z"}
+{"parentUuid":"h1","isSidechain":false,"type":"attachment","attachment":{"type":"hook_additional_context","content":["This session is hosted by baton."],"hookName":"SessionStart:startup","hookEvent":"SessionStart"},"uuid":"h2","timestamp":"2026-10-12T12:00:00.001Z"}
+{"type":"file-history-snapshot","messageId":"p1","snapshot":{"trackedFileBackups":{}},"isSnapshotUpdate":false}
+{"parentUuid":"h2","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Run echo one."},"uuid":"p1","timestamp":"2026-10-12T12:00:05.000Z"}
+{"parentUuid":"p1","isSidechain":false,"type":"attachment","attachment":{"type":"total_tokens_reminder"},"uuid":"t1","timestamp":"2026-10-12T12:00:05.001Z"}
+{"parentUuid":"t1","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"echo one"}}],"stop_reason":"tool_use"},"uuid":"a1","timestamp":"2026-10-12T12:00:06.000Z"}
+{"parentUuid":"a1","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"one"}]},"uuid":"r1","timestamp":"2026-10-12T12:00:07.000Z"}
+{"parentUuid":"r1","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"one"}],"stop_reason":"end_turn"},"uuid":"a2","timestamp":"2026-10-12T12:00:08.000Z"}
+{"parentUuid":"a2","isSidechain":false,"type":"system","subtype":"stop_hook_summary","uuid":"s1","timestamp":"2026-10-12T12:00:08.100Z"}
+{"parentUuid":"s1","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":3000,"isMeta":false,"uuid":"s2","timestamp":"2026-10-12T12:00:08.101Z"}
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-10-12T12:01:00.500Z"}
+{"parentUuid":"s2","isSidechain":false,"type":"attachment","attachment":{"type":"queued_command","prompt":"Now fix b.","commandMode":"prompt"},"uuid":"q1","timestamp":"2026-10-12T12:01:00.000Z"}
+{"parentUuid":"q1","isSidechain":false,"type":"attachment","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit"},"uuid":"hu","timestamp":"2026-10-12T12:01:00.100Z"}
+{"parentUuid":"hu","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Bash","input":{"command":"baton note 'fixed b differently' --undo 'git revert HEAD'"}}],"stop_reason":"tool_use"},"uuid":"a3","timestamp":"2026-10-12T12:01:02.000Z"}
+{"parentUuid":"a3","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"Noted as d1."}]},"uuid":"r2","timestamp":"2026-10-12T12:01:03.000Z"}
+{"parentUuid":"r2","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"},"uuid":"a4","timestamp":"2026-10-12T12:01:04.000Z"}
+{"parentUuid":"a4","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":4000,"uuid":"s3","timestamp":"2026-10-12T12:01:04.100Z"}
+{"parentUuid":"s3","isSidechain":false,"type":"system","subtype":"local_command","uuid":"l1","timestamp":"2026-10-12T12:02:00.000Z"}
+{"parentUuid":"s2","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Fix b another way."},"uuid":"p3","timestamp":"2026-10-12T12:03:00.000Z"}

@@ -1,0 +1,20 @@
+{"parentUuid":null,"isSidechain":false,"type":"attachment","attachment":{"type":"hook_success","hookEvent":"SessionStart"},"uuid":"h1","timestamp":"2026-10-12T12:00:00.000Z"}
+{"parentUuid":"h1","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Remember the codeword."},"uuid":"p1","timestamp":"2026-10-12T12:00:05.000Z"}
+{"parentUuid":"p1","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Noted."}],"stop_reason":"end_turn"},"uuid":"a1","timestamp":"2026-10-12T12:00:06.000Z"}
+{"parentUuid":"a1","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":1000,"uuid":"s1","timestamp":"2026-10-12T12:00:06.100Z"}
+{"parentUuid":"s1","isSidechain":false,"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>"},"uuid":"c0","timestamp":"2026-10-12T12:01:00.000Z"}
+{"parentUuid":null,"logicalParentUuid":"s1","isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual"},"uuid":"cb","timestamp":"2026-10-12T12:01:05.000Z"}
+{"parentUuid":"cb","isSidechain":false,"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary."},"uuid":"cs","timestamp":"2026-10-12T12:01:01.000Z"}
+{"parentUuid":"cs","isSidechain":false,"type":"user","isMeta":true,"message":{"role":"user","content":"caveat"},"uuid":"m1","timestamp":"2026-10-12T12:01:00.001Z"}
+{"parentUuid":"m1","isSidechain":false,"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>"},"uuid":"c1","timestamp":"2026-10-12T12:01:00.002Z"}
+{"parentUuid":"c1","isSidechain":false,"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"},"uuid":"c2","timestamp":"2026-10-12T12:01:05.100Z"}
+{"parentUuid":"c2","isSidechain":false,"type":"attachment","attachment":{"type":"hook_success","hookEvent":"SessionStart"},"uuid":"hs","timestamp":"2026-10-12T12:01:05.200Z"}
+{"parentUuid":"hs","isSidechain":false,"type":"attachment","attachment":{"type":"hook_system_message","hookEvent":"SessionStart"},"uuid":"hm","timestamp":"2026-10-12T12:01:05.201Z"}
+{"parentUuid":"hm","isSidechain":false,"type":"attachment","attachment":{"type":"hook_additional_context","content":["[baton] The context was compacted at a phase boundary."],"hookEvent":"SessionStart"},"uuid":"hb","timestamp":"2026-10-12T12:01:05.202Z"}
+{"parentUuid":"hb","isSidechain":false,"promptSource":"system","type":"user","message":{"role":"user","content":"[baton] Context compacted. Begin P1 now."},"uuid":"p2","timestamp":"2026-10-12T12:01:06.000Z"}
+{"parentUuid":"p2","isSidechain":false,"type":"attachment","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit"},"uuid":"hu","timestamp":"2026-10-12T12:01:06.001Z"}
+{"parentUuid":"hu","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"baton checkpoint --notes 'half of P1'"}}],"stop_reason":"tool_use"},"uuid":"a2","timestamp":"2026-10-12T12:01:07.000Z"}
+{"parentUuid":"a2","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]},"uuid":"r2","timestamp":"2026-10-12T12:01:08.000Z"}
+{"parentUuid":"r2","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":2000,"uuid":"s2","timestamp":"2026-10-12T12:01:08.100Z"}
+{"parentUuid":"m1","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"What was the codeword?"},"uuid":"p3","timestamp":"2026-10-12T12:02:00.000Z"}
+{"parentUuid":"p3","isSidechain":false,"type":"attachment","attachment":{"type":"total_tokens_reminder"},"uuid":"t3","timestamp":"2026-10-12T12:02:00.001Z"}

@@ -60,6 +60,14 @@ baton as `StopFailure` with `error: invalid_request`, and baton escalated it as 
   rewind. Following the parents from that prompt never reaches the old branch's last entry.
 - **It shows one hook late.** At the prompt's own `UserPromptSubmit`, the prompt is not in the transcript yet. It is
   there by the turn's next hook.
+- **The turn rewound away may have no prompt entry.** In the real rewind, the human had typed that turn's prompt while
+  the model was still working, and Claude Code wrote it as an attachment of type `queued_command`, not as a user entry
+  with `promptSource`. So what marks a branch as rewound away is a turn of any kind in it: a prompt, a queued prompt,
+  or a reply of the model's.
+- **Parents are written first.** In every real transcript checked (over 20,000 entries), an entry's parent comes
+  before it in the file. So the walk back from the new prompt and from the old leaf to the entry they share reads only
+  as far back as that entry. Replayed prompt by prompt, as if marked at each `UserPromptSubmit`, over 1,400 real
+  prompts flagged the one known rewind and nothing else, and spike 29's A, B and C2 one each.
 - **Code restore leaves no marker.** "Restore code and conversation" deleted a file the rewound turn had written; the
   transcript only shows it in a later `file-history-snapshot`. Restores cover only files Claude's edit tools changed,
   never git: commits stay, so restored files show as changes against `HEAD`.
@@ -97,11 +105,13 @@ baton as `StopFailure` with `error: invalid_request`, and baton escalated it as 
    minutes (counted in the run's state, so the count survives the restart); then it stops and says so. If the
    conversation cannot be resumed (claude exits early, before any `SessionStart`), it starts a fresh session bound to
    the same run, from the phase's brief, once.
-4. **A rewind is noticed, and the model is told what still stands.** At the human's prompt, baton notes the last entry
-   in the transcript. At the turn's next hook, it checks that the prompt descends from it. If not, it reads the
-   abandoned branch for what baton recorded there (its own commands: notes, proposals, jobs, `done`) and the files it
-   edited. It then tells the model, through hook feedback (`decision: block` on PostToolUse or Stop, the channel spike 24 found
-   followed every time), that the human rewound, what still stands, and that the edited files are as they are on disk.
-   If the rewind dropped the brief, it gives the brief again. baton's own record is never rolled back by a rewind:
-   undoing a decision stays the human's, through its undo.
+4. **A rewind is noticed, and the model is told what still stands.** At each prompt, baton notes the last entry in
+   the transcript. At the turn's next hook, it checks that the prompt descends from it. If not, it reads the
+   abandoned branch once: its time span, the `baton` commands run there, the files Claude's edit tools wrote there,
+   and whether baton's brief was in it. Decisions and jobs are found in baton's record by that time span. It then
+   tells the model, through hook feedback (`decision: block` on PostToolUse or Stop, the channel spike 24 found
+   followed every time), that the human rewound, what still stands (decisions, jobs and their results, a phase done,
+   a block), and that the edited files are as they are on disk. If the rewind dropped the brief, it gives the brief
+   again. While a compaction is owed, nothing is told: the compaction's brief gives the phase afresh. baton's own
+   record is never rolled back by a rewind: undoing a decision stays the human's, through its undo.
 5. **Tests use recorded transcripts for refusals.** No test provokes a refusal.

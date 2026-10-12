@@ -1,8 +1,8 @@
 // Package transcript reads Claude Code's transcript of a session, the JSONL file every hook's input names
-// in transcript_path, for what no hook's input says: why a turn failed. Claude Code does not document the
-// format; what baton reads was measured (docs/research/recovery.md). Reading is best effort and read-only:
-// a missing file or a line that does not parse gives nothing, and baton then behaves as if it had not
-// looked.
+// in transcript_path, for what no hook's input says: why a turn failed, and whether the human rewound the
+// conversation. Claude Code does not document the format; what baton reads was measured
+// (docs/research/recovery.md). Reading is best effort and read-only: a missing file or a line that does not
+// parse gives nothing, and baton then behaves as if it had not looked.
 package transcript
 
 import (
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"time"
 )
 
 // Entry is one line of a transcript, as far as baton reads it.
@@ -27,6 +28,20 @@ type Entry struct {
 	// Refusal is set on the entries Claude Code writes when the model's safeguards declined a turn and it
 	// will not go on with it.
 	Refusal *Refusal
+	Time    time.Time // when it was written (the zero time if it says not)
+	// Attachment is an attachment entry's type (hook_additional_context, file, …), and HookEvent the hook
+	// whose output it carries, for a hook's (SessionStart, UserPromptSubmit, …).
+	Attachment string
+	HookEvent  string
+	// Tools are the tool calls of an assistant entry.
+	Tools []Tool
+}
+
+// Tool is a tool call the model made.
+type Tool struct {
+	Name    string // Bash, Write, Edit, …
+	Command string // a Bash call's command line
+	File    string // the file it names: file_path, or a notebook's notebook_path
 }
 
 // Prompt reports a prompt that starts a turn: one the human typed, or one Claude Code queued (a task's
@@ -46,18 +61,37 @@ const TailBytes = 256 << 10
 // Tail is the entries in the last n bytes of the transcript at path, oldest first. The first line is
 // skipped when the tail starts inside it, and so is any line that does not parse (one cut off, say).
 func Tail(path string, n int64) ([]Entry, error) {
-	f, err := os.Open(path)
+	f, size, err := open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	return read(f, max(size-n, 0), size)
+}
+
+// open opens the transcript at path, and says how long it is.
+func open(path string) (*os.File, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, err
+		f.Close()
+		return nil, 0, err
 	}
-	from := max(fi.Size()-n, 0)
-	data := make([]byte, fi.Size()-from)
-	if _, err := f.ReadAt(data, from); err != nil && err != io.EOF {
+	return f, fi.Size(), nil
+}
+
+// read is the entries in bytes [from, to) of f, oldest first. A line that from starts inside is skipped,
+// and so is any line that does not parse.
+func read(f *os.File, from, to int64) ([]Entry, error) {
+	start := from
+	if from > 0 {
+		start-- // the byte before says whether from starts a line
+	}
+	data := make([]byte, to-start)
+	if _, err := f.ReadAt(data, start); err != nil && err != io.EOF {
 		return nil, err
 	}
 	if from > 0 {
@@ -114,8 +148,9 @@ func Refused(path string) (*Refusal, error) {
 	return LastRefusal(entries), nil
 }
 
-// line is the JSON of a transcript entry, as far as baton reads it. message stays raw: its shape differs
-// between entry types, and one baton does not expect must not lose it the rest of the line.
+// line is the JSON of a transcript entry, as far as baton reads it. message and attachment stay raw: their
+// shapes differ between entry types, and one baton does not expect must not lose it the rest of the line.
+// So does the timestamp, which is parsed on its own.
 type line struct {
 	Type              string          `json:"type"`
 	Subtype           string          `json:"subtype"`
@@ -128,7 +163,15 @@ type line struct {
 	IsAPIErrorMessage bool            `json:"isApiErrorMessage"`
 	RefusalCategory   string          `json:"apiRefusalCategory"`
 	RefusalWhy        string          `json:"apiRefusalExplanation"`
+	Timestamp         string          `json:"timestamp"`
+	Attachment        json.RawMessage `json:"attachment"`
 	Message           json.RawMessage `json:"message"`
+}
+
+// attachment is the part of an attachment entry's attachment baton reads.
+type attachment struct {
+	Type      string `json:"type"`
+	HookEvent string `json:"hookEvent"`
 }
 
 // message is the part of an assistant entry's message baton reads.
@@ -138,6 +181,18 @@ type message struct {
 		Category    string `json:"category"`
 		Explanation string `json:"explanation"`
 	} `json:"stop_details"`
+	Content json.RawMessage `json:"content"`
+}
+
+// block is a content block of an assistant message, as far as baton reads a tool call's.
+type block struct {
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+	Input struct {
+		Command      string `json:"command"`
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
+	} `json:"input"`
 }
 
 func parse(raw []byte) (Entry, bool) {
@@ -153,13 +208,36 @@ func parse(raw []byte) (Entry, bool) {
 	if e.Parent == "" {
 		e.Parent = l.LogicalParentUUID
 	}
-	switch {
-	case l.Type == "system" && l.Subtype == "model_refusal_no_fallback":
-		e.Refusal = &Refusal{Category: l.RefusalCategory, Explanation: l.RefusalWhy}
-	case l.Type == "assistant" && l.IsAPIErrorMessage:
-		var m message
-		if json.Unmarshal(l.Message, &m) == nil && m.StopReason == "refusal" {
-			e.Refusal = &Refusal{Category: m.StopDetails.Category, Explanation: m.StopDetails.Explanation}
+	e.Time, _ = time.Parse(time.RFC3339Nano, l.Timestamp)
+	if l.Type == "attachment" {
+		var a attachment
+		if json.Unmarshal(l.Attachment, &a) == nil {
+			e.Attachment, e.HookEvent = a.Type, a.HookEvent
+		}
+	}
+	if l.Type != "assistant" {
+		if l.Type == "system" && l.Subtype == "model_refusal_no_fallback" {
+			e.Refusal = &Refusal{Category: l.RefusalCategory, Explanation: l.RefusalWhy}
+		}
+		return e, true
+	}
+	var m message
+	if json.Unmarshal(l.Message, &m) != nil {
+		return e, true
+	}
+	if l.IsAPIErrorMessage && m.StopReason == "refusal" {
+		e.Refusal = &Refusal{Category: m.StopDetails.Category, Explanation: m.StopDetails.Explanation}
+	}
+	var blocks []block
+	if json.Unmarshal(m.Content, &blocks) == nil {
+		for _, b := range blocks {
+			if b.Type == "tool_use" {
+				file := b.Input.FilePath
+				if file == "" {
+					file = b.Input.NotebookPath
+				}
+				e.Tools = append(e.Tools, Tool{Name: b.Name, Command: b.Input.Command, File: file})
+			}
 		}
 	}
 	return e, true
