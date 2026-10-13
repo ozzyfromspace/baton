@@ -276,8 +276,8 @@ Change the last line of list.txt from epsilon to EPSILON, and leave every other 
 `
 
 // The phase agent's work changes list.txt, which the lead has changed and not committed: its landing
-// waits, since the fast-forward would refuse it, or worse. Once the lead commits, baton rebases the
-// agent's branch onto the lead's commit and lands it, and list.txt keeps both changes.
+// waits, since the fast-forward would refuse it, or worse. Once the lead commits, baton merges the lead's
+// commit into the agent's branch and lands it, and list.txt keeps both changes.
 func TestALandingWaitsForTheLeadsChanges(t *testing.T) {
 	dir := listPlanProject(t)
 	Attach(t, dir, overlapPlan)
@@ -295,11 +295,10 @@ func TestALandingWaitsForTheLeadsChanges(t *testing.T) {
 	release(t, dir)
 	s.Until("the plan to complete", 6*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })
 	ev := s.Events()
-	if !before(ev, is("land_deferred", "phase", "P1"), is("rebased", "phase", "P1")) || !before(ev, is("rebased", "phase", "P1"), is("landed", "phase", "P1")) {
-		t.Fatal("P1 did not land, rebased onto the lead's commit, after it waited")
+	if !before(ev, is("land_deferred", "phase", "P1"), is("merged_in", "phase", "P1")) || !before(ev, is("merged_in", "phase", "P1"), is("landed", "phase", "P1")) {
+		t.Fatal("P1 did not land, with the lead's commit merged in, after it waited")
 	}
-	log := Git(t, dir, "log", "--format=%s")
-	if a, e := strings.Index(log, "feat: alpha"), strings.Index(log, "feat: epsilon"); a < 0 || e < 0 || e > a {
+	if log := Git(t, dir, "log", "--format=%s"); !strings.Contains(log, "feat: alpha") || !strings.Contains(log, "feat: epsilon") || !strings.Contains(log, "Merge branch 'main' into baton/") {
 		t.Errorf("the run's branch, newest first: %s", log)
 	}
 	if got := readFile(dir, "list.txt"); got != "ALPHA\nbeta\ngamma\ndelta\nEPSILON\n" {
@@ -350,7 +349,7 @@ echo "gate: passed"
 `
 
 // The checkout gets a commit of its own while the phase agent's gate runs, and another while the merge
-// queue verifies the phase again on its rebased branch. The first verifies it again, once; the second does
+// queue verifies the phase again with the run's branch merged in. The first verifies it again, once; the second does
 // not, however long the gate takes: the phase lands over it, unverified with it, and the lead is told.
 func TestALandingKeepsUpWithTheLead(t *testing.T) {
 	dir := projectWith(t, map[string]string{"gate.sh": countedGate})
@@ -403,8 +402,7 @@ func TestALandingKeepsUpWithTheLead(t *testing.T) {
 	if !before(ev, is("landed", "phase", "P1"), is("landed_told")) {
 		t.Error("the lead was never told what landed")
 	}
-	log := Git(t, dir, "log", "--format=%s")
-	if o, f, sc := strings.Index(log, "feat: one"), strings.Index(log, "first.txt"), strings.Index(log, "second.txt"); o < 0 || f < 0 || sc < 0 || o > sc || sc > f {
+	if log := Git(t, dir, "log", "--format=%s"); !strings.Contains(log, "feat: one") || !strings.Contains(log, "first.txt") || !strings.Contains(log, "second.txt") || !strings.Contains(log, "Merge branch 'main' into baton/") {
 		t.Errorf("the run's branch, newest first: %s", log)
 	}
 	none(t, s, "land_returned", "controller_panic", "escalated")
@@ -426,16 +424,18 @@ After: none
 2. Commit it: git add list.txt, then git commit -m 'feat: the agent gamma'.
 3. Report P1 done: baton done P1 --notes 'gamma changed'
 
-If baton then says your work conflicts with the run's branch, rebase as it says. In list.txt, keep both versions of the third line: the one from the run's branch first, then yours on the line after it, and leave the other lines as they are.
+If baton then says your work conflicts with the run's branch, do as it says. In list.txt, keep both versions of the third line: the one from the run's branch first, then yours on the line after it, and leave the other lines as they are.
 `
 
-// The run's branch changes the line the phase agent changes, after the agent started: its rebase onto the
-// run's branch conflicts, so baton hands the phase back to the agent with a message, and the agent rebases
-// and resolves it itself and reports it done again. Then it lands, with both changes.
+// The run's branch changes the line the phase agent changes, after the agent started: merging it into the
+// agent's branch conflicts, so baton hands the phase back to the agent with a message, and the agent merges
+// and resolves it itself and reports it done again. Then it lands, with both changes and every commit as it
+// was. The agent may run only git add and git commit unasked: its merge goes to Claude Code's permission
+// check, as in a real session.
 func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 	dir := listPlanProject(t)
 	Attach(t, dir, conflictPlan)
-	s := StartAgents(t, dir, nil, "--allowedTools", "Bash(git:*)", "Bash(echo:*)", "Edit", "Write")
+	s := StartAgents(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Edit", "Write")
 	s.AutoApprove()
 
 	if spawned := s.WaitEvent("worker_spawned", 2*time.Minute); spawned == nil || spawned["phase"] != "P1" {
@@ -461,8 +461,8 @@ func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 		t.Error("the phase agent did not report P1 done again")
 	}
 	log := Git(t, dir, "log", "--format=%s")
-	if l, w := strings.Index(log, "feat: the lead gamma"), strings.Index(log, "feat: the agent gamma"); l < 0 || w < 0 || w > l {
-		t.Errorf("the run's branch, newest first: %s", log)
+	if !strings.Contains(log, "feat: the lead gamma") || !strings.Contains(log, "feat: the agent gamma") || !strings.Contains(log, "Merge branch 'main' into baton/") {
+		t.Errorf("the run's branch, newest first, with no merge: %s", log)
 	}
 	got := readFile(dir, "list.txt")
 	if l, w := strings.Index(got, "gamma (lead)"), strings.Index(got, "gamma (agent)"); l < 0 || w < l || strings.Contains(got, "<<<<<<<") ||

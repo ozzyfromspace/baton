@@ -21,7 +21,7 @@ func WorkerIntro(title, file, phase, tree, branch string) string {
 	}
 	return fmt.Sprintf("You are a worker for the plan %q (%s). baton works on the phases of the plan that can go ahead at the same time, each by an agent of its own: "+
 		"you work on %s alone, in a git worktree of your own (%s%s), while the lead session and any other workers work on other phases elsewhere. "+
-		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, and never merge, rebase or push it yourself: "+
+		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, never rebase, reset or push it, and merge into it only when baton asks you to: "+
 		"once you report %s done, baton lands it on the run's branch.", title, file, phase, tree, on, phase)
 }
 
@@ -213,8 +213,8 @@ func WorkerDone(phase, job, ran string) string {
 		return fmt.Sprintf("%s is finished, and verifying: job %s (%s) is still running. baton lands your work on the run's branch once it passes; "+
 			"if it fails, %s reopens here, and you take it up again from your notes on that job. End your turn now.", phase, job, ran, phase)
 	}
-	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it rebases your branch onto it and merges it under the lead session. "+
-		"If anything needs you first (a rebase conflict, a red verification), baton tells you here. End your turn now.", phase)
+	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it merges the run's branch into yours if that has moved on, then fast-forwards the run's branch to yours under the lead session. "+
+		"If anything needs you first (a conflict, a red verification), baton tells you here. End your turn now.", phase)
 }
 
 // DropWorkers is what `baton drop` says about the workers it ends: phases names them.

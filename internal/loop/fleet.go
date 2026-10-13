@@ -38,7 +38,7 @@ import (
 // fleetEvery is how often the coordinator looks over the run's phase agents.
 const fleetEvery = time.Second
 
-// gitTimeout bounds each git command run for a worker: the merge queue's rebase, and its landing.
+// gitTimeout bounds each git command run for a worker: the merge queue's merge, and its landing.
 const gitTimeout = 2 * time.Minute
 
 // launchRetry is how long the coordinator waits before it starts a phase agent again after one failed to

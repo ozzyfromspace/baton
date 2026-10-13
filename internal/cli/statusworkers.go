@@ -117,11 +117,11 @@ func printMergeQueue(io IO, st state.State) {
 		line := fmt.Sprintf("  %d. %-6s finished %s", i+1, w.Phase, m.Queued.Local().Format("15:04"))
 		switch {
 		case m.Reverify != "":
-			line += " · verifying again on its rebased branch (job " + m.Reverify + ")"
+			line += " · verifying again with the run's branch merged in (job " + m.Reverify + ")"
 		case m.Deferred != "":
 			line += " · waits to land: " + m.Deferred + " (since " + m.DeferredAt.Local().Format("15:04") + ")"
-		case m.Rebased != "":
-			line += " · rebased onto " + shortCommit(m.Onto)
+		case m.Merged != "":
+			line += " · merged with " + shortCommit(m.Onto)
 		}
 		fmt.Fprintln(io.Out, line)
 	}

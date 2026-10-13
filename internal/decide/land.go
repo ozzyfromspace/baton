@@ -46,25 +46,31 @@ func Landed(ls []state.Landing, branch string) string {
 		branch, strings.Join(parts, "; "), plural(len(ls), "it", "them"), short7(head), unverified)
 }
 
-// LandConflict tells a worker on phase that its branch conflicts with branch (the run's branch) in
-// paths, so it rebases and resolves it itself.
+// MergeMessage is the message of the commit that merges the run's branch (branch) into a phase's branch
+// (phaseBranch) to land it, worded as git words its own.
+func MergeMessage(branch, phaseBranch string) string {
+	return fmt.Sprintf("Merge branch '%s' into %s", branch, phaseBranch)
+}
+
+// LandConflict tells a worker on phase that the run's branch (branch) conflicts with its branch in paths,
+// so it merges it in and resolves that itself. Nothing it is asked to do rewrites a commit.
 func LandConflict(phase, branch string, paths []string) string {
-	return fmt.Sprintf("[baton] Your work on %s did not land yet: rebasing your branch onto %s, the run's branch, conflicts in %s, where other work landed meanwhile. "+
-		"This time, rebase it yourself: git rebase %s, resolve each conflict so that both your change and the one already on %s keep working, git add the files, "+
-		"and git rebase --continue. Run the phase's checks again, then run baton done %s again.",
+	return fmt.Sprintf("[baton] Your work on %s did not land yet: other work landed on %s, the run's branch, meanwhile, and it conflicts with yours in %s. "+
+		"Merge it into your branch yourself: git merge %s, resolve each conflict so that both your change and the one already on %s keep working, git add the files, "+
+		"and git commit --no-edit. A merge keeps every commit as it is: never rebase or reset your branch to do it. Run the phase's checks again, then run baton done %s again.",
 		phase, branch, strings.Join(paths, ", "), branch, branch, phase)
 }
 
-// LandRefused tells a worker on phase that baton could not rebase its branch onto branch (the run's
-// branch), for why (what git said), so it does it itself.
+// LandRefused tells a worker on phase that baton could not merge branch (the run's branch) into its
+// branch, for why (what git said), so it does it itself.
 func LandRefused(phase, branch, why string) string {
-	return fmt.Sprintf("[baton] Your work on %s did not land yet: baton could not rebase your branch onto %s, the run's branch (git said: %s). "+
-		"Commit or remove any uncommitted changes in your worktree, then rebase it yourself: git rebase %s, resolving any conflicts. "+
-		"Run the phase's checks again, then run baton done %s again.", phase, branch, why, branch, phase)
+	return fmt.Sprintf("[baton] Your work on %s did not land yet: baton could not merge %s, the run's branch, into your branch (git said: %s). "+
+		"Commit any uncommitted changes in your worktree, never discarding them, then merge it yourself: git merge %s, resolving any conflicts so that both sides keep working, "+
+		"and git commit --no-edit. Never rebase or reset your branch to do it. Run the phase's checks again, then run baton done %s again.", phase, branch, why, branch, phase)
 }
 
-// ReverifyNotes are the notes of the verification baton runs again on a worker's branch, rebased onto
-// branch (the run's branch): why it runs again (other work landed there, or, byLead, only the checkout's
+// ReverifyNotes are the notes of the verification baton runs again on a worker's branch, with branch (the
+// run's branch) merged in: why it runs again (other work landed there, or, byLead, only the checkout's
 // own commits came), and where the phase stood (notes, the model's own, from the verification that
 // passed). A worker whose phase it reopens resumes from them.
 func ReverifyNotes(branch, notes string, byLead bool) string {
@@ -72,7 +78,7 @@ func ReverifyNotes(branch, notes string, byLead bool) string {
 	if byLead {
 		since = "commits had been made on " + branch + " in the checkout meanwhile"
 	}
-	n := fmt.Sprintf("baton rebased this phase's branch onto %s, the run's branch, to land it, and verified it again there, since %s.", branch, since)
+	n := fmt.Sprintf("baton merged %s, the run's branch, into this phase's branch to land it, and verified it again there, since %s.", branch, since)
 	if notes != "" {
 		n += " Before that: " + notes
 	}

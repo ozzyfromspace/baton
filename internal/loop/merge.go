@@ -18,10 +18,12 @@ import (
 // `baton done` completes its sub-run, its verification green; the worker stays, idle, until its work has
 // landed. Then, one step at a time and once its session is idle:
 //
-//  1. its branch is rebased onto the run's branch, in its worktree. A rebase that stops is aborted, and
-//     the phase goes back to the worker, which rebases it itself (state.Reopen);
+//  1. if the run's branch moved on, it is merged into the worker's branch, in its worktree (gitx.Merge).
+//     A merge that stops is aborted, and the phase goes back to the worker, which merges it in itself
+//     (state.Reopen). Nothing baton runs, or asks a worker to run, rewrites a commit: a rebase drops a
+//     merge commit, and with it a conflict the worker resolved;
 //  2. if the run's branch has commits the one its verification passed on lacks, the phase is verified
-//     again on the rebased commit (state.Reverify): red takes it up again in the worker. Each landing is
+//     again on the merged commit (state.Reverify): red takes it up again in the worker. Each landing is
 //     verified against the others: a commit a worker landed (of this run or another in the checkout)
 //     verifies it again every time. The checkout's own commits (the lead's, or the human's) verify it
 //     again once: those made while the merge queue's verification runs are landed over, unverified with
@@ -45,7 +47,7 @@ type landGit interface {
 	RevParse(root, rev string) string
 	Branch(root string) string
 	IsAncestor(ctx context.Context, root, a, b string) (bool, error)
-	Rebase(ctx context.Context, dir, onto string) error
+	Merge(ctx context.Context, dir, onto, msg string) error
 	Changes(ctx context.Context, root, from, to string) ([]gitx.Change, error)
 	Commits(ctx context.Context, root, from, to string) ([]string, error)
 	Overlap(root string, changes []gitx.Change) ([]string, error)
@@ -60,8 +62,8 @@ func (realGit) Branch(root string) string        { return gitx.Branch(root) }
 func (realGit) IsAncestor(ctx context.Context, root, a, b string) (bool, error) {
 	return gitx.IsAncestor(ctx, root, a, b)
 }
-func (realGit) Rebase(ctx context.Context, dir, onto string) error {
-	return gitx.Rebase(ctx, dir, onto)
+func (realGit) Merge(ctx context.Context, dir, onto, msg string) error {
+	return gitx.Merge(ctx, dir, onto, msg)
 }
 func (realGit) Changes(ctx context.Context, root, from, to string) ([]gitx.Change, error) {
 	return gitx.Changes(ctx, root, from, to)
@@ -152,7 +154,7 @@ func (c *Coordinator) queue(now time.Time, s *state.Store, w *worker, e state.Wo
 }
 
 // land works on landing worker e, whose session this host runs as w, in the run whose state is st. It
-// reports whether it did something that took this step: it rebased, landed, or handed the phase back.
+// reports whether it did something that took this step: it merged, landed, or handed the phase back.
 func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker) bool {
 	g := c.Fleet.gitx()
 	sub, err := w.store.Load()
@@ -167,7 +169,7 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 		case ps != nil && ps.Status == state.PhaseVerifying:
 			return false // its verification runs again: the result decides
 		default:
-			c.returned(now, s, e, "its verification failed on its branch rebased onto the run's branch", nil)
+			c.returned(now, s, e, "its verification failed on its branch, with the run's branch merged in", nil)
 			return true
 		}
 	} else if sub.Mode != state.ModeComplete {
@@ -193,7 +195,7 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 		c.deferLanding(now, s, e, err.Error(), nil, failedRetry)
 		return false
 	} else if !ok {
-		return c.rebase(now, s, st, w, e, onto, tip)
+		return c.mergeIn(now, s, st, w, e, onto, tip)
 	}
 	var over unverified
 	if j := verified(sub, e.Phase); j != nil && j.Commit != tip {
@@ -252,19 +254,19 @@ type unverified struct {
 	commits  []string
 }
 
-// rebase rebases worker e's branch, at tip, onto the run's branch, at onto. A rebase that does not go
+// mergeIn merges the run's branch, at onto, into worker e's branch, at tip. A merge that does not go
 // through hands the phase back to the worker.
-func (c *Coordinator) rebase(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, onto, tip string) bool {
+func (c *Coordinator) mergeIn(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, onto, tip string) bool {
 	g := c.Fleet.gitx()
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
-	if err := g.Rebase(ctx, e.Worktree, onto); err != nil {
-		var re *gitx.RebaseError
+	if err := g.Merge(ctx, e.Worktree, onto, decide.MergeMessage(st.RunBranch, e.Branch)); err != nil {
+		var re *gitx.MergeError
 		if !errors.As(err, &re) {
-			c.deferLanding(now, s, e, "baton could not rebase its branch: "+err.Error(), nil, failedRetry)
+			c.deferLanding(now, s, e, "baton could not merge the run's branch into its branch: "+err.Error(), nil, failedRetry)
 			return false
 		}
-		text, why := decide.LandRefused(e.Phase, st.RunBranch, re.Msg), "baton could not rebase its branch: "+re.Msg
+		text, why := decide.LandRefused(e.Phase, st.RunBranch, re.Msg), "baton could not merge the run's branch into its branch: "+re.Msg
 		if len(re.Paths) > 0 {
 			text, why = decide.LandConflict(e.Phase, st.RunBranch, re.Paths), "its branch conflicts with the run's in "+strings.Join(re.Paths, ", ")
 		}
@@ -277,12 +279,12 @@ func (c *Coordinator) rebase(now time.Time, s *state.Store, st state.State, w *w
 		c.returned(now, s, e, why, re.Paths)
 		return true
 	}
-	rebased := g.RevParse(s.Checkout, "refs/heads/"+e.Branch)
+	merged := g.RevParse(s.Checkout, "refs/heads/"+e.Branch)
 	c.setEntry(s, e, func(x *state.Worker) {
-		x.Merge.Rebased, x.Merge.Onto, x.Merge.Tries = rebased, onto, x.Merge.Tries+1
+		x.Merge.Merged, x.Merge.Onto, x.Merge.Tries = merged, onto, x.Merge.Tries+1
 	})
-	s.Event("rebased", map[string]any{"phase": e.Phase, "onto": onto, "from": tip, "to": rebased})
-	c.announce(s, fmt.Sprintf("baton: rebased %s's branch onto %s (now %s)", e.Phase, st.RunBranch, short(rebased)))
+	s.Event("merged_in", map[string]any{"phase": e.Phase, "onto": onto, "from": tip, "to": merged})
+	c.announce(s, fmt.Sprintf("baton: merged %s into %s's branch (now %s)", st.RunBranch, e.Phase, short(merged)))
 	return true
 }
 
@@ -295,7 +297,7 @@ func verified(sub state.State, phase string) *state.Job {
 	return j
 }
 
-// reverify verifies worker e's phase again in its sub-run, on its rebased branch at tip, with the
+// reverify verifies worker e's phase again in its sub-run, on its merged branch at tip, with the
 // verification j it passed before the run's branch moved on (why: moved).
 func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, j state.Job, tip, why string) {
 	var q state.Job
@@ -315,10 +317,10 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 	if why == movedLead {
 		came = "commits were made on " + st.RunBranch + " in the checkout"
 	}
-	c.announce(s, fmt.Sprintf("baton: %s since %s was verified → verifying it again on its rebased branch (job %s, `%s`)", came, e.Phase, q.ID, j.Command))
+	c.announce(s, fmt.Sprintf("baton: %s since %s was verified → verifying it again with the run's branch merged in (job %s, `%s`)", came, e.Phase, q.ID, j.Command))
 }
 
-// fastForward lands worker e's branch, at tip, rebased onto the run's branch at onto, over the commits
+// fastForward lands worker e's branch, at tip, with the run's branch at onto merged in, over the commits
 // there its verification did not see (over): the checkout fast-forwards to it, unless the lead's local
 // changes are in its way, or a tool call or a gate of a lead in the checkout is running. It reports
 // whether it landed.
@@ -378,7 +380,7 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	release()
 	switch {
 	case errors.Is(err, gitx.ErrNotFastForward):
-		return false // the run's branch moved on: the next step rebases again
+		return false // the run's branch moved on: the next step merges it in again
 	case errors.Is(err, gitx.ErrLocked):
 		c.landAt[e.Ref] = now.Add(lockedRetry)
 		return false

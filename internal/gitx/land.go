@@ -13,42 +13,44 @@ import (
 )
 
 // A worker's work lands on the run's branch under the live lead session (spike 25,
-// docs/research/workers.md). Its branch is rebased onto the run's branch in the worker's own worktree,
-// and the checkout then fast-forwards to it with `git merge --ff-only`, which is all or nothing: it
-// updates the files the branch changed, keeps every unrelated local change, and applies nothing when a
-// changed path has local changes of its own. Only an ignored file in the way is overwritten without a
-// word, so Overlap looks for those itself. The run's branch never moves without its working tree
-// (update-ref or branch -f leave the index behind, and the lead's next commit reverts the work), and
-// nothing is stashed (--autostash leaves conflict markers in the lead's files).
+// docs/research/workers.md). When the run's branch has moved on, it is merged into the worker's branch
+// in the worker's own worktree (Merge), and the checkout then fast-forwards to that branch with `git
+// merge --ff-only`, which is all or nothing: it updates the files the branch changed, keeps every
+// unrelated local change, and applies nothing when a changed path has local changes of its own. Only an
+// ignored file in the way is overwritten without a word, so Overlap looks for those itself. No commit is
+// ever rewritten: a rebase drops a merge commit, and with it a conflict an agent resolved, without a word
+// when the replay goes through. The run's branch never moves without its working tree (update-ref or
+// branch -f leave the index behind, and the lead's next commit reverts the work), and nothing is stashed
+// (--autostash leaves conflict markers in the lead's files).
 
 // The ways landing can fail that the merge queue acts on.
 var (
-	// ErrNotFastForward: the branch is not ahead of the checkout's HEAD, which moved since the rebase.
+	// ErrNotFastForward: the branch is not ahead of the checkout's HEAD, which moved since the merge.
 	ErrNotFastForward = errors.New("not a fast-forward")
 	// ErrOverwrite: the fast-forward would overwrite local changes; nothing was applied.
 	ErrOverwrite = errors.New("local changes would be overwritten")
 	// ErrLocked: another git command holds the checkout's index; nothing was applied.
 	ErrLocked = errors.New("the index is locked")
-	// ErrConflict: the rebase stopped on conflicts, and was aborted.
-	ErrConflict = errors.New("the rebase conflicts")
+	// ErrConflict: the merge stopped on conflicts, and was aborted.
+	ErrConflict = errors.New("the merge conflicts")
 )
 
-// RebaseError is a rebase that did not go through. It was aborted, so the branch is as it was. Paths are
-// the paths that conflicted (none when git refused to start, or stopped for another reason), and Msg is
-// what git said.
-type RebaseError struct {
+// MergeError is a merge that did not go through. It was aborted, or never started, so the branch, its
+// index and its files are as they were. Paths are the paths that conflicted (none when git refused to
+// start, or stopped for another reason), and Msg is what git said.
+type MergeError struct {
 	Paths []string
 	Msg   string
 }
 
-func (e *RebaseError) Error() string {
+func (e *MergeError) Error() string {
 	if len(e.Paths) > 0 {
-		return fmt.Sprintf("the rebase conflicts in %s", strings.Join(e.Paths, ", "))
+		return fmt.Sprintf("the merge conflicts in %s", strings.Join(e.Paths, ", "))
 	}
-	return "the rebase failed: " + e.Msg
+	return "the merge failed: " + e.Msg
 }
 
-func (e *RebaseError) Unwrap() error {
+func (e *MergeError) Unwrap() error {
 	if len(e.Paths) > 0 {
 		return ErrConflict
 	}
@@ -74,46 +76,44 @@ func IsAncestor(ctx context.Context, root, a, b string) (bool, error) {
 	return false, fmt.Errorf("git merge-base: %v: %s", err, stderr)
 }
 
-// Rebase rebases the branch checked out in the worktree dir onto commit onto. A rebase that stops is
-// aborted, and its RebaseError says why: the paths that conflicted, or what git said (the worktree has
-// uncommitted changes, a commit could not be signed). Local changes are never stashed.
-func Rebase(ctx context.Context, dir, onto string) error {
+// Merge merges commit onto into the branch checked out in the worktree dir, as the commit message msg. It
+// rewrites nothing: every commit of the branch stays as it is. It starts only with no uncommitted change
+// to a tracked file, since aborting a merge cannot always give such a change back; an untracked file in
+// its way makes git refuse before it changes anything. A merge that stops (on a conflict, or a merge
+// commit that could not be signed) is aborted, and its MergeError says why. Local changes are never
+// stashed.
+func Merge(ctx context.Context, dir, onto, msg string) error {
 	if !Usable(dir) {
 		return ErrNoGit
 	}
-	_, stderr, _, err := runCode(ctx, dir, landEnv, "-c", "rebase.autoStash=false", "-c", "rebase.updateRefs=false", "rebase", "-q", onto)
+	out, err := run(ctx, dir, nil, nil, "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=no")
+	if err != nil {
+		return err
+	}
+	if dirty := parseStatus(out); len(dirty) > 0 {
+		return &MergeError{Msg: "uncommitted changes to " + strings.Join(dirty, ", ")}
+	}
+	_, stderr, _, err := runCode(ctx, dir, landEnv, "-c", "merge.autoStash=false", "merge", "-q", "--no-edit", "-m", msg, onto)
 	if err == nil {
 		return nil
 	}
-	e := &RebaseError{Msg: firstLines(stderr, 3)}
-	if !rebasing(ctx, dir) {
-		return e
+	e := &MergeError{Msg: firstLines(stderr, 3)}
+	if !merging(ctx, dir) {
+		return e // git refused to start, and changed nothing
 	}
 	if out, _, _, err := runCode(ctx, dir, nil, "diff", "--name-only", "-z", "--diff-filter=U"); err == nil {
 		e.Paths = nulList(out)
 	}
-	if _, stderr, _, err := runCode(ctx, dir, landEnv, "rebase", "--abort"); err != nil {
+	if _, stderr, _, err := runCode(ctx, dir, landEnv, "merge", "--abort"); err != nil {
 		return fmt.Errorf("%v, and aborting it failed: %s", e, firstLines(stderr, 3))
 	}
 	return e
 }
 
-// rebasing reports a rebase stopped part way in the worktree dir.
-func rebasing(ctx context.Context, dir string) bool {
-	for _, name := range []string{"rebase-merge", "rebase-apply"} {
-		out, _, _, err := runCode(ctx, dir, nil, "rev-parse", "--git-path", name)
-		if err != nil {
-			continue
-		}
-		p := strings.TrimSpace(string(out))
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(dir, p)
-		}
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
+// merging reports a merge stopped part way in the worktree dir.
+func merging(ctx context.Context, dir string) bool {
+	_, _, code, _ := runCode(ctx, dir, nil, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	return code == 0
 }
 
 // Change is a path a branch changes.

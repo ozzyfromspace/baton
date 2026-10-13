@@ -31,7 +31,7 @@ func TestStandWords(t *testing.T) {
 		{Stand{Kind: StandParked, Why: ParkedWhy(state.ParkRed)}, "⏸", "P3 parked", "set aside after its verification failed"},
 		{Stand{Kind: StandLanding}, "⚙", "P3 landing", "landing"},
 		{Stand{Kind: StandLanding, Why: "the lead changed a.go too"}, "⚙", "P3 waits to land", "waits to land: the lead changed a.go too"},
-		{Stand{Kind: StandLanding, Job: "P3.j2"}, "⚙", "P3 verifying again", "verifying again on its rebased branch (job P3.j2)"},
+		{Stand{Kind: StandLanding, Job: "P3.j2"}, "⚙", "P3 verifying again", "verifying again with the run's branch merged in (job P3.j2)"},
 		{Stand{Kind: StandHeld, Why: "memory pressure is critical"}, "·", "P3 held", "held: memory pressure is critical"},
 		{Stand{Kind: StandReady}, "·", "P3 ready", "ready"},
 		{Stand{Kind: StandWaits, Waits: []string{"P1", "P2"}}, "·", "P3 waits on P1, P2", "waits on P1 and P2"},

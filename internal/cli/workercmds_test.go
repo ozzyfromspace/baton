@@ -144,7 +144,7 @@ func TestAWorkerDoneHandsItsWorkToBaton(t *testing.T) {
 		verifying bool
 		want      string
 	}{
-		{"done", false, "baton: P1 done. baton lands your work on the run's branch: it rebases your branch onto it and merges it under the lead session."},
+		{"done", false, "baton: P1 done. baton lands your work on the run's branch: it merges the run's branch into yours if that has moved on, then fast-forwards the run's branch to yours under the lead session."},
 		{"verifying", true, "baton: P1 is finished, and verifying: job P1.j1 ("},
 	} {
 		t.Run(c.name, func(t *testing.T) {

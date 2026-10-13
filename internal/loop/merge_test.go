@@ -18,7 +18,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// landingCrew is a crew whose worker on P1 is at work. A rebase makes commits, so git has an identity.
+// landingCrew is a crew whose worker on P1 is at work. A merge makes commits, so git has an identity.
 func landingCrew(t *testing.T) *crew {
 	t.Helper()
 	x := newCrew(t, 1)
@@ -123,7 +123,7 @@ func TestAFinishedWorkersPhaseLands(t *testing.T) {
 	if l.Phase != "P1" || !slices.Equal(l.Commits, []string{tip}) || !slices.Equal(l.Files, []string{"dir/two.txt", "one.txt"}) || l.Head != tip || l.Told {
 		t.Errorf("landing %+v", l)
 	}
-	if !x.has("land_queued", `"phase":"P1"`) || !x.has("landed", `"phase":"P1"`, tip) || x.has("rebased") || x.has("land_deferred") {
+	if !x.has("land_queued", `"phase":"P1"`) || !x.has("landed", `"phase":"P1"`, tip) || x.has("merged_in") || x.has("land_deferred") {
 		t.Errorf("events:\n%s", x.events())
 	}
 	for _, want := range []string{"P1 is finished → its work waits to land", "P1 landed on the run's branch: 1 commit (dir/two.txt, one.txt)"} {
@@ -147,33 +147,36 @@ func TestAFinishedWorkersPhaseLands(t *testing.T) {
 	}
 }
 
-// The run's branch moved on since the worker started: its branch is rebased onto it first, so the
-// history stays a line.
-func TestALandingRebasesOntoTheMovedBranch(t *testing.T) {
+// A worker's branch the run's branch moved on from has the run's branch merged in, never rebased: the
+// worker's commit stays as it was, and the checkout fast-forwards to the merge.
+func TestALandingMergesTheMovedBranchIn(t *testing.T) {
 	x := landingCrew(t)
 	lead := x.leadCommits(map[string]string{"lead.txt": "lead\n"})
 	old := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
 	x.tick(time.Second)
-	rebased := gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1")
-	if rebased == old || !x.has("rebased", `"phase":"P1"`, `"onto":"`+lead+`"`) || gitx.Head(x.repo) != lead {
-		t.Fatalf("after a step: branch %s (was %s), HEAD %s\n%s", rebased, old, gitx.Head(x.repo), x.events())
+	merged := gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1")
+	if merged == old || !x.has("merged_in", `"phase":"P1"`, `"onto":"`+lead+`"`) || gitx.Head(x.repo) != lead {
+		t.Fatalf("after a step: branch %s (was %s), HEAD %s\n%s", merged, old, gitx.Head(x.repo), x.events())
 	}
-	if !strings.Contains(x.announced(), "rebased P1's branch onto main") {
+	if !strings.Contains(x.announced(), "merged main into P1's branch") {
 		t.Errorf("announced %q", x.announced())
 	}
 	x.tick(time.Second)
-	if got := gitx.Head(x.repo); got != rebased {
-		t.Fatalf("HEAD = %s, want the rebased %s\n%s", got, rebased, x.events())
+	if got := gitx.Head(x.repo); got != merged {
+		t.Fatalf("HEAD = %s, want the merge %s\n%s", got, merged, x.events())
 	}
-	if parent := gittest.Git(t, x.repo, "rev-parse", "HEAD~1"); parent != lead {
-		t.Errorf("the landed commit's parent is %s, not the lead's %s", parent, lead)
+	if parents := gittest.Git(t, x.repo, "rev-parse", "HEAD^1", "HEAD^2"); parents != old+"\n"+lead {
+		t.Errorf("the landed merge's parents are %q, want the worker's %s and the lead's %s", parents, old, lead)
+	}
+	if msg := gittest.Git(t, x.repo, "log", "-1", "--format=%s"); msg != "Merge branch 'main' into baton/sess-1/P1" {
+		t.Errorf("the merge's message is %q", msg)
 	}
 	if w := x.worker("P1"); w.Status != state.WorkerLanded {
 		t.Errorf("worker %+v", w)
 	}
 }
 
-// A phase verified before the run's branch moved on is verified again on its rebased branch: green
+// A phase verified before the run's branch moved on is verified again with the run's branch merged in: green
 // lands it, and red takes it up again in the worker.
 func TestALandingIsVerifiedAgain(t *testing.T) {
 	for _, c := range []struct {
@@ -184,22 +187,22 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 			x := landingCrew(t)
 			x.leadCommits(map[string]string{"lead.txt": "lead\n"})
 			x.finish("P1", map[string]string{"one.txt": "one\n"}, true)
-			x.tick(time.Second) // rebased
+			x.tick(time.Second) // merged
 			x.tick(time.Second) // verified again
-			rebased := gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1")
+			merged := gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1")
 			sub := x.sub("P1")
 			sst, _ := sub.Load()
 			j := sst.Latest("P1")
-			if j == nil || j.Status != state.JobQueued || j.Commit != rebased || j.Command != "make test" || !strings.Contains(j.Notes, "all of it") ||
+			if j == nil || j.Status != state.JobQueued || j.Commit != merged || j.Command != "make test" || !strings.Contains(j.Notes, "all of it") ||
 				sst.Phases["P1"].Status != state.PhaseVerifying || x.worker("P1").Merge.Reverify != j.ID {
 				t.Fatalf("job %+v; P1 %+v; worker %+v", j, sst.Phases["P1"], x.worker("P1"))
 			}
 			if !x.has("reverify_queued", `"job":"`+j.ID+`"`, `"why":"lead"`) || !j.Requeue ||
-				!strings.Contains(x.announced(), "commits were made on main in the checkout since P1 was verified → verifying it again on its rebased branch") {
+				!strings.Contains(x.announced(), "commits were made on main in the checkout since P1 was verified → verifying it again with the run's branch merged in") {
 				t.Errorf("events:\n%s", x.events())
 			}
 			x.tick(time.Second)
-			if gitx.Head(x.repo) == rebased {
+			if gitx.Head(x.repo) == merged {
 				t.Fatal("landed before its verification passed")
 			}
 
@@ -211,7 +214,7 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 			x.tick(time.Second) // the worker's own loop settles its job
 			x.tick(time.Second)
 			if c.status == state.JobPassed {
-				if gitx.Head(x.repo) != rebased || x.worker("P1").Status != state.WorkerLanded {
+				if gitx.Head(x.repo) != merged || x.worker("P1").Status != state.WorkerLanded {
 					t.Fatalf("not landed after its verification passed\n%s", x.events())
 				}
 				if sst, _ := sub.Load(); len(sst.Inbox) > 0 {
@@ -220,7 +223,7 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 				return
 			}
 			sst, _ = sub.Load()
-			if gitx.Head(x.repo) == rebased || sst.Mode != state.ModeRunning || sst.Current != "P1" || x.worker("P1").Status != state.WorkerWorking || x.worker("P1").Merge != nil {
+			if gitx.Head(x.repo) == merged || sst.Mode != state.ModeRunning || sst.Current != "P1" || x.worker("P1").Status != state.WorkerWorking || x.worker("P1").Merge != nil {
 				t.Fatalf("after red: sub-run %s on %q; worker %+v", sst.Mode, sst.Current, x.worker("P1"))
 			}
 			if !x.has("land_returned", `"phase":"P1"`) || x.state().Conflicts != 0 {
@@ -230,7 +233,7 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 	}
 }
 
-// A rebase that conflicts is aborted, and the phase goes back to its worker, told what conflicted; once it
+// A merge that conflicts is aborted, and the phase goes back to its worker, told what conflicted; once it
 // resolves the conflict and reports the phase done again, it lands.
 func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	x := landingCrew(t)
@@ -240,7 +243,7 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 
 	w := x.worker("P1")
 	if gitx.Head(w.Worktree) != old || gittest.Git(t, w.Worktree, "status", "--porcelain") != "" {
-		t.Fatal("the conflicted rebase was not aborted")
+		t.Fatal("the conflicted merge was not aborted")
 	}
 	sst, _ := x.sub("P1").Load()
 	if w.Status != state.WorkerWorking || w.Merge != nil || sst.Mode != state.ModeRunning || sst.Current != "P1" || sst.Phases["P1"].Status != state.PhaseActive {
@@ -256,11 +259,14 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 		t.Errorf("%d landings in a row conflicted, want 1", n)
 	}
 
-	// The worker resolves it, and reports the phase done again.
-	exec.Command("git", "-C", w.Worktree, "rebase", "main").Run()
+	// The worker resolves it by merging, as it is told, and reports the phase done again. The run's branch
+	// moves on once more meanwhile: baton merges that in too, and the resolution stays.
+	exec.Command("git", "-C", w.Worktree, "merge", "main").Run()
 	gittest.Write(t, w.Worktree, "a.txt", "both\n")
 	gittest.Git(t, w.Worktree, "add", "a.txt")
-	gittest.Git(t, w.Worktree, "-c", "core.editor=true", "rebase", "--continue")
+	gittest.Git(t, w.Worktree, "commit", "-q", "--no-edit")
+	resolved := gitx.Head(w.Worktree)
+	x.leadCommits(map[string]string{"b.txt": "the lead's again\n"})
 	sub := x.sub("P1")
 	pl, _ := sub.LoadPlan()
 	sub.Update(func(st *state.State) error {
@@ -270,8 +276,17 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 		return err
 	})
 	x.tick(time.Second)
-	if read(t, x.repo, "a.txt") != "both\n" || x.worker("P1").Status != state.WorkerLanded || x.state().Conflicts != 0 {
+	if !x.has("merged_in", `"from":"`+resolved+`"`) {
+		t.Fatalf("the run's branch was not merged into the resolved branch\n%s", x.events())
+	}
+	x.tick(time.Second)
+	if read(t, x.repo, "a.txt") != "both\n" || read(t, x.repo, "b.txt") != "the lead's again\n" || x.worker("P1").Status != state.WorkerLanded || x.state().Conflicts != 0 {
 		t.Fatalf("not landed after the worker resolved it (%d conflicts on record)\n%s", x.state().Conflicts, x.events())
+	}
+	for _, c := range []string{old, resolved} {
+		if ok, _ := gitx.IsAncestor(context.Background(), x.repo, c, "HEAD"); !ok {
+			t.Errorf("the worker's commit %s is not on the run's branch: it was rewritten", c)
+		}
 	}
 }
 
@@ -397,13 +412,13 @@ func TestALandingWaitsForAGateInTheCheckout(t *testing.T) {
 	}
 }
 
-// A gate a worker ran in its worktree (--here) runs there again on its rebased branch.
+// A gate a worker ran in its worktree (--here) runs there again with the run's branch merged in.
 func TestALandingIsVerifiedAgainInItsWorktree(t *testing.T) {
 	x := landingCrew(t)
 	x.leadCommits(map[string]string{"lead.txt": "lead\n"})
 	x.finish("P1", map[string]string{"one.txt": "one\n"}, true)
 	x.sub("P1").Update(func(st *state.State) error { st.Latest("P1").Here = true; return nil })
-	x.tick(time.Second) // rebased
+	x.tick(time.Second) // merged
 	x.tick(time.Second) // verified again
 	sst, _ := x.sub("P1").Load()
 	if j := sst.Latest("P1"); j == nil || j.Status != state.JobQueued || !j.Here || j.Commit != gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") {
@@ -413,7 +428,7 @@ func TestALandingIsVerifiedAgainInItsWorktree(t *testing.T) {
 
 // The merge queue verifies a landing again at most once for the checkout's own commits: those the lead
 // makes while that runs are landed over, unverified with it, and the lead is told. A worker's landing
-// meanwhile, of this run or of another in the checkout, verifies it again; a rebase that stops still hands
+// meanwhile, of this run or of another in the checkout, verifies it again; a merge that stops still hands
 // the phase back.
 func TestTheLeadsCommitsVerifyALandingAgainOnce(t *testing.T) {
 	for _, c := range []struct {
@@ -433,7 +448,7 @@ func TestTheLeadsCommitsVerifyALandingAgainOnce(t *testing.T) {
 			x := landingCrew(t)
 			x.leadCommits(map[string]string{"lead.txt": "lead\n"})
 			x.finish("P1", map[string]string{"one.txt": "one\n"}, true)
-			x.tick(time.Second) // rebased
+			x.tick(time.Second) // merged
 			x.tick(time.Second) // verified again: only the lead's commit came since the worker's own verification
 			sub := x.sub("P1")
 			sst, _ := sub.Load()
@@ -464,7 +479,7 @@ func TestTheLeadsCommitsVerifyALandingAgainOnce(t *testing.T) {
 				return nil
 			})
 			x.tick(time.Second) // the worker's own loop settles its job
-			x.tick(time.Second) // rebased again, onto the commit that came meanwhile
+			x.tick(time.Second) // merged again, onto the commit that came meanwhile
 			x.tick(time.Second)
 
 			reverified := strings.Count(x.events(), `"kind":"reverify_queued"`)
@@ -597,14 +612,14 @@ func TestALandingWaitsForTheWorkerToStop(t *testing.T) {
 	x.tick(time.Second)
 	x.tick(time.Second)
 	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old || x.worker("P1").Status != state.WorkerLanding {
-		t.Fatalf("rebased under a worker at work\n%s", x.events())
+		t.Fatalf("merged under a worker at work\n%s", x.events())
 	}
 	// A stop baton refused leaves the turn going, though the state says it ended: the session must
 	// have been quiet a while too.
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastActivity = false, x.now; return nil })
 	x.tick(time.Second)
 	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old {
-		t.Fatalf("rebased under a worker a moment after its last hook\n%s", x.events())
+		t.Fatalf("merged under a worker a moment after its last hook\n%s", x.events())
 	}
 	x.tick(workerQuiet)
 	x.tick(time.Second)
@@ -626,13 +641,13 @@ func TestALandingWaitsForAMessageOnItsWay(t *testing.T) {
 	x.tick(workerQuiet)
 	x.tick(time.Second)
 	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old || x.worker("P1").Status != state.WorkerLanding {
-		t.Fatalf("rebased with a message on its way to its agent\n%s", x.events())
+		t.Fatalf("merged with a message on its way to its agent\n%s", x.events())
 	}
 	x.modOff = false
 	x.runMod() // the message starts it again
 	x.tick(workerQuiet)
 	if gitx.RevParse(x.repo, "refs/heads/baton/sess-1/P1") != old || len(x.resumes) != 1 {
-		t.Fatalf("rebased under the turn the message started (%v)\n%s", x.resumes, x.events())
+		t.Fatalf("merged under the turn the message started (%v)\n%s", x.resumes, x.events())
 	}
 	x.stops("P1")
 	x.tick(workerQuiet)
@@ -811,7 +826,7 @@ func TestAWaitingLandingHoldsUpNoOther(t *testing.T) {
 		t.Fatalf("P2 waited behind P1\n%s", x.events())
 	}
 	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = false; return nil })
-	x.tick(time.Second) // rebased onto P2's
+	x.tick(time.Second) // P2's merged in
 	x.tick(time.Second)
 	if x.worker("P1").Status != state.WorkerLanded || gitx.Head(x.repo) == first || read(t, x.repo, "one.txt") != "one\n" {
 		t.Fatalf("P1 did not land after P2\n%s", x.events())

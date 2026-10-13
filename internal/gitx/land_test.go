@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -218,71 +219,148 @@ func TestLandOnALockedIndex(t *testing.T) {
 	}
 }
 
-func TestRebase(t *testing.T) {
+// Merge brings the worker's branch up to date with the moved run's branch by merging it in: nothing is
+// rewritten, so every commit of the worker's stays on its branch, and the checkout lands it all by a
+// fast-forward.
+func TestMergeTheMovedBranchIn(t *testing.T) {
 	ctx := context.Background()
-	t.Run("onto the moved branch", func(t *testing.T) {
-		l := newLanding(t)
-		l.work("worker: A", map[string]string{"A": "a1\na2\na3\na4\n"})
-		write(t, l.main, "B", "b1\nb-lead\n")
-		commit(t, l.main, "lead: B")
-		if err := Rebase(ctx, l.wt, l.head()); err != nil {
-			t.Fatal(err)
-		}
-		tip := git(t, l.wt, "rev-parse", "HEAD")
-		if ok, _ := IsAncestor(ctx, l.main, l.head(), tip); !ok {
-			t.Error("the rebased branch is not on the moved branch")
-		}
-		commits, err := Commits(ctx, l.main, l.head(), tip)
-		if err != nil || len(commits) != 1 || commits[0] != tip {
-			t.Errorf("commits to land = %q, %v; want the one rebased", commits, err)
-		}
-		changes, err := Changes(ctx, l.main, l.head(), tip)
-		if want := []Change{{Path: "A"}}; err != nil || !reflect.DeepEqual(changes, want) {
-			t.Errorf("changes = %+v, %v; want %+v", changes, err, want)
-		}
-		if _, err := l.land(); err != nil {
-			t.Fatal(err)
-		}
-		if read(t, l.main, "B") != "b1\nb-lead\n" || read(t, l.main, "A") != "a1\na2\na3\na4\n" {
-			t.Error("the landing lost the lead's commit or the worker's")
-		}
-	})
-	t.Run("a conflict is aborted, and names its paths", func(t *testing.T) {
-		l := newLanding(t)
-		tip := l.work("worker: C", map[string]string{"C": "c1\nc-worker\n"})
-		write(t, l.main, "C", "c1\nc-lead\n")
-		commit(t, l.main, "lead: C")
-		err := Rebase(ctx, l.wt, l.head())
-		var re *RebaseError
-		if !errors.As(err, &re) || !errors.Is(err, ErrConflict) || !reflect.DeepEqual(re.Paths, []string{"C"}) {
-			t.Fatalf("rebase: %v, want a conflict in C", err)
-		}
-		if got := git(t, l.wt, "rev-parse", "HEAD"); got != tip || rebasing(ctx, l.wt) {
-			t.Errorf("after the conflict, HEAD = %s (want %s), still rebasing %v", got, tip, rebasing(ctx, l.wt))
-		}
-		if got := git(t, l.wt, "status", "--porcelain"); got != "" {
-			t.Errorf("the aborted rebase left %q", got)
-		}
-	})
-	t.Run("uncommitted work is never stashed", func(t *testing.T) {
-		l := newLanding(t)
-		tip := l.work("worker: A", map[string]string{"A": "a1\na2\na3\na4\n"})
-		write(t, l.main, "B", "b1\nb-lead\n")
-		commit(t, l.main, "lead: B")
-		git(t, l.wt, "config", "rebase.autoStash", "true")
-		write(t, l.wt, "A", "half done\n")
-		err := Rebase(ctx, l.wt, l.head())
-		var re *RebaseError
-		if !errors.As(err, &re) || len(re.Paths) > 0 || errors.Is(err, ErrConflict) || re.Msg == "" {
-			t.Fatalf("rebase: %v, want a refusal that names no conflict", err)
-		}
-		if got := git(t, l.wt, "rev-parse", "HEAD"); got != tip || read(t, l.wt, "A") != "half done\n" {
-			t.Errorf("the refused rebase moved the branch (%s) or the work in progress", got)
-		}
-		if got := git(t, l.wt, "stash", "list"); got != "" {
-			t.Errorf("the rebase stashed: %s", got)
-		}
-	})
+	l := newLanding(t)
+	tip := l.work("worker: A", map[string]string{"A": "a1\na2\na3\na4\n"})
+	write(t, l.main, "B", "b1\nb-lead\n")
+	commit(t, l.main, "lead: B")
+	if err := Merge(ctx, l.wt, l.head(), "Merge branch 'main' into w"); err != nil {
+		t.Fatal(err)
+	}
+	merged := git(t, l.wt, "rev-parse", "HEAD")
+	if msg := git(t, l.wt, "log", "-1", "--format=%s"); msg != "Merge branch 'main' into w" {
+		t.Errorf("the merge's message is %q", msg)
+	}
+	if ok, _ := IsAncestor(ctx, l.main, tip, merged); !ok {
+		t.Error("the merge rewrote the worker's commit")
+	}
+	if ok, _ := IsAncestor(ctx, l.main, l.head(), merged); !ok {
+		t.Error("the merged branch is not on the moved branch")
+	}
+	commits, err := Commits(ctx, l.main, l.head(), merged)
+	if err != nil || len(commits) != 2 || commits[0] != tip || commits[1] != merged {
+		t.Errorf("commits to land = %q, %v; want the worker's and the merge", commits, err)
+	}
+	changes, err := Changes(ctx, l.main, l.head(), merged)
+	if want := []Change{{Path: "A"}}; err != nil || !reflect.DeepEqual(changes, want) {
+		t.Errorf("changes = %+v, %v; want %+v", changes, err, want)
+	}
+	if _, err := l.land(); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, l.main, "B") != "b1\nb-lead\n" || read(t, l.main, "A") != "a1\na2\na3\na4\n" {
+		t.Error("the landing lost the lead's commit or the worker's")
+	}
+}
+
+// resolved makes the worker's branch hold a conflict it resolved: its change to C conflicts with the
+// lead's, and it merges the run's branch in, keeping both lines. It returns the merge commit.
+func (l *landing) resolved() string {
+	t := l.t
+	l.work("worker: C", map[string]string{"C": "c1\nc-worker\n"})
+	write(t, l.main, "C", "c1\nc-lead\n")
+	commit(t, l.main, "lead: C")
+	exec.Command("git", "-C", l.wt, "merge", "-q", "--no-edit", "main").Run()
+	write(t, l.wt, "C", "c1\nc-lead\nc-worker\n")
+	git(t, l.wt, "add", "C")
+	git(t, l.wt, "commit", "-q", "--no-edit")
+	return git(t, l.wt, "rev-parse", "HEAD")
+}
+
+// A conflict the worker resolved stays resolved when the run's branch moves on again, where a rebase
+// would drop its merge and replay the conflict, or, once the lead takes its line back, drop the
+// resolution without a word.
+func TestMergeKeepsAResolution(t *testing.T) {
+	ctx := context.Background()
+	l := newLanding(t)
+	resolved := l.resolved()
+	write(t, l.main, "B", "b1\nb-lead\n")
+	commit(t, l.main, "lead: B")
+	if err := Merge(ctx, l.wt, l.head(), "Merge branch 'main' into w"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := IsAncestor(ctx, l.main, resolved, "w"); !ok {
+		t.Error("the resolution is not on the branch")
+	}
+	if read(t, l.wt, "C") != "c1\nc-lead\nc-worker\n" || read(t, l.wt, "B") != "b1\nb-lead\n" {
+		t.Error("the merge lost the resolution or the lead's commit")
+	}
+}
+
+// Whatever stops a merge leaves the worker's branch, its index and its files as they were: a conflict
+// (aborted, its paths named), uncommitted work (never stashed or merged over), an untracked file in the
+// way (kept), and a merge commit that cannot be signed (aborted).
+func TestAMergeThatStopsChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name     string
+		setup    func(l *landing)
+		conflict []string
+		kept     map[string]string // the worktree's files afterwards
+	}{
+		{"a conflict", func(l *landing) {
+			l.work("worker: C", map[string]string{"C": "c1\nc-worker\n"})
+			write(l.t, l.main, "C", "c1\nc-lead\n")
+			commit(l.t, l.main, "lead: C")
+		}, []string{"C"}, map[string]string{"C": "c1\nc-worker\n"}},
+		{"a conflict with a resolution on the branch", func(l *landing) {
+			l.resolved()
+			write(l.t, l.main, "C", "c1\n")
+			commit(l.t, l.main, "lead: takes its line back")
+		}, []string{"C"}, map[string]string{"C": "c1\nc-lead\nc-worker\n"}},
+		{"uncommitted work", func(l *landing) {
+			l.moved()
+			git(l.t, l.wt, "config", "merge.autoStash", "true")
+			write(l.t, l.wt, "A", "half done\n")
+		}, nil, map[string]string{"A": "half done\n"}},
+		{"an untracked file in the way", func(l *landing) {
+			l.work("worker: A", map[string]string{"A": "a1\na2\na3\na4\n"})
+			write(l.t, l.main, "N", "the lead's\n")
+			commit(l.t, l.main, "lead: N")
+			write(l.t, l.wt, "N", "the worker's, untracked\n")
+		}, nil, map[string]string{"N": "the worker's, untracked\n"}},
+		{"a merge commit that cannot be signed", func(l *landing) {
+			l.moved()
+			git(l.t, l.wt, "config", "commit.gpgsign", "true")
+			git(l.t, l.wt, "config", "gpg.program", "false")
+		}, nil, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := newLanding(t)
+			c.setup(l)
+			tip, status := git(t, l.wt, "rev-parse", "HEAD"), git(t, l.wt, "status", "--porcelain")
+			err := Merge(ctx, l.wt, l.head(), "Merge branch 'main' into w")
+			var me *MergeError
+			if !errors.As(err, &me) || !reflect.DeepEqual(me.Paths, c.conflict) || errors.Is(err, ErrConflict) != (c.conflict != nil) || c.conflict == nil && me.Msg == "" {
+				t.Fatalf("merge: %v, want one stopped with conflicts in %q", err, c.conflict)
+			}
+			if got := git(t, l.wt, "rev-parse", "HEAD"); got != tip || merging(ctx, l.wt) {
+				t.Errorf("HEAD = %s (want %s), still merging %v", got, tip, merging(ctx, l.wt))
+			}
+			if got := git(t, l.wt, "status", "--porcelain"); got != status {
+				t.Errorf("the worktree was %q, and is %q", status, got)
+			}
+			for name, content := range c.kept {
+				if got := read(t, l.wt, name); got != content {
+					t.Errorf("%s = %q, want %q", name, got, content)
+				}
+			}
+			if got := git(t, l.wt, "stash", "list"); got != "" {
+				t.Errorf("the merge stashed: %s", got)
+			}
+		})
+	}
+}
+
+// moved commits the worker's change to A, and the lead's to B: a merge of the two goes through.
+func (l *landing) moved() {
+	l.work("worker: A", map[string]string{"A": "a1\na2\na3\na4\n"})
+	write(l.t, l.main, "B", "b1\nb-lead\n")
+	commit(l.t, l.main, "lead: B")
 }
 
 func TestChangesAddedAndDeleted(t *testing.T) {
@@ -305,8 +383,8 @@ func TestLandWithoutGit(t *testing.T) {
 	if _, err := IsAncestor(ctx, dir, "a", "b"); err != ErrNoGit {
 		t.Errorf("IsAncestor: %v", err)
 	}
-	if err := Rebase(ctx, dir, "a"); err != ErrNoGit {
-		t.Errorf("Rebase: %v", err)
+	if err := Merge(ctx, dir, "a", "m"); err != ErrNoGit {
+		t.Errorf("Merge: %v", err)
 	}
 	if _, err := Changes(ctx, dir, "a", "b"); err != ErrNoGit {
 		t.Errorf("Changes: %v", err)

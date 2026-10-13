@@ -96,14 +96,14 @@ func (w Worker) RetiringBy(by string, now time.Time) bool {
 type Merge struct {
 	Queued time.Time `json:"queued"`
 	Tries  int       `json:"tries,omitempty"`
-	// Rebased is the branch's tip after its latest rebase, onto Onto, the tip of the run's branch then.
-	Rebased string `json:"rebased,omitempty"`
-	Onto    string `json:"onto,omitempty"`
+	// Merged is the branch's tip after the run's branch, at Onto then, was last merged into it.
+	Merged string `json:"merged,omitempty"`
+	Onto   string `json:"onto,omitempty"`
 	// Deferred is why the latest attempt to land waits (such as the lead's own changes to the same
 	// files), since DeferredAt.
 	Deferred   string    `json:"deferred,omitempty"`
 	DeferredAt time.Time `json:"deferred_at,omitzero"`
-	// Reverify is the sub-run's job verifying the rebased branch again, since the run's branch moved on
+	// Reverify is the sub-run's job verifying the merged branch again, since the run's branch moved on
 	// from the commit its verification passed on.
 	Reverify string `json:"reverify,omitempty"`
 }
@@ -512,11 +512,11 @@ func takeUp(st *State, p plan.Plan, now time.Time) string {
 
 // The merge queue lands a worker's phase from its sub-run, which its `baton done` completed. Two things
 // send the phase back there: the run's branch moved on since its verification passed, so it is verified
-// again on its rebased branch (Reverify), or its work cannot land as it is and the worker must act
+// again on its merged branch (Reverify), or its work cannot land as it is and the worker must act
 // (Reopen).
 
 // Reverify verifies a worker's finished phase again, in its sub-run st, with j: the verification that
-// passed, run on the commit its branch was rebased to. The phase is verifying, as after `baton done`
+// passed, run on the commit its branch was merged to. The phase is verifying, as after `baton done`
 // with a verification running, so the sub-run completes again once j passes (without a word to the
 // worker, which was told its phase is done), or takes the phase up again, red, as after any
 // verification that fails. j is marked as the merge queue's (Job.Requeue). It returns j as queued.

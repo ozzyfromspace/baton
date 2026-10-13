@@ -141,7 +141,7 @@ func (s Stand) Board(now time.Time) string {
 	case StandLanding:
 		switch {
 		case s.Job != "":
-			return words("verifying again on its rebased branch", job)
+			return words("verifying again with the run's branch merged in", job)
 		case s.Why != "":
 			return "waits to land: " + s.Why
 		}

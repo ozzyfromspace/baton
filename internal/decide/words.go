@@ -133,7 +133,7 @@ func (w Words) proposeThen() string {
 }
 
 // landing is what becomes of a worker's phase once it is done.
-const landing = "baton then lands your work on the run's branch, and tells you here if anything needs you first (a rebase conflict, a red verification)."
+const landing = "baton then lands your work on the run's branch, and tells you here if anything needs you first (a conflict, a red verification)."
 
 // verifyHow is how a long gate goes to baton, and what becomes of the phase meanwhile.
 func (w Words) verifyHow() string {
