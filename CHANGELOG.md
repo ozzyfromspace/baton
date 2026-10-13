@@ -4,6 +4,30 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-12
+
+A phase agent's work used to land by a rebase, and a conflict went back to the agent with "rebase it
+yourself". In a real run, Claude Code's auto mode refused that rebase as destructive. The agent got its
+work onto a side branch another way, then asked to move its phase branch and delete the side branch, and
+the word "delete" made the question wait for the human, so the phase sat until someone answered. Now
+nothing baton runs, or asks an agent to run, rewrites a commit.
+
+### Changed
+- **Landing merges instead of rebasing.** When the run's branch has moved on, baton merges it into the
+  phase's branch, and the run's branch fast-forwards to the merge. A phase whose branch the run's branch
+  never left still lands as a plain fast-forward. The run's history gains a merge commit where phases
+  overlapped in time, and keeps every commit as it was made, signatures included.
+- **A conflict goes back to the phase agent as a merge:** `git merge <run's branch>`, resolve, `git add`,
+  `git commit --no-edit`. A merge adds a commit and rewrites none, so there is nothing for auto mode to
+  refuse, and a resolution stays when the run's branch moves on again, where a rebase could drop it without
+  a word.
+- **baton's merge leaves nothing half done.** It starts only when the phase's worktree has no uncommitted
+  change to a tracked file, never stashes, and is aborted if it stops, on a conflict or a merge commit that
+  can't be signed, so the branch, its index and its files stay as they were. An untracked file in its way
+  makes git refuse before it changes anything.
+- **A landing that cannot go through never says to discard work:** the agent is told to commit what is
+  uncommitted, never to remove it.
+
 ## [0.8.0] - 2026-10-12
 
 v0.7's workers were hidden sessions, each in a pseudo-terminal of baton's own: easy for baton to drive, and
@@ -746,7 +770,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ozzyfromspace/baton/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ozzyfromspace/baton/compare/v0.5.0...v0.6.0
