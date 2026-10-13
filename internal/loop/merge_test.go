@@ -813,7 +813,7 @@ func TestACallRecordedBeforeTheLockHoldsTheLanding(t *testing.T) {
 // The first worker queued waiting does not hold up the next: each lands as soon as it can.
 func TestAWaitingLandingHoldsUpNoOther(t *testing.T) {
 	x := newCrew(t, 2)
-	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid"} {
+	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
 		t.Setenv(k, v)
 	}
 	x.atWork("P1", "P2")
