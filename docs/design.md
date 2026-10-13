@@ -111,10 +111,14 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   - A model's own call to the `baton:phase` type is refused.
 - **Room.** `workers: auto` sizes the fleet to the machine. A new agent also waits while the machine is busy, the
   lanes fall behind, landings keep conflicting, or a usage limit holds. Every hold is host code.
-- **Landing.** A finished phase joins the merge queue. Its branch is rebased in its worktree, and a conflict goes back
-  to its agent. It is verified again if the run's branch moved (at most once for the checkout's own commits). Then it
-  is fast-forwarded with `git merge --ff-only` between the lead's tool calls, never over a file the lead has
-  uncommitted. The lead is told what moved, and never to rewrite it.
+- **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, it is merged into the phase's
+  branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Nothing baton
+  runs, or asks an agent to run, rewrites a commit: a rebase can drop a resolved conflict without a word, and Claude
+  Code's auto mode may refuse one as destructive. A merge starts only on a worktree with nothing uncommitted, and one
+  that stops is aborted, leaving everything as it was. The phase is verified again if the run's branch moved (at most
+  once for the checkout's own commits). Then the run's branch is fast-forwarded to it with `git merge --ff-only`
+  between the lead's tool calls, never over a file the lead has uncommitted. The lead is told what moved, and never
+  to rewrite it.
 - **Serial mode.** With no hello from the mod, there are no phase agents: the lead works the phases in turn, as
   `workers: 0` does.
 

@@ -5,7 +5,8 @@ Claude Code shows in its agent panel. A mod in baton's plugin spawns and message
 the agents' reports, on the host's say-so; baton's hooks, told apart by `agent_id`, brief and hold them. An agent's
 compaction hooks look like the lead's, so only a proof (the mod's report, or a loop's own transcript) moves a
 compaction. Every delivery to an agent is a message, `/clear` ends every agent, and nothing types into a dialog where
-the mod runs. Workflows were ruled out: a workflow agent cannot wait.
+the mod runs. A phase's work lands by a merge, never a rebase (v0.8.1). Workflows were ruled out: a workflow agent
+cannot wait.
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
@@ -173,6 +174,25 @@ Real phase agents on Claude Code 2.1.296 with Haiku, in baton's own e2e scenario
   agent's first start gets it): an answer baton gave there never reached the agent, which said so and waited.
   What baton has for a resumed agent comes with its next tool call (`PostToolUse`) or its stop (`SubagentStop`,
   refused with it), and the message that wakes it says so.
+
+## Why landing merges (v0.8.1)
+
+In a real v0.6 run (a worker session in auto mode, on a large private project), the merge queue's rebase of a
+phase's branch conflicted, and the worker was told to `git rebase` the run's branch itself. Claude Code's auto-mode
+classifier refused that as "[Git Destructive]". The worker replayed its commits onto a side branch by cherry-pick,
+which passed its gate, then asked to move its phase branch there (`git checkout -B`) and delete the side branch. The
+word "delete" made the proposal untimed, so the phase waited for the human. The same conflict scenario on a toy
+repository (P7's, without its `Bash(git:*)` allow rule) went through: the classifier judges by context, and a small
+case does not show its refusal.
+
+Checked by hand with git 2.50 (`git rebase` without `--rebase-merges`): rebasing a branch that holds a merge drops the
+merge commit and replays the branch's own commits. Usually that meets the same conflict again; when the run's branch
+has since taken its side back, the replay goes through and the resolution is gone, without a word. `git merge`
+rewrites nothing. A merge that stops on a conflict, or on a merge commit that cannot be signed, leaves `MERGE_HEAD`,
+and `git merge --abort` gives back the branch, index and files exactly; an untracked file in its way makes git
+refuse before it changes anything; `merge --abort` cannot always give back an uncommitted change to a tracked file,
+so baton merges only on a worktree with none. So baton merges the run's branch into a phase's branch, never rebases
+it, and a conflict goes back to the agent as a merge.
 
 ## What it means for baton
 

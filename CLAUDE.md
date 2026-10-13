@@ -10,6 +10,7 @@ baton runs a multi-phase Claude Code plan unattended by hosting `claude` in a ps
 - **Hooks fail open.** For Claude Code hooks, exit code 2 means *block*, and so does a Go panic or a `flag` parse error. Every `baton hook` path recovers panics, uses `flag.ContinueOnError` and exits 0 on internal errors; only the deliberate rewake path exits 2. Each hook event has a test proving a panic exits 0, and every hook of the mod has a `.catch` that lets the event through.
 - **Dormant unless hosted.** Hooks, the CLI and the mod do nothing unless `BATON_HOST=1` is set, apart from `/baton start` handing a plain session over (package `elevate`).
 - **Compaction moves only on proof.** A phase agent's `PreCompact`, `SessionStart(compact)` and `PostCompact` carry no `agent_id` and look like the lead's, so those hooks only log `compact_seen`. A `state.Proof` comes from the mod's report (the lead's compaction) or a new `compact_boundary` in a loop's own transcript.
+- **No git operation baton runs, or asks a model to run, rewrites or discards work.** Landing merges the run's branch into a phase's branch and never rebases it: a rebase can drop a resolved conflict without a word, and auto mode may refuse one ([`visible-workers.md`](docs/research/visible-workers.md)). baton's merge starts only on a worktree with nothing uncommitted, and is aborted if it stops.
 - **Nothing types into a dialog where the mod runs.** In serial mode, v0.7's typed `3` stays, only while baton's question is the only dialog open.
 
 ## Layout

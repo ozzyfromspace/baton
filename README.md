@@ -20,7 +20,7 @@ So baton takes those decisions away from the model. The model does the work; det
 4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
 5. **Gates off the critical path.** A gate that takes more than a couple of minutes goes to baton (`baton verify`), which runs it on the committed code outside your checkout while the model works on. A finished phase is reported done while its gate runs: it is done when the gate passes, and reopens if it fails.
 6. **Boundaries.** When a phase is done, baton waits until nothing is in the way (a turn, a dialog, your typing) and types `/compact` itself. Once it has proof that the compaction happened, it briefs the next phase and wakes the model.
-7. **Landing.** baton rebases a phase agent's finished work onto your branch, verifies it again if your branch moved, and fast-forwards your branch between your session's tool calls. Your session is told which commits and files moved.
+7. **Landing.** If your branch moved on while a phase agent worked, baton merges it into the agent's branch (a conflict goes back to the agent, which merges it itself), verifies it again, and fast-forwards your branch between your session's tool calls. Nothing is rebased, so no commit is ever rewritten. Your session is told which commits and files moved.
 
 ## What you see
 
