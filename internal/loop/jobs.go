@@ -225,8 +225,8 @@ func verdictLine(vd state.Verdict) string {
 }
 
 // deliver wakes an idle session whose phase in hand has job results due (state.Due), whose plan a
-// verification just completed, or that baton has messages for (state.Mail): it types a short line, and
-// the prompt's hook hands them over. It waits for the typing gates like anything baton types, and never
+// verification just completed, or that baton has messages for (state.Mail): it gives it a short line
+// (say), and the prompt's hook hands them over. It waits for the typing gates like anything baton types, and never
 // while the session is to ask the human something (a worker's proposal is the lead session's to ask). It
 // reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
@@ -248,7 +248,6 @@ func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 		return false // typed already: its prompt has not arrived yet
 	}
 	l.proceed()
-	l.typedFor, l.typedAt = ids, v.Now
 	// The lead's prompt hook hands over the results and baton's messages; a phase agent, started again by
 	// the line, is given them with its next tool call or its stop.
 	agent := l.Store.Worker() != ""
@@ -263,13 +262,15 @@ func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	default:
 		line = decide.MailTyped(kinds)
 	}
-	if len(due) > 0 {
-		l.Store.Event("results_typed", map[string]any{"jobs": jobIDs(due)})
-	} else {
-		l.Store.Event("mail_typed", map[string]any{"messages": kinds})
+	if err := l.say(v, in, line); err != nil {
+		l.unsaid(err, "typing the results")
+		return false // said at a later tick
 	}
-	if err := in.Type(line, true); err != nil {
-		l.logf("loop: typing the results: %v", err)
+	l.typedFor, l.typedAt = ids, v.Now
+	if len(due) > 0 {
+		l.Store.Event("results_typed", map[string]any{"jobs": jobIDs(due), "via": l.via()})
+	} else {
+		l.Store.Event("mail_typed", map[string]any{"messages": kinds, "via": l.via()})
 	}
 	return true
 }

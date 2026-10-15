@@ -25,7 +25,7 @@ func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 	}{
 		{"phase_done", func(e map[string]any) bool { return e["phase"] == "P0" }},
 		{"compact_queued", func(e map[string]any) bool { return e["reason"] == "boundary" }},
-		{"compact_typed", nil},
+		{"compact_asked", nil}, // baton's mod compacts the lead: nothing is typed
 		{"compact_started", func(e map[string]any) bool { return e["by_baton"] == true && e["trigger"] == "manual" }},
 		{"phase_started", func(e map[string]any) bool { return e["phase"] == "P1" }},
 		{"brief", func(e map[string]any) bool { return e["type"] == "boundary" && e["phase"] == "P1" }},

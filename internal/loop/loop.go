@@ -1,7 +1,8 @@
 // Package loop is the host's controller: on every tick it reads the project state the hooks keep, and
-// it is the only part of baton that acts on its own. It types /compact when a compaction is queued and
-// it is safe to type, demands proof the compaction happened, nudges a model that did not resume, and
-// sends the human the notices the hooks queued.
+// it is the only part of baton that acts on its own. It has the lead compacted when a compaction is queued
+// and it is safe to (by baton's mod where it runs, otherwise by typing /compact), demands proof the
+// compaction happened, nudges a model that did not resume, and sends the human the notices the hooks
+// queued. Where the mod runs, nothing is typed into the session at all (mod.go).
 //
 // Nothing here may wait forever. Every state baton waits in has a deadline, and every gate that holds
 // baton back either expires (a screen that never settles, a turn with no sign of life) or is reported
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
@@ -30,7 +32,7 @@ type Timing struct {
 	Quiet          time.Duration // the screen must be still this long before baton types
 	QuietMax       time.Duration // a screen that never settles (a status line redrawn every second) is ignored after this
 	HandsOff       time.Duration // and the human must not have typed for this long
-	AckTimeout     time.Duration // a compaction must show it began (a hook, or the mod's report) this soon after typing /compact
+	AckTimeout     time.Duration // a compaction must show it began (the mod's report) this soon after typing /compact (where the mod compacts, its ack says)
 	CompactTimeout time.Duration // and its proof must come this soon after it began
 	FailedRetry    time.Duration // a failed compaction is tried again after this, then 3× longer each round
 	ResumeNudge    time.Duration // no turn this long after a compaction: type a reminder
@@ -74,7 +76,8 @@ var DefaultTiming = Timing{
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
-// MaxTries is how many times baton types /compact in one round before it gives up on the round.
+// MaxTries is how many times baton asks for a compaction in one round (typing /compact, or by its mod)
+// before it gives up on the round.
 const MaxTries = 2
 
 // MaxRounds is how many rounds of attempts a failed compaction gets (5, 15 and 45 minutes apart).
@@ -87,7 +90,8 @@ const MaxIdleNudges = 2
 var Reminders = []time.Duration{30 * time.Minute, 2 * time.Hour, 6 * time.Hour}
 
 // clearLine is sent before retrying: Ctrl-U ×6 wipes whatever is left of baton's own failed attempt.
-// It is only sent when the human has no draft (a gate), so it never erases their text.
+// It is only sent when the human has no draft (a gate), so it never erases their text, and only where
+// baton types (serial mode).
 const clearLine = "\x15\x15\x15\x15\x15\x15"
 
 // Loop implements host.Controller, for the lead session. (A phase agent's loop, Agent, keeps one for the
@@ -135,12 +139,23 @@ type Loop struct {
 	switchHeld string    // the job whose switch uncommitted work holds, reported once
 	typedFor   string    // the jobs whose results baton last typed a line for, and when
 	typedAt    time.Time
-	modAnswers bool           // baton's mod in this claude settles baton's questions at their deadlines
 	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart    *restart       // the restart claude was ended for
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
+
+	// How the loop reaches the lead's claude (mod.go): whether its mod has said hello, which carries what
+	// baton gives the lead from then on, and how this tick does (modMode), last looked at modAt, with the
+	// host's first tick at hostAt; the line the mod was given and has not acked yet, given at submittedAt;
+	// and when Claude Code last refused a compaction as a turn was running.
+	modOn       bool
+	mode        int
+	modAt       time.Time
+	hostAt      time.Time
+	submitting  int
+	submittedAt time.Time
+	declinedAt  time.Time
 
 	lastTick       time.Time
 	wokeAt         time.Time
@@ -169,6 +184,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if st.Owner != nil && !st.IsOwner(l.Store.Instance, v.Now) {
 		return // another terminal drives this run now
 	}
+	l.mode = l.modMode(v)
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
 	if !st.Run.ExitAt.IsZero() {
@@ -212,6 +228,10 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 		l.typeCompact(v, st, in)
 	case state.CompactTyped:
+		if comp.Command != 0 {
+			l.asked(v, st) // the mod was asked for it
+			break
+		}
 		switch since := v.Now.Sub(l.since(comp.Typed)); {
 		case st.Run.ModReports.IsZero():
 			// Nothing reports a compaction as it begins (the mod moves it to active at once where it runs):
@@ -229,7 +249,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 			}
 		}
 	case state.CompactActive:
-		if v.Now.Sub(l.since(comp.Started)) > l.Timing.CompactTimeout {
+		if why := comp.Refused(); why != "" {
+			l.redo(v, comp, why) // it did not happen after all: a hook vetoed it, or it failed
+		} else if v.Now.Sub(l.since(comp.Started)) > l.Timing.CompactTimeout {
 			l.fail(comp, fmt.Sprintf("the compaction did not finish within %s", l.Timing.CompactTimeout))
 		}
 	case state.CompactFailed:
@@ -346,6 +368,7 @@ func (l *Loop) drive(s *state.Store) {
 	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}
 	l.settled, l.typedFor, l.typedAt, l.switchNext, l.switchHeld = time.Time{}, "", time.Time{}, time.Time{}, ""
 	l.rateNotified, l.errNudged, l.errRetries = false, time.Time{}, 0
+	l.modAt, l.submitting, l.declinedAt = time.Time{}, 0, time.Time{} // the line open was the other run's bridge's
 	l.alone, l.aloneAt, l.heldWhy, l.heldSince = state.Dialog{}, time.Time{}, "", time.Time{}
 }
 
@@ -364,7 +387,7 @@ func (l *Loop) Flush() {
 // could not have done anything while the machine was asleep.
 func (l *Loop) clock(v host.View) {
 	if l.lastTick.IsZero() {
-		l.wokeAt = v.Now
+		l.wokeAt, l.hostAt = v.Now, v.Now
 	} else if gap := v.Now.Round(0).Sub(l.lastTick.Round(0)); gap > l.Timing.ClockJump {
 		l.logf("loop: clock jumped %s (sleep?); timers restart", gap.Round(time.Second))
 		l.Store.Event("woke", map[string]any{"slept": gap.Round(time.Second).String()})
@@ -385,6 +408,7 @@ const (
 	gateTyping = "the human is typing"
 	gateScreen = "the screen is still updating"
 	gateUsage  = "the account waits on its usage limit"
+	gateMod    = "baton's mod has not said hello yet"
 )
 
 // gate says why baton must not type right now, or "" if it may. It runs once per tick.
@@ -394,6 +418,11 @@ const (
 // (Claude Code's idle notification usually corrects the flag within a minute; this is the backstop.)
 // And a screen that never stays still for Quiet, while everything else allows typing, is ignored after
 // QuietMax: something is redrawing it on a timer, such as a status line with a clock.
+//
+// Where baton's mod runs, nothing is typed, so neither the human's draft nor the screen holds baton: the
+// mod compacts the lead and submits baton's lines with the draft left in the box (spike 35). A turn, a
+// dialog, the usage limit and the human typing this moment still do. Until the mod in a restarted claude
+// says hello (modWaiting), nothing goes out.
 func (l *Loop) gate(v host.View, st state.State) string {
 	why := ""
 	switch {
@@ -403,9 +432,11 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		why = gateDialog
 	case v.Now.Before(l.limited(st)):
 		why = gateUsage // anything typed would fail on it: Claude Code resumes the session itself as it resets
+	case l.mode == modWaiting:
+		why = gateMod
 	case busyAgents(st) && !l.agentsStale(v, st):
 		why = gateAgents
-	case v.Draft:
+	case v.Draft && l.mode != modOn:
 		why = gateDraft
 	case v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff:
 		why = gateTyping
@@ -413,6 +444,9 @@ func (l *Loop) gate(v host.View, st state.State) string {
 	if why != "" {
 		l.openSince = time.Time{}
 		return why
+	}
+	if l.mode == modOn {
+		return ""
 	}
 	if l.openSince.IsZero() {
 		l.openSince = v.Now
@@ -513,9 +547,20 @@ func (l *Loop) owed(st state.State) bool {
 // An empty draft is the dead-reckoning case: keyTracker counts keystrokes and errs toward "there is a
 // draft", so it can drift there with nothing in the box. SaveDraft writes nothing for that, and the
 // clear puts the flag back where reality is — so this fixes a phantom draft too, at no cost.
+//
+// Ctrl-C is how it clears the box, and one Ctrl-C at an idle prompt stops every background agent of the
+// session for good, baton's and the model's own (spike 35): it never runs while one may be live
+// (agentsLive), and the draft holds baton, which says so (held). Where baton's mod runs it never runs at
+// all: nothing there waits on a draft.
 func (l *Loop) rescueDraft(v host.View, st state.State, in host.Injector) bool {
+	if l.viaMod() {
+		return false
+	}
 	// Something wants to type, which is what keeps heldSince from being reset at the end of the tick.
 	l.wished = true
+	if agentsLive(st) {
+		return false
+	}
 	if v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
 		return false
 	}
@@ -554,6 +599,24 @@ func (l *Loop) rescueDraft(v host.View, st state.State, in host.Injector) bool {
 	return true
 }
 
+// agentsLive reports an agent that may be at work in the lead's claude: a phase agent on the run's roster,
+// or a background agent of the lead's model (a subagent, a workflow, a teammate), as its last stop listed
+// them. One Ctrl-C at the prompt stops every one of them for good (spike 35).
+func agentsLive(st state.State) bool {
+	for _, w := range st.LiveWorkers() {
+		if w.AgentID != "" {
+			return true
+		}
+	}
+	for _, t := range st.Run.Background {
+		switch {
+		case t.AgentType == state.PhaseAgent, t.Type == "subagent", t.Type == "workflow", t.Type == "teammate":
+			return true
+		}
+	}
+	return false
+}
+
 // held is called whenever baton needs to type something and the gate says no. Most gates clear by
 // themselves or expire into action; held only REPORTS, so nothing it is told about can hold a run. The
 // exception is gateDialog, which is the human's consent and keeps its wait (see the note above).
@@ -570,6 +633,9 @@ func (l *Loop) held(v host.View, st state.State, task string) {
 		// rescue itself is failing — which is worth telling someone about, not worth waiting on.
 		limit, kind = l.Timing.DraftEscalate, "draft"
 		reason = fmt.Sprintf("baton needs to %s and could not clear the draft in the input box; it will keep trying", task)
+		if agentsLive(st) {
+			reason = decide.DraftHolds(task)
+		}
 	case gateAgents:
 		limit, kind = l.Timing.BackgroundMax, "stuck"
 		reason = fmt.Sprintf("baton has needed to %s for %s, but background subagents are still running", task, l.Timing.BackgroundMax)
@@ -597,6 +663,13 @@ func (l *Loop) typeCompact(v host.View, st state.State, in host.Injector) {
 		return
 	}
 	l.proceed()
+	if l.viaMod() {
+		if v.Now.Sub(l.declinedAt) < l.Timing.HandsOff {
+			return // refused a moment ago as a turn ran: the turn's hooks say so first
+		}
+		l.askCompact(v, st)
+		return
+	}
 	text := "/compact"
 	if comp.Tries > 0 || comp.Rounds > 0 {
 		text = clearLine + text
@@ -656,9 +729,12 @@ func (l *Loop) checkResumed(v host.View, st state.State, in host.Injector) {
 			verb = "Resume"
 		}
 		msg := fmt.Sprintf("[baton] Context compacted. %s %s now — the brief above has your instructions.", verb, st.Current)
+		if err := l.say(v, in, msg); err != nil {
+			l.unsaid(err, "reminding the model to resume")
+			return
+		}
 		l.update(func(st *state.State) { st.Run.Compaction.Nudged = v.Now })
-		l.Store.Event("resume_nudge", map[string]any{"epoch": comp.Epoch})
-		in.Type(msg, true)
+		l.Store.Event("resume_nudge", map[string]any{"epoch": comp.Epoch, "via": l.via()})
 	case !comp.Nudged.IsZero() && v.Now.Sub(l.since(comp.Nudged)) > l.Timing.ResumeEscalate:
 		if e := st.Run.Escalation; e == nil || e.Kind != "stalled" {
 			l.escalate("stalled", fmt.Sprintf("the model did not resume %s after the compaction", st.Current))
@@ -668,7 +744,7 @@ func (l *Loop) checkResumed(v host.View, st state.State, in host.Injector) {
 
 func (l *Loop) fail(comp state.Compaction, reason string) {
 	l.update(func(st *state.State) {
-		st.Run.Compaction.Status, st.Run.Compaction.FailedAt = state.CompactFailed, l.Store.Now()
+		st.Run.Compaction.Status, st.Run.Compaction.FailedAt, st.Run.Compaction.Declined = state.CompactFailed, l.Store.Now(), nil
 	})
 	l.Store.Event("compact_failed", map[string]any{"epoch": comp.Epoch, "round": comp.Rounds + 1, "reason": reason})
 	if comp.Rounds+1 < MaxRounds {

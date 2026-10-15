@@ -123,7 +123,7 @@ func TestARunningPlanRestartsAtThePhaseBoundary(t *testing.T) {
 		{"restarting", func(e map[string]any) bool { return e["from"] == "v9.1.0" && e["to"] == "v9.1.1" }},
 		{"host_started", func(e map[string]any) bool { return e["version"] == "v9.1.1" }},
 		{"restarted", func(e map[string]any) bool { return e["version"] == "v9.1.1" }},
-		{"compact_typed", nil},
+		{"compact_asked", nil}, // baton's mod compacts the lead: nothing is typed
 		{"compact_started", func(e map[string]any) bool { return e["by_baton"] == true }},
 		{"phase_started", func(e map[string]any) bool { return e["phase"] == "P1" }},
 		{"phase_done", func(e map[string]any) bool { return e["phase"] == "P1" }},

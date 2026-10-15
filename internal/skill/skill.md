@@ -33,7 +33,7 @@ Run `baton board` and show its output verbatim, in a code block. (Where baton's 
 
 Run `baton drafts` (passing through any `--last`, `N` or `--path`) and show its output verbatim.
 
-When the human's unsent draft is in the way, baton saves the text and clears the input box rather than waiting on it: a half-typed message used to be able to park a whole run. Each draft is a file in the run's `drafts/` folder (`baton drafts --path` prints it) holding exactly what was typed, so `cat` recovers it even if baton will not start.
+Where baton's mod runs, a draft is never in baton's way: baton compacts and gives you its lines with the draft left in the input box. Where it does not (the phases run one at a time in this session), baton saves an unsent draft that is in its way and clears the input box rather than waiting on it, unless an agent may be at work, since clearing the box would stop it. Each draft is a file in the run's `drafts/` folder (`baton drafts --path` prints it) holding exactly what was typed, so `cat` recovers it even if baton will not start.
 
 ## plan <goal>
 
@@ -171,4 +171,4 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 ### Compaction
 
 - Never type `/compact` yourself. baton does that at the right moment.
-- If the human's unsent draft is in the way of a compaction, baton saves it among its drafts and clears the input box. That is deliberate and needs nothing from you; if they ask where their message went, run `baton drafts`.
+- baton leaves the human's unsent draft in the input box: it compacts and gives you its lines around it. Only where it runs without its mod, and no agent is at work, does it save a draft that is in the way among its drafts and clear the box. Either needs nothing from you; if they ask where their message went, run `baton drafts`.

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -83,11 +82,13 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		return
 	}
 	l.proceed()
-	msg := l.idleMessage(v, st)
+	if err := l.say(v, in, l.idleMessage(v, st)); err != nil {
+		l.unsaid(err, "reminding the idle model")
+		return
+	}
 	l.idleNudged = v.Now
 	l.update(func(st *state.State) { st.Run.IdleNudges++ })
-	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1})
-	in.Type(msg, true)
+	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1, "via": l.via()})
 }
 
 // resuming reports the stretch after a compaction baton asked for, until the model's turn after it begins:
@@ -181,7 +182,8 @@ func agentPhase(st state.State, agent string) string {
 // human can let it go ahead. The answer arrives through the usual hook.
 //
 // It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
-// baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog.
+// baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog; nor
+// while a mod that may yet say hello is waited for (modWaiting).
 //
 // A key typed into the wrong dialog can approve something nobody approved (in a permission prompt, 2 is
 // "Yes, and always allow"), so three layers keep it out of anyone else's (docs/research/escalation.md):
@@ -196,7 +198,7 @@ func agentPhase(st state.State, agent string) string {
 // per question.
 func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) {
 	d, alone := st.Run.Dialogs.Only()
-	if !alone || !d.AutoAnswered.IsZero() || l.modSettles() {
+	if !alone || !d.AutoAnswered.IsZero() || l.mode != modOff {
 		return
 	}
 	var due time.Time
@@ -242,16 +244,6 @@ const ownAnswerKey = "3"
 
 // MinProposalWait is the least time a proposal's question is on screen, alone, before baton answers it.
 const MinProposalWait = decide.MinWait
-
-// modSettles reports that baton's mod in the claude this host runs said hello: it settles baton's
-// questions at their deadlines itself. Once it has, it does for the rest of this host's life.
-func (l *Loop) modSettles() bool {
-	if !l.modAnswers {
-		rec, err := bridge.Open(l.Store.Dir, l.Store.Now, nil).Peek()
-		l.modAnswers = err == nil && rec.Hello.Ready(l.Store.Instance)
-	}
-	return l.modAnswers
-}
 
 // transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
 // login, billing, a model that does not exist, a request Claude Code refuses to send, a turn the model's
@@ -318,10 +310,13 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 		return
 	}
 	l.proceed()
+	if err := l.say(v, in, fmt.Sprintf("[baton] The last turn ended with an API error (%s). Continue %s.", e.Error, st.Current)); err != nil {
+		l.unsaid(err, "retrying after an API error")
+		return
+	}
 	l.errRetries++
 	l.errNudged = v.Now
-	l.Store.Event("error_retry", map[string]any{"error": e.Error, "retry": l.errRetries})
-	in.Type(fmt.Sprintf("[baton] The last turn ended with an API error (%s). Continue %s.", e.Error, st.Current), true)
+	l.Store.Event("error_retry", map[string]any{"error": e.Error, "retry": l.errRetries, "via": l.via()})
 }
 
 // stopped describes this loop, stopped, for the escalation that says so: its phase, whether it is a
