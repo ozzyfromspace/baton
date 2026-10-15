@@ -20,7 +20,7 @@ So baton takes those decisions away from the model. The model does the work; det
 4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for, at least 2 minutes apart, so the machine shows each one's load before the next starts. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
 5. **Gates off the critical path.** A gate that takes more than a couple of minutes goes to baton (`baton verify`), which runs it on the committed code outside your checkout while the model works on. A finished phase is reported done while its gate runs: it is done when the gate passes, and reopens if it fails. A phase agent's failed gate goes back to that agent, with the result.
 6. **Boundaries.** When a phase is done, baton waits until nothing is in the way (a turn, a dialog) and has its mod compact the session, with your unsent draft left in the input box. Once it has proof that the compaction happened, it briefs the next phase and wakes the model. When baton takes up a phase by itself (a gate's verdict, a landing), a turn under way, yours included, runs to its end first.
-7. **Landing.** If your branch moved on while a phase agent worked, baton merges it into the agent's branch (a conflict goes back to the agent, which merges it itself), verifies it again, and fast-forwards your branch between your session's tool calls. Nothing is rebased, so no commit is ever rewritten. Your session is told which commits and files moved.
+7. **Landing.** If your branch moved on while a phase agent worked, baton merges it into the agent's branch (a conflict goes back to the agent, which merges it itself), verifies it again, and fast-forwards your branch between your session's tool calls. Nothing is rebased, so no commit is ever rewritten. Your session is told which commits and files moved. A landing that would touch files your session has uncommitted waits, and after 10 minutes your session's model is asked to commit those files.
 
 ## What you see
 
@@ -36,28 +36,32 @@ Phase agents need baton's mod, which ships in its plugin. Where Claude Code does
 
 ## When it needs you
 
-A run must not stop for something it can work around, and baton never waits on you for something it can decide. It waits only where you chose that (Pause baton, Wait for me, a cap you set) or where nothing in baton can answer (a permission prompt, the usage limit, a login, a refusal). Every other question has a deadline, and the deadline picks the model's side. When something goes wrong (a commit whose signature times out, a missing tool, a rule of the plan that can't be followed right now), the model reaches you in the lightest way that fits:
+A run must not stop for something it can work around, and baton never waits on you for something it can decide. It waits with no deadline only where you chose that (Pause baton, a cap you set) or where nothing in baton can answer (a permission prompt, the usage limit, a login, a refusal). Every other wait has a deadline, and the deadline picks the model's side. None is longer than 20 minutes, except a block's, which is 30. When something goes wrong (a commit whose signature times out, a missing tool, a rule of the plan that can't be followed right now), the model reaches you in the lightest way that fits:
 
 | The model runs | When | The run |
 |---|---|---|
 | `baton note "<what it did>" --undo "<how>"` | It already took a reversible way around. | Goes on; you're told. |
 | `baton propose "<what it will do>" --because "<why>" --undo "<how>" --wait 5m` | There's a reversible way forward, but you might choose differently. | Asks you, and goes ahead at the deadline unless you answer: 5 to 20 minutes as the model judges, 10 by default. |
-| `baton blocked "<why>" --tried "<what it tried>"` | Every way forward is irreversible, outward-facing, or needs a secret only you hold. | Stops until you answer. |
+| `baton blocked "<why>" --tried "<what it tried>"` | Every way forward is irreversible, outward-facing, or needs a secret only you hold. | Stops until you answer, or for 30 minutes: then the model looks again for a safe way on, and proposes it. |
 
-- **A proposal** reads *"baton: gpg signing timed out. Unless you answer by 15:33, I will commit P4 unsigned."*, and you can answer Wait for me, Pause baton or Go ahead. The model gives the shortest wait that fits: every minute waiting is time the run loses. One whose question you dismiss still goes ahead at its deadline, unless you write first. A proposal that looks outward-facing or irreversible (push, publish, deploy, delete, …) gets no deadline.
-- **baton's own questions answer themselves.** Its question when the model has stopped without a status, and its question about a plan you approved mid-run, wait 10 minutes; then the plan goes on (a revision of the running plan is followed; another plan is left for `/baton run`). The context question picks Keep going after 10 minutes.
+- **A proposal** reads *"baton: gpg signing timed out. Unless you answer by 15:33, I will commit P4 unsigned."*, and you can answer Wait for me, Pause baton or Go ahead. The model gives the shortest wait that fits: every minute waiting is time the run loses. One whose question you dismiss still goes ahead at its deadline, unless you write first. Wait for me holds it until you write, or for 20 minutes with no word from you; then it goes ahead.
+- **An outward proposal is answered Not now.** A proposal that looks outward-facing or irreversible (push, publish, deploy, delete, …) has a deadline too, and a fourth answer, Not now, which baton gives for you at the deadline. The model then does it only if it is safely reversible and stays in your project (pushing its own branch, a draft pull request), and otherwise leaves it undone and carries on with everything that doesn't need it. `baton status` and the run's summary list what was left for you.
+- **A block looks again.** A block nobody answers for 30 minutes is lifted, and the model looks again for a safe way on that doesn't need you (the parts that don't depend on the answer first, or a reversible way around) and proposes it.
+- **baton's own questions answer themselves.** Its question when the model has stopped without a status, and its question about a plan you approved mid-run, wait 10 minutes; then the plan goes on (a revision of the running plan is followed; another plan is left for `/baton run`). Their Wait for me holds the run until you write, for 20 minutes at most. The context question picks Keep going after 10 minutes.
+- **The model's own questions**, which it may ask in a turn you started, wait 10 minutes too where baton's mod runs; then baton picks the option the model recommended, or its first, and tells the model it chose for you.
 - **Every decision made without you is kept, with its undo,** for you to read when the plan has run: `baton status` lists them. The model is handed the ones you haven't seen the next time you type, so "undo the unsigned commit" still works hours later. Set `max_auto_decisions` to have baton stop for a review after that many in one phase.
-- **A phase agent's question** comes to you in Claude Code's own question dialog, naming its phase, and your answer goes to the agent. Wait for me leaves only that phase waiting, until `/baton run` asks you again.
-- **A phase agent you stop** from the agent panel leaves its phase waiting for you. baton pushes that, the board shows it, and `/baton run` starts a fresh agent.
-- **A run that stops moving** tells you: when nothing in it has moved for 30 minutes and nothing is at work (no tool call, no gate whose log still grows), baton pushes one notice naming what each phase left waits on.
-- **A permission prompt**, your session's or a phase agent's, is never answered or typed through by baton. It shows in your terminal, the band shows `P3 needs you`, and baton pushes if it waits. Only that phase waits.
+- **A phase agent's question** comes to you in Claude Code's own question dialog, naming its phase, and your answer goes to the agent. Wait for me leaves only that phase waiting, until `/baton run` asks you again, or for 20 minutes with no word from you.
+- **A phase agent you stop** from the agent panel is asked about: Restart it, Leave it stopped, or Pause baton. With no answer in 10 minutes, baton lets it go if its work is done, and otherwise restarts it and tells you. Stop it a second time and nobody answers, and baton takes it down and asks you what to do with its phase, with no deadline, since you're the one in its way: only that phase and those that need it wait, and `baton status` shows it. After Leave it stopped, `/baton run` starts a fresh agent.
+- **A run that stops moving** tells you: when nothing in it has moved for 20 minutes and nothing is at work (no tool call, no gate whose log still grows), baton pushes one notice naming what each phase left waits on.
+- **A permission prompt**, your session's or a phase agent's, is never answered or typed through by baton. It shows in your terminal, the band shows `P3 needs you`, and baton pushes if it waits. Only that phase waits: under a phase agent's prompt, baton still compacts your session and gives it its results.
 - **A turn the model's safeguards refuse** is never retried, and baton never switches models. baton tells you which phase stopped, and the two ways on: rewind (Esc Esc) to before the flagged turn and take a different approach, or `/clear` for a fresh conversation from the phase's brief. Phases that don't need it carry on.
 - **Whenever the run halts**, baton first saves any uncommitted work into a private ref under `refs/baton/snapshots/`. `baton status` lists them, with the command to restore one.
 
 Questions are asked in the session, and Claude's own notifications take them to every device you're signed in on. baton also pushes to your desktop, and to your phone through [ntfy](https://ntfy.sh) if you set a topic.
 
 baton also handles the stops that aren't the model's to report:
-- **A crash.** A claude that exits by itself mid-plan is resumed in place, with its phase agents, at most twice in 30 minutes.
+- **A crash.** A claude that exits by itself mid-plan is resumed in place, with its phase agents. Past two crashes in 30 minutes, baton keeps trying, 5 minutes later and then every 15.
+- **An API error a fresh conversation avoids** (a prompt too long, a request too large) starts the phase afresh from its brief, your session's or a phase agent's. An expired login, billing, an unknown model and a refusal stay yours.
 - **A rewind** (Esc Esc) is noticed, and the model is told what of baton's record still stands.
 - **A `/clear` mid-phase** gets the phase's brief, and baton starts each unfinished phase's agent again in its worktree.
 
@@ -101,7 +105,7 @@ Start sessions with `baton` instead of `claude`; it takes the same arguments. In
 
 You can edit the plan file while it runs: baton follows the new text, and a phase agent at work is told when its phase or the standing rules change. If a phase agent's work reached your branch some other way (merged by hand), `baton done <phase>` in your session records it landed. `/baton pause` hands you the session: a `/compact` of yours while paused counts for the compaction baton owed, so `/baton run` doesn't compact again unless the conversation has grown much since, and a plan attached while paused waits for `/baton run`. A plan that another replaces, or that you drop, is kept in `.baton/runs/<run>/gen-<N>/`.
 
-Each session has a run of its own in `.baton/runs/` (kept out of git), so several terminals can each run a plan in one project. A run follows its conversation through `--resume` and `/clear`. Without git, a plan runs the same way; baton just has nothing to commit or snapshot.
+Each session has a run of its own in `.baton/runs/` (kept out of git), so several terminals can each run a plan in one project. A run follows its conversation through `--resume` and `/clear`. A conversation Claude Code moves to its background service is no longer hosted, though it inherited baton's settings, and baton says so once: `baton --resume <session id>` in a terminal gives it back, and `/baton run <plan>` there carries the run on where it stood. Without git, a plan runs the same way; baton just has nothing to commit or snapshot.
 
 ### Long gates
 
@@ -111,7 +115,7 @@ Each session has a run of its own in `.baton/runs/` (kept out of git), so severa
 | `baton verify --here "<command>" --notes "…"` | Runs it on `HEAD` in the checkout itself, for a gate that needs the checkout's running services. Edits and landings there wait until it ends. In a phase agent's worktree it holds one of the project's lanes while it runs, so here gates and lane gates take turns (one at a time without a `.baton-lane`). |
 | `baton await "<command>" --notes "…"` | Waits on something outside the project, such as a CI run. No git needed. |
 
-The result reaches the model at its next tool call or stop, or wakes it. If a phase can't go on without its result and another phase can start, baton sets the phase aside after 5 minutes, and comes back to it when the result is in.
+The result reaches the model at its next tool call or stop, or wakes it. If a phase can't go on without its result and another phase can start, baton sets the phase aside after 5 minutes, and comes back to it when the result is in. A `verify` gate that hangs in silence, its log unchanged and its processes using no CPU for 20 minutes, is stopped and counts as unverified, with the reason; where baton can't read the CPU, it never stops a gate on log silence alone.
 
 A project whose gates need dependencies or services commits an executable `.baton-lane` at its root:
 
@@ -137,7 +141,7 @@ Settings go in `~/.baton/config.json`. Most have an environment variable too (`B
 | `ntfy_topic` | none | Pushes to your phone through ntfy. Treat the topic like a password. |
 | `workers` | `auto` | How many phase agents may work at once. `auto` sizes it to the machine (one per 2 CPUs or 4 GiB, whichever allows fewer, less one for your session, at most 8). A number from 1 to 8 sets the most; `0` runs one phase at a time. Phase agents start at least 2 minutes apart. |
 | `autocompact` | `810k` | The context cap claude starts with: `auto`, 100k to 1m, or `off`. |
-| `escalation_timeout` | `10m` | How long a proposal with no `--wait` of its own waits for you before it goes ahead, and how long baton's own questions wait. |
+| `escalation_timeout` | `10m` | How long a proposal with no `--wait` of its own waits for you before it goes ahead, and how long baton's questions, and the model's own, wait: `1m` to `20m`. |
 | `max_auto_decisions` | off | How many decisions one phase may make without you before baton stops for a review. Off unless you set a number. |
 | `aggregate_qa` | `true` | A plan's heavy checks (full suites, lints, end-to-end) run in its QA phases only (`Type: qa`); the phases between run focused checks. `false` has every phase check itself in full. |
 | `details` | `false` | Put the reason in pushes, which otherwise say only that you're needed. |

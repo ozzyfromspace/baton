@@ -4,6 +4,135 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-15
+
+v0.8.3 made baton wait on you only where you chose it or where nothing in baton can answer. Going through
+every wait in the code, and a real run's transcript, still turned up edge cases that left a run stuck or
+spinning: a hold nobody lifted, a block nobody answered, an outward proposal with no deadline, an agent you
+stopped, a crash loop that ended the host, a gate that hung in silence, a landing deferred forever, and a
+session that only looked hosted. Each now ends by itself, in the safest way baton can take without you.
+Nothing waits on you for longer than 20 minutes, except a block, which waits 30 and then looks again. Each
+case has a test that drives it to its end with nobody there, and the new ones also run end to end on real
+Claude Code (`test/e2e/stuck_test.go`).
+
+A session on v0.8.x moves to v0.8.4 by itself at its next restart point; `baton update` updates baton's
+host and its mod together. A session that only inherited the settings of a v0.8.3 host still runs that
+host's baton, and so still looks hosted, until it is started again with v0.8.4.
+
+### Changed
+- **Wait for me lapses.** A hold you chose (Wait for me, on a proposal, on baton's stall question, on a plan
+  you approved mid-run, or on a phase agent's question) lasts until you write, or for 20 minutes with no
+  word from you. Then it lapses into the question's default, and the model is told (`hold_lapsed`). The
+  options' descriptions say so.
+- **An outward proposal is answered Not now at its deadline.** A proposal that names an outward or
+  irreversible act (push, publish, deploy, delete, pay, send, force …) waited for you with no deadline. It
+  now has one like any other proposal (the model's `--wait`, 5 to 20 minutes, or `escalation_timeout`), and
+  a fourth answer, Not now, which baton gives for you then (`proposal_resolved`, answer Not now, by
+  timeout). The model does the act only if it is safely reversible and stays inside the project (pushing
+  its own branch, a draft pull request, deleting files it generated), and `baton note`s it; otherwise it
+  leaves it undone and carries on with everything that does not need it. `baton status` lists what was left
+  for you, and so does the run's summary when the plan completes.
+- **A block looks again after 30 minutes.** A `baton blocked` nobody answers for 30 minutes (from when it
+  began, or when you last wrote) is lifted, and the model is told to look again for a safe, independent
+  way on that drops no work, and to propose it, which goes ahead at its deadline (`block_lapsed`). A phase
+  agent's block the same: its question's default is now Look again. Your answer before then works as
+  before; Look again is also yours to give (`look_again`).
+- **The model's own questions have a deadline.** In a turn you started while a plan runs, a question the
+  lead's model asks you (AskUserQuestion) is answered at `escalation_timeout` where baton's mod runs: the
+  option the model marked Recommended, else its first, one per question; the model is told that baton chose
+  for you (`question_answered`). Serial mode leaves them to you, as no typed key can pick an option safely.
+- **baton's questions keep their default third,** so serial mode answers them at their deadline too. The
+  stall question is now Pause baton · Wait for me · Continue; the question about a plan approved mid-run is
+  Start the new plan from P0 · Wait for me · Continue with the revised plan (or Keep the current run). Wait
+  for me on a plan holds it until you write (`replan_held`). Starting the new plan from P0 still keeps the
+  old run's record in `.baton/runs/<run>/gen-<N>/`.
+- **A phase agent you stop is asked about, and decided at a deadline.** Its phase waited for `/baton run` for
+  good. Now baton asks you on the lead's screen: Restart it · Leave it stopped · Pause baton
+  (`agent_restart_asked`). With no answer at `escalation_timeout`, baton decides from its record: an agent
+  whose work is done (its phase done and not red, or landed) is let go and its work lands
+  (`worker_retired`); otherwise baton restarts it from its brief and tells you, with a question of its own
+  (`agent_restarted`). Stopped a second time with no answer, the agent is taken down (`agent_taken_down`),
+  and if its work is not done baton asks what to do with the phase with no deadline, since you are the one
+  in its way: only that phase and those that need it wait, and the question steps aside after
+  `escalation_timeout` and comes back when you next write. Restart it then starts the count afresh.
+- **`baton await` asks the QA question too,** as `baton verify` does (`--qa "<why now>"` flags an early full
+  check): before a QA phase, a wait on CI is often a full check in disguise. A red result before a QA phase
+  says that other phases' work in progress may be why: the model fixes what is its phase's, and finishes
+  with `baton done --despite-red "<why>"` if the rest is not.
+- **`escalation_timeout` is 1 to 20 minutes** (it was up to 2 hours); 10 by default.
+- **Every timing was audited.** What waits on you takes at most 20 minutes (most take 10); the rest is sized
+  to what it waits for:
+
+  | Timing | Before | After | It waits for |
+  |---|---|---|---|
+  | `escalation_timeout` | 10m (1m to 2h) | 10m (1m to 20m) | you, on a question or a proposal |
+  | Wait for me (`HoldLapse`) | until you wrote | 20m | you, on a hold you chose |
+  | A block (`BlockLook`) | until you answered | 30m, then the model looks again | you, on a block |
+  | An outward proposal | until you answered | its `--wait` or `escalation_timeout`, then Not now | you |
+  | The model's own question | until you answered | `escalation_timeout` (where the mod runs) | you |
+  | A stopped phase agent | until `/baton run` | `escalation_timeout`, then from the record | you |
+  | Pushes of an open escalation | 30m, 2h, 6h | 10m, 20m | you; then the deadline settles it |
+  | Notices of an open dialog | 3m, 33m, 2h3m, 6h3m | 3m, 13m, 23m | you, on a dialog |
+  | The stall alarm (`StallAfter`) | 30m | 20m | anything in the run to move |
+  | Reminders of a stalled session (`StalledNudge`) | 30m | 15m | the model |
+  | The model's background agents holding a compaction (`BackgroundMax`) | 30m | 20m | its agents |
+  | The model's background work keeping reminders away (`BackgroundIdle`) | 1h | 20m | its work |
+  | After a resume nudge's escalation | never reminded again | every 15m | the model |
+  | Crash recovery past two in 30 minutes | the host exited | 5m, then every 15m | nothing: it retries |
+  | A silent gate (`HungAfter`) | `verify_timeout` (3h) | 20m of no log and no CPU | the gate |
+  | A landing held by the lead's changes (`LandNudge`) | for good | the lead is told after 10m | the lead |
+
+  Unchanged, as none waits on you: the context question (10m), `switch_after` (5m), `verify_timeout` (3h),
+  `foreground_max` (2m), the resume nudge (1m) and its escalation (3m), a phase agent's start (5m), a stale
+  turn (15m), an idle nudge (10m), a compaction's timeout (10m) and its retries (5m to 15m), the usage
+  limit's retry (15m) and an overload's (1m, backing off to 16m), and phase agents starting 2 minutes apart.
+  With no deadline, by your choice: Pause baton, `/baton pause`, the review you opt into with
+  `max_auto_decisions`, and the question about an agent stopped twice whose work is not done.
+
+### Fixed
+- **A phase agent's permission prompt holds only that agent.** It was recorded on the lead's screen, so it
+  held the lead's compaction, deliveries and phase switches, and an Agent-tool prompt held every new agent.
+  Where baton's mod runs, the lead now goes on under it, and the prompt survives (spike 36); the board and
+  the stall alarm name the prompt by its phase. In serial mode any dialog still holds the lead, since a
+  typed key would answer the agent's prompt. While a phase agent's own Agent call waits on
+  its prompt, new phase agents still wait: a worktree request names nobody, so one could go to the wrong
+  agent.
+- **A crash loop no longer ends the host.** Past two crashes in 30 minutes, the host stayed down until you
+  ran `baton --resume`. It now waits 5 minutes, then 15 between tries, for as long as the plan runs
+  (`recovery_backoff`, pushed); a Ctrl-C in that wait stops it. A session whose last turn was refused is
+  resumed quietly, never started afresh.
+- **An API error a fresh context avoids starts the phase afresh.** A prompt too long, a request too large, a
+  broken tool history, a rejected image or PDF stopped the session for good. The lead (`lead_afresh`) or the
+  phase agent (`agent_afresh`) is now started afresh from its brief, with the same backoff, once nothing
+  would be lost. A refusal, an expired login, billing and an unknown model stay yours.
+- **A gate that hangs in silence is stopped.** A `verify` job whose log has not grown and whose processes
+  used no CPU for 20 minutes ends unverified, with the reason, and the model is told (`job_hung`). Log
+  silence alone never stops one: where baton can't read the CPU (Windows), a gate runs to `verify_timeout`.
+  A gate whose work runs outside its own processes (`docker exec`, `ssh`) and prints nothing for 20 minutes
+  is taken for hung.
+- **A landing is not deferred forever.** One held for 10 minutes by the lead's uncommitted changes to the same
+  files tells the lead's model to commit those files by path, never to stash or discard them
+  (`land_nudged`); one held because the checkout is off the run's branch is pushed to you once
+  (`land_off_branch`).
+- **A session that only looks hosted is dormant.** Claude Code can move a conversation into its background
+  service, under a new session id, and the new process inherits every `BATON_*` variable of the hosted
+  claude that started the service. It looked hosted, yet no baton host drove it: nothing compacted, no agent
+  started, and its plan's run stayed with the old session. Hosted now means a live baton host above the
+  session (the host records its pid); a session that only inherited the variables changes nothing, says
+  once how to give it back (`baton --resume <session id>` in a terminal; `inherited_notice`), and `baton
+  version`, `baton status` and its status line say "not hosted (inherited)". Its `WorktreeCreate` still gets
+  a plain worktree, since baton's hook replaces Claude Code's own. `/baton run <plan>` in it, or in the
+  resumed session, carries on the old session's run of that plan where it stood, when no live host owns it
+  (`run_carried`), and baton's mod follows its host to the carried run, so its phase agents start again.
+  The check reads the asking process's ancestors, one at a time, about 7µs each, and keeps no cache on
+  disk.
+- **A run is carried on whatever path names its plan file,** through a symlink too.
+- **A stalled session's resume is nudged again.** After the escalation of a resume nudge nobody answered,
+  the model was never reminded again; it now is, every 15 minutes (`resume_nudge`).
+- **The words say what baton does.** The model's primer and playbook said a block stops the run until you
+  answer, and that no answer to any proposal means the model does it; each Wait for me said it waits for
+  your word. Each now says what happens at the deadline.
+
 ## [0.8.3] - 2026-10-15
 
 baton exists so a run never waits on you for something it can decide, and v0.8.2 still did. A run left
@@ -890,7 +1019,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...v0.8.1

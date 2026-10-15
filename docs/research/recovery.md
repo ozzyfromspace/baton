@@ -109,7 +109,9 @@ baton as `StopFailure` with `error: invalid_request`, and baton escalated it as 
    upgrade restart does, and tells the model the turn in flight was lost and what to continue. At most twice in 30
    minutes (counted in the run's state, so the count survives the restart); then it stops and says so. If the
    conversation cannot be resumed (claude exits early, before any `SessionStart`), it starts a fresh session bound to
-   the same run, from the phase's brief, once.
+   the same run, from the phase's brief, once. (Since v0.8.4 nothing stops there: past two in 30 minutes the host
+   waits 5 minutes, then 15 between tries, and brings the session back for as long as the plan runs; a fresh
+   session from the brief also answers an API error a fresh context avoids, such as a prompt too long.)
 4. **A rewind is noticed, and the model is told what still stands.** At each prompt, baton notes the last entry in
    the transcript. At the turn's next hook, it checks that the prompt descends from it. If not, it reads the
    abandoned branch once: its time span, the `baton` commands run there, the files Claude's edit tools wrote there,
