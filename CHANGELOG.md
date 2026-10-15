@@ -4,6 +4,55 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-15
+
+baton exists so a run never waits on you for something it can decide, and v0.8.2 still did. A run left
+overnight sat idle for two hours because its phase had made five decisions without the human, and baton
+stopped it until someone said "Let the run go on". Every wait like that is gone. baton now waits on you
+only where you chose it (Pause baton, Wait for me, a cap you set) or where nothing in baton can answer (a
+permission prompt, the usage limit, a login, a refusal). Every other question has a deadline, and the
+deadline picks the model's side. Every decision is still recorded with its undo, for you to read when the
+plan has run. And a plan no longer runs its full test suite after every small phase: QA phases do the
+heavy checks once for many.
+
+A session on v0.8.x moves to v0.8.3 by itself at its next restart point; `baton update` updates baton's
+host and its mod together.
+
+### Changed
+- **No cap on decisions without you, unless you set one.** `max_auto_decisions` is off by default; set it
+  to a number to have baton stop for a review after that many in one phase.
+- **The model sizes each proposal's wait.** `baton propose … --wait 5m` takes 5 to 20 minutes, and the
+  model is told to give the shortest wait that fits, since every minute waiting is time the run loses.
+  With none, or one out of range, a proposal waits `escalation_timeout`, now 10 minutes by default.
+- **QA phases carry the heavy checks.** A plan phase with `Type: qa` under its heading runs the full test
+  suites, lints and end-to-end runs, and fixes what the phases since the last one left incoherent. The
+  phases between run focused checks only and may end in a work-in-progress state, as their briefs say.
+  `/baton plan` places a few, and baton asks once about each gate queued before one (`baton verify --qa
+  "<why now>"` flags a full check run early on purpose). `aggregate_qa: false` (or
+  `BATON_AGGREGATE_QA=0`) has every phase check itself in full, as before.
+- **A plan is checked against your other instructions before you see it.** At the model's first
+  `ExitPlanMode` for a plan, baton asks it once to flag anything in CLAUDE.md, memory, skills or settings
+  that competes with the plan (a rule to run the full suite before every commit, say) and to address it
+  in the plan. A stop before the plan reaches you is turned back once.
+
+### Fixed
+- **A proposal nobody answered goes ahead.** One whose question went away unanswered (Esc, a restart)
+  was held for you like Wait for me, its deadline thrown away; now it goes ahead at its deadline unless
+  you write first. A phase agent's proposal counts its wait from when the agent made it, and goes ahead at
+  its deadline even when you never saw it because your session's own question went first.
+- **baton's own questions answer themselves.** Its stall question (Continue / Pause baton) and its
+  question about a plan you approved mid-run waited on you for good. Each now waits 10 minutes, then the
+  plan goes on: a revision of the running plan is followed, and another plan is left for `/baton run`.
+  The context question waits 10 minutes, not 20. A block stays the model's own choice to wait.
+- **Nothing gives up on the run.** A failed compaction is retried every 15 minutes for as long as it
+  fails. A job's result reaches a session the watchdog had down as stalled, and the stalled session is
+  still reminded every 30 minutes. A plan file baton can't follow no longer pauses the run: it goes on
+  with the plan as attached, and you're told. A lead's `baton blocked` holds the lead alone, and phase
+  agents keep starting and landing. A phase agent that stops without a status is nudged instead of being
+  told to ask a question nobody would answer.
+- **CI runs on Node 24.** `actions/checkout` and `actions/setup-go` v7, and Ubuntu 26.04 for the Linux
+  jobs, so no job warns about Node 20 or the `ubuntu-latest` move.
+
 ## [0.8.2] - 2026-10-15
 
 A real v0.8.1 run, with four phase agents beside the lead, stopped for over three hours with nobody told.
@@ -841,7 +890,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...v0.8.0
