@@ -48,6 +48,8 @@ var headline = map[string]string{
 	"workers":           "baton needs you: its workers could not start",
 	"worker_held":       "baton needs you: a phase waits for you",
 	"run_stalled":       "baton needs you: the run stopped moving",
+	"recovery_backoff":  "claude keeps exiting: baton brings it back after a wait",
+	"afresh_later":      "a session keeps failing: baton starts a fresh one after a wait",
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a

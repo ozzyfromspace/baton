@@ -147,11 +147,10 @@ type Runtime struct {
 	// (docs/research/recovery.md).
 	Mark *Mark `json:"mark,omitempty"`
 	// Recoveries are the recent times the host brought the lead back after its claude exited by itself
-	// mid-plan, oldest first; the host forgets the old ones, and counts these against its cap. FreshFor
-	// is the phase it last started a fresh session for ("" for none in hand), when the conversation could
-	// not be resumed: once per phase. nil: none yet.
+	// mid-plan, or started it afresh after an API error a fresh session avoids (in a phase agent's
+	// sub-run: a fresh agent), oldest first. The old ones are forgotten, and the recent ones set how long
+	// the next waits (Backoff).
 	Recoveries []Recovery `json:"recoveries,omitempty"`
-	FreshFor   *string    `json:"fresh_for,omitempty"`
 }
 
 // Stall is the notice that the run stopped moving (Runtime.Stalled): pushed At, for a run that had not
@@ -201,11 +200,17 @@ type Mark struct {
 
 // Recovery is one time the host brought the lead back after its claude exited by itself mid-plan
 // (docs/research/recovery.md): it resumed the conversation, or, when that could not be done, started a
-// fresh session from the phase's brief.
+// fresh session from the phase's brief. It is also a time the lead, or a phase agent, was started afresh
+// after an API error a fresh session avoids (StopError.Afresh).
 type Recovery struct {
 	At    time.Time `json:"at"`
 	Why   string    `json:"why"` // "claude exited with code 137"
 	Fresh bool      `json:"fresh,omitempty"`
+	// Waited is how long baton waited before it, past MaxRecoveries in RecoveryWindow (Backoff).
+	Waited time.Duration `json:"waited,omitempty"`
+	// Quiet: the lead's last turn stood refused, so its conversation was resumed with its model left
+	// asleep: nothing is typed into a refused conversation, and how it goes on is the human's.
+	Quiet bool `json:"quiet,omitempty"`
 	// Told: the session it brought back has been told, once (the resumed model woken, the fresh one briefed).
 	Told bool `json:"told,omitempty"`
 }
@@ -453,6 +458,8 @@ type Escalation struct {
 type StopError struct {
 	Error   string `json:"error"`
 	Details string `json:"details,omitempty"`
+	// Message is what Claude Code showed for it (StopFailure's last_assistant_message), when it said.
+	Message string `json:"message,omitempty"`
 	// Category is a refusal's, as the API named it ("cyber", …; "" for none).
 	Category string    `json:"category,omitempty"`
 	At       time.Time `json:"at"`

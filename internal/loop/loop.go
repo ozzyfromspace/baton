@@ -50,6 +50,8 @@ type Timing struct {
 	WarnTimeout    time.Duration // the context question unanswered this long: baton answers "Keep going"
 	RateLimitRetry time.Duration // retry interval after a usage-limit error (doubled once at most)
 	OverloadRetry  time.Duration // first retry after an overload or server error (then backoff)
+	RecoverAfter   time.Duration // past state.MaxRecoveries in state.RecoveryWindow, a lead or an agent that stopped by nobody's choice is brought back after this (state.Backoff)
+	RecoverEvery   time.Duration // and then this long apart, for as long as it keeps stopping
 	ClockJump      time.Duration // a gap between ticks this long means the machine slept
 	NoticeRetry    time.Duration // a notice that failed to send is retried after this
 	RestartIdle    time.Duration // with no plan running, a session idle this long may restart on a newer baton
@@ -73,6 +75,7 @@ var DefaultTiming = Timing{
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, BackgroundMax: 30 * time.Minute, BackgroundIdle: time.Hour,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
+	RecoverAfter: 5 * time.Minute, RecoverEvery: 15 * time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 30 * time.Minute,
 	EscalationTimeout: config.DefaultEscalationTimeout,
@@ -125,6 +128,10 @@ type Loop struct {
 	// Lapse answers a question of the lead's own, baton's, for the human (hooks.Lapse): one past its
 	// deadline with no dialog of it on screen. Nil: such a question waits.
 	Lapse func(s *state.Store, question, answer string, now time.Time) error
+	// StartsAfresh says the host starts the lead afresh once the loop ends its claude for it (it execs a
+	// new host: upgrade.CanRestart), after an API error a fresh session avoids (afresh.go). Without it, such
+	// an error is the human's, as any other baton cannot retry away.
+	StartsAfresh bool
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open
@@ -150,6 +157,8 @@ type Loop struct {
 	typedAt    time.Time
 	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
 	restart    *restart       // the restart claude was ended for
+	fresh      *fresh         // the fresh session claude was ended for (afresh.go)
+	freshSeen  time.Time      // the error a fresh session was last found owed for
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
@@ -376,7 +385,7 @@ func (l *Loop) drive(s *state.Store) {
 	l.Store = s
 	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}
 	l.settled, l.typedFor, l.typedAt, l.switchNext, l.switchHeld = time.Time{}, "", time.Time{}, time.Time{}, ""
-	l.rateNotified, l.errNudged, l.errRetries = false, time.Time{}, 0
+	l.rateNotified, l.errNudged, l.errRetries, l.freshSeen = false, time.Time{}, 0, time.Time{}
 	l.modAt, l.submitting, l.declinedAt = time.Time{}, 0, time.Time{} // the line open was the other run's bridge's
 	l.alone, l.aloneAt, l.heldWhy, l.heldSince = state.Dialog{}, time.Time{}, "", time.Time{}
 }

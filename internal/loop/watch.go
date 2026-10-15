@@ -265,9 +265,10 @@ const ownAnswerKey = "3"
 // MinProposalWait is the least time a proposal's question is on screen, alone, before baton answers it.
 const MinProposalWait = decide.MinWait
 
-// transientErrors are API errors worth retrying: they pass on their own. Anything else (an expired
-// login, billing, a model that does not exist, a request Claude Code refuses to send, a turn the model's
-// safeguards declined) needs the human.
+// transientErrors are API errors worth retrying: they pass on their own. An invalid request that is the
+// conversation itself (too long, too large: state.StopError.Afresh) is avoided by a fresh session
+// (afresh.go). Anything else (an expired login, billing, a model that does not exist, a request Claude Code
+// refuses to send, a turn the model's safeguards declined) needs the human.
 var transientErrors = map[string]bool{"rate_limit": true, "overloaded": true, "server_error": true, "unknown": true, "max_output_tokens": true}
 
 // errorKinds are the escalations of an API error that ended the last turn: refused for a turn the model's
@@ -286,7 +287,13 @@ const MaxErrorRetries = 6
 // A refusal (a turn the model's safeguards declined, which Claude Code would not go on with) is never
 // retried, and nothing is typed into its conversation: the same model given the same conversation
 // usually declines again, and how the phase goes on is the human's to decide (decide.Refused).
+//
+// An error that refused the conversation itself, which every turn of it would meet again, starts it
+// afresh instead (afresh).
 func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state.StopError) {
+	if e.Afresh() && l.afresh(v, st, in, e) {
+		return
+	}
 	if !transientErrors[e.Error] {
 		kind := "api_error"
 		if e.Error == state.ErrRefusal {

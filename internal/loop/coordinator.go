@@ -136,6 +136,9 @@ type worker struct {
 	sentAt   time.Time
 	session  string // the lead's session its agent lives in: a /clear of the lead's ends it
 	stray    string // its agent, started in a plain worktree baton made for it: that goes once it has ended
+	// erred is when the API error a fresh agent avoids, last found to end its agent's turn, ended it
+	// (afresh.go).
+	erred time.Time
 }
 
 // guarded runs fn, a part of a session's tick, so that a panic in it is logged, in l's log and at most
