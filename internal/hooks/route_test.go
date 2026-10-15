@@ -114,8 +114,8 @@ func TestEveryHookKnowsItsLoop(t *testing.T) {
 }
 
 // A phase agent's permission prompt is drawn on the lead's screen, so it is recorded there, under the
-// agent's id, and holds baton's typing there like any dialog, until the call's result, the agent's stop
-// or its failure says it is gone.
+// agent's id and its phase (where baton's mod runs, it holds only that agent), until the call's result,
+// the agent's stop or its failure says it is gone.
 func TestAPhaseAgentsDialogsAreOnTheLeadsScreen(t *testing.T) {
 	for _, c := range []struct {
 		name, event string
@@ -133,6 +133,9 @@ func TestAPhaseAgentsDialogsAreOnTheLeadsScreen(t *testing.T) {
 			f.fire("PermissionRequest", phaseAgent(bash("make"), tree))
 			if got := openDialogs(f); !equal(got, []string{"agent-p1/Bash"}) {
 				t.Fatalf("on the lead's screen: %v", got)
+			}
+			if d, _ := f.state().Run.Dialogs.Front(); d.Phase != "P1" {
+				t.Errorf("recorded as %+v", d)
 			}
 			if !f.logged("dialog_open", map[string]any{"tool": "Bash", "agent": "agent-p1", "phase": "P1"}) {
 				t.Errorf("events: %v", f.events())

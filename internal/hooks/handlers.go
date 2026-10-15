@@ -1070,7 +1070,7 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 		}
 		var open int
 		up, err := h.onScreen(c, s, func(st *state.State) {
-			st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: s.Agent, Key: dialogKey(c.Input), Since: c.Now})
+			st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: s.Agent, Key: dialogKey(c.Input), Since: c.Now, Phase: s.Worker()})
 			open = len(st.Run.Dialogs)
 		})
 		if err == nil {

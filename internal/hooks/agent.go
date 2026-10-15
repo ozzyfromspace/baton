@@ -39,7 +39,9 @@ func (h *handlers) agentCall(c Context, ended bool) {
 	if err != nil || s == nil {
 		return
 	}
+	who := c.Agent     // whose call, as its permission prompt is recorded (permissionRequest)
 	if s.Agent != "" { // a phase agent's call: its sub-run is not where the lead's worktrees are told apart
+		who = s.Agent
 		if s, err = s.ParentRun(); err != nil {
 			return
 		}
@@ -53,7 +55,7 @@ func (h *handlers) agentCall(c Context, ended bool) {
 		if ended {
 			st.Run.AgentCallEnded(id)
 		} else {
-			st.Run.AgentCalled(id, c.Now)
+			st.Run.AgentCalled(id, who, c.Now)
 		}
 		return nil
 	})
