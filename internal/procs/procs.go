@@ -11,6 +11,10 @@
 //
 // A working directory that was removed still reads as its old path (Linux's " (deleted)" is cut off), so
 // compare paths as strings: one that is gone cannot be resolved.
+//
+// It also reads how much CPU time a job's process tree has used (TreeUsage), so that the host can tell a
+// gate that hangs from one that works without a word: on macOS from proc_info (PROC_PIDTASKINFO), which
+// reads platform binaries too; on Linux from /proc/<pid>/stat.
 package procs
 
 import (

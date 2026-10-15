@@ -36,7 +36,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.errRetries, l.rateNotified = 0, false
 
 	stalled := quietStall(st.Run.Escalation) // escalated already, and pushed: results still go in, and reminders go on
-	if st.Run.Escalation != nil && !stalled || st.Blocked != nil || l.why == gateTurn || st.Run.Dialogs.AnyOpen() {
+	if st.Run.Escalation != nil && !stalled || st.Blocked != nil || l.why == gateTurn || l.dialogHolds(st) {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}

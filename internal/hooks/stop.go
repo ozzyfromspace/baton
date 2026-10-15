@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -111,7 +112,7 @@ func (h *handlers) stop(c Context) (Result, error) {
 	}
 	msg, _ := d.out()["systemMessage"].(string)
 	if d.deliver.any() {
-		d.out()["reason"] = d.deliver.text(s)
+		d.out()["reason"] = d.deliver.text(s, config.AggregatesFromEnv(c.Env))
 		msg = lines(msg, d.deliver.says())
 		d.deliver.event(s, "stop")
 	}

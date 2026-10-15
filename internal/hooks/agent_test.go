@@ -249,13 +249,13 @@ func TestTheModelsAgentCallsHoldThePhasesWorktree(t *testing.T) {
 }
 
 // A phase agent's own calls to the Agent tool count in the lead's run, where worktrees are told apart, from
-// their PreToolUse to their result.
+// their PreToolUse to their result, under the agent's id, as its permission prompt is.
 func TestAPhaseAgentsAgentCallsCountInTheLeadsRun(t *testing.T) {
 	r := newAgentRun(t)
 	r.fire("PreToolUse", spawnCall())
 	r.worktree("agent-a1")
 	r.fire("PreToolUse", asAgent(modelCall("toolu_m1"), "a1", r.entry.Worktree))
-	if sub, st := loaded(t, r.sub), r.state(); len(sub.Run.AgentCalls) != 0 || len(st.Run.AgentCalls) != 1 || st.Run.AgentCalls[0].ToolUse != "toolu_m1" {
+	if sub, st := loaded(t, r.sub), r.state(); len(sub.Run.AgentCalls) != 0 || len(st.Run.AgentCalls) != 1 || st.Run.AgentCalls[0].ToolUse != "toolu_m1" || st.Run.AgentCalls[0].Agent != "a1" {
 		t.Errorf("the lead's run %+v, the sub-run's %+v", st.Run.AgentCalls, sub.Run.AgentCalls)
 	}
 	r.fire("PostToolUse", asAgent(modelCall("toolu_m1"), "a1", r.entry.Worktree))

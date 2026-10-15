@@ -95,6 +95,29 @@ func TestParseHead(t *testing.T) {
 	if q := p.NextQA("P2"); q != nil {
 		t.Errorf("next QA of the QA phase itself: %+v", q)
 	}
+	for id, want := range map[string]string{"P0": "P2 (Check)", "P1": "P2 (Check)", "P2": "", "P3": "", "P9": ""} {
+		if got := p.QAAhead(id); got != want {
+			t.Errorf("QA ahead of %s: %q, want %q", id, got, want)
+		}
+	}
+	// A QA phase with another ahead runs the heavy checks itself; a narrowed plan keeps its QA phase's name.
+	doc2 := "# Demo\n\n## P0 — A\n\nAfter: none\n\n## P1 — Check\n\nType: qa\n\n## P2 — B\n\n## P3 — Release check\n\nType: qa\n\n## Verification\n"
+	p2, err := Build("demo.md", []byte(doc2), Suggest([]byte(doc2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p2.QAAhead("P1"); got != "" {
+		t.Errorf("QA ahead of a QA phase with another ahead: %q", got)
+	}
+	for id, want := range map[string]string{"P0": "P1 (Check)", "P1": "", "P2": "P3 (Release check)"} {
+		only, err := p2.Only(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := only.QAAhead(id); got != want {
+			t.Errorf("QA ahead of %s, narrowed: %q, want %q", id, got, want)
+		}
+	}
 	if got := p.SinceQA("P2"); !reflect.DeepEqual(got, []string{"P0", "P1"}) {
 		t.Errorf("since QA: %v", got)
 	}

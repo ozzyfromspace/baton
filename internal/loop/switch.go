@@ -95,11 +95,11 @@ func (l *Loop) switching(v host.View, st state.State) state.State {
 const switchRecheck = 30 * time.Second
 
 // idle reports a session sitting idle: no turn under way (one that shows no sign of life for StaleTurn is
-// not trusted to be), and nothing on screen waiting for the human.
+// not trusted to be), and nothing on screen waiting for the human that holds the lead (dialogHolds).
 func (l *Loop) idle(v host.View, st state.State) bool {
 	r := st.Run
 	open := r.TurnOpen && v.Now.Sub(latest(r.LastActivity, r.TurnStarted, l.wokeAt)) < l.Timing.StaleTurn
-	return !open && !r.Dialogs.AnyOpen()
+	return !open && !l.dialogHolds(st)
 }
 
 // unswitch calls off a switch whose job ended before its compaction was typed. The human was to be told

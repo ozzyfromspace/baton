@@ -60,6 +60,8 @@ type Timing struct {
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
 	HoldLapse      time.Duration // a proposal held for the human (Wait for me) with no word from them this long: baton lifts the hold (lapseHold)
+	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
+	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -79,7 +81,8 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
-	HoldLapse: decide.HoldLapse, EscalationTimeout: config.DefaultEscalationTimeout,
+	HoldLapse: decide.HoldLapse, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
+	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
 // MaxTries is how many times baton asks for a compaction in one round (typing /compact, or by its mod)
@@ -159,6 +162,10 @@ type Loop struct {
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
+
+	// When the running gates were last looked at for signs of life (hung), and what was seen of each, by job.
+	hungAt time.Time
+	lives  map[string]life
 
 	// How the loop reaches the lead's claude (mod.go): whether its mod has said hello, which carries what
 	// baton gives the lead from then on, and how this tick does (modMode), last looked at modAt, with the
@@ -308,7 +315,7 @@ func (l *Loop) publishGate(st state.State) {
 // leave ends claude for a human leaving baton, once the turn is over and nothing is on screen, so the
 // conversation is resumed (as plain Claude Code) between turns.
 func (l *Loop) leave(v host.View, st state.State, in host.Injector) {
-	if l.quit || st.Run.TurnOpen && !l.turnStale(v, st) || st.Run.Dialogs.AnyOpen() || v.Now.Sub(v.LastOutput) < l.Timing.Quiet {
+	if l.quit || st.Run.TurnOpen && !l.turnStale(v, st) || l.dialogHolds(st) || v.Now.Sub(v.LastOutput) < l.Timing.Quiet {
 		return
 	}
 	l.quit = true
@@ -436,14 +443,14 @@ const (
 //
 // Where baton's mod runs, nothing is typed, so neither the human's draft nor the screen holds baton: the
 // mod compacts the lead and submits baton's lines with the draft left in the box (spike 35). A turn, a
-// dialog, the usage limit and the human typing this moment still do. Until the mod in a restarted claude
-// says hello (modWaiting), nothing goes out.
+// dialog of the lead's (dialogHolds), the usage limit and the human typing this moment still do. Until the
+// mod in a restarted claude says hello (modWaiting), nothing goes out.
 func (l *Loop) gate(v host.View, st state.State) string {
 	why := ""
 	switch {
 	case st.Run.TurnOpen && !l.turnStale(v, st):
 		why = gateTurn
-	case st.Run.Dialogs.AnyOpen():
+	case l.dialogHolds(st):
 		why = gateDialog
 	case v.Now.Before(l.limited(st)):
 		why = gateUsage // anything typed would fail on it: Claude Code resumes the session itself as it resets
@@ -479,6 +486,19 @@ func (l *Loop) gate(v host.View, st state.State) string {
 	return ""
 }
 
+// dialogHolds reports a dialog open that holds the lead: its compaction, its deliveries, a switch and
+// leaving baton. Where baton's mod runs, a phase agent's dialog holds only that agent (state.LeadOpen):
+// the mod's compaction, the rewake after it and a line it submits all run under its permission prompt,
+// which survives them, and the lead's own call that needs one waits behind it (spike 36). Anywhere else
+// every dialog holds: a key baton types lands in the one on screen, and Enter in a permission prompt
+// approves the call.
+func (l *Loop) dialogHolds(st state.State) bool {
+	if l.mode == modOn {
+		return st.Run.Dialogs.LeadOpen()
+	}
+	return st.Run.Dialogs.AnyOpen()
+}
+
 // limited is until when the session's run waits on the account's usage limit (zero: it does not).
 func (l *Loop) limited(st state.State) time.Time {
 	var until time.Time
@@ -510,7 +530,8 @@ func (l *Loop) turnStale(v host.View, st state.State) bool {
 // Keystrokes landing in a permission prompt SELECT an option, so a baton that stopped trusting that
 // flag and typed anyway could approve a tool call nobody approved. Every other gate expires into
 // action; this one may not, because the thing on the other side of it is the human's consent. A plan
-// that waits for an answer is working as intended, and that wait is escalated and pushed.
+// that waits for an answer is working as intended, and that wait is escalated and pushed. Where baton's
+// mod runs nothing is typed, and a phase agent's prompt holds only that agent (dialogHolds).
 //
 // agentsStale reports background subagents that have held baton for BackgroundMax. They used to hold it
 // for good: the gate escalated once and then waited on a human. A hung subagent must not be able to

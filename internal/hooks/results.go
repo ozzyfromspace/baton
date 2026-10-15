@@ -7,6 +7,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -40,11 +41,12 @@ func take(st *state.State, now time.Time) delivery {
 
 func (d delivery) any() bool { return len(d.jobs) > 0 }
 
-// text is the results for the model, each with the end of its log.
-func (d delivery) text(s *state.Store) string {
+// text is the results for the model, each with the end of its log. aggregate is aggregate_qa (jobResult).
+func (d delivery) text(s *state.Store, aggregate bool) string {
+	pl, _ := s.LoadPlan()
 	var parts []string
 	for _, j := range d.jobs {
-		parts = append(parts, jobResult(s, j, d.red))
+		parts = append(parts, jobResult(s, pl, j, d.red, aggregate))
 	}
 	if d.complete {
 		parts = append(parts, decide.VerifiedComplete(d.decisions))
@@ -70,14 +72,19 @@ func (d delivery) event(s *state.Store, via string) {
 	s.Event("results_delivered", map[string]any{"jobs": ids, "via": via})
 }
 
-// jobResult is one job's result for the model (decide.JobResult), with the end of its log.
-func jobResult(s *state.Store, j state.Job, red []state.Job) string {
+// jobResult is one job's result for the model (decide.JobResult), with the end of its log. With aggregate
+// (aggregate_qa), a red result of a phase with a QA phase ahead in pl says other phases' work may be why.
+func jobResult(s *state.Store, pl plan.Plan, j state.Job, red []state.Job, aggregate bool) string {
 	log := j.Log
 	if log == "" {
 		log = s.JobLog(j.ID)
 	}
 	tail, _ := lane.Tail(log, resultLines, resultBytes)
-	return decide.JobResult(j, log, tail, red)
+	qa := ""
+	if aggregate {
+		qa = pl.QAAhead(j.Phase)
+	}
+	return decide.JobResult(j, log, tail, red, qa)
 }
 
 // announced takes the lines the host left for the human (Runtime.Announce).

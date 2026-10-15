@@ -867,6 +867,139 @@ func TestALandingWaitsForTheRunsBranch(t *testing.T) {
 	}
 }
 
+// A landing held by the lead's checkout on another branch pushes the human, once a landing however long
+// it waits: only a human moves the checkout back.
+func TestALandingOffTheRunsBranchPushesTheHumanOnce(t *testing.T) {
+	x := landingCrew(t)
+	gittest.Git(t, x.repo, "checkout", "-q", "-b", "elsewhere")
+	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	for range 10 {
+		x.tick(overlapRetry)
+	}
+	if n := strings.Count(x.events(), `"kind":"land_off_branch"`); n != 1 || !x.has("land_off_branch", `"phase":"P1"`, `"branch":"elsewhere"`, `"run_branch":"main"`) {
+		t.Fatalf("%d pushes\n%s", n, x.events())
+	}
+	if n := strings.Count(x.events(), `"notice":"land_off_branch"`); n != 1 {
+		t.Errorf("the notice was sent %d times\n%s", n, x.events())
+	}
+	if m := x.worker("P1").Merge; m == nil || m.OffBranch.IsZero() {
+		t.Errorf("the push is not on record: %+v", m)
+	}
+	gittest.Git(t, x.repo, "checkout", "-q", "main")
+	x.tick(overlapRetry)
+	if gitx.Head(x.repo) != tip {
+		t.Fatalf("not landed once the checkout was back on main\n%s", x.events())
+	}
+}
+
+// The lead's uncommitted changes that hold a landing for LandNudge get its model a message, once a
+// landing, asking it to commit those files by path; the human is told it was asked.
+func TestALandingHeldByTheLeadsChangesAsksItToCommitThem(t *testing.T) {
+	x := landingCrew(t)
+	const nudge = 2 * time.Minute
+	x.c.Lead.Timing.LandNudge = nudge
+	gittest.Write(t, x.repo, "a.txt", "the lead's, uncommitted\n")
+	gittest.Write(t, x.repo, "b.txt", "the lead's, untracked\n")
+	x.finish("P1", map[string]string{"a.txt": "the worker's\n", "b.txt": "the worker's\n", "c.txt": "the worker's\n"}, false)
+	x.tick(time.Second)
+	held := x.now
+	if m := x.worker("P1").Merge; m == nil || !m.Overlap.Equal(held) {
+		t.Fatalf("the overlap's start is not on record: %+v\n%s", m, x.events())
+	}
+	commit := func() []state.Message {
+		var out []state.Message
+		for _, m := range x.state().Inbox {
+			if m.Kind == state.MessageCommit {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	for x.now.Sub(held) < nudge-overlapRetry {
+		x.tick(overlapRetry)
+	}
+	if len(commit()) != 0 || x.has("land_nudged") {
+		t.Fatalf("asked before %s\n%s", nudge, x.events())
+	}
+	x.tick(overlapRetry)
+	got := commit()
+	if len(got) != 1 || !strings.Contains(got[0].Text, "git add -- a.txt b.txt") || got[0].Phase != "" {
+		t.Fatalf("the lead's mail: %+v\n%s", got, x.events())
+	}
+	if !x.has("land_nudged", `"phase":"P1"`, `"paths":["a.txt","b.txt"]`, `"waited":"2m0s"`) ||
+		!strings.Contains(x.announced(), "baton: P1 has waited 2m to land on the lead's uncommitted changes to a.txt, b.txt → asked the lead to commit them") {
+		t.Errorf("not logged or announced\n%s", x.events())
+	}
+	for range 18 {
+		x.tick(overlapRetry)
+	}
+	if n := strings.Count(x.events(), `"kind":"land_nudged"`); n != 1 || len(commit()) != 1 {
+		t.Errorf("asked %d times, %d messages", n, len(commit()))
+	}
+
+	// Once the lead's changes are out of the way, the landing goes on, and a later overlap would count
+	// afresh.
+	gittest.Git(t, x.repo, "checkout", "--", "a.txt")
+	os.Remove(filepath.Join(x.repo, "b.txt"))
+	x.tick(overlapRetry)
+	if w := x.worker("P1"); w.Status != state.WorkerLanded {
+		t.Fatalf("not landed once the lead's changes were gone: %+v\n%s", w, x.events())
+	}
+}
+
+// A landing the lead's changes hold for a while, then let go of before it is held again, counts its wait
+// afresh: the lead is asked only once they have held it LandNudge in a row.
+func TestALeadsChangesHoldALandingInARowBeforeItIsAsked(t *testing.T) {
+	x := landingCrew(t)
+	const nudge = 2 * time.Minute
+	x.c.Lead.Timing.LandNudge = nudge
+	x.finish("P1", map[string]string{"a.txt": "the worker's\n"}, false)
+	x.c.Fleet.git = &holdGit{landGit: realGit{}, overlap: []string{"a.txt"}}
+	g := x.c.Fleet.git.(*holdGit)
+	x.tick(time.Second)
+	for x.now.Sub(x.worker("P1").Merge.Overlap) < nudge/2 {
+		x.tick(overlapRetry)
+	}
+	g.overlap = nil
+	g.busy = true // held by something else, so it does not land
+	x.tick(overlapRetry)
+	if m := x.worker("P1").Merge; !m.Overlap.IsZero() {
+		t.Fatalf("an overlap that ended is still counted: %+v", m)
+	}
+	g.overlap, g.busy = []string{"a.txt"}, false
+	x.tick(overlapRetry)
+	again := x.now
+	for x.now.Sub(again) < nudge-overlapRetry {
+		x.tick(overlapRetry)
+	}
+	if x.has("land_nudged") {
+		t.Fatalf("asked before the overlap held %s in a row\n%s", nudge, x.events())
+	}
+	x.tick(overlapRetry)
+	if !x.has("land_nudged", `"paths":["a.txt"]`) {
+		t.Errorf("not asked\n%s", x.events())
+	}
+}
+
+// holdGit is git that reports the lead's local changes to overlap in a landing's way, and, while busy,
+// a fast-forward refused for changes it would overwrite.
+type holdGit struct {
+	landGit
+	overlap []string
+	busy    bool
+}
+
+func (g *holdGit) Overlap(root string, changes []gitx.Change) ([]string, error) {
+	return g.overlap, nil
+}
+
+func (g *holdGit) FastForward(ctx context.Context, root, commit string) error {
+	if g.busy {
+		return gitx.ErrOverwrite
+	}
+	return g.landGit.FastForward(ctx, root, commit)
+}
+
 // scribble is git whose fast-forward goes with a write to one of the lead's files, as a process of the
 // lead's might make at that moment.
 type scribble struct {

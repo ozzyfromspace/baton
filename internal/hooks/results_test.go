@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -69,6 +70,48 @@ func TestAResultReachesTheModelMidTurn(t *testing.T) {
 	}
 	if out := bash(""); out != nil {
 		t.Errorf("given twice: %v", out)
+	}
+}
+
+// While the plan leaves its heavy checks to a QA phase ahead (aggregate_qa), a red result says other
+// phases' work in progress may be why, and how to finish over it; with aggregate_qa off, or no QA phase
+// ahead, it does not.
+func TestARedResultBeforeAQAPhaseMayBeOthers(t *testing.T) {
+	const hint = "This plan leaves its full checks to P1 (Second), and other phases' work in progress may be why this is red: " +
+		"fix what is P0's, and if the rest is not, finish with `baton done P0 --despite-red \"<why>\"`"
+	for _, c := range []struct {
+		name  string
+		qa    bool
+		vars  map[string]string
+		hints bool
+	}{
+		{"a QA phase ahead", true, nil, true},
+		{"aggregate_qa off", true, map[string]string{"BATON_AGGREGATE_QA": "0"}, false},
+		{"no QA phase ahead", false, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.vars = c.vars
+			if c.qa {
+				pl, err := f.store.LoadPlan()
+				if err != nil {
+					t.Fatal(err)
+				}
+				pl.Phases[1].Type = plan.TypeQA
+				if err := f.store.WritePlan(pl); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.finished("P0", state.JobFailed)
+			out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{}})
+			ctx := feedback(out)
+			if !strings.Contains(ctx, resultHead) {
+				t.Fatalf("no result:\n%s", ctx)
+			}
+			if got := strings.Contains(ctx, hint); got != c.hints {
+				t.Errorf("hints %v, want %v:\n%s", got, c.hints, ctx)
+			}
+		})
 	}
 }
 

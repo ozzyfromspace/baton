@@ -2,6 +2,7 @@ package loop
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -22,6 +25,15 @@ type runners struct {
 	sweeps  atomic.Int32
 	up      []int // the lanes this host brought up, which Down brings down
 	downs   atomic.Int32
+	cpu     map[int]procs.Usage // what Usage reads of each process group: none, unless the test says
+	cpuErr  error
+}
+
+func (f *runners) Usage(pgid int) (procs.Usage, error) {
+	if f.cpuErr != nil {
+		return nil, f.cpuErr
+	}
+	return maps.Clone(f.cpu[pgid]), nil
 }
 
 func (f *runners) Spawn(ref, id string) (int, error) {
@@ -265,5 +277,121 @@ func TestAJobDoesNotHoldARestart(t *testing.T) {
 	r.tick(time.Second)
 	if !r.restarted() {
 		t.Fatal("a running job held the restart")
+	}
+}
+
+// gateRig is a rig whose phase P1 runs a gate (job j1, its command's group 43) with a log of its own, its
+// runner beating, as the host has been up a while.
+func gateRig(t *testing.T, edit func(*state.Job)) (*rig, *runners, string) {
+	r, f := jobRig(t)
+	r.run(3 * time.Minute)
+	log := filepath.Join(t.TempDir(), "j1.log")
+	os.WriteFile(log, []byte("[baton] job j1: make test\n"), 0o644)
+	f.cpu = map[int]procs.Usage{43: {43: 100, 44: 7}}
+	r.set(func(st *state.State) {
+		j := running(0)(r.now)
+		j.Kind, j.Command, j.Log = state.JobVerify, "make test", log
+		if edit != nil {
+			edit(&j)
+		}
+		st.Jobs = []state.Job{j}
+	})
+	return r, f, log
+}
+
+// live runs the gate rig for d in 10-second ticks, its runner beating, and each minute does what moves.
+func live(r *rig, d time.Duration, each func(minute int)) {
+	for at := time.Duration(0); at < d; at += 10 * time.Second {
+		if at%time.Minute == 0 && each != nil {
+			each(int(at / time.Minute))
+		}
+		r.set(func(st *state.State) {
+			if j := st.Job("j1"); j != nil && j.Status == state.JobRunning {
+				j.Heartbeat = r.now
+			}
+		})
+		r.tick(10 * time.Second)
+	}
+}
+
+// A gate whose log has not grown, and whose process tree has used no CPU, for HungAfter is stopped as
+// hung, and counts as unverified; one that shows a sign of life of either kind, or whose processes
+// cannot be read, never is. Nor is an await, or a gate waiting for a lane.
+func TestAGateThatHangsIsStopped(t *testing.T) {
+	idle := func(*runners, int) {}
+	for _, c := range []struct {
+		name string
+		job  func(*state.Job)
+		cpu  func(f *runners, minute int) // what the processes do each minute
+		log  bool                         // the log grows each minute
+		hung bool
+	}{
+		{"a quiet log, idle processes", nil, idle, false, true},
+		{"a quiet log, busy processes", nil, func(f *runners, _ int) { f.cpu[43][44] += 3 }, false, false},
+		{"a quiet log, a process started", nil, func(f *runners, m int) { f.cpu[43][100+m] = 0 }, false, false},
+		{"a quiet log, no CPU reading", nil, func(f *runners, _ int) { f.cpuErr = procs.ErrUnsupported }, false, false},
+		{"a quiet log, its processes gone", nil, func(f *runners, _ int) { delete(f.cpu, 43) }, false, false},
+		{"a growing log, idle processes", nil, idle, true, false},
+		{"busy once, a while ago", nil, func(f *runners, m int) {
+			if m == 10 {
+				f.cpu[43][43]++
+			}
+		}, false, false},
+		{"an await", func(j *state.Job) { j.Kind = state.JobAwait }, idle, false, false},
+		{"a gate waiting for a lane", func(j *state.Job) { j.LaneWait, j.PGID = j.Started, 0 }, idle, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, f, log := gateRig(t, c.job)
+			live(r, DefaultTiming.HungAfter+5*time.Minute, func(m int) {
+				c.cpu(f, m)
+				if c.log {
+					w, _ := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0)
+					w.WriteString("ok\n")
+					w.Close()
+				}
+			})
+			j := r.job("j1")
+			if !c.hung {
+				if j.Status != state.JobRunning || strings.Contains(r.events(), "job_hung") {
+					t.Fatalf("stopped: %+v\n%s", j, r.events())
+				}
+				return
+			}
+			if j.Status != state.JobInterrupted || j.Red() || j.Exit != -1 || !decide.Hung(j) || !j.Delivered.IsZero() {
+				t.Fatalf("job: %+v", j)
+			}
+			if want := decide.HungReason(DefaultTiming.HungAfter); j.Reason != want {
+				t.Errorf("reason %q, want %q", j.Reason, want)
+			}
+			if len(f.killed) != 0 {
+				t.Errorf("killed %v: its runner, which beats, stops its command", f.killed)
+			}
+			if !strings.Contains(r.events(), `"kind":"job_hung"`) || !strings.Contains(r.events(), `"quiet":"20m0s"`) {
+				t.Errorf("events:\n%s", r.events())
+			}
+			if a := strings.Join(r.state().Run.Announce, "\n"); !strings.Contains(a, "baton: job j1 (`make test`, P1) looks hung") {
+				t.Errorf("announced %q", a)
+			}
+		})
+	}
+}
+
+// The count of a hung gate runs from the first look that saw it still, and only while the host looks:
+// across the machine's sleep it starts afresh.
+func TestAHungGateIsCountedWhileTheHostLooks(t *testing.T) {
+	r, _, _ := gateRig(t, nil)
+	live(r, DefaultTiming.HungAfter-time.Minute, nil)
+	if j := r.job("j1"); j.Status != state.JobRunning {
+		t.Fatalf("stopped before %s: %+v", DefaultTiming.HungAfter, j)
+	}
+	r.set(func(st *state.State) { st.Jobs[0].Heartbeat = r.now.Add(time.Hour) })
+	r.tick(time.Hour) // the machine slept
+	live(r, DefaultTiming.HungAfter-time.Minute, nil)
+	if j := r.job("j1"); j.Status != state.JobRunning {
+		t.Fatalf("its sleep counted: %+v", j)
+	}
+	live(r, 2*time.Minute, nil)
+	if j := r.job("j1"); !decide.Hung(j) {
+		t.Fatalf("not stopped: %+v", j)
 	}
 }
