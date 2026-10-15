@@ -39,5 +39,22 @@ func RunStalled(quiet time.Duration, waits []string, lead string) string {
 	return fmt.Sprintf("the run has not moved for %s — %s. /baton board shows where it stands", Span(quiet), strings.Join(append(slices.Clip(waits), lead), "; "))
 }
 
+// LaneWaits is the session line when job j waits for one of the project's lanes, all slots of them being
+// in use by gates (in lanes, and in phase agents' worktrees), with ahead jobs that began to wait before it
+// waiting still: nothing is needed from anyone.
+func LaneWaits(j state.Job, slots, ahead int) string {
+	in := "the project's one lane is in use"
+	if slots > 1 {
+		in = fmt.Sprintf("all %d of the project's lanes are in use", slots)
+	}
+	switch {
+	case ahead == 1:
+		in += ", and 1 gate waits ahead of it"
+	case ahead > 1:
+		in += fmt.Sprintf(", and %d gates wait ahead of it", ahead)
+	}
+	return fmt.Sprintf("baton: job %s (`%s`, %s) waits for a lane: %s. It starts once one is free", j.ID, j.Command, j.Phase, in)
+}
+
 // LogQuiet says that a running job's log has not grown for d: its gate may hang.
 func LogQuiet(d time.Duration) string { return "its log has not grown for " + Span(d) }

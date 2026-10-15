@@ -2,6 +2,7 @@ package lane
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -224,7 +225,7 @@ func TestSlotContention(t *testing.T) {
 	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	r.Now = func() time.Time { return at }
 	var waits []time.Time
-	r.LaneWait = func(since time.Time) { waits = append(waits, since) }
+	r.LaneWait = func(since time.Time, slots, ahead int) { waits = append(waits, since) }
 	held, _ := p.TryAcquire(1)
 	time.AfterFunc(300*time.Millisecond, func() { held.Release() })
 	got := r.Run(context.Background(), Job{ID: "j1", Command: "true", Commit: head})
@@ -342,6 +343,106 @@ func TestAGateHereRunsInItsWorkDir(t *testing.T) {
 	}
 	if log := logOf(t, r); !strings.Contains(log, "job j1: grep -q changed a.txt, on "+head[:12]+" in "+root+", with no lane") {
 		t.Errorf("log:\n%s", log)
+	}
+}
+
+// A gate run Here in a worktree outside the project's checkout (a phase agent's) holds one of the
+// project's lanes while it runs, as a gate in a lane does, with BATON_LANE set to it: two such gates with
+// one slot run in turn, the second waiting as a gate in a lane waits. It checks nothing out in the lane,
+// and of the lane script only asks how many slots there are.
+func TestAGateHereInAWorktreeHoldsALane(t *testing.T) {
+	root, head := project(t, true)
+	path := calls(t)
+	pool := Pool{Home: t.TempDir(), Root: root}
+	busy := filepath.Join(t.TempDir(), "busy") // there while a gate runs
+	gate := fmt.Sprintf(`test ! -e %[1]s && touch %[1]s && echo "$BATON_LANE $BATON_LANE_DIR" > lane.txt && sleep 0.3 && rm %[1]s`, busy)
+	trees := []string{t.TempDir(), t.TempDir()}
+	runner := func(tree string) *Runner {
+		r := testRunner(t, root)
+		r.Pool, r.WorkDir = pool, tree
+		return r
+	}
+
+	first := make(chan Result)
+	go func() {
+		first <- runner(trees[0]).Run(context.Background(), Job{ID: "P1.j1", Command: gate, Commit: head, Here: true})
+	}()
+	for deadline := time.Now().Add(5 * time.Second); !isFile(busy); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first gate never ran")
+		}
+	}
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	r := runner(trees[1])
+	r.Now = func() time.Time { return at }
+	type wait struct {
+		since        time.Time
+		slots, ahead int
+	}
+	var waits []wait
+	r.LaneWait = func(since time.Time, slots, ahead int) { waits = append(waits, wait{since, slots, ahead}) }
+	second := r.Run(context.Background(), Job{ID: "P2.j1", Command: gate, Commit: head, Here: true})
+	for i, got := range []Result{<-first, second} {
+		if got.Status != Passed || got.Lane != 1 {
+			t.Errorf("gate %d: %+v", i+1, got)
+		}
+		if b, _ := os.ReadFile(filepath.Join(trees[i], "lane.txt")); strings.TrimSpace(string(b)) != "1 "+trees[i] {
+			t.Errorf("gate %d saw BATON_LANE and BATON_LANE_DIR %q", i+1, b)
+		}
+	}
+	if !slices.Equal(waits, []wait{{at, 1, 0}, {time.Time{}, 1, 0}}) {
+		t.Errorf("told of the wait %+v", waits)
+	}
+	if log := logOf(t, r); !strings.Contains(log, "every lane is in use (1); waiting for one") || !strings.Contains(log, "in "+trees[1]+", holding lane 1") {
+		t.Errorf("log:\n%s", log)
+	}
+	if want := []string{"slots", "slots"}; !slices.Equal(readCalls(path), want) {
+		t.Errorf("calls = %v, want %v", readCalls(path), want)
+	}
+	if isFile(filepath.Join(pool.LaneDir(1), ".git")) {
+		t.Error("a gate run here checked a lane out")
+	}
+
+	// A gate in a lane waits for one run here.
+	held, _ := pool.TryAcquire(1)
+	time.AfterFunc(200*time.Millisecond, func() { held.Release() })
+	if got := runner(trees[0]).Run(context.Background(), Job{ID: "j2", Command: "true", Commit: head}); got.Status != Passed || got.Lane != 1 {
+		t.Errorf("a gate in a lane: %+v", got)
+	}
+}
+
+// A job waiting for a lane learns how many jobs that began to wait before it wait still: a waiter whose
+// process ended counts no more, and its file goes.
+func TestWaitersCountThoseAhead(t *testing.T) {
+	p := Pool{Home: t.TempDir(), Root: t.TempDir()}
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	wait := func(since time.Time, want int) *Waiter {
+		t.Helper()
+		w, ahead := p.Wait(since)
+		if w == nil || ahead != want {
+			t.Fatalf("waiting since %s: %v, %d ahead, want %d", since.Format(time.TimeOnly), w, ahead, want)
+		}
+		return w
+	}
+	a := wait(at, 0)
+	b := wait(at.Add(time.Second), 1)
+	for range 9 { // the tenth waiter of this process is still told from the first
+		waits.Add(1)
+	}
+	c := wait(at, 1) // begun at the same instant as a, after it
+	a.Done()
+	d := wait(at.Add(2*time.Second), 2)
+	stale := filepath.Join(p.Dir(), "waits", fmt.Sprintf("%020d-%010d-%010d", at.Add(-time.Hour).UnixNano(), 1, 1))
+	os.WriteFile(stale, nil, 0o644)
+	e := wait(at.Add(3*time.Second), 3)
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("a waiter no process holds is still there")
+	}
+	for _, w := range []*Waiter{b, c, d, e, nil} {
+		w.Done()
+	}
+	if left, _ := os.ReadDir(filepath.Join(p.Dir(), "waits")); len(left) != 0 {
+		t.Errorf("waiters left: %v", left)
 	}
 }
 

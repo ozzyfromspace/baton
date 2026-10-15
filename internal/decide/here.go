@@ -7,9 +7,11 @@ import (
 )
 
 // A gate that needs the checkout itself (its running services, files that are not in git) says so:
-// `baton verify --here` runs it on HEAD in the session's own working tree, with no lane. It reads that tree
-// as it runs, so until it ends baton holds what would change it there: edits, another phase, and, in the
-// lead's checkout, a worker's work landing (state.HereGate).
+// `baton verify --here` runs it on HEAD in the session's own working tree, not in a lane. (In a phase
+// agent's worktree it holds one of the project's lanes as it runs, with BATON_LANE set, so that it and the
+// gates in lanes take turns: lane.Job.Here.) It reads that tree as it runs, so until it ends baton holds
+// what would change it there: edits, another phase, and, in the lead's checkout, a worker's work landing
+// (state.HereGate).
 
 // HereQueued is what the model does while its gate runs in its working tree (--here), which baton holds
 // until the gate ends; worker: the session is a worker's, in a worktree no landing touches. timeout is

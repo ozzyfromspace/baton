@@ -136,13 +136,19 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 				return nil
 			})
 		},
-		LaneWait: func(since time.Time) {
+		LaneWait: func(since time.Time, slots, ahead int) {
 			s.Update(func(st *state.State) error {
 				if j := st.Job(job.ID); mine(j, job) && j.Status == state.JobRunning {
 					j.LaneWait = since
+					if !since.IsZero() {
+						st.Run.Announce = append(st.Run.Announce, decide.LaneWaits(*j, slots, ahead))
+					}
 				}
 				return nil
 			})
+			if !since.IsZero() {
+				s.Event("lane_wait", map[string]any{"job": job.ID, "phase": job.Phase, "slots": slots, "ahead": ahead, "here": job.Here})
+			}
 		},
 	}
 	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here})

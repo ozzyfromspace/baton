@@ -38,8 +38,12 @@ type Job struct {
 	// Commit is the commit to check out in a lane and run the command on. Without one, the command runs
 	// in the working tree itself, with no lane (a wait on something outside the project).
 	Commit string
-	// Here runs the command in the working tree itself, with no lane, on the commit checked out there
-	// (Commit, which nothing checks out): a gate that needs that tree.
+	// Here runs the command in the working tree itself (the runner's WorkDir), on the commit checked out
+	// there (Commit, which nothing checks out): a gate that needs that tree. In the project's checkout it
+	// holds no lane. In a worktree of its own (a phase agent's), it holds one of the pool's lanes while it
+	// runs, as a gate in a lane does, and runs with BATON_LANE set to it, though it runs outside it: so
+	// gates in lanes and in worktrees together run no more at once than the project's slots, and what a
+	// lane keeps apart (a test database, a Compose project) stays apart.
 	Here bool
 }
 
@@ -87,9 +91,10 @@ type Runner struct {
 	Beat func(now time.Time) (host time.Time, wanted bool)
 	// Started is told the lane and the process group of each process the job starts.
 	Started func(lane, pgid int)
-	// LaneWait is told when the job starts to wait for a lane, every lane being in use (since: when it
-	// started to), and when it stops waiting, with a lane or without (the zero time).
-	LaneWait func(since time.Time)
+	// LaneWait is told when the job starts to wait for a lane, every one of the pool's slots being in use
+	// (since: when it started to), with how many jobs that began to wait before it wait still (ahead), and
+	// when it stops waiting, with a lane or without (the zero time).
+	LaneWait func(since time.Time, slots, ahead int)
 
 	ran, stale time.Duration
 	prev, host time.Time
@@ -119,18 +124,20 @@ func (r *Runner) defaults() {
 func (r *Runner) Run(ctx context.Context, j Job) Result {
 	r.begin()
 	var res Result
-	if j.Commit == "" || j.Here {
-		dir := r.WorkDir
-		if dir == "" {
-			dir = r.Pool.Root
-		}
-		if j.Here {
-			r.say("job %s: %s, on %s in %s, with no lane", j.ID, j.Command, short(j.Commit), dir)
-		} else {
-			r.say("job %s: %s, in %s", j.ID, j.Command, dir)
-		}
+	dir := r.WorkDir
+	if dir == "" {
+		dir = r.Pool.Root
+	}
+	switch {
+	case j.Here && Key(dir) != Key(r.Pool.Root):
+		res = r.hereInSlot(ctx, j, dir)
+	case j.Here:
+		r.say("job %s: %s, on %s in %s, with no lane", j.ID, j.Command, short(j.Commit), dir)
 		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
-	} else {
+	case j.Commit == "":
+		r.say("job %s: %s, in %s", j.ID, j.Command, dir)
+		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
+	default:
 		res = r.inLane(ctx, j)
 	}
 	r.account()
@@ -155,33 +162,69 @@ func (r *Runner) begin() {
 	}
 }
 
-// inLane runs a job in a lane of its own.
-func (r *Runner) inLane(ctx context.Context, j Job) Result {
+// slot holds one of the pool's lanes for the job, waiting while every one is in use. It returns the lane,
+// or why the job stopped as it waited, or why it got none.
+func (r *Runner) slot(ctx context.Context) (*Slot, *Result, error) {
 	n := r.Pool.Slots(ctx)
 	slot, err := r.Pool.TryAcquire(n)
-	if slot == nil && err == nil {
-		r.say("every lane is in use (%d); waiting for one", n)
-		r.laneWait(r.Now())
-		var stop *Result
-		err, stop = r.supervise(ctx, func(c context.Context) error {
-			slot, err = r.Pool.Acquire(c, n)
-			return err
-		})
-		r.laneWait(time.Time{})
-		if stop != nil {
-			if slot != nil {
-				slot.Release()
-			}
-			return *stop
-		}
+	if slot != nil || err != nil {
+		return slot, nil, err
 	}
-	if err != nil {
+	since := r.Now()
+	w, ahead := r.Pool.Wait(since)
+	defer w.Done()
+	if ahead > 0 {
+		r.say("every lane is in use (%d); waiting for one, behind %d other job(s) waiting", n, ahead)
+	} else {
+		r.say("every lane is in use (%d); waiting for one", n)
+	}
+	r.laneWait(since, n, ahead)
+	err, stop := r.supervise(ctx, func(c context.Context) error {
+		var err error
+		slot, err = r.Pool.Acquire(c, n)
+		return err
+	})
+	r.laneWait(time.Time{}, n, 0)
+	if stop != nil {
+		if slot != nil {
+			slot.Release()
+		}
+		return nil, stop, nil
+	}
+	return slot, nil, err
+}
+
+// hereInSlot runs a gate Here in dir, a worktree outside the project's checkout, holding one of the
+// pool's lanes while it runs (Job.Here). It checks nothing out in the lane and brings it neither up nor
+// down: the gate runs on the tree, and what the lane's up started is the lane's.
+func (r *Runner) hereInSlot(ctx context.Context, j Job, dir string) Result {
+	slot, stop, err := r.slot(ctx)
+	switch {
+	case stop != nil:
+		return *stop
+	case err != nil:
+		return Result{Status: LaneError, Exit: -1, Reason: fmt.Sprintf("no lane: %v", err)}
+	}
+	defer slot.Release()
+	r.say("job %s: %s, on %s in %s, holding lane %d", j.ID, j.Command, short(j.Commit), dir, slot.N)
+	res := r.command(ctx, slot.N, dir, r.Pool.env(slot.N, dir, j.Commit), shell(j.Command))
+	res.Lane = slot.N
+	return res
+}
+
+// inLane runs a job in a lane of its own.
+func (r *Runner) inLane(ctx context.Context, j Job) Result {
+	slot, stop, err := r.slot(ctx)
+	switch {
+	case stop != nil:
+		return *stop
+	case err != nil:
 		return Result{Status: LaneError, Exit: -1, Reason: fmt.Sprintf("no lane: %v", err)}
 	}
 	defer slot.Release()
 
 	r.say("job %s: %s, on %s in lane %d (%s)", j.ID, j.Command, short(j.Commit), slot.N, slot.Dir)
-	err, stop := r.supervise(ctx, func(c context.Context) error { return r.Pool.checkout(c, slot, j.Commit) })
+	err, stop = r.supervise(ctx, func(c context.Context) error { return r.Pool.checkout(c, slot, j.Commit) })
 	if stop != nil {
 		return r.stopped(*stop, slot)
 	}
@@ -227,10 +270,11 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 	return r.stopped(res, slot)
 }
 
-// laneWait tells LaneWait, if set, that the job waits for a lane since since (zero: no longer).
-func (r *Runner) laneWait(since time.Time) {
+// laneWait tells LaneWait, if set, that the job waits for one of slots lanes since since (zero: no
+// longer), behind ahead others.
+func (r *Runner) laneWait(since time.Time, slots, ahead int) {
 	if r.LaneWait != nil {
-		r.LaneWait(since)
+		r.LaneWait(since, slots, ahead)
 	}
 }
 

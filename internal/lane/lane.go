@@ -6,6 +6,7 @@
 //	$BATON_HOME/lanes/<key>/<n>/     lane n: a worktree, reused from one job to the next
 //	$BATON_HOME/lanes/<key>/<n>.lock held (flock) by the job running in lane n
 //	$BATON_HOME/lanes/<key>/<n>.up   the host that ran the lane's up, while the lane is up
+//	$BATON_HOME/lanes/<key>/waits/   a file for each job waiting for a lane, held (flock) while it waits
 //
 // <key> is derived from the working tree's path, so every run in one checkout shares its lanes.
 //
@@ -25,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -144,6 +146,54 @@ func (p Pool) Acquire(ctx context.Context, n int) (*Slot, error) {
 		case <-time.After(acquirePoll):
 		}
 	}
+}
+
+// A Waiter is a job's place among the jobs waiting for a lane of the pool: a file in its waits directory,
+// named for when the job began to wait, and held (flock) while it waits, so that a waiter whose process
+// ended counts no more.
+type Waiter struct{ lock *flock.Flock }
+
+// waits numbers this process's waiters, so that two begun at the same instant have files of their own.
+var waits atomic.Int64
+
+// Wait records that a job began to wait for a lane at since, and returns its place, with how many jobs
+// that began to wait before it wait still. A lane goes to whichever waiter looks first once it comes free,
+// so the count says how long the queue was, not when the job's turn comes. A file no live waiter holds is
+// removed as it is found. With no place to record it (nil), the job waits all the same.
+func (p Pool) Wait(since time.Time) (*Waiter, int) {
+	dir := filepath.Join(p.Dir(), "waits")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, 0
+	}
+	name := fmt.Sprintf("%020d-%010d-%010d", since.UnixNano(), os.Getpid(), waits.Add(1)) // in the order they began
+	l := flock.New(filepath.Join(dir, name))
+	if ok, err := l.TryLock(); err != nil || !ok {
+		return nil, 0
+	}
+	entries, _ := os.ReadDir(dir)
+	ahead := 0
+	for _, e := range entries {
+		if e.Name() >= name {
+			continue
+		}
+		other := flock.New(filepath.Join(dir, e.Name()))
+		if ok, err := other.TryLock(); err == nil && ok {
+			other.Unlock() // its job waits no more
+			os.Remove(other.Path())
+			continue
+		}
+		ahead++
+	}
+	return &Waiter{l}, ahead
+}
+
+// Done gives up the waiter's place: its job holds a lane, or waits no more.
+func (w *Waiter) Done() {
+	if w == nil {
+		return
+	}
+	w.lock.Unlock()
+	os.Remove(w.lock.Path())
 }
 
 // tryLane holds lane n if it is free.

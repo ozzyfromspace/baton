@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -184,7 +186,8 @@ func TestLaneRunStopsACancelledJob(t *testing.T) {
 }
 
 // A job that waits for a lane, every lane being in use, records since when, for the host, which holds new
-// workers back while gates queue for lanes; the record goes once the job holds a lane.
+// workers back while gates queue for lanes; the record goes once the job holds a lane. The wait is
+// announced, with how many wait ahead of it, and logged.
 func TestLaneRunRecordsItsWaitForALane(t *testing.T) {
 	defer func(d time.Duration) { laneTick = d }(laneTick)
 	laneTick = 20 * time.Millisecond
@@ -223,8 +226,15 @@ func TestLaneRunRecordsItsWaitForALane(t *testing.T) {
 		t.Fatal("lane-run never took the lane that came free")
 	}
 	st, _ := s.Load()
-	if j := st.Job("j1"); j.Status != state.JobPassed || j.Lane != 1 || !j.LaneWait.IsZero() {
+	j := st.Job("j1")
+	if j.Status != state.JobPassed || j.Lane != 1 || !j.LaneWait.IsZero() {
 		t.Errorf("job: %+v", *j)
+	}
+	if want := decide.LaneWaits(*j, 1, 0); !slices.Contains(st.Run.Announce, want) {
+		t.Errorf("announced %q, want %q", st.Run.Announce, want)
+	}
+	if e := events(t, s)["lane_wait"]; e == nil || e["job"] != "j1" || e["phase"] != "P1" || e["slots"] != 1.0 || e["ahead"] != 0.0 || e["here"] != false {
+		t.Errorf("lane_wait: %v", e)
 	}
 }
 
@@ -324,7 +334,7 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 		st.Jobs = []state.Job{
 			{ID: "j1", Phase: "P1", Kind: state.JobAwait, Command: "pwd -P > where.txt", Status: state.JobQueued, Queued: now},
 			{ID: "j2", Phase: "P1", Kind: state.JobVerify, Command: "true", Commit: head, Status: state.JobQueued, Queued: now},
-			{ID: "j3", Phase: "P1", Kind: state.JobVerify, Command: "pwd -P > here.txt", Commit: head, Here: true, Status: state.JobQueued, Queued: now},
+			{ID: "j3", Phase: "P1", Kind: state.JobVerify, Command: `pwd -P > here.txt; echo "$BATON_LANE" > lane.txt`, Commit: head, Here: true, Status: state.JobQueued, Queued: now},
 		}
 		return nil
 	})
@@ -343,12 +353,16 @@ func TestLaneRunRunsAWorkersJobs(t *testing.T) {
 	if j := st.Job("j2"); j.Status != state.JobPassed || j.Lane != 1 {
 		t.Errorf("verify: %+v", *j)
 	}
-	// A gate run --here runs in the worker's own worktree too, with no lane.
-	if j := st.Job("j3"); j.Status != state.JobPassed || j.Lane != 0 {
+	// A gate run --here runs in the worker's own worktree too, holding one of the project's lanes as it
+	// runs, with BATON_LANE set to it.
+	if j := st.Job("j3"); j.Status != state.JobPassed || j.Lane != 1 {
 		t.Errorf("verify --here: %+v", *j)
 	}
 	if b, _ := os.ReadFile(filepath.Join(tree, "here.txt")); strings.TrimSpace(string(b)) != tree {
 		t.Errorf("the gate run --here ran in %q, not the worker's worktree %s", b, tree)
+	}
+	if b, _ := os.ReadFile(filepath.Join(tree, "lane.txt")); strings.TrimSpace(string(b)) != "1" {
+		t.Errorf("the gate run --here saw BATON_LANE %q", b)
 	}
 	io, _, _ := testIO("", env)
 	if pool := lanePool(io, w); pool != lanePool(io, lead) || !strings.HasPrefix(pool.LaneDir(1), env["BATON_HOME"]) {

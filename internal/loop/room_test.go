@@ -277,8 +277,9 @@ func TestAResumeOrARespawnWaitsForNoRamp(t *testing.T) {
 	}
 }
 
-// A gate that has waited for a lane for over a minute, the lead's or a worker's, holds new workers back:
-// another worker's gates would only queue behind it. A shorter wait does not, nor one that is over.
+// A gate that has waited for a lane for over a minute, the lead's or a worker's (in a lane, or run --here
+// in its worktree), holds new workers back: another worker's gates would only queue behind it. A shorter
+// wait does not, nor one that is over.
 func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 	x := newCrewOn(t, 6, wide)
 	x.c.Fleet.Ramp = 0 // agents start back to back here: the ramp has a test of its own
@@ -317,6 +318,20 @@ func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 	x.tick(time.Second)
 	held("P3")
 	waits(x.sub("P1"), "P1.j1", x.now.Add(-2*time.Minute), state.JobInterrupted) // stopped as it waited
+
+	// A worker's gate run --here takes a lane too (lane.Job.Here), and waits for one as a gate in a lane
+	// does: the hold goes on.
+	x.sub("P2").Update(func(st *state.State) error {
+		since := x.now.Add(-2 * time.Minute)
+		st.Jobs = append(st.Jobs, state.Job{ID: "P2.j1", Phase: "P2", Kind: state.JobVerify, Command: "make e2e", Commit: "c2", Here: true, Status: state.JobRunning,
+			Queued: since, Started: since, Heartbeat: since, LaneWait: since})
+		return nil
+	})
+	x.tick(time.Second)
+	if h := x.state().Hold; len(x.spawned()) != 2 || h == nil || h.Kind != state.HoldLanes || h.Phase != "P3" {
+		t.Fatalf("workers on %v; hold %+v", x.spawned(), h)
+	}
+	waits(x.sub("P2"), "P2.j1", time.Time{}, state.JobRunning) // it holds a lane now
 	x.tick(time.Second)
 	if got := x.spawned(); len(got) != 3 || got[2] != "P3" || x.state().Hold != nil {
 		t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
