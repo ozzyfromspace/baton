@@ -53,6 +53,8 @@ func TestAnOutwardProposalIsLeftAtItsDeadline(t *testing.T) {
 			)
 			s := StartEnv(t, dir, []string{"BATON_ESCALATION_TIMEOUT=20s"}, args...)
 			s.Trust()
+			// Haiku may look the repository over once it is told Not now; a human approves those commands.
+			s.ApprovePermissions()
 			waitSequence(t, s, 10*time.Minute, steps...)
 			ev := s.Events()
 			if first(ev, is("notified", "notice", "not_now")) < 0 {

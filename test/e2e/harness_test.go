@@ -377,6 +377,31 @@ func (s *Session) AutoApprove() {
 	}()
 }
 
+// ApprovePermissions plays a human who answers only the permission prompts of the model's tools, which
+// nothing in baton can answer, and leaves every question (baton's, an agent's relayed one, the model's
+// own) to its deadline. Tests of what happens when nobody answers a question need it once the model may
+// run a command its allow rules do not name.
+func (s *Session) ApprovePermissions() {
+	prompt := func(e map[string]any) bool {
+		return e["kind"] == "dialog_open" && e["dialog"] == "" && e["tool"] != "AskUserQuestion"
+	}
+	go func() {
+		approved := 0
+		for {
+			select {
+			case <-s.exited:
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			if opens := count(s.Events(), prompt); opens > approved {
+				time.Sleep(1500 * time.Millisecond)
+				s.pty.Write([]byte("\r"))
+				approved = opens
+			}
+		}
+	}()
+}
+
 // RemovePlansAfter deletes plan files the session wrote into ~/.claude/plans (plan mode writes there),
 // so tests never leave plans behind in the developer's real plans folder.
 func (s *Session) RemovePlansAfter() {
