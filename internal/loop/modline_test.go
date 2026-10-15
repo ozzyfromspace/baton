@@ -76,7 +76,7 @@ func TestWhereTheModRunsNothingIsTyped(t *testing.T) {
 			r.set(func(st *state.State) {
 				st.BoundaryOwed = false
 				state.Start(st, r.now, state.Origin{})
-				state.SetCheckpoint(st)
+				state.SetCheckpoint(st, r.now)
 				st.Run.Compaction.Queue("checkpoint", r.now)
 			})
 		}, bridge.Compact, ""},

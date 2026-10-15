@@ -468,7 +468,7 @@ func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, err
 		return st, nil
 	}
 	return s.Update(func(st *state.State) error {
-		st.Run.Context = &state.ContextUse{UsedPct: pct, Tokens: tokens, WindowSize: size, Limit: limit, At: now}
+		state.SawContext(st, state.ContextUse{UsedPct: pct, Tokens: tokens, WindowSize: size, Limit: limit, At: now})
 		return nil
 	})
 }

@@ -170,7 +170,7 @@ func TestParkAndResume(t *testing.T) {
 	}
 
 	st.Jobs[0].Status = JobPassed
-	if next := advance(&st, p); next != "P0" || st.Current != "P0" || !st.BoundaryOwed {
+	if next := advance(&st, p, t0); next != "P0" || st.Current != "P0" || !st.BoundaryOwed {
 		t.Fatalf("after the job: next %q state %+v", next, st)
 	}
 	if st.Resumed() {
@@ -578,7 +578,7 @@ func TestExtend(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			st := c.st()
 			st.CheckpointDue = true
-			added, took := Extend(&st, c.p)
+			added, took := Extend(&st, c.p, t0)
 			if strings.Join(added, ",") != c.added || took != c.took || st.Current != c.cur || st.BoundaryOwed != (c.took != "") {
 				t.Fatalf("added %v took %q: current %q boundary %v", added, took, st.Current, st.BoundaryOwed)
 			}
@@ -609,7 +609,7 @@ func TestARevisionDroppingThePhaseInHand(t *testing.T) {
 	if next := Revise(&st, graph("P0:", "P1:P0"), t0); next != "" || st.Current != "" || st.Mode != ModeRunning || st.Job("j1").Status != JobRunning {
 		t.Fatalf("dropping P2, with P1 waiting on P0's verification: next %q state %+v", next, st)
 	}
-	if added, took := Extend(&st, graph("P0:", "P1:P0", "P4:")); len(added) != 1 || took != "P4" || st.Current != "P4" || !st.BoundaryOwed {
+	if added, took := Extend(&st, graph("P0:", "P1:P0", "P4:"), t0); len(added) != 1 || took != "P4" || st.Current != "P4" || !st.BoundaryOwed {
 		t.Fatalf("P4 added with none in hand: added %v took %q state %+v", added, took, st)
 	}
 }

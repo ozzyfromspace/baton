@@ -583,7 +583,7 @@ func TestAPhaseAgentsCheckpointIsAFreshAgent(t *testing.T) {
 		t.Errorf("the nudge: %s", tell)
 	}
 
-	w.set(func(st *state.State) { state.SetCheckpoint(st) })
+	w.set(func(st *state.State) { state.SetCheckpoint(st, w.now) })
 	if why := denyReason(w.fire("PreToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}})); !strings.Contains(why, "you checkpointed, and a fresh agent continues this phase") {
 		t.Errorf("a call after the checkpoint: %q", why)
 	}

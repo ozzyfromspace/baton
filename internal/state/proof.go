@@ -236,15 +236,17 @@ type After struct {
 	Result           *Job
 	// Unseen: nothing proved it had begun, so it is logged as begun when it is proven over.
 	Unseen bool
-	Proof  string // what proved it: "transcript" or "mod"
+	Proof  string // what proved it: "transcript" or "mod"; "kept" for one /baton run counted (Keep)
 }
 
 // Compacted records a compaction of the lead that p proves over, and does what it means for the run, as
 // SessionStart(compact) and PostCompact once did. The compaction baton asked for is done, and so is one
 // it owed that the human or Claude Code made instead; after a boundary or a switch the next phase starts
-// (o is the repository as it does), after a checkpoint the checkpoint is over. Any compaction ends the
-// context question (WarnOwed), and means the conversation has turns before the next one. A boundary
-// older than the compaction baton queued proves only that the conversation compacted then.
+// (o is the repository as it does), after a checkpoint the checkpoint is over (cover). Any compaction
+// ends the context question (WarnOwed), and means the conversation has turns before the next one. A
+// boundary older than the compaction baton queued, or than what the run owes (OwedAt), proves only that
+// the conversation compacted then. While the run is paused, the one it owed is kept for /baton run
+// (Covered, Keep), and what the paused conversation adds is measured from here (PauseCompacted).
 //
 // It reports false, changing nothing, for a proof of anything else: a compaction begun, a phase agent's,
 // a boundary baton counted already (its mark is past it, Proven), or a report it no longer keeps.
@@ -271,7 +273,8 @@ func Compacted(st *State, p Proof, now time.Time, o Origin) (After, bool) {
 	early := !p.at.IsZero() && !comp.Queued.IsZero() && p.at.Before(comp.Queued)
 	ours := !early && (comp.InFlight() || comp.Status == CompactFailed && (st.BoundaryOwed || st.CheckpointOwed))
 	a.Unseen = comp.Status != CompactActive
-	if !ours && !early && st.Mode == ModeRunning && (st.BoundaryOwed || st.CheckpointOwed) {
+	owed := (st.Mode == ModeRunning || st.Mode == ModePaused) && (st.BoundaryOwed || st.CheckpointOwed)
+	if !ours && !early && owed && (p.at.IsZero() || !p.at.Before(st.OwedAt)) {
 		// Claude Code (or the human) compacted while a compaction was owed: that one counts.
 		adoptOwed(st, now)
 		ours = true
@@ -295,9 +298,30 @@ func Compacted(st *State, p Proof, now time.Time, o Origin) (After, bool) {
 		comp.Started = now
 	}
 	comp.ByBaton, comp.Trigger, comp.Finished = ours, p.trigger, now
+	if st.Mode == ModePaused {
+		at := p.at
+		if at.IsZero() || at.After(now) {
+			at = now
+		}
+		st.PauseContext, st.PauseCompacted = 0, at
+		if ours && (st.BoundaryOwed || st.CheckpointOwed) {
+			st.Covered = now
+		}
+	}
 	if st.Mode != ModeRunning || !ours {
 		return a, true
 	}
+	cover(st, &a, now, o)
+	return a, true
+}
+
+// cover does what a compaction of the lead that covered what the run owed means for it, and says what in
+// a: after a boundary or a switch the phase in hand starts (o is the repository as it does), or resumes
+// from where it was set aside, with the finished job it was set aside for; after a checkpoint the
+// checkpoint is over. Compacted calls it as the compaction is proven, and Keep for one proven while the
+// run was paused.
+func cover(st *State, a *After, now time.Time, o Origin) {
+	comp := st.Run.Compaction
 	switch {
 	case comp.StartsPhase() && st.BoundaryOwed:
 		a.Reason, a.Started = comp.Reason, true
@@ -316,10 +340,40 @@ func Compacted(st *State, p Proof, now time.Time, o Origin) (After, bool) {
 		a.Reason = "checkpoint"
 		st.CheckpointOwed = false
 	}
-	return a, true
 }
 
-// adoptOwed makes a compaction baton did not type count as the one it owes: a new epoch, underway.
+// Keep counts the compaction a paused run kept (Covered) as the one it owes, as /baton run gives the run
+// back, before Resume: the phase owed starts with no compaction of its own (o is the repository as it
+// does), or the checkpoint is over (cover), and a says what, with Proof "kept". It does nothing when the
+// conversation grew by more than ResumeGrowth since (GrownWhilePaused), or a compaction became owed
+// after it (OwedAt): one then comes as it would have.
+func Keep(st *State, now time.Time, o Origin) (After, bool) {
+	comp := st.Run.Compaction
+	if st.Mode != ModePaused || st.Covered.IsZero() || st.Covered.Before(st.OwedAt) || st.GrownWhilePaused() > ResumeGrowth ||
+		comp.Status != CompactDone || !comp.ByBaton || !(st.BoundaryOwed || st.CheckpointOwed) {
+		return After{}, false
+	}
+	a := After{Epoch: comp.Epoch, Trigger: comp.Trigger, ByBaton: true, Proof: "kept"}
+	cover(st, &a, now, o)
+	st.Covered = time.Time{}
+	return a, a.Reason != ""
+}
+
+// SawContext records a reading of the context's size (Claude Code's status line). Once the lead compacted
+// while the run is paused, PauseContext is the smallest reading since, from which Resume measures what the
+// paused conversation added: the first readings after a compaction may still give the size before it.
+func SawContext(st *State, c ContextUse) {
+	st.Run.Context = &c
+	if st.Mode != ModePaused || st.PauseCompacted.IsZero() || c.At.Before(st.PauseCompacted) || c.Used() <= 0 {
+		return
+	}
+	if st.PauseContext == 0 || c.Used() < st.PauseContext {
+		st.PauseContext = c.Used()
+	}
+}
+
+// adoptOwed makes a compaction baton did not type count as the one it owes: a new epoch, underway. It
+// applies while the run is paused too, for /baton run to keep (Keep).
 func adoptOwed(st *State, now time.Time) {
 	comp := &st.Run.Compaction
 	if !comp.InFlight() {

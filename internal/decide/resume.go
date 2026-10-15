@@ -28,3 +28,18 @@ func (w Words) FreshNow(title string) string {
 	}
 	return fmt.Sprintf("Now: continue %s. Some of it may be done already: check what is (%s) before you redo anything, then go on from there.", title, check)
 }
+
+// ResumeKept is what /baton run says of the compaction the run kept while it was paused, as it counts it
+// for the compaction the run owed (title: "P3 (Title)"): after a boundary (starts) the phase begins, or
+// resumes when it was set aside unfinished (resumed), and its brief comes with the command's result; after
+// a checkpoint it goes on.
+func ResumeKept(title string, starts, resumed bool) string {
+	if !starts {
+		return fmt.Sprintf("The context was compacted while baton was paused, and has grown little since, so that compaction is the checkpoint's: continue %s, from the brief that comes with this command's result.", title)
+	}
+	verb := "begins"
+	if resumed {
+		verb = "resumes"
+	}
+	return fmt.Sprintf("The context was compacted while baton was paused, and has grown little since, so %s %s now, with no compaction of its own: its brief comes with this command's result, and has your instructions.", title, verb)
+}

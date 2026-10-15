@@ -130,7 +130,7 @@ func TestOnlyTheLeadsOwnCompactionMovesTheLead(t *testing.T) {
 			}
 		}},
 		{"a checkpoint owed", func(f *fixture, _ plan.Plan) {
-			f.set(func(st *state.State) { state.SetCheckpoint(st) })
+			f.set(func(st *state.State) { state.SetCheckpoint(st, f.now) })
 			f.fire("Stop", map[string]any{})
 		}, "manual", "checkpoint", []string{"compacted at your checkpoint", "[baton] Context compacted at your checkpoint. Continue P0 (First)."},
 			func(t *testing.T, st state.State) {

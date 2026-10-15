@@ -202,7 +202,7 @@ func TestSwitchAtCheckpoint(t *testing.T) {
 	} {
 		st := c.st
 		st.Jobs = append(st.Jobs, Job{ID: "j3", Phase: "P1", Status: JobRunning, Here: c.notes == "here"})
-		SetCheckpoint(&st)
+		SetCheckpoint(&st, t0)
 		to := SwitchAtCheckpoint(&st, p, c.notes, t1)
 		if to != c.want {
 			t.Errorf("%s: switched to %q", c.name, to)

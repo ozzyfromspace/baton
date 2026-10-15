@@ -83,7 +83,7 @@ func TestBlockCheckpointPauseResume(t *testing.T) {
 	idle := New()
 	for name, err := range map[string]error{
 		"blocked":    SetBlocked(&idle, "x", t0),
-		"checkpoint": SetCheckpoint(&idle),
+		"checkpoint": SetCheckpoint(&idle, t0),
 		"pause":      Pause(&idle),
 	} {
 		if err == nil {
@@ -100,13 +100,13 @@ func TestBlockCheckpointPauseResume(t *testing.T) {
 	if err := Resume(&st); err != nil || st.Blocked != nil || st.Mode != ModeRunning {
 		t.Fatalf("resume clears a block: %v %+v", err, st)
 	}
-	if err := SetCheckpoint(&st); err != nil || !st.CheckpointOwed {
+	if err := SetCheckpoint(&st, t0); err != nil || !st.CheckpointOwed {
 		t.Fatal("checkpoint")
 	}
 	if err := Pause(&st); err != nil || st.Mode != ModePaused {
 		t.Fatal("pause")
 	}
-	if err := SetCheckpoint(&st); err == nil {
+	if err := SetCheckpoint(&st, t0); err == nil {
 		t.Error("checkpoint while paused")
 	}
 	if err := Resume(&st); err != nil || st.Mode != ModeRunning {
@@ -385,11 +385,14 @@ func TestDetachSetsThePlanAside(t *testing.T) {
 // checkpoint before the phase goes on; growth that is small or not known does not.
 func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 	at := func(tokens int) *ContextUse { return &ContextUse{Tokens: tokens, At: t0} }
+	compacted := t0.Add(time.Minute)
 	for _, tc := range []struct {
 		name          string
 		paused, after *ContextUse
-		owed          func(*State)
-		due           bool
+		// since are readings after a compaction while paused, the first a moment after it; nil: none.
+		since []int
+		owed  func(*State)
+		due   bool
 	}{
 		{name: "grew past the line", paused: at(60_000), after: at(60_000 + ResumeGrowth + 1), due: true},
 		{name: "grew a little", paused: at(60_000), after: at(60_000 + ResumeGrowth)},
@@ -397,6 +400,10 @@ func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 		{name: "size not known at pause", after: at(200_000)},
 		{name: "a boundary compaction is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.BoundaryOwed = true }},
 		{name: "a checkpoint is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.CheckpointOwed = true }},
+		{name: "compacted while paused, then grew past the line", paused: at(150_000), since: []int{30_000, 30_000 + ResumeGrowth + 1}, due: true},
+		{name: "compacted while paused, then grew a little", paused: at(150_000), since: []int{30_000, 30_000 + ResumeGrowth}},
+		{name: "compacted while paused, read stale first", paused: at(150_000), since: []int{150_000, 30_000, 30_000 + ResumeGrowth + 1}, due: true},
+		{name: "compacted while paused, nothing read since", paused: at(150_000), since: []int{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := Attach(threePhases(), t0, Origin{})
@@ -405,6 +412,13 @@ func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			st.Run.Context = tc.after
+			if tc.since != nil {
+				// Growth is counted from the smallest reading after the compaction, not from the pause.
+				Compacted(&st, proven(t, &st, compacted), compacted, Origin{})
+				for i, n := range tc.since {
+					SawContext(&st, ContextUse{Tokens: n, At: compacted.Add(time.Duration(i+1) * time.Second)})
+				}
+			}
 			if tc.owed != nil {
 				tc.owed(&st)
 			}
@@ -419,13 +433,37 @@ func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 
 	// The checkpoint, or the end of the phase, settles it.
 	for name, settle := range map[string]func(st *State) error{
-		"checkpoint": SetCheckpoint,
+		"checkpoint": func(st *State) error { return SetCheckpoint(st, t0) },
 		"done":       func(st *State) error { _, err := Done(st, threePhases(), "P0", t0, DoneOpts{}); return err },
 	} {
 		st := Attach(threePhases(), t0, Origin{})
 		st.CheckpointDue = true
 		if err := settle(&st); err != nil || st.CheckpointDue {
 			t.Errorf("%s: err %v, still due %v", name, err, st.CheckpointDue)
+		}
+	}
+}
+
+// OwedAt is when the run last came to owe a compaction: each kind of owe sets it as it becomes owed, and
+// one owed already keeps the time it became owed.
+func TestOwedAt(t *testing.T) {
+	later := t0.Add(time.Hour)
+	for _, c := range []struct {
+		name string
+		owe  func(st *State)
+		want time.Time
+	}{
+		{"a phase done", func(st *State) { Done(st, threePhases(), "P0", later, DoneOpts{}) }, later},
+		{"a checkpoint", func(st *State) { SetCheckpoint(st, later) }, later},
+		{"a checkpoint owed already", func(st *State) { SetCheckpoint(st, t0); SetCheckpoint(st, later) }, t0},
+		{"a boundary over a checkpoint", func(st *State) { SetCheckpoint(st, t0); Done(st, threePhases(), "P0", later, DoneOpts{}) }, later},
+		{"a phase set aside", func(st *State) { ParkPhase(st, threePhases(), "P0", Park{Reason: ParkCheckpoint, Since: later}) }, later},
+		{"attached at a boundary", func(st *State) { *st = AttachAtBoundary(*st, threePhases(), later) }, later},
+	} {
+		st := underway(t)
+		c.owe(&st)
+		if !st.OwedAt.Equal(c.want) {
+			t.Errorf("%s: owed at %v, want %v", c.name, st.OwedAt, c.want)
 		}
 	}
 }

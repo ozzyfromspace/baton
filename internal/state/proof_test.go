@@ -145,7 +145,7 @@ func TestWhoseCompactionItIs(t *testing.T) {
 		}, t0.Add(-time.Minute), false, "", CompactTyped, "P1"},
 		{"owed, not queued yet", func(st *State) {
 			st.Run.Compaction = Compaction{Epoch: 4, Status: CompactDone, Queued: t0.Add(-time.Hour)}
-			SetCheckpoint(st)
+			SetCheckpoint(st, t0)
 		}, t0.Add(time.Minute), true, "checkpoint", CompactDone, "P0"},
 		{"given up on, still owed", func(st *State) {
 			Done(st, threePhases(), "P0", t0, DoneOpts{})
@@ -160,6 +160,14 @@ func TestWhoseCompactionItIs(t *testing.T) {
 			st.Run.Compaction.Queue("checkpoint", t0)
 			st.Mode = ModePaused
 		}, t0.Add(time.Minute), true, "", CompactDone, "P0"},
+		{"paused, adopted", func(st *State) {
+			SetCheckpoint(st, t0)
+			Pause(st)
+		}, t0.Add(time.Minute), true, "", CompactDone, "P0"},
+		{"from before the owe", func(st *State) {
+			st.Run.Compaction = Compaction{Epoch: 4, Status: CompactDone, Queued: t0.Add(-time.Hour)}
+			SetCheckpoint(st, t0.Add(2*time.Minute))
+		}, t0.Add(time.Minute), false, "", CompactDone, "P0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			os.WriteFile(path, []byte(userLine+boundaryLine("b", "auto", c.at)), 0o644)
@@ -211,7 +219,7 @@ func TestTheModsReport(t *testing.T) {
 	if !Report(&st, Reported(false, "manual", t0), t0) || st.Run.Compaction.ByBaton || st.Run.Compaction.Status == CompactActive {
 		t.Fatalf("the human's /compact taken for baton's: %+v", st.Run.Compaction)
 	}
-	SetCheckpoint(&st)
+	SetCheckpoint(&st, t0)
 	if !Report(&st, Reported(false, "manual", t0), t0) || !st.Run.Compaction.ByBaton || st.Run.Compaction.Status != CompactActive || st.Run.Compaction.Reason != "checkpoint" {
 		t.Fatalf("an owed compaction not taken up: %+v", st.Run.Compaction)
 	}
@@ -256,7 +264,7 @@ func checkpointing(t *testing.T, path string) State {
 	st.Mode, st.Current = ModeRunning, "P2"
 	st.Phases["P2"] = &PhaseState{Status: PhaseWorking}
 	st.Run.Briefed, st.Run.Transcript, st.Run.Proven = "a1", path, &Mark{Path: path, Offset: int64(len(agentLine))}
-	if err := SetCheckpoint(&st); err != nil {
+	if err := SetCheckpoint(&st, t0); err != nil {
 		t.Fatal(err)
 	}
 	st.Run.Compaction = Compaction{Status: CompactQueued, Reason: "checkpoint", Epoch: 1}
@@ -366,7 +374,7 @@ func TestANewAgentEndsTheCheckpoint(t *testing.T) {
 // rewake, the transcript's boundary counts it, and the mod's word coming again, however late, is dropped.
 func TestTheModsOwnCompactionCountsOnce(t *testing.T) {
 	st := underway(t)
-	SetCheckpoint(&st)
+	SetCheckpoint(&st, t0)
 	st.Run.Compaction.Queue("checkpoint", t0)
 	epoch := st.Run.Compaction.Epoch
 	if !Report(&st, Ran(7, epoch, false, t0), t0) || st.Run.Compaction.Status != CompactActive || !st.Run.Compaction.ByBaton ||
@@ -429,5 +437,132 @@ func TestADeclinedTry(t *testing.T) {
 		if got := st.Run.Compaction.Refused() != ""; got != c.refused {
 			t.Errorf("%s: refused %q", c.name, st.Run.Compaction.Refused())
 		}
+	}
+}
+
+// proven writes a compact boundary at at to a fresh transcript of the lead's, marked before it, and
+// returns its proof.
+func proven(t *testing.T, st *State, at time.Time) Proof {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(path, []byte(userLine+boundaryLine("b", "manual", at)), 0o644)
+	st.Run.Proven = &Mark{Path: path, Offset: int64(len(userLine))}
+	p, _, found := Boundary(path, st.Run.Proven, 0)
+	if !found {
+		t.Fatal("no proof")
+	}
+	return p
+}
+
+// A compaction while the run is paused counts for the one it owed, baton's or not: /baton run keeps it
+// (Keep), so the phase owed starts with no compaction of its own, or the checkpoint is over, unless the
+// conversation grew by more than ResumeGrowth since it (measured from the smallest reading after it), or
+// a compaction became owed after it.
+func TestAPausedRunKeepsItsCompaction(t *testing.T) {
+	p := threePhases()
+	boundary := func(st *State) {
+		Done(st, p, "P0", t0, DoneOpts{})
+		st.Run.Compaction.Queue("boundary", t0)
+	}
+	reading := func(st *State, tokens int, after time.Duration) {
+		SawContext(st, ContextUse{Tokens: tokens, At: t0.Add(time.Minute + after)})
+	}
+	for _, c := range []struct {
+		name    string
+		owe     func(st *State)
+		after   func(st *State) // after the compaction, still paused
+		kept    bool
+		reason  string
+		current string
+		resumed bool
+	}{
+		{name: "a boundary, baton's queued", owe: boundary, kept: true, reason: "boundary", current: "P1"},
+		{name: "a boundary, not queued: adopted", owe: func(st *State) { Done(st, p, "P0", t0, DoneOpts{}) }, kept: true, reason: "boundary", current: "P1"},
+		{name: "a checkpoint", owe: func(st *State) { SetCheckpoint(st, t0) }, kept: true, reason: "checkpoint", current: "P0"},
+		{name: "a parked phase resumes, with its result", owe: func(st *State) {
+			q, _, _ := QueueJob(st, Job{Phase: "P0", Kind: JobVerify, Command: "make test"}, t0)
+			j := st.Job(q.ID)
+			j.Status, j.Exit, j.Ended = JobFailed, 1, t0
+			ParkPhase(st, p, "P0", Park{Reason: ParkRed, Since: t0, Job: q.ID})
+		}, kept: true, reason: "boundary", current: "P0", resumed: true},
+		{name: "grew a little since", owe: boundary, after: func(st *State) {
+			reading(st, 30_000, time.Second)
+			reading(st, 30_000+ResumeGrowth, time.Hour)
+		}, kept: true, reason: "boundary", current: "P1"},
+		{name: "grew too much since", owe: boundary, after: func(st *State) {
+			reading(st, 30_000, time.Second)
+			reading(st, 30_000+ResumeGrowth+1, time.Hour)
+		}, current: "P1"},
+		{name: "a stale reading first", owe: boundary, after: func(st *State) {
+			reading(st, 150_000, time.Second) // the size before the compaction, read again
+			reading(st, 30_000, 2*time.Second)
+			reading(st, 45_000, time.Hour)
+		}, kept: true, reason: "boundary", current: "P1"},
+		{name: "a reading from before it", owe: boundary, after: func(st *State) {
+			reading(st, 10_000, -time.Hour)
+			reading(st, 30_000, time.Hour)
+		}, kept: true, reason: "boundary", current: "P1"},
+		{name: "owed again after it", owe: func(st *State) { SetCheckpoint(st, t0) }, after: func(st *State) {
+			Done(st, p, "P0", t0.Add(time.Hour), DoneOpts{Force: true})
+		}, current: "P1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := underway(t)
+			st.Run.Context = &ContextUse{Tokens: 150_000, At: t0}
+			c.owe(&st)
+			if err := Pause(&st); err != nil {
+				t.Fatal(err)
+			}
+			pr := proven(t, &st, t0.Add(time.Minute))
+			if a, ok := Compacted(&st, pr, t0.Add(time.Minute), Origin{}); !ok || !a.ByBaton || a.Started || a.Reason != "" {
+				t.Fatalf("while paused: %+v %v", a, ok)
+			}
+			if st.Covered.IsZero() || st.PauseCompacted.IsZero() || st.PauseContext != 0 || st.Run.Compaction.Status != CompactDone {
+				t.Fatalf("not covered: covered %v, compacted %v, context %d, %+v", st.Covered, st.PauseCompacted, st.PauseContext, st.Run.Compaction)
+			}
+			if c.after != nil {
+				c.after(&st)
+			}
+			owed := st.BoundaryOwed || st.CheckpointOwed
+			a, kept := Keep(&st, t0.Add(2*time.Hour), Origin{})
+			if kept != c.kept || a.Reason != c.reason || a.Resumed != c.resumed || st.Current != c.current {
+				t.Fatalf("kept %v (want %v): %+v, current %s", kept, c.kept, a, st.Current)
+			}
+			if err := Resume(&st); err != nil || st.Mode != ModeRunning || !st.Covered.IsZero() || !st.PauseCompacted.IsZero() {
+				t.Fatalf("resume: %v %+v", err, st)
+			}
+			switch {
+			case !c.kept:
+				if !owed || !(st.BoundaryOwed || st.CheckpointOwed) || a.Proof != "" {
+					t.Errorf("a compaction not kept, and nothing owed after it: %+v", a)
+				}
+			case c.reason == "boundary":
+				if st.BoundaryOwed || !a.Started || a.Proof != "kept" || st.Phases[c.current].Status != PhaseActive {
+					t.Errorf("%s not started: %+v %+v", c.current, a, st.Phases[c.current])
+				}
+				if c.resumed && (a.Result == nil || st.Job(a.Result.ID).Delivered.IsZero()) {
+					t.Errorf("its result: %+v", a.Result)
+				}
+			case c.reason == "checkpoint":
+				if st.CheckpointOwed {
+					t.Error("the checkpoint is still owed")
+				}
+			}
+		})
+	}
+
+	// Nothing to keep: a compaction while running, or a paused run that owed nothing as it compacted.
+	st := underway(t)
+	SetCheckpoint(&st, t0)
+	Compacted(&st, proven(t, &st, t0.Add(time.Minute)), t0.Add(time.Minute), Origin{})
+	if _, kept := Keep(&st, t0.Add(time.Hour), Origin{}); kept || !st.Covered.IsZero() {
+		t.Errorf("kept a compaction made while running: covered %v", st.Covered)
+	}
+	st = underway(t)
+	Pause(&st)
+	Compacted(&st, proven(t, &st, t0.Add(time.Minute)), t0.Add(time.Minute), Origin{})
+	st.OweCheckpoint(t0.Add(time.Hour))
+	if _, kept := Keep(&st, t0.Add(time.Hour), Origin{}); kept || !st.Covered.IsZero() {
+		t.Errorf("kept a compaction that covered nothing owed: covered %v", st.Covered)
 	}
 }

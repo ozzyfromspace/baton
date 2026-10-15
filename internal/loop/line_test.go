@@ -173,7 +173,7 @@ func TestAFreshAgentAfterACheckpointIsWokenForItsResult(t *testing.T) {
 			x := newCrew(t, 1)
 			x.atWork("P1")
 			first := x.agent("P1")
-			x.sub("P1").Update(func(st *state.State) error { return state.SetCheckpoint(st) })
+			x.sub("P1").Update(func(st *state.State) error { return state.SetCheckpoint(st, x.now) })
 			x.stops("P1")
 			for range 4 {
 				x.tick(time.Second)

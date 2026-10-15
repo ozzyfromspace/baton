@@ -253,7 +253,7 @@ func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (sa
 		}
 		st.PlanDrift = ""
 		var added []string
-		added, took = state.Extend(st, adopted)
+		added, took = state.Extend(st, adopted, now)
 		ev = &event{"plan_changed", map[string]any{"plan": pl.File, "adopted": true}}
 		if len(added) > 0 {
 			ev.fields["added"] = added

@@ -98,7 +98,8 @@ func Switch(st *State, p plan.Plan, now time.Time) (Switched, bool) {
 	j, ps := *st.CurrentJob(), st.Phases[st.Current]
 	sw := Switched{From: st.Current, To: to, Job: j.ID, Prev: ps.Park}
 	ps.Status, ps.Park = PhaseParked, &Park{Reason: ParkJob, Since: now, Notes: j.Notes, Job: j.ID}
-	st.Current, st.BoundaryOwed = to, true
+	st.Current = to
+	st.OweBoundary(now)
 	st.Run.Progress()
 	st.Run.Compaction.Queue("switch", now)
 	st.Run.Compaction.Switch = &sw
@@ -175,7 +176,8 @@ func SwitchAtCheckpoint(st *State, p plan.Plan, notes string, now time.Time) str
 		pk.Job = j.ID
 	}
 	ps.Status, ps.Park = PhaseParked, &pk
-	st.Current, st.BoundaryOwed = to, true
+	st.Current = to
+	st.OweBoundary(now)
 	st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue = false, false, false
 	st.Run.Progress()
 	st.Run.Compaction.Queue("switch", now)

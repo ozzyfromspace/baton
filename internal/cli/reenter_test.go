@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -220,5 +221,72 @@ func TestPhasesAddedToThePlanFileRun(t *testing.T) {
 	})
 	if out := s.must("", "run"); !strings.Contains(out, "No phase can start yet") || s.state().Current != "" {
 		t.Errorf("run with nothing to start said:\n%s", out)
+	}
+}
+
+// The human's /compact while the run is paused at a boundary is the one it owed: /baton run counts it, and
+// the next phase starts with no compaction of its own, its brief handed over with the command's result,
+// unless the conversation grew by more than state.ResumeGrowth since the compaction.
+func TestRunKeepsACompactionMadeWhilePaused(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		since []int // the context's size as read after the compaction
+		kept  bool
+	}{
+		{name: "nothing read since", kept: true},
+		{name: "grew a little since", since: []int{20_000, 20_000 + state.ResumeGrowth}, kept: true},
+		{name: "grew too much since", since: []int{20_000, 20_000 + state.ResumeGrowth + 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, planFile := newSession(t)
+			s.attach(planFile)
+			s.must("", "done", "P0")
+			s.set(func(x *state.State) { x.Run.Context = &state.ContextUse{Tokens: 150_000, At: s.now} })
+			s.must("", "pause")
+			// The mod reports the human's /compact, begun and over; the rewake counts it.
+			s.now = s.now.Add(time.Minute)
+			s.set(func(x *state.State) {
+				state.Report(x, state.Reported(false, "manual", s.now), s.now)
+				state.Report(x, state.Reported(true, "manual", s.now), s.now)
+				p, _ := state.Kept(*x)
+				state.Compacted(x, p, s.now, state.Origin{})
+				for i, n := range tc.since {
+					state.SawContext(x, state.ContextUse{Tokens: n, At: s.now.Add(time.Duration(i+1) * time.Second)})
+				}
+			})
+			if st := s.state(); st.Covered.IsZero() || !st.BoundaryOwed || st.Phases["P1"].Status == state.PhaseActive {
+				t.Fatalf("while paused: %+v", st)
+			}
+			if out := s.must("", "status"); !strings.Contains(out, "compaction: the context was compacted while baton was paused; /baton run counts that for the compaction owed, unless the conversation grows by more than 20k tokens first") {
+				t.Errorf("status:\n%s", out)
+			}
+			s.now = s.now.Add(time.Hour)
+			out := s.must("", "run")
+			st := s.state()
+			if !tc.kept {
+				if !strings.Contains(out, "baton drives the plan again") || !st.BoundaryOwed || st.Run.Briefing != nil || !s.logged("compaction_not_kept", map[string]any{"grew": float64(state.ResumeGrowth + 1)}) {
+					t.Fatalf("run said:\n%s\nboundary owed %v, events: %s", out, st.BoundaryOwed, s.events())
+				}
+				return
+			}
+			if !strings.Contains(out, "P1 (The one-liners) begins now, with no compaction of its own: its brief comes with this command's result") {
+				t.Errorf("run said:\n%s", out)
+			}
+			if st.Mode != state.ModeRunning || st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive || st.Run.Compaction.InFlight() {
+				t.Fatalf("P1 not started: %+v", st)
+			}
+			if b := st.Run.Briefing; b == nil || b.Kind != "boundary" || b.Phase != "P1" || b.Wake {
+				t.Errorf("the brief owed: %+v", b)
+			}
+			for kind, want := range map[string]map[string]any{
+				"compaction_kept": {"phase": "P1", "reason": "boundary"},
+				"phase_started":   {"phase": "P1"},
+				"resumed":         {"kept": true},
+			} {
+				if !s.logged(kind, want) {
+					t.Errorf("no %s %v in %s", kind, want, s.events())
+				}
+			}
+		})
 	}
 }

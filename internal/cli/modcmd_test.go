@@ -350,7 +350,7 @@ func TestTheModsCompactionForBaton(t *testing.T) {
 	}
 	m.run.Update(func(st *state.State) error {
 		st.Run.Compaction.Status, st.Run.Compaction.Declined = state.CompactQueued, nil
-		state.SetCheckpoint(st)
+		state.SetCheckpoint(st, m.run.Now())
 		return nil
 	})
 	report(`"kind":"compacting","trigger":"manual"`)

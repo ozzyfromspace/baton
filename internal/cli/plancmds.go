@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -363,6 +364,9 @@ func cmdStatus(args []string, io IO) int {
 	}
 	if st.CheckpointDue {
 		fmt.Fprintln(io.Out, "checkpoint: the conversation grew while baton was paused; Claude records where "+st.Current+" stands, then baton compacts")
+	}
+	if st.Mode == state.ModePaused && !st.Covered.IsZero() {
+		fmt.Fprintf(io.Out, "compaction: the context was compacted while baton was paused; /baton run counts that for the compaction owed, unless the conversation grows by more than %s tokens first\n", valve.Tokens(state.ResumeGrowth))
 	}
 	printWaitingOnYou(io, &st)
 	printRelay(io, s, st)
@@ -716,7 +720,7 @@ func cmdDone(args []string, io IO) int {
 		}
 		if followed {
 			st.PlanDrift = ""
-			if added, _ := state.Extend(st, pl); len(added) > 0 {
+			if added, _ := state.Extend(st, pl, io.Now()); len(added) > 0 {
 				s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
 			}
 		}
@@ -1018,7 +1022,7 @@ func cmdCheckpoint(args []string, io IO) int {
 		if err := guard(io, st, "not recorded", true); err != nil {
 			return err
 		}
-		if err := state.SetCheckpoint(st); err != nil {
+		if err := state.SetCheckpoint(st, io.Now()); err != nil {
 			return err
 		}
 		back = state.Returning(*st, pl)
@@ -1255,7 +1259,7 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 	var added []string
 	var next string
 	if _, err := s.Update(func(st *state.State) error {
-		added, _ = state.Extend(st, pl)
+		added, _ = state.Extend(st, pl, io.Now())
 		st.PlanDrift = ""
 		next = state.Revise(st, pl, io.Now())
 		return nil
@@ -1275,10 +1279,13 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 }
 
 // resume gives a paused or stopped run back to baton. A plan file that changed so that baton can no
-// longer follow it keeps the run paused. If the conversation grew by more than state.ResumeGrowth while
-// the run was paused, the phase goes on from a compacted context: the model records where it stands
-// first, and the hooks hold it to that (CheckpointDue). A run that holds no phase takes up one that can
-// start (state.Extend): one the plan file adds, or one free to start since the run was paused.
+// longer follow it keeps the run paused. A compaction the run kept while it was paused counts as the one
+// it owed (state.Keep): the phase owed starts with no compaction of its own, its brief handed over with
+// this command's result (hooks.Owe), or the checkpoint is over. Otherwise, if the conversation grew by
+// more than state.ResumeGrowth while the run was paused, the phase goes on from a compacted context: the
+// model records where it stands first, and the hooks hold it to that (CheckpointDue). A run that holds no
+// phase takes up one that can start (state.Extend): one the plan file adds, or one free to start since the
+// run was paused.
 func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(cur, pl))
 	if err != nil {
@@ -1293,9 +1300,18 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 		}
 		pl = adopted
 	}
+	// What the repository looks like as a phase starts on a compaction kept while paused (read before
+	// taking the lock: git can be slow).
+	var origin state.Origin
+	if !cur.Covered.IsZero() && cur.BoundaryOwed {
+		origin = state.OriginOf(s.Root)
+	}
 	var grew int
 	var added []string
 	var took string
+	var kept state.After
+	var keeps, covered bool
+	var owed hooks.Owing
 	st, err := s.Update(func(st *state.State) error {
 		if err := guard(io, st, "not resumed", false); err != nil {
 			return err
@@ -1303,15 +1319,25 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 		if changed {
 			st.PlanDrift = ""
 		}
-		grew = st.GrownWhilePaused()
+		grew, covered = st.GrownWhilePaused(), !st.Covered.IsZero()
+		kept, keeps = state.Keep(st, io.Now(), origin)
 		if err := state.Resume(st); err != nil {
 			return err
 		}
-		added, took = state.Extend(st, pl)
+		if keeps {
+			owed = hooks.Owe(st, pl, kept, false, io.Now())
+		}
+		added, took = state.Extend(st, pl, io.Now())
 		return nil
 	})
 	if err != nil {
 		return refused(io, s, "run", err)
+	}
+	if keeps {
+		s.Event("compaction_kept", map[string]any{"phase": owed.Brief.Phase, "reason": kept.Reason, "epoch": kept.Epoch, "grew": grew})
+		owed.Log(s)
+	} else if covered {
+		s.Event("compaction_not_kept", map[string]any{"grew": grew})
 	}
 	if len(added) > 0 {
 		s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
@@ -1335,6 +1361,11 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 	case st.Current == "" && st.Mode == state.ModeRunning:
 		s.Event("resumed", nil)
 		fmt.Fprintf(io.Out, "baton: resumed %q. No phase can start yet: every phase left waits for a job or for a worker's work to land. End your turn now; baton wakes you when there is something to do.\n", pl.Title)
+		return 0
+	}
+	if keeps {
+		s.Event("resumed", map[string]any{"kept": true})
+		fmt.Fprintf(io.Out, "baton: resumed %q at %s. %s\n", pl.Title, at, decide.ResumeKept(at, kept.Started, kept.Resumed))
 		return 0
 	}
 	if !st.CheckpointDue {

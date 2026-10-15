@@ -503,7 +503,7 @@ func takeUp(st *State, p plan.Plan, now time.Time) string {
 	if st.Mode != ModeRunning || st.Current != "" {
 		return ""
 	}
-	next := advance(st, p)
+	next := advance(st, p, now)
 	if next != "" {
 		st.Run.Compaction.Queue("boundary", now)
 	}

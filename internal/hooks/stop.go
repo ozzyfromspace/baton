@@ -190,7 +190,8 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		return d
 	}
 	if st.CheckpointAsked && !st.BoundaryOwed {
-		st.CheckpointAsked, st.CheckpointOwed = false, true // the human asked for it; the model need not remember
+		st.CheckpointAsked = false
+		st.OweCheckpoint(now) // the human asked for it; the model need not remember
 	}
 	switch p := st.OwnProposal(); {
 	case st.Run.Compaction.InFlight():

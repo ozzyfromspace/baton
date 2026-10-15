@@ -282,11 +282,12 @@ func Complete(st State, p plan.Plan) bool {
 // advance takes up the next phase once the one in hand is done or set aside; it starts after a
 // compaction, as at any phase boundary. With nothing that can start, the run is complete, or holds no
 // phase until a job finishes. It returns the phase taken up, or "".
-func advance(st *State, p plan.Plan) string {
+func advance(st *State, p plan.Plan, now time.Time) string {
 	next := Next(*st, p)
 	switch {
 	case next != "":
-		st.Current, st.BoundaryOwed = next, true
+		st.Current = next
+		st.OweBoundary(now)
 	case Complete(*st, p):
 		st.Mode, st.Current, st.BoundaryOwed = ModeComplete, "", false
 	default:
@@ -379,7 +380,7 @@ func Settle(st *State, p plan.Plan, now time.Time) Settled {
 		st.Run.Progress()
 	}
 	if st.Mode == ModeRunning && st.Current == "" {
-		out.Taken = advance(st, p)
+		out.Taken = advance(st, p, now)
 		out.Complete = st.Mode == ModeComplete
 	}
 	if !out.Complete {
@@ -417,7 +418,7 @@ func ParkPhase(st *State, p plan.Plan, id string, pk Park) (string, error) {
 		return st.Current, nil
 	}
 	st.CheckpointOwed, st.CheckpointDue = false, false
-	return advance(st, p), nil
+	return advance(st, p, pk.Since), nil
 }
 
 // Resumed reports whether the phase in hand was set aside before and has been taken up again.

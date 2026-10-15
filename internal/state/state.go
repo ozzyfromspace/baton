@@ -122,8 +122,17 @@ type State struct {
 	// phase goes on from a compacted context. Before anything else, the model records where the phase
 	// stands (`baton checkpoint`), and baton compacts.
 	CheckpointDue bool `json:"checkpoint_due,omitempty"`
-	// PauseContext is the context's size in tokens when the run was paused (0: not known).
-	PauseContext int `json:"pause_context,omitempty"`
+	// OwedAt is when BoundaryOwed or CheckpointOwed last became true (OweBoundary, OweCheckpoint): a
+	// compaction before it covers nothing the run owes now.
+	OwedAt time.Time `json:"owed_at,omitzero"`
+	// PauseContext is the context's size in tokens when the run was paused, or, once the lead compacted
+	// while it was paused (PauseCompacted), the smallest reading since (SawContext); 0: not known.
+	PauseContext   int       `json:"pause_context,omitempty"`
+	PauseCompacted time.Time `json:"pause_compacted,omitzero"`
+	// Covered is when a compaction proven while the run was paused covered the one it owed (Compacted):
+	// /baton run counts it rather than compacting again (Keep), unless the conversation grew by more than
+	// ResumeGrowth since.
+	Covered time.Time `json:"covered,omitzero"`
 	// Decisions are the notes and proposals of this run, oldest first.
 	Decisions []Decision `json:"decisions,omitempty"`
 	// ReviewDue is the phase whose decisions without the human reached max_auto_decisions: baton stops
@@ -196,7 +205,7 @@ func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
 func AttachAtBoundary(prev State, p plan.Plan, now time.Time) State {
 	st := Reattach(prev, p, now, Origin{})
 	st.Phases[st.Current] = &PhaseState{Status: PhasePending}
-	st.BoundaryOwed = true
+	st.OweBoundary(now)
 	return st
 }
 
@@ -225,14 +234,14 @@ func Revise(st *State, p plan.Plan, now time.Time) string {
 		st.Phases[cur] = ps
 		return cur
 	}
-	return advance(st, p)
+	return advance(st, p, now)
 }
 
 // Extend adds the phases of p the run does not know yet, pending, and returns their ids: phases the
 // human added to the plan file while it ran (plan.Added). A running run that holds no phase (every
 // phase left waited for a job) then takes up the next one that can start, and returns it as took ("" for
 // none): it starts after a compaction, as at any phase boundary, rather than once a job ends.
-func Extend(st *State, p plan.Plan) (added []string, took string) {
+func Extend(st *State, p plan.Plan, now time.Time) (added []string, took string) {
 	for _, ph := range p.Phases {
 		if st.Phases[ph.ID] == nil {
 			st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
@@ -243,7 +252,8 @@ func Extend(st *State, p plan.Plan) (added []string, took string) {
 		return added, ""
 	}
 	if took = Next(*st, p); took != "" {
-		st.Current, st.BoundaryOwed = took, true
+		st.Current = took
+		st.OweBoundary(now)
 		st.CheckpointOwed, st.CheckpointDue = false, false // the boundary compacts the conversation anyway
 	}
 	return added, took
@@ -360,7 +370,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 	if cs := st.Phases[st.Current]; id != st.Current && cs != nil && cs.Status == PhaseActive {
 		return st.Current, nil // a phase finished out of order (--force); the one under way carries on
 	}
-	return advance(st, p), nil
+	return advance(st, p, now), nil
 }
 
 // Start marks the current phase active; called when its brief is delivered after the boundary compaction.
@@ -410,13 +420,30 @@ func SetBlocked(st *State, reason string, now time.Time) error {
 }
 
 // SetCheckpoint asks for a mid-phase compaction at the next stop.
-func SetCheckpoint(st *State) error {
+func SetCheckpoint(st *State, now time.Time) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("checkpoints only apply while a plan is running (mode: %s)", st.Mode)
 	}
-	st.CheckpointOwed, st.CheckpointAsked, st.CheckpointDue, st.Blocked = true, false, false, nil
+	st.OweCheckpoint(now)
+	st.CheckpointAsked, st.CheckpointDue, st.Blocked = false, false, nil
 	st.Run.Progress()
 	return nil
+}
+
+// OweBoundary owes a compaction before the phase in hand starts, from now (OwedAt).
+func (st *State) OweBoundary(now time.Time) {
+	if !st.BoundaryOwed {
+		st.OwedAt = now
+	}
+	st.BoundaryOwed = true
+}
+
+// OweCheckpoint owes a compaction mid-phase, from now (OwedAt).
+func (st *State) OweCheckpoint(now time.Time) {
+	if !st.CheckpointOwed {
+		st.OwedAt = now
+	}
+	st.CheckpointOwed = true
 }
 
 // ResumeGrowth is how far the context may grow while the run is paused before the phase goes on from a
@@ -430,15 +457,15 @@ func Pause(st *State) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("nothing to pause (mode: %s)", st.Mode)
 	}
-	st.Mode, st.PauseContext = ModePaused, 0
+	st.Mode, st.PauseContext, st.PauseCompacted, st.Covered = ModePaused, 0, time.Time{}, time.Time{}
 	if cu := st.Run.Context; cu != nil {
 		st.PauseContext = cu.Used()
 	}
 	return nil
 }
 
-// GrownWhilePaused is how many tokens the context grew by since the run was paused, or 0 when that is
-// not known.
+// GrownWhilePaused is how many tokens the context grew by since the run was paused, or since the lead
+// last compacted while it was (PauseCompacted), or 0 when that is not known.
 func (st State) GrownWhilePaused() int {
 	if st.Mode != ModePaused || st.PauseContext == 0 || st.Run.Context == nil {
 		return 0
@@ -463,7 +490,7 @@ func Resume(st *State) error {
 		if st.GrownWhilePaused() > ResumeGrowth && !st.BoundaryOwed && !st.CheckpointOwed {
 			st.CheckpointDue = true
 		}
-		st.Mode, st.PauseContext = ModeRunning, 0
+		st.Mode, st.PauseContext, st.PauseCompacted, st.Covered = ModeRunning, 0, time.Time{}, time.Time{}
 	}
 	if st.ReviewDue != "" {
 		Reviewed(st) // the human chose to let the run go on

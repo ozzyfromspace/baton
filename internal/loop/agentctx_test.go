@@ -127,7 +127,7 @@ func TestAMessageInFlightHoldsTheCheckpointBack(t *testing.T) {
 	id := x.waiting("P1")
 	x.passed("P1", id)
 	x.tick(5 * time.Second) // the result's message is issued, and not run yet
-	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = true; return state.SetCheckpoint(st) })
+	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen = true; return state.SetCheckpoint(st, x.now) })
 	x.stops("P1")
 	x.tick(time.Second)
 	if x.status("P1") != state.WorkerWorking || len(x.agents) != 1 {
@@ -159,7 +159,7 @@ func TestAnAgentsCheckpointStartsAFreshAgent(t *testing.T) {
 	x := newCrew(t, 1)
 	x.atWork("P1")
 	first := x.agent("P1")
-	x.sub("P1").Update(func(st *state.State) error { return state.SetCheckpoint(st) })
+	x.sub("P1").Update(func(st *state.State) error { return state.SetCheckpoint(st, x.now) })
 	x.tick(time.Second)
 	if x.status("P1") != state.WorkerWorking {
 		t.Fatalf("ended mid-turn: %+v", x.worker("P1"))

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/brief"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -123,8 +124,7 @@ func (h *handlers) prove(c Context, s *state.Store, p state.Proof) (counted, wak
 	}
 	var a state.After
 	var applied bool
-	var owed *state.Briefing
-	var park *state.Park
+	var owed Owing
 	st, err := s.Update(func(st *state.State) error {
 		if !st.IsOwner(s.Instance, c.Now) {
 			return errNotOwner
@@ -132,23 +132,7 @@ func (h *handlers) prove(c Context, s *state.Store, p state.Proof) (counted, wak
 		if a, applied = state.Compacted(st, p, c.Now, origin); !applied || st.Mode != state.ModeRunning {
 			return nil
 		}
-		st.Run.LastActivity = c.Now
-		owed = &state.Briefing{Kind: briefKind(a), Phase: st.Current, Wake: a.Reason != "", At: c.Now}
-		if a.Result != nil {
-			owed.Job = a.Result.ID
-		}
-		if ps := st.Phases[st.Current]; ps != nil {
-			park = ps.Park
-		}
-		st.Run.Briefing = owed
-		msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
-		switch owed.Kind {
-		case brief.Boundary, brief.Switch:
-			msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
-		case brief.Resume:
-			msg = "baton: " + phaseTitle(pl, st.Current) + " resumes now, from where it was set aside"
-		}
-		st.Run.Announce = append(st.Run.Announce, msg)
+		owed = Owe(st, pl, a, true, c.Now)
 		return nil
 	})
 	if err != nil || !applied {
@@ -158,18 +142,55 @@ func (h *handlers) prove(c Context, s *state.Store, p state.Proof) (counted, wak
 		s.Event("compact_started", map[string]any{"trigger": a.Trigger, "by_baton": a.ByBaton, "epoch": a.Epoch, "reason": st.Run.Compaction.Reason, "proof": a.Proof})
 	}
 	s.Event("compact_finished", map[string]any{"trigger": a.Trigger, "by_baton": a.ByBaton, "epoch": a.Epoch, "proof": a.Proof})
-	switch {
-	case owed == nil:
-	case owed.Kind == brief.Boundary || owed.Kind == brief.Switch:
-		s.Event("phase_started", map[string]any{"phase": st.Current})
-	case owed.Kind == brief.Resume:
-		resumed := map[string]any{"phase": st.Current}
-		if park != nil {
-			resumed["reason"] = park.Reason
+	owed.Log(s)
+	return true, owed.Brief != nil && owed.Brief.Wake, nil
+}
+
+// Owing is the brief a compaction of the lead owes the model (Owe), and the phase it starts or resumes.
+type Owing struct {
+	Brief *state.Briefing
+	park  *state.Park
+}
+
+// Owe records the brief a compaction of the lead that a describes owes the model (Runtime.Briefing), and
+// announces what it starts, in the update that counted the compaction: as the rewake proves it (prove),
+// or as /baton run counts one the run kept while it was paused (state.Keep). With wake, the rewake gives
+// the brief of a compaction baton asked for, waking the model; without, the model's next tool call takes
+// it (baton run's own).
+func Owe(st *state.State, pl plan.Plan, a state.After, wake bool, now time.Time) Owing {
+	st.Run.LastActivity = now
+	o := Owing{Brief: &state.Briefing{Kind: briefKind(a), Phase: st.Current, Wake: wake && a.Reason != "", At: now}}
+	if a.Result != nil {
+		o.Brief.Job = a.Result.ID
+	}
+	if ps := st.Phases[st.Current]; ps != nil {
+		o.park = ps.Park
+	}
+	st.Run.Briefing = o.Brief
+	msg := "baton: context compacted — continuing " + phaseTitle(pl, st.Current)
+	switch o.Brief.Kind {
+	case brief.Boundary, brief.Switch:
+		msg = "baton: " + phaseTitle(pl, st.Current) + " starts now, with a fresh brief"
+	case brief.Resume:
+		msg = "baton: " + phaseTitle(pl, st.Current) + " resumes now, from where it was set aside"
+	}
+	st.Run.Announce = append(st.Run.Announce, msg)
+	return o
+}
+
+// Log logs the phase o starts (phase_started) or resumes (phase_resumed, with why it was set aside).
+func (o Owing) Log(s *state.Store) {
+	switch b := o.Brief; {
+	case b == nil:
+	case b.Kind == brief.Boundary || b.Kind == brief.Switch:
+		s.Event("phase_started", map[string]any{"phase": b.Phase})
+	case b.Kind == brief.Resume:
+		resumed := map[string]any{"phase": b.Phase}
+		if o.park != nil {
+			resumed["reason"] = o.park.Reason
 		}
 		s.Event("phase_resumed", resumed)
 	}
-	return true, owed != nil && owed.Wake, nil
 }
 
 // briefKind is the kind of brief a proven compaction owes (brief.Write).

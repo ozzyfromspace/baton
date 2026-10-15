@@ -370,6 +370,55 @@ func TestResumeSequenceThroughTheHooks(t *testing.T) {
 	}
 }
 
+// The human's /compact while the run is paused at a boundary is the one the boundary owed: its rewake
+// wakes nobody and starts nothing, and /baton run (state.Keep, then Owe, as the CLI does) starts P1 with no
+// compaction of its own, its brief handed over with baton run's own tool result, once.
+func TestACompactionWhilePausedStartsThePhaseAtRun(t *testing.T) {
+	f := newFixture(t, true)
+	pl, _ := f.store.LoadPlan()
+	f.store.Update(func(st *state.State) error { _, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{}); return err })
+	f.fire("Stop", map[string]any{})
+	f.store.Update(func(st *state.State) error { return state.Pause(st) })
+	if code, msg := f.compacted("manual"); code != 0 || msg != "" {
+		t.Fatalf("the rewake of a paused run: code %d %q", code, msg)
+	}
+	if st := f.state(); st.Covered.IsZero() || !st.BoundaryOwed || st.Phases["P1"].Status == state.PhaseActive || st.Run.Briefing != nil {
+		t.Fatalf("while paused: %+v", st)
+	}
+
+	var owed Owing
+	f.store.Update(func(st *state.State) error {
+		a, kept := state.Keep(st, f.now, state.Origin{})
+		if !kept {
+			t.Fatal("not kept")
+		}
+		state.Resume(st)
+		owed = Owe(st, pl, a, false, f.now)
+		return nil
+	})
+	owed.Log(f.store)
+	out := f.fire("PostToolUse", bash("baton run"))
+	if tell := feedback(out); !strings.Contains(tell, "Now: P1 — Second. Begin it now.") || !strings.Contains(tell, "Do b.") {
+		t.Fatalf("brief:\n%s", tell)
+	}
+	if said(out) != "baton: P1 (Second) starts now, with a fresh brief" {
+		t.Errorf("said %q", said(out))
+	}
+	if !f.logged("brief", map[string]any{"type": "boundary", "phase": "P1", "via": "tool"}) || !f.logged("phase_started", map[string]any{"phase": "P1"}) {
+		t.Errorf("events: %v", f.events())
+	}
+	if st := f.state(); st.BoundaryOwed || st.Phases["P1"].Status != state.PhaseActive || st.Run.Briefing != nil {
+		t.Fatalf("P1 not started: %+v", st)
+	}
+	if out := f.fire("PostToolUse", bash("ls")); feedback(out) != "" {
+		t.Errorf("briefed twice: %v", out)
+	}
+	f.fire("Stop", map[string]any{})
+	if c := f.state().Run.Compaction; c.InFlight() {
+		t.Errorf("compacted again: %+v", c)
+	}
+}
+
 // The phase a boundary starts records what it finds: HEAD and the work already uncommitted, so its own
 // blocked and done refuse only what it leaves. Without git there is nothing to record.
 func TestABoundaryRecordsWhatTheNextPhaseFinds(t *testing.T) {
