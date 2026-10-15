@@ -5,13 +5,16 @@ Claude Code shows in its agent panel. A mod in baton's plugin spawns and message
 the agents' reports, on the host's say-so; baton's hooks, told apart by `agent_id`, brief and hold them. An agent's
 compaction hooks look like the lead's, so only a proof (the mod's report, or a loop's own transcript) moves a
 compaction. Every delivery to an agent is a message, `/clear` ends every agent, and nothing types into a dialog where
-the mod runs. A phase's work lands by a merge, never a rebase (v0.8.1). Workflows were ruled out: a workflow agent
-cannot wait.
+the mod runs. A phase's work lands by a merge, never a rebase (v0.8.1). A Ctrl-C at an idle prompt stops every
+background agent, so where the mod runs baton types nothing: the mod compacts and submits, and the human's draft
+stays in the box; in auto mode agents' reports come back as peer prompts, which the mod drops (v0.8.2). Workflows
+were ruled out: a workflow agent cannot wait.
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
-scenarios) and [`spikes/32-phase-agents`](../../spikes/32-phase-agents) (what baton's design for it assumes; fourteen).
-Each spike's README has its table and harness.
+scenarios) and [`spikes/32-phase-agents`](../../spikes/32-phase-agents) (what baton's design for it assumes; fourteen);
+and 2026-10-15 against 2.1.300 and 2.1.296 by [`spikes/35-mod-drives`](../../spikes/35-mod-drives) (what a mod can do
+in place of baton's keys, and what the keys do to agents). Each spike's README has its table and harness.
 
 ## The question
 
@@ -193,6 +196,40 @@ and `git merge --abort` gives back the branch, index and files exactly; an untra
 refuse before it changes anything; `merge --abort` cannot always give back an uncommitted change to a tracked file,
 so baton merges only on a worktree with none. So baton merges the run's branch into a phase's branch, never rebases
 it, and a conflict goes back to the agent as a merge.
+
+## What spike 35 found (v0.8.2)
+
+A real v0.8.1 run (2026-10-13) showed two things the earlier spikes had not: a phase agent ended "stopped by the
+user" 42 ms after baton's draft rescue cleared the input box with Ctrl-C at an idle prompt, and agents' reports
+reached the lead's model as peer messages, which baton took for the human's turns.
+[`spikes/35-mod-drives`](../../spikes/35-mod-drives) measured both, and what the mod can do in place of baton's keys,
+on Claude Code 2.1.300 and 2.1.296 with Haiku:
+
+- **One Ctrl-C at an idle prompt stops every background agent**, with a draft in the box or without ("All
+  background agents stopped"; the agent's turn `aborted` 10 to 20 ms later). A message afterwards is refused: "was
+  stopped by the user and won't be resumed". This covers the model's own background agents too; background shells
+  run on. Ctrl-U stops nothing, but deletes the draft. Spike 32 had tried Ctrl-C only during a lead turn, where it
+  stops that turn alone.
+- **The mod can compact the lead.** `$.session.compact()` from its timer runs every settings compaction hook with
+  `trigger: manual`, writes the boundary about 130 ms after `PostCompact`, and the asyncRewake hook wakes the lead
+  with its brief, as for a typed `/compact`. The promise resolves just after `PostCompact`. The mod's own
+  `session.compact` hook does not run for its call, so it reports from the promise. **The human's draft stays in the
+  box** through the compaction and the turn the brief starts. While a turn runs the call is refused at once, naming
+  the turn; a dialog does not stop it.
+- **The mod can submit baton's lines.** `$.prompt.submit` starts a turn of its own with the draft left in place, and
+  during a turn it waits for the turn's end. With `asUser: true` the model reads the line bare, as it reads a typed
+  one; without it, framed as the plugin's message. `$.prompt.read` and `fill` make an exact round trip of a draft, and
+  `fill` is refused under a dialog (`refusal: "dialog"`).
+- **In auto mode, an agent's report is handed back as a peer prompt** (`<agent-message from="P2">` then `[Subagent
+  hand-back]`), into a running turn or as a turn of its own, at every end of every background agent; an agent resumed
+  by a message also gives a `task-notification`. In other modes there is no hand-back: a fresh agent's end sends the
+  lead nothing, and a resumed one's a `task-notification`. All 190 hand-backs in this machine's transcripts
+  (2.1.278 to 2.1.296) came in auto mode, the mode the human's sessions run in. The mod's `prompt.submit` event
+  carries only `origin: {kind: "peer"}`, so the mod tells baton's hand-backs by that frame, and its drop works; the
+  settings hooks received no `source` for any prompt, so the host tells machine prompts by their text.
+
+So in v0.8.2, baton types nothing where the mod runs: compactions and baton's lines go through the mod, and the box is
+never touched. In serial mode, where it still types, it never sends Ctrl-C while an agent may be live.
 
 ## What it means for baton
 
