@@ -14,7 +14,7 @@ So baton takes those decisions away from the model. The model does the work; det
 
 ## How a run goes
 
-1. **Plan.** `/baton plan <goal>` plans in plan mode, with a heading per phase (`## P0 — …`). Under each heading, a line says what the phase needs done first: `After: P1, P3`, `After: none` or `After: all`. Without the line, a phase follows the one before it.
+1. **Plan.** `/baton plan <goal>` plans in plan mode, with a heading per phase (`## P0 — …`). Under each heading, a line says what the phase needs done first: `After: P1, P3`, `After: none` or `After: all`. Without the line, a phase follows the one before it. A few phases are **QA phases** (`Type: qa`): they run the full test suites and lints, once for the phases before them, which run focused checks only, so no small phase spends an hour on a full suite. Before the plan reaches you, the model checks it against your other instructions (CLAUDE.md, memory) and addresses anything that competes with it.
 2. **Approve.** baton attaches the plan when you approve it, compacts the planning conversation away, and starts P0 from a brief: the phase's section of the plan, the standing rules, and the notes of earlier phases.
 3. **Work.** Your session, the **lead**, works the phase in your checkout and reports with `baton done`. A stop without a status is refused, with instructions.
 4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for, at least 2 minutes apart, so the machine shows each one's load before the next starts. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
@@ -36,16 +36,17 @@ Phase agents need baton's mod, which ships in its plugin. Where Claude Code does
 
 ## When it needs you
 
-A run must not stop for something it can work around. When something goes wrong (a commit whose signature times out, a missing tool, a rule of the plan that can't be followed right now), the model reaches you in the lightest way that fits:
+A run must not stop for something it can work around, and baton never waits on you for something it can decide. It waits only where you chose that (Pause baton, Wait for me, a cap you set) or where nothing in baton can answer (a permission prompt, the usage limit, a login, a refusal). Every other question has a deadline, and the deadline picks the model's side. When something goes wrong (a commit whose signature times out, a missing tool, a rule of the plan that can't be followed right now), the model reaches you in the lightest way that fits:
 
 | The model runs | When | The run |
 |---|---|---|
 | `baton note "<what it did>" --undo "<how>"` | It already took a reversible way around. | Goes on; you're told. |
-| `baton propose "<what it will do>" --because "<why>" --undo "<how>"` | There's a reversible way forward, but you might choose differently. | Asks you, and goes ahead at the deadline (5 minutes) unless you answer. |
+| `baton propose "<what it will do>" --because "<why>" --undo "<how>" --wait 5m` | There's a reversible way forward, but you might choose differently. | Asks you, and goes ahead at the deadline unless you answer: 5 to 20 minutes as the model judges, 10 by default. |
 | `baton blocked "<why>" --tried "<what it tried>"` | Every way forward is irreversible, outward-facing, or needs a secret only you hold. | Stops until you answer. |
 
-- **A proposal** reads *"baton: gpg signing timed out. Unless you answer by 15:33, I will commit P4 unsigned."*, and you can answer Wait for me, Pause baton or Go ahead. A proposal that looks outward-facing or irreversible (push, publish, deploy, delete, …) gets no deadline.
-- **Every decision made without you is kept, with its undo.** The model is handed the ones you haven't seen the next time you type, so "undo the unsigned commit" still works hours later. After 5 in one phase, baton stops for you to review them.
+- **A proposal** reads *"baton: gpg signing timed out. Unless you answer by 15:33, I will commit P4 unsigned."*, and you can answer Wait for me, Pause baton or Go ahead. The model gives the shortest wait that fits: every minute waiting is time the run loses. One whose question you dismiss still goes ahead at its deadline, unless you write first. A proposal that looks outward-facing or irreversible (push, publish, deploy, delete, …) gets no deadline.
+- **baton's own questions answer themselves.** Its question when the model has stopped without a status, and its question about a plan you approved mid-run, wait 10 minutes; then the plan goes on (a revision of the running plan is followed; another plan is left for `/baton run`). The context question picks Keep going after 10 minutes.
+- **Every decision made without you is kept, with its undo,** for you to read when the plan has run: `baton status` lists them. The model is handed the ones you haven't seen the next time you type, so "undo the unsigned commit" still works hours later. Set `max_auto_decisions` to have baton stop for a review after that many in one phase.
 - **A phase agent's question** comes to you in Claude Code's own question dialog, naming its phase, and your answer goes to the agent. Wait for me leaves only that phase waiting, until `/baton run` asks you again.
 - **A phase agent you stop** from the agent panel leaves its phase waiting for you. baton pushes that, the board shows it, and `/baton run` starts a fresh agent.
 - **A run that stops moving** tells you: when nothing in it has moved for 30 minutes and nothing is at work (no tool call, no gate whose log still grows), baton pushes one notice naming what each phase left waits on.
@@ -136,8 +137,9 @@ Settings go in `~/.baton/config.json`. Most have an environment variable too (`B
 | `ntfy_topic` | none | Pushes to your phone through ntfy. Treat the topic like a password. |
 | `workers` | `auto` | How many phase agents may work at once. `auto` sizes it to the machine (one per 2 CPUs or 4 GiB, whichever allows fewer, less one for your session, at most 8). A number from 1 to 8 sets the most; `0` runs one phase at a time. Phase agents start at least 2 minutes apart. |
 | `autocompact` | `810k` | The context cap claude starts with: `auto`, 100k to 1m, or `off`. |
-| `escalation_timeout` | `5m` | How long a proposal waits for you before it goes ahead. |
-| `max_auto_decisions` | `5` | How many decisions one phase may make without you before baton stops for a review. |
+| `escalation_timeout` | `10m` | How long a proposal with no `--wait` of its own waits for you before it goes ahead, and how long baton's own questions wait. |
+| `max_auto_decisions` | off | How many decisions one phase may make without you before baton stops for a review. Off unless you set a number. |
+| `aggregate_qa` | `true` | A plan's heavy checks (full suites, lints, end-to-end) run in its QA phases only (`Type: qa`); the phases between run focused checks. `false` has every phase check itself in full. |
 | `details` | `false` | Put the reason in pushes, which otherwise say only that you're needed. |
 
 The rest are described in [`internal/config/config.go`](internal/config/config.go): `ntfy_server`, `desktop`, `checkpoint_pct` (60), `warn_pct` (90), `auto_restart`, `switch_after` (5m), `verify_timeout` (3h), `foreground_max` (2m) and `worker_usage_max`. `BATON_HOME` moves `~/.baton` elsewhere.

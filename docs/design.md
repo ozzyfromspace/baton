@@ -179,10 +179,28 @@ interface had made *notify* and *halt* the same operation.
   action and must make progress, the replay finished the plan 4 times in 4.
 - **Every refusal names the way forward,** from one playbook: commit degraded rather than lose work, take a
   worse-but-working path, propose a way around a rule. `blocked` needs `--tried`.
+- **Nothing waits on the human for what baton can decide** (v0.8.3). baton waits on them only where they chose it
+  (Pause baton, Wait for me, `/baton pause`, a phase agent they stopped, a `max_auto_decisions` they set) or where
+  nothing in baton can answer (a permission prompt, the usage limit, a login or billing error, a refusal, which is
+  never retried). Every other question of baton's has a deadline, and the deadline picks the model's side: the
+  human said they would rather correct an assumption later than find a run idle for hours.
 - **The timed proposal** is the question `baton: <because>. Unless you answer by HH:MM, I will <action>.`, with the
-  answers Wait for me · Pause baton · Go ahead. It goes ahead at its deadline (`escalation_timeout`, 5 minutes), never
-  sooner than a minute after it appears, and a key press restarts the clock. A proposal that names an outward or
-  irreversible act (push, publish, deploy, delete, force, …) has no deadline.
+  answers Wait for me · Pause baton · Go ahead. It goes ahead at its deadline, never sooner than a minute after it
+  appears, and a key press restarts the clock. The model sets the wait (`--wait`, 5 to 20 minutes), told to give the
+  shortest that fits since every minute waiting is time the run loses; with none, or one out of range, it waits
+  `escalation_timeout` (10 minutes). A question that goes away unanswered (Esc, a restart) is nobody's choice: the
+  proposal goes ahead at its deadline all the same (the lead's loop settles it, `Loop.lapse`), unless the human
+  writes first. A phase agent's proposal counts its wait from when it was made, so one the human never saw (the
+  lead's own question went first) goes ahead too. A proposal that names an outward or irreversible act (push,
+  publish, deploy, delete, force, …) has no deadline.
+- **baton's own questions answer themselves.** The stall question (Continue · Pause baton, when the model stopped
+  without a status) and the question about a plan approved mid-run wait `escalation_timeout`; then Continue, and
+  for the plan its default: a revision of the running plan is followed, another plan is left for `/baton run`. The
+  mod answers one on screen (`hooks.Bound`); the host's loop answers one that never reached it (`hooks.Lapse`). A
+  block is the model's own choice to wait, and a review one the human opted into: neither is answered for them.
+- **Nothing gives up.** A failed compaction is retried every 15 minutes for as long as it fails; a session the
+  watchdog has down as stalled still gets its results, and a reminder every 30 minutes; a plan file baton can't
+  follow is reported, and the run goes on with the plan as attached; a lead's block holds the lead alone.
 - **Answering its own question.** Where the mod runs, its `tool.call` hook answers baton's question at the deadline,
   so nothing types into a dialog. That matters because dialogs queue, and in Claude Code 2.1.296 a permission
   prompt's third option is "Yes, and switch to auto mode". Where the mod doesn't run (serial mode), the host types
@@ -194,9 +212,19 @@ interface had made *notify* and *halt* the same operation.
   working tree, the index, `HEAD` and gpg untouched.
 - **Every decision made without the human is recorded,** with its undo, in baton's state. It is announced, listed by
   `baton status` and `baton done`, carried in each brief, and handed to the model when the human next types, so a
-  late answer works after any compaction. After `max_auto_decisions` in one phase, baton stops for a review; a
-  decision made with no phase in hand is the run's, and counts toward no phase's review. The model cannot clear its
-  own block.
+  late answer works after any compaction. Only a human who set `max_auto_decisions` gets a review after that many
+  in one phase (it is off by default); a decision made with no phase in hand is the run's, and counts toward no
+  phase's review. The model cannot clear its own block.
+- **QA phases carry the heavy checks** (`Type: qa`, `aggregate_qa`, on by default). Dense checks at every phase
+  burn hours and hold everything behind them, so a phase before a QA phase is briefed to run focused checks only
+  (the tests of what it changes and what that likely affects) and may end in a work-in-progress state; the QA
+  phase runs the full suites and lints once, and fixes what the phases before it left incoherent. baton cannot
+  tell a focused check from a full one, so it asks the model once of each gate queued before a QA phase, and the
+  gate runs either way; `--qa "<why now>"` flags a full check run early on purpose.
+- **Competing instructions are flagged before approval.** The model's first `ExitPlanMode` for a plan is turned
+  back once with baton's request to check the plan against CLAUDE.md, memory, skills and settings, and address in
+  it anything that competes (a rule to run the full suite before every commit, say). A stop in plan mode before the
+  plan reaches the human is turned back once too.
 - **Without git** there is no gate and no snapshot, and baton says "complete" rather than "committed".
 
 ## When the human steps in
