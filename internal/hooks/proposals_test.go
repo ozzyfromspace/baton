@@ -410,9 +410,14 @@ func TestALateAnswerFindsTheDecisions(t *testing.T) {
 		state.AddProposal(st, state.Decision{What: "use staging", Undo: "switch back"}, f.now)
 		return state.Resolve(st, "d3", state.ByHuman, "Go ahead", f.now) // the human said so
 	})
-	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>"} {
+	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>", handback("P2")} {
 		if out := f.fire("UserPromptSubmit", map[string]any{"prompt": prompt}); out != nil {
 			t.Fatalf("%q was handed the record: %v", prompt, out)
+		}
+	}
+	for _, e := range f.events() {
+		if e["kind"] == "decisions_told" {
+			t.Fatalf("told the decisions without the human: %v", e)
 		}
 	}
 	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "I'm back. Undo whatever you did while I was away."})

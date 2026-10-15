@@ -243,15 +243,22 @@ func TestNonOwnerSessionIsDormant(t *testing.T) {
 }
 
 func TestTurnSource(t *testing.T) {
-	cases := map[string]string{
-		"please continue": "human",
-		"[baton] no activity for 10m — report status":               "baton",
-		"<task-notification>\nStop hook feedback [baton] compacted": "baton",
-		"<task-notification>\nBackground command finished":          "system",
+	cases := []struct{ prompt, source, want string }{
+		{"please continue", "", "human"},
+		{"please continue", "user", "human"},
+		{"[baton] no activity for 10m — report status", "", "baton"},
+		{"[baton] P2's verification passed", "plugin", "baton"},
+		{"<task-notification>\nStop hook feedback [baton] compacted", "", "baton"},
+		{"<task-notification>\nBackground command finished", "", "system"},
+		{handback("P1"), "", "system"},
+		{"<agent-message from=\"a3a32bff5823f90f1\">\nhow far along is P3?", "", "system"},
+		{"  " + handback("P1"), "", "system"},
+		{"go on", "peer", "system"},
+		{"the human wrote <agent-message from=\"P1\">", "", "human"},
 	}
-	for prompt, want := range cases {
-		if got := TurnSource(prompt); got != want {
-			t.Errorf("%q: %s, want %s", prompt, got, want)
+	for _, c := range cases {
+		if got := TurnSource(c.prompt, c.source); got != c.want {
+			t.Errorf("%q from %q: %s, want %s", c.prompt, c.source, got, c.want)
 		}
 	}
 }
@@ -456,6 +463,12 @@ func (f *fixture) setContext(tokens int) {
 		st.Run.Context = &state.ContextUse{Tokens: tokens, WindowSize: 1_000_000, UsedPct: float64(tokens) / 10_000}
 		return nil
 	})
+}
+
+// handback is an agent's report as Claude Code hands it back to the lead in auto mode, as the settings
+// hook receives it (spike 35).
+func handback(from string) string {
+	return "<agent-message from=\"" + from + "\">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.\n\n  " + from + " is done."
 }
 
 func additionalContext(out map[string]any) string {
@@ -1084,13 +1097,17 @@ func TestAnAnswerBatonTypedIsAttributedToTheTimeout(t *testing.T) {
 	}
 }
 
-// The human takes part by typing in the session; baton's own nudges and other notifications do not count.
+// The human takes part by typing in the session; baton's own nudges, other notifications and an agent's
+// report handed back do not count.
 func TestTheHumanTakesPartByTyping(t *testing.T) {
 	f := newFixture(t, true)
-	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>"} {
+	for _, prompt := range []string{NudgePrefix + " Continue P0.", "<task-notification>build done</task-notification>", handback("P1")} {
 		f.fire("UserPromptSubmit", map[string]any{"prompt": prompt})
 		if h := f.state().Run.HumanAt; !h.IsZero() {
 			t.Fatalf("%q counted as the human: %v", prompt, h)
+		}
+		if by := f.state().Run.TurnBy; by == "human" {
+			t.Fatalf("%q started a turn by the human", prompt)
 		}
 	}
 	f.now = f.now.Add(time.Minute)

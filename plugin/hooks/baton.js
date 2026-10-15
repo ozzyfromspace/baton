@@ -536,6 +536,19 @@ function ours(text) {
   return ''
 }
 
+// HANDBACK is the frame Claude Code puts an agent's report in when it hands it back to the lead as a peer
+// message: the agent's name, or its id where it has none, then the hand-back's line.
+const HANDBACK = /^<agent-message from="([^"]*)">\r?\n\[Subagent hand-back\]/
+
+// handedBack is the id of the baton agent whose report a peer message hands back, or '' if it is none of
+// theirs. baton names each of its agents by its phase.
+function handedBack(text) {
+  const m = HANDBACK.exec(text.trimStart())
+  if (!m) return ''
+  for (const [id, a] of Object.entries(M.agents)) if (m[1] === id || m[1] === a.phase) return id
+  return ''
+}
+
 // letThrough is every hook's .catch: whatever went wrong, the event goes on as if the mod were not there
 // (next is replay-safe there: what was asked of it already is not asked again).
 function letThrough($, e, next) {
@@ -571,11 +584,13 @@ async function turned($, e, next) {
   return r
 }
 
-// A report of one of baton's agents never reaches the lead's model: baton has it. Only its id tells it
-// from the brief baton's rewake gives the lead, which comes as a task notification too.
+// A report of one of baton's agents never reaches the lead's model: baton has it. It comes as a task
+// notification, where only its id tells it from the brief baton's rewake gives the lead, and in auto mode
+// also handed back as a peer message, framed with the agent's name.
 async function prompted($, e, next) {
-  if (live() && e.origin && e.origin.kind === 'task-notification') {
-    const id = ours(e.text || '')
+  if (live() && e.origin) {
+    const text = e.text || ''
+    const id = e.origin.kind === 'task-notification' ? ours(text) : e.origin.kind === 'peer' ? handedBack(text) : ''
     if (id) {
       const a = M.agents[id]
       await keep($, { kind: 'dropped', agent: id })

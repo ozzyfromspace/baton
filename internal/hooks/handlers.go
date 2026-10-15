@@ -898,9 +898,11 @@ func planOnScreen(st *state.State) bool {
 	return false
 }
 
-// TurnSource classifies a submitted prompt: a rewake or nudge from baton, another task notification,
-// or the human.
-func TurnSource(prompt string) string {
+// TurnSource classifies a submitted prompt: a rewake or nudge from baton, one of Claude Code's own (another
+// task's notification, an agent's message or the report it hands back), or the human. source is where the
+// hook says the prompt came from: anything but the user's is Claude Code's. Claude Code 2.1.300 gives no
+// source (spike 35), so its own prompts are also told by the frame they come in.
+func TurnSource(prompt, source string) string {
 	p := strings.TrimSpace(prompt)
 	switch {
 	case strings.HasPrefix(p, NudgePrefix):
@@ -910,13 +912,15 @@ func TurnSource(prompt string) string {
 			return "baton"
 		}
 		return "system"
+	case strings.HasPrefix(p, "<agent-message from="), source != "" && source != "user":
+		return "system"
 	default:
 		return "human"
 	}
 }
 
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
-	by := TurnSource(str(c.Input, "prompt"))
+	by := TurnSource(str(c.Input, "prompt"), str(c.Input, "source"))
 	mark := markOf(str(c.Input, "transcript_path")) // read before the lock: the turn's next hook looks at the prompt (rewind.go)
 	var events []event
 	var tell, staleSkill, ann string

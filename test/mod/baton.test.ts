@@ -297,6 +297,30 @@ test("baton's agents' reports go to baton; the rewake's brief and the human's pr
   expect(kinds(w)).toEqual(['dropped a1'])
 })
 
+test("a report of baton's agent handed back as a peer message goes to baton; anyone else's reaches the model", async ($, on) => {
+  const agents = [
+    { id: 'a1', phase: 'P1', drop: "P1's report went to baton" },
+    { id: 'a2', phase: 'P2' },
+  ]
+  const w = world(on, { files: { [DIR + '/agents.json']: JSON.stringify({ agents }) } })
+  await start($, w)
+  const handback = (from: string) => `<agent-message from="${from}">\n[Subagent hand-back] The text below is the final report of a subagent.\n\n  P done.`
+  const peer = { kind: 'peer' }
+  const byName = await $.prompt.submit({ text: handback('P1'), origin: peer, wait: false })
+  const byID = await $.prompt.submit({ text: handback('a2'), origin: peer, wait: false })
+  const theModels = await $.prompt.submit({ text: handback('claude-code-guide'), origin: peer, wait: false })
+  const notAHandback = await $.prompt.submit({ text: '<agent-message from="P1">\nhow far along is P3?', origin: peer, wait: false })
+  const typed = await $.prompt.submit({ text: handback('P1'), origin: { kind: 'composer' }, wait: false })
+  await w.clock.advance(1000)
+  expect((byName as any).drop).toBe("P1's report went to baton")
+  expect((byID as any).drop).toBe('P2')
+  expect((theModels as any).text).toContain('claude-code-guide')
+  expect((notAHandback as any).text).toContain('how far along')
+  expect((typed as any).text).toContain('[Subagent hand-back]')
+  expect(w.beneath).toEqual(['prompt peer', 'prompt peer', 'prompt composer'])
+  expect(kinds(w)).toEqual(['dropped a1', 'dropped a2'])
+})
+
 test("the turns of baton's agents are reported, how they ended included; no one else's", async ($, on) => {
   const w = world(on, { files: { [DIR + '/agents.json']: JSON.stringify({ agents: [{ id: 'a1', phase: 'P1' }] }) } })
   await start($, w)
