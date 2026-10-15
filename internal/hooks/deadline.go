@@ -24,8 +24,9 @@ type Wait struct {
 
 // Bound is how long question may wait, put to the human in the lead's session of s at asked (when the
 // mod's hook first saw the call), as the lead's state stands at now: a timed proposal of the lead's own
-// goes ahead at its deadline, the context question is answered Keep going after warnTimeout, and a phase
-// agent's question gets its default at its deadline (decide.RelayDefault). None is answered sooner than
+// goes ahead at its deadline, the context question is answered Keep going after warnTimeout, a block is
+// answered Look again once the host's loop found nobody answered it in time, and a phase agent's question
+// gets its default at its deadline (decide.RelayDefault). None is answered sooner than
 // decide.MinWait after it was on screen: a question of the lead's model may be queued behind another
 // dialog, so its clock runs from when it was first seen in front (Dialog.Front, recorded here); one of
 // the mod's is asked only while no other dialog is open (the band it is asked from is not drawn then).
@@ -78,12 +79,25 @@ func bound(st *state.State, question string, asked, now time.Time, warnTimeout, 
 	case "escalation", "replan":
 		// baton's own question about the run: the plan goes on (Continue), or a plan the human approved
 		// mid-run gets its default (decide.ReplanDefault). A block is the model's own choice to wait, and is
-		// never answered for the human.
+		// never answered Continue for the human: once the host's loop finds nobody has answered it for its
+		// BlockLook (State.LookDue), it is answered Look again, and until then the mod asks again.
 		answer = "Continue"
-		if iq.kind == "replan" {
+		e := st.Run.Escalation
+		switch {
+		case iq.kind == "replan":
 			answer = decide.ReplanDefault(st.Replan.Same)
-		} else if e := st.Run.Escalation; e == nil || e.Kind == "blocked" {
+		case e == nil:
 			return Wait{}
+		case e.Kind == "blocked":
+			shown, front := shownSince(st, question, now)
+			if !st.LookDue() {
+				return Wait{For: recheck, Answer: decide.LookAgain}
+			}
+			due = latest(st.Blocked.Lapsed, shown.Add(decide.MinWait))
+			if !front {
+				return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: decide.LookAgain}
+			}
+			return Wait{For: min(max(due.Sub(now), 0), recheck), Answer: decide.LookAgain}
 		}
 		shown, front := shownSince(st, question, now)
 		due = shown.Add(max(escTimeout, decide.MinWait))

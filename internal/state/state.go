@@ -96,6 +96,10 @@ type Block struct {
 	Reason string    `json:"reason"`
 	Tried  string    `json:"tried,omitempty"`
 	Since  time.Time `json:"since"`
+	// Lapsed is when the lead's loop found that nobody had answered the block for its Timing.BlockLook
+	// while its question was on screen: that question is then answered Look again (by baton's mod,
+	// hooks.Bound, or where baton types, by the host), which lifts it (LiftBlock).
+	Lapsed time.Time `json:"lapsed,omitzero"`
 }
 
 // State is the content of .baton/state.json.
@@ -433,6 +437,29 @@ func SetBlocked(st *State, reason string, now time.Time) error {
 	st.Blocked = &Block{Reason: reason, Since: now}
 	st.Run.Progress()
 	return nil
+}
+
+// LookDue reports a block whose question on screen is to be answered Look again: the lead's loop found
+// nobody had answered it in time (Block.Lapsed), and the human has not written since.
+func (st State) LookDue() bool {
+	b := st.Blocked
+	return b != nil && !b.Lapsed.IsZero() && b.Lapsed.After(st.Run.HumanAt)
+}
+
+// LiftBlock lifts the block, with the escalation that put it to the human, for the model to look again
+// for a safe way on (decide.LookAgain): nobody answered it in time, or the human chose that. It reports
+// the block's reason, and false when there was none.
+func LiftBlock(st *State) (string, bool) {
+	b := st.Blocked
+	if b == nil {
+		return "", false
+	}
+	st.Blocked = nil
+	if e := st.Run.Escalation; e != nil && e.Kind == "blocked" {
+		st.Run.Escalation = nil
+	}
+	st.Run.Progress()
+	return b.Reason, true
 }
 
 // SetCheckpoint asks for a mid-phase compaction at the next stop.

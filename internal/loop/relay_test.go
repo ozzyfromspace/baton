@@ -122,7 +122,7 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 			q := c.q
 			q.Deadline = now
 			state.AnswerRelay(&q, c.by, c.answer, now)
-			if got := applyRelay(&st, q, c.maxAuto, now); got != c.result {
+			if got := applyRelay(&st, q, c.maxAuto, DefaultTiming, now); got != c.result {
 				t.Errorf("result %q, want %q", got, c.result)
 			}
 			if c.check != nil {
@@ -138,7 +138,7 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 			}
 			// Applied again (the host ended between its two writes): nothing new is said, to anyone.
 			n, notices := len(st.Inbox), len(st.Run.Notices)
-			if again := applyRelay(&st, q, c.maxAuto, now); len(st.Inbox) != n || len(st.Run.Notices) != notices ||
+			if again := applyRelay(&st, q, c.maxAuto, DefaultTiming, now); len(st.Inbox) != n || len(st.Run.Notices) != notices ||
 				c.result != "waits for the human" && again != "settled in its sub-run already" {
 				t.Errorf("applied twice: %q, %d messages, %d notices", again, len(st.Inbox), len(st.Run.Notices))
 			}
@@ -153,12 +153,12 @@ func TestALaterAnswerReplacesOneNotGivenYet(t *testing.T) {
 	st := subRun(t, relayed, now.Add(-time.Minute))
 	held := relayed
 	state.AnswerRelay(&held, state.ByHuman, "Wait for me", now)
-	if got := applyRelay(&st, held, 0, now); got != "waits for the human" {
+	if got := applyRelay(&st, held, 0, DefaultTiming, now); got != "waits for the human" {
 		t.Fatalf("held: %q", got)
 	}
 	again := relayed
 	state.AnswerRelay(&again, state.ByHuman, "Go ahead", now.Add(time.Minute))
-	if got := applyRelay(&st, again, 0, now.Add(time.Minute)); got != "goes ahead" {
+	if got := applyRelay(&st, again, 0, DefaultTiming, now.Add(time.Minute)); got != "goes ahead" {
 		t.Fatalf("asked again: %q", got)
 	}
 	if mail := st.Mail(); len(mail) != 1 || !strings.Contains(mail[0].Text, "The human chose Go ahead on your proposal P3.d1") {

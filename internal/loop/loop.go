@@ -60,6 +60,7 @@ type Timing struct {
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
 	HoldLapse      time.Duration // a proposal held for the human (Wait for me) with no word from them this long: baton lifts the hold (lapseHold)
+	BlockLook      time.Duration // a block with no word from the human this long: baton lifts it, and the model looks again (block.go; 0: decide.BlockLook)
 	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
 	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 
@@ -70,8 +71,9 @@ type Timing struct {
 
 // DefaultTiming is baton's production timing. Nothing baton can decide waits on the human for longer
 // than 20 minutes (most for 10): a question gets its default at escalation_timeout, and a hold the human
-// chose lapses after HoldLapse. The rest is sized to what it waits for: a turn, a compaction, the mod, a
-// subagent, a reply over the network.
+// chose lapses after HoldLapse. A block, which the model judged only the human could answer, is lifted
+// after BlockLook for it to look again. The rest is sized to what it waits for: a turn, a compaction, the
+// mod, a subagent, a reply over the network.
 var DefaultTiming = Timing{
 	Quiet: 1500 * time.Millisecond, QuietMax: 30 * time.Second, HandsOff: 3 * time.Second,
 	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute, FailedRetryMax: 15 * time.Minute, StalledNudge: 15 * time.Minute,
@@ -81,7 +83,7 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
-	HoldLapse: decide.HoldLapse, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
+	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 

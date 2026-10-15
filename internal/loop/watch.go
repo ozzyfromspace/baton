@@ -20,6 +20,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.answerOwnQuestion(v, st, in)
 	l.lapse(v, st)
 	l.lapseHold(v, st)
+	l.lookAgain(v, st)
 	l.lapseQuestions(v, st)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || l.resuming(st) {
@@ -198,9 +199,10 @@ func agentPhase(st state.State, agent string) string {
 
 // answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context
 // question (Keep going) after WarnTimeout, since it only warns and Claude Code compacts on its own when
-// the context is full; and a timed proposal (Go ahead) at its deadline, since a run must not stop for
-// something it can work around (docs/design.md). An untimed proposal is never answered: only the
-// human can let it go ahead. The answer arrives through the usual hook.
+// the context is full; a timed proposal (Go ahead) at its deadline, since a run must not stop for
+// something it can work around (docs/design.md); and a block nobody answered for Timing.BlockLook (Look
+// again, lookAgain). An untimed proposal is never answered: only the human can let it go ahead. The
+// answer arrives through the usual hook.
 //
 // It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
 // baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog; nor
@@ -242,6 +244,21 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		// the wake (the minute alone does that).
 		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
 		fields["id"] = p.ID
+	case "escalation":
+		// Only a block nobody answered in time (lookAgain) is answered, Look again: every other escalation
+		// is the human's.
+		e := st.Run.Escalation
+		if e == nil || e.Kind != "blocked" || decide.Normalize(e.Question) != d.Key {
+			return
+		}
+		if !l.alone.Same(d) {
+			l.alone, l.aloneAt = d, v.Now
+		}
+		if !st.LookDue() {
+			return
+		}
+		due = latest(st.Blocked.Lapsed, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
+		fields["blocked"] = true
 	default:
 		return
 	}
@@ -481,8 +498,9 @@ func (l *Loop) holdLapsed(v host.View, st state.State) bool {
 // escalation timeout with no dialog of it on screen, since the model never put it to them or it went
 // away: the plan goes on (Continue), and a plan the human approved mid-run gets its default
 // (decide.ReplanDefault). Where its dialog is on screen, the mod answers it there at the same time
-// (hooks.Bound). A block is the model's own choice to wait, and a review one the human opted into: neither
-// is answered for them.
+// (hooks.Bound). A block is the model's own choice to wait, and is never answered Continue for the human
+// (after Timing.BlockLook it is lifted for the model to look again, lookAgain); a review is one the human
+// opted into, and is not answered for them.
 func (l *Loop) lapseQuestions(v host.View, st state.State) {
 	if l.Lapse == nil || l.Store.Worker() != "" || st.Mode != state.ModeRunning {
 		return

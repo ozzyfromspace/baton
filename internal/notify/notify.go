@@ -45,6 +45,7 @@ var headline = map[string]string{
 	"proceeded":         "baton went ahead with a proposal nobody answered",
 	"decision":          "baton is holding a proposal for you",
 	"hold_lapsed":       "baton stopped holding a proposal nobody answered",
+	"block_lapsed":      "baton lifted a block nobody answered: Claude looks again",
 	"review":            "baton needs you: review the decisions made without you",
 	"workers":           "baton needs you: its workers could not start",
 	"worker_held":       "baton needs you: a phase waits for you",

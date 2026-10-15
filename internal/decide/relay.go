@@ -10,9 +10,10 @@ import (
 
 // A phase agent's question reaches the human in Claude Code's own dialog, which baton's mod opens in the
 // lead's terminal (state.Relay). Its third option is what baton picks when nobody answers, as for the
-// lead's own questions: a timed proposal goes ahead at the time its question names, and anything else
-// waits for the human, who has it again with /baton run, so that nothing waits on an agent's question
-// on screen. These are the words the human and the agent read about all that.
+// lead's own questions: a timed proposal goes ahead at the time its question names, a block is lifted for
+// the agent to look again (BlockLook), and anything else waits for the human, who has it again with
+// /baton run, so that nothing waits on an agent's question on screen. These are the words the human and
+// the agent read about all that.
 
 // RelayOptions are the answers to phase agent question r.
 func RelayOptions(r state.Relay) []Option {
@@ -27,13 +28,14 @@ func RelayOptions(r state.Relay) []Option {
 	case r.Kind == state.RelayReview:
 		return []Option{{"Continue", "I've seen them; let " + r.Phase + " go on"}, pause, wait}
 	}
-	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, wait}
+	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, {LookAgain, "The agent looks for a safe way around it and proposes it first"}}
 }
 
 // What an answer to a phase agent's question does (RelayOutcome).
 const (
 	OutcomeGo    = "go"    // its proposal goes ahead
 	OutcomeOn    = "on"    // its block or its review is over, and its phase goes on
+	OutcomeLook  = "look"  // its block is lifted, and its agent looks again for a safe way on
 	OutcomeWait  = "wait"  // its phase waits for the human
 	OutcomePause = "pause" // the run is paused, and its phase waits for the human
 	OutcomeWords = "words" // the human answered in their own words, which the agent follows
@@ -51,6 +53,8 @@ func RelayOutcome(r state.Relay, answer string) string {
 		return OutcomeGo
 	case answer == "Continue" && r.Kind != state.RelayProposal:
 		return OutcomeOn
+	case answer == LookAgain && r.Kind == state.RelayBlocked:
+		return OutcomeLook
 	}
 	return OutcomeWords
 }
@@ -59,7 +63,7 @@ func RelayOutcome(r state.Relay, answer string) string {
 func RelayDefault(r state.Relay) string { return RelayOptions(r)[2].Label }
 
 // RelayQuestion is the question that puts phase agent question r to the human. A timed proposal goes
-// ahead at deadline.
+// ahead at deadline, and a block is lifted then for the agent to look again.
 func RelayQuestion(r state.Relay, deadline time.Time) Question {
 	who := "baton: the agent on " + r.Phase
 	var text string
@@ -72,7 +76,8 @@ func RelayQuestion(r state.Relay, deadline time.Time) Question {
 		text = fmt.Sprintf("%s has made %d decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let %s go on?",
 			who, r.Count, r.Phase)
 	default:
-		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on.", who, clause(r.Because), r.Phase)
+		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on. Unless you answer by %s, it looks again for a safe way around it.",
+			who, clause(r.Because), r.Phase, deadline.Local().Format("15:04"))
 	}
 	return Question{Text: Sanitize(text), Options: RelayOptions(r)}
 }

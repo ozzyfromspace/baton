@@ -25,6 +25,8 @@ func issuedQuestions(st *state.State) []issued {
 	if e := st.Run.Escalation; e != nil && e.Question != "" {
 		if e.Kind == "review" {
 			out = append(out, issued{"review", decide.Question{Text: e.Question, Options: decide.ReviewOptions}})
+		} else if e.Kind == "blocked" {
+			out = append(out, issued{"escalation", decide.Question{Text: e.Question, Options: decide.BlockedOptions}})
 		} else {
 			out = append(out, issued{"escalation", decide.Question{Text: e.Question, Options: decide.EscalationOptions}})
 		}

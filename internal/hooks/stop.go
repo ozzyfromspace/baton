@@ -280,7 +280,10 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.StopBlocks = 0
 		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", decide.Named(st.Current), st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked, Since: st.Blocked.Since, Because: st.Blocked.Reason}, now)
 	case st.Blocked != nil:
-		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", decide.Named(st.Current), st.Blocked.Reason), now)
+		// Put to the human with Look again as the default: if nobody answers for the loop's BlockLook, the
+		// block is lifted for the model to look again (loop.lookAgain).
+		reason := fmt.Sprintf("blocked on %s: %s", decide.Named(st.Current), st.Blocked.Reason)
+		escalateAsking(st, &d, "blocked", reason, decide.Question{Text: "baton: " + reason, Options: decide.BlockedOptions}, now)
 	case st.Run.WarnOwed && st.Run.WarnQuestion != "":
 		// The model was asked to put the context question to the human and stopped without doing so.
 		// Refused once: the context warning is advice, so a second stop goes on as it would have.

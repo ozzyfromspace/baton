@@ -1295,6 +1295,7 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 		}
 		// Events are named as if the CLI had done it (resumed, paused), so the record reads the same.
 		var event, say, tell string
+		var more map[string]any
 		switch strings.TrimSpace(answer) {
 		case "Continue":
 			reason := ""
@@ -1321,6 +1322,19 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 			event, say = "checkpoint_asked", "baton: checkpoint at the end of this step"
 			tell = NudgePrefix + " The human chose Checkpoint now. " + w.FinishStep() + ", then run " +
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
+		case decide.LookAgain:
+			// The block is lifted for the model to look again for a safe way on, which it proposes: nobody
+			// answered it for the loop's BlockLook (baton's answer, State.LookDue), or the human chose it.
+			if e := st.Run.Escalation; iq.kind != "escalation" || e == nil || e.Kind != "blocked" || st.Blocked == nil {
+				continue
+			}
+			reason, _ := state.LiftBlock(st)
+			say, tell = decide.LookingAgain("", reason, st.Current, decide.BlockLook, w.Timeout, auto)
+			event, more = "look_again", map[string]any{"phase": st.Current, "reason": reason}
+			if auto {
+				event = "block_lapsed"
+				notice(st, "block_lapsed", reason, c.Now)
+			}
 		case "Keep going":
 			if iq.kind != "context_warning" {
 				continue
@@ -1339,7 +1353,11 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 		} else {
 			st.Run.HumanAt = c.Now
 		}
-		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": by}, say: say, tell: tell}
+		fields := map[string]any{"answer": answer, "by": by}
+		for k, v := range more {
+			fields[k] = v
+		}
+		return valveAction{event: event, fields: fields, say: say, tell: tell}
 	}
 	return valveAction{}
 }

@@ -37,8 +37,8 @@ type Relay struct {
 	Queued   time.Time `json:"queued"`
 	// Issued is when the host had the mod ask it (command Ask, of host instance Instance), and Deadline
 	// when baton answers it if nobody has: a timed proposal goes ahead then (the time its question names),
-	// and anything else waits for the human, who has it again with /baton run. Asked: it reached
-	// Claude Code's dialog queue, at AskedAt.
+	// a block is lifted for the agent to look again, and anything else waits for the human, who has it
+	// again with /baton run. Asked: it reached Claude Code's dialog queue, at AskedAt.
 	Issued   time.Time   `json:"issued,omitzero"`
 	Ask      int         `json:"ask,omitempty"`
 	Instance string      `json:"instance,omitempty"`
@@ -46,14 +46,14 @@ type Relay struct {
 	Asked    bool        `json:"asked,omitempty"`
 	AskedAt  time.Time   `json:"asked_at,omitzero"`
 	Answered *Resolution `json:"answered,omitempty"`
-	// Dismissed is when a timed proposal's dialog went away unanswered: it is not asked again, and goes
-	// ahead at its deadline.
+	// Dismissed is when the dialog of a timed proposal, or of a block, went away unanswered: it is not
+	// asked again, and gets its default at its deadline.
 	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Applied is when the answer reached the worker's sub-run.
 	Applied time.Time `json:"applied,omitzero"`
 	// Lapsed is when the coordinator was done with the hold an answer with no way on (Wait for me, Pause
-	// baton, none) put on a proposal's phase: it lifted it, as nobody had answered for loop's
-	// Timing.HoldLapse since, or found it settled already.
+	// baton, none) put on a proposal's phase, or a block's: it lifted it, as nobody had answered for loop's
+	// Timing.HoldLapse (a block's, Timing.BlockLook) since, or found it settled already.
 	Lapsed time.Time `json:"lapsed,omitzero"`
 }
 
