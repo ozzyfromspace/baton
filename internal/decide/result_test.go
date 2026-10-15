@@ -38,10 +38,13 @@ func TestJobResult(t *testing.T) {
 			[]string{"could not run: the command did not run (exit 127)", "This is not a test result", "do not look for a bug in P3's code", "Run the gate in place instead, and `baton note`", ".baton-lane"},
 			[]string{"Fix what failed"}},
 		{"interrupted", job(state.JobVerify, state.JobInterrupted, -1, "its runner (pid 7) is gone"),
-			[]string{"was interrupted after 12m: its runner (pid 7) is gone", "Nothing was checked"}, nil},
+			[]string{"was interrupted after 12m: its runner (pid 7) is gone", "Nothing was checked"}, []string{"hung"}},
+		{"hung", job(state.JobVerify, state.JobInterrupted, -1, HungReason(20*time.Minute)),
+			[]string{"was interrupted after 12m: hung — its log had not grown, and its processes had used no CPU, for 20m: `make test`",
+				"baton stopped it as hung, so nothing was checked: find what it waits on"}, []string{"Hand it to baton again, or run it in place."}},
 		{"await failed", job(state.JobAwait, state.JobFailed, 1, ""), []string{"What it waited on did not succeed"}, []string{"verify again"}},
 	} {
-		got := JobResult(c.job, "/x/j4.log", "line 1\nFAIL thing\n", red)
+		got := JobResult(c.job, "/x/j4.log", "line 1\nFAIL thing\n", red, "")
 		for _, w := range append(c.want, "The end of its log (/x/j4.log):\n\nline 1\nFAIL thing\n\n",
 			"Red now: P1 (job j2, `go test ./...` on aaaabbbbcccc failed (exit 2) after 1m). Failures in their area are theirs, not this phase's: leave them to it.") {
 			if !strings.Contains(got, w) {
@@ -56,9 +59,62 @@ func TestJobResult(t *testing.T) {
 		if strings.Contains(got, "P3 (job j4") {
 			t.Errorf("%s names its own phase as red:\n%s", c.name, got)
 		}
+		if strings.Contains(got, "--despite-red") {
+			t.Errorf("%s, with no QA phase ahead, says other phases' work may be why:\n%s", c.name, got)
+		}
 	}
-	if got := JobResult(job(state.JobAwait, state.JobPassed, 0, ""), "/x/j4.log", "", nil); !strings.Contains(got, "Its log: /x/j4.log") || strings.Contains(got, "Red now") {
+	if got := JobResult(job(state.JobAwait, state.JobPassed, 0, ""), "/x/j4.log", "", nil, ""); !strings.Contains(got, "Its log: /x/j4.log") || strings.Contains(got, "Red now") {
 		t.Errorf("no tail, nothing red:\n%s", got)
+	}
+}
+
+// While the plan leaves its heavy checks to a QA phase ahead, the phases before it may leave work in
+// progress: a red result says other phases' work may be why, and how to finish over it. Only a red one.
+func TestARedResultBeforeAQAPhaseMayBeOthers(t *testing.T) {
+	t0 := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	const hint = "This plan leaves its full checks to P10 (QA), and other phases' work in progress may be why this is red: " +
+		"fix what is P3's, and if the rest is not, finish with `baton done P3 --despite-red \"<why>\"` (the human is told) and leave it to P10 (QA)."
+	for _, c := range []struct {
+		name, kind, status, qa string
+		hints                  bool
+	}{
+		{"verify failed", state.JobVerify, state.JobFailed, "P10 (QA)", true},
+		{"verify ran out of time", state.JobVerify, state.JobTimeout, "P10 (QA)", true},
+		{"await failed", state.JobAwait, state.JobFailed, "P10 (QA)", true},
+		{"passed", state.JobVerify, state.JobPassed, "P10 (QA)", false},
+		{"could not run", state.JobVerify, state.JobLaneError, "P10 (QA)", false},
+		{"interrupted", state.JobVerify, state.JobInterrupted, "P10 (QA)", false},
+		{"no QA phase ahead, or aggregate_qa off", state.JobVerify, state.JobFailed, "", false},
+	} {
+		j := state.Job{ID: "j4", Phase: "P3", Kind: c.kind, Command: "make test", Status: c.status, Exit: 1, Started: t0, Ended: t0.Add(time.Minute)}
+		got := JobResult(j, "/x/j4.log", "FAIL", nil, c.qa)
+		if strings.Contains(got, hint) != c.hints {
+			t.Errorf("%s: hints %v, want %v:\n%s", c.name, !c.hints, c.hints, got)
+		}
+	}
+}
+
+func TestQAAsk(t *testing.T) {
+	verify, await := QAAsk(state.JobVerify, "P3", "P10 (QA)"), QAAsk(state.JobAwait, "P3", "P10 (QA)")
+	for _, c := range []struct {
+		got       string
+		want, not []string
+	}{
+		{verify, []string{"Is this a focused check of what P3 changed, or a full suite, lint or end-to-end run that P10 (QA) runs anyway?",
+			"leave such runs to P10 (QA)", "baton verify \"<command>\" --qa \"<why now>\""}, []string{"baton await", "CI"}},
+		{await, []string{"Is what this waits on a focused check of what P3 changed, or a full check in disguise (a CI run of every suite",
+			"that P10 (QA) runs anyway?", "baton await \"<command>\" --qa \"<why now>\""}, []string{"baton verify"}},
+	} {
+		for _, w := range c.want {
+			if !strings.Contains(c.got, w) {
+				t.Errorf("lacks %q:\n%s", w, c.got)
+			}
+		}
+		for _, w := range c.not {
+			if strings.Contains(c.got, w) {
+				t.Errorf("has %q:\n%s", w, c.got)
+			}
+		}
 	}
 }
 

@@ -25,6 +25,10 @@ func TestTheRecordSaysWhatHappenedAndHowToUndoIt(t *testing.T) {
 		{"a proposal nobody answered", state.Decision{ID: "d3", Kind: state.Proposal, Phase: "P5", What: "commit unsigned", Undo: "re-sign it", At: at, Deadline: deadline,
 			Resolved: &state.Resolution{By: state.ByTimeout, Answer: "Go ahead", At: deadline.Add(time.Minute)}},
 			"d3 (P5, " + stamp(deadline.Add(time.Minute)) + ") went ahead, as nobody answered by " + deadline.Local().Format("15:04") + ": commit unsigned. Undo: re-sign it"},
+		{"a proposal held for the human, whose hold lapsed", state.Decision{ID: "d4", Kind: state.Proposal, Phase: "P5", What: "commit unsigned", Undo: "re-sign it", At: at,
+			Deadline: deadline, Lapsed: deadline.Add(20 * time.Minute), Resolved: &state.Resolution{By: state.ByTimeout, Answer: "Go ahead", At: deadline.Add(20 * time.Minute)}},
+			"d4 (P5, " + stamp(deadline.Add(20*time.Minute)) + ") went ahead (or a more reversible way did) once its hold for you lapsed at " +
+				deadline.Add(20*time.Minute).Local().Format("15:04") + ", as nobody answered: commit unsigned. Undo: re-sign it"},
 	} {
 		if got := Entry(c.d); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
@@ -39,12 +43,15 @@ func TestOnlyDecisionsMadeWithoutTheHumanAreRecorded(t *testing.T) {
 		{ID: "d3", Kind: state.Proposal, Resolved: &state.Resolution{By: state.ByTimeout, Answer: "Go ahead"}},
 		{ID: "d4", Kind: state.Proposal, Resolved: &state.Resolution{By: state.ByHeld}},
 		{ID: "d5", Kind: state.Proposal}, // still pending
+		// Answered Not now for the human: not done on baton's word (what the model did of it, it noted).
+		{ID: "d6", Kind: state.Proposal, Resolved: &state.Resolution{By: state.ByTimeout, Answer: state.NotNow}},
+		{ID: "d7", Kind: state.Proposal, Lapsed: time.Now(), Resolved: &state.Resolution{By: state.ByTimeout, Answer: "Go ahead"}},
 	}
 	var ids []string
 	for _, d := range WithoutHuman(ds) {
 		ids = append(ids, d.ID)
 	}
-	if got := strings.Join(ids, " "); got != "d1 d3" {
+	if got := strings.Join(ids, " "); got != "d1 d3 d7" {
 		t.Errorf("without the human: %s", got)
 	}
 	if Tally(1) != "1 decision made without you" || Tally(3) != "3 decisions made without you" {

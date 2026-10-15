@@ -239,6 +239,9 @@ type Dialog struct {
 	Agent string    `json:"agent,omitempty"`
 	Key   string    `json:"key,omitempty"`
 	Since time.Time `json:"since"`
+	// Phase is the phase whose phase agent asked: its dialog shows on the lead's screen, and is recorded in
+	// the lead's run. Where baton's mod runs, one holds only that agent (LeadOpen).
+	Phase string `json:"phase,omitempty"`
 	// Kind names a question baton issued, put to the human word for word in the shape baton gave it:
 	// "escalation", "review", or one baton answers itself if nobody has within a while: "context_warning"
 	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when it did.
@@ -302,6 +305,14 @@ func (q *DialogQueue) remove(drop func(Dialog) bool) {
 
 // AnyOpen reports whether any dialog is open.
 func (q DialogQueue) AnyOpen() bool { return len(q) > 0 }
+
+// LeadOpen reports whether a dialog is open that is not a phase agent's: the lead's own, or one of an
+// agent of the model's own. Where baton's mod runs, only such a dialog holds the lead: the mod's
+// compaction, the rewake after it and a line it submits all run under a phase agent's permission prompt,
+// which survives them (spike 36).
+func (q DialogQueue) LeadOpen() bool {
+	return slices.ContainsFunc(q, func(d Dialog) bool { return d.Phase == "" })
+}
 
 // Has reports whether a dialog of this kind is open.
 func (q DialogQueue) Has(kind string) bool {
@@ -607,13 +618,14 @@ type Spawning struct {
 	At      time.Time `json:"at"`
 }
 
-// An AgentCall is a call of the model's own to the Agent tool (ToolUse), made at At, whose agent may still
-// ask for a worktree: Claude Code asks for an isolated agent's as the call starts, right after its
-// PreToolUse, or, where the human must allow the call first, once they have. It is settled by its result,
-// by a worktree baton makes for an agent of the model's own, or AgentCallWait after At while no Agent
-// call waits on the human.
+// An AgentCall is a call of the model's own to the Agent tool (ToolUse), made at At by Agent ("" for the
+// lead's main agent), whose agent may still ask for a worktree: Claude Code asks for an isolated agent's
+// as the call starts, right after its PreToolUse, or, where the human must allow the call first, once they
+// have. It is settled by its result, by a worktree baton makes for an agent of the model's own, or
+// AgentCallWait after At while no Agent call of the same agent waits on the human.
 type AgentCall struct {
 	ToolUse string    `json:"tool_use"`
+	Agent   string    `json:"agent,omitempty"`
 	At      time.Time `json:"at"`
 }
 
@@ -624,10 +636,11 @@ const AgentCallWait = 30 * time.Second
 // maxAgentCalls bounds the Agent calls on record: one whose result never came must not pile up.
 const maxAgentCalls = 32
 
-// AgentCalled records the model's own Agent call id, made at at, and lets go of the ones settled by time.
-func (r *Runtime) AgentCalled(id string, at time.Time) {
+// AgentCalled records the model's own Agent call id, made by agent at at, and lets go of the ones settled
+// by time.
+func (r *Runtime) AgentCalled(id, agent string, at time.Time) {
 	r.AgentCalls = append(slices.DeleteFunc(r.AgentCalls, func(c AgentCall) bool { return c.ToolUse == id || !r.agentMayAsk(c, at) }),
-		AgentCall{ToolUse: id, At: at})
+		AgentCall{ToolUse: id, Agent: agent, At: at})
 	if n := len(r.AgentCalls) - maxAgentCalls; n > 0 {
 		r.AgentCalls = slices.Delete(r.AgentCalls, 0, n)
 	}
@@ -652,9 +665,12 @@ func (r Runtime) AgentCallsOpen(now time.Time) bool {
 }
 
 // agentMayAsk reports that the agent of call c may still ask for a worktree at now: not long after its
-// call, or with an Agent call's permission prompt open (none says whose).
+// call, or with an Agent call's permission prompt of the same agent open. A permission prompt names the
+// agent that asked (spike 36), so one agent's prompt keeps no other agent's call open; but a worktree
+// request names nobody, so a call waiting on its prompt holds every phase agent's start until it is
+// answered, lest the human allow it while baton's spawn is open.
 func (r Runtime) agentMayAsk(c AgentCall, now time.Time) bool {
-	return now.Sub(c.At) < AgentCallWait || slices.ContainsFunc(r.Dialogs, func(d Dialog) bool { return d.Tool == "Agent" })
+	return now.Sub(c.At) < AgentCallWait || slices.ContainsFunc(r.Dialogs, func(d Dialog) bool { return d.Tool == "Agent" && d.Agent == c.Agent })
 }
 
 // PlainTree is a worktree baton made for an agent of the model's own, named Name (agent-<id> for an

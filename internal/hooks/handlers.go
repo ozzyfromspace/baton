@@ -1030,7 +1030,7 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		says = append(says, ann)
 	}
 	if dl.any() {
-		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
+		tell = strings.TrimSpace(dl.text(s, config.AggregatesFromEnv(c.Env)) + "\n\n" + tell)
 		says = append(says, dl.says())
 		dl.event(s, "prompt")
 	}
@@ -1075,7 +1075,7 @@ func (h *handlers) permissionRequest(c Context) (Result, error) {
 		}
 		var open int
 		up, err := h.onScreen(c, s, func(st *state.State) {
-			st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: s.Agent, Key: dialogKey(c.Input), Since: c.Now})
+			st.Run.Dialogs.Open(state.Dialog{Tool: tool, Agent: s.Agent, Key: dialogKey(c.Input), Since: c.Now, Phase: s.Worker()})
 			open = len(st.Run.Dialogs)
 		})
 		if err == nil {
@@ -1254,7 +1254,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		s.Event("boundary_waits", map[string]any{"phase": st.Current, "reason": st.Run.Compaction.Reason, "turn_by": st.Run.TurnBy})
 	}
 	if dl.any() {
-		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
+		tell = strings.TrimSpace(dl.text(s, config.AggregatesFromEnv(c.Env)) + "\n\n" + tell)
 		dl.event(s, "tool")
 	}
 	if news.any() {

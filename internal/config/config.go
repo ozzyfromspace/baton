@@ -36,7 +36,7 @@ type Config struct {
 	// baton asks the human, through AskUserQuestion, whether to checkpoint (BATON_WARN_PCT). 0 disables it.
 	WarnPct *float64 `json:"warn_pct,omitempty"`
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it: a
-	// duration from 1m to 2h, "10m" by default (BATON_ESCALATION_TIMEOUT, which may go down to 10s). It is
+	// duration from 1m to 20m, "10m" by default (BATON_ESCALATION_TIMEOUT, which may go down to 10s). It is
 	// the wait of a proposal whose model gave no --wait from 5m to 20m, and of baton's own questions.
 	EscalationTimeout string `json:"escalation_timeout,omitempty"`
 	// MaxAutoDecisions is how many decisions a phase may make without the human (notes, and proposals
@@ -100,10 +100,12 @@ const (
 )
 
 // Bounds for escalation_timeout. A proposal that goes ahead within seconds gives nobody a chance to
-// veto it, so only the environment, for tests, may go below a minute.
+// veto it, so only the environment, for tests, may go below a minute. Nothing baton can decide waits on
+// the human longer than 20 minutes, the longest a proposal's own --wait may ask for
+// (decide.ProposalWaitMax), whatever the setting says.
 const (
 	MinEscalationTimeout    = time.Minute
-	MaxEscalationTimeout    = 2 * time.Hour
+	MaxEscalationTimeout    = 20 * time.Minute
 	MinEnvEscalationTimeout = 10 * time.Second
 )
 

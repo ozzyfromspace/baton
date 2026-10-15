@@ -811,7 +811,7 @@ func cmdDone(args []string, io IO) int {
 	})
 	var re state.RedError
 	if errors.As(err, &re) {
-		return refusedRed(io, s, re.Job)
+		return refusedRed(io, s, pl, re.Job)
 	}
 	if err != nil {
 		return refused(io, s, "done", err)
@@ -899,7 +899,7 @@ func cmdDone(args []string, io IO) int {
 
 // refusedRed turns down done for a phase whose latest verification is red. A result the model has not
 // been given yet comes with it, and counts as given.
-func refusedRed(io IO, s *state.Store, j state.Job) int {
+func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job) int {
 	var fresh bool
 	s.Update(func(st *state.State) error {
 		if x := st.Job(j.ID); x != nil && x.Delivered.IsZero() {
@@ -910,7 +910,7 @@ func refusedRed(io IO, s *state.Store, j state.Job) int {
 	s.Event("refused", map[string]any{"command": "done", "phase": j.Phase, "why": "red", "job": j.ID})
 	if fresh {
 		tail, _ := lane.Tail(jobLog(s, j), 80, 6<<10)
-		fmt.Fprintln(io.Err, decide.JobResult(j, jobLog(s, j), tail, nil))
+		fmt.Fprintln(io.Err, decide.JobResult(j, jobLog(s, j), tail, nil, qaAhead(io, pl, j.Phase)))
 	}
 	return fail(io, "%s", decide.RedRefusal(j))
 }

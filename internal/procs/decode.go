@@ -118,3 +118,53 @@ func statusUID(fsys fs.FS, dir string) (int, error) {
 	}
 	return 0, errors.New("status: no Uid")
 }
+
+// rowsFromProc reads every process of fsys, rooted at / (Linux's /proc), for finding a tree: its parent,
+// its group and the CPU time it has used (utime and stime, in clock ticks), other than zombies. One that
+// ends as it is read is left out.
+func rowsFromProc(fsys fs.FS) ([]row, error) {
+	entries, err := fs.ReadDir(fsys, "proc")
+	if err != nil {
+		return nil, err
+	}
+	var out []row
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		b, err := fs.ReadFile(fsys, "proc/"+e.Name()+"/stat")
+		if err != nil {
+			continue // it ended meanwhile
+		}
+		p, state, err := parseStat(b)
+		if err != nil || state == 'Z' || state == 'X' {
+			continue
+		}
+		cpu, err := statCPU(b)
+		if err != nil {
+			return nil, fmt.Errorf("proc/%d/stat: %w", pid, err)
+		}
+		out = append(out, row{pid: pid, ppid: p.PPID, pgid: p.PGID, cpu: cpu})
+	}
+	return out, nil
+}
+
+// statCPU reads the CPU time a process has used from /proc/<pid>/stat: utime and stime, its 14th and
+// 15th fields, the 12th and 13th after the command name.
+func statCPU(b []byte) (uint64, error) {
+	end := bytes.LastIndexByte(b, ')')
+	if end < 0 {
+		return 0, errors.New("no command name")
+	}
+	f := strings.Fields(string(b[end+1:]))
+	if len(f) < 13 {
+		return 0, errors.New("no CPU times")
+	}
+	utime, err1 := strconv.ParseUint(f[11], 10, 64)
+	stime, err2 := strconv.ParseUint(f[12], 10, 64)
+	if err := errors.Join(err1, err2); err != nil {
+		return 0, err
+	}
+	return utime + stime, nil
+}

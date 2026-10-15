@@ -19,6 +19,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
 	l.answerOwnQuestion(v, st, in)
 	l.lapse(v, st)
+	l.lapseHold(v, st)
 	l.lapseQuestions(v, st)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || l.resuming(st) {
@@ -35,7 +36,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.errRetries, l.rateNotified = 0, false
 
 	stalled := quietStall(st.Run.Escalation) // escalated already, and pushed: results still go in, and reminders go on
-	if st.Run.Escalation != nil && !stalled || st.Blocked != nil || l.why == gateTurn || st.Run.Dialogs.AnyOpen() {
+	if st.Run.Escalation != nil && !stalled || st.Blocked != nil || l.why == gateTurn || l.dialogHolds(st) {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
@@ -422,6 +423,65 @@ func (l *Loop) lapse(v host.View, st state.State) {
 	if last {
 		l.Store.Event("review_due", map[string]any{"phase": p.Phase, "decisions": n})
 	}
+}
+
+// lapseHold lifts the lead's hold for the human (an escalation of kind decision: a proposal they chose
+// Wait for me on, or whose question went away unanswered) once nobody has written for Timing.HoldLapse,
+// counted from the hold or the human's last word, whichever is later, and not while the machine slept:
+// the run does not wait on them any longer. A proposal baton could have let go ahead does (or a more
+// reversible way to the same end does); one only the human could let through is answered Not now, and
+// the model does it only if it is the safe kind (decide.NotNowRule). The human writing first answers the
+// hold instead (hooks.released), and while the run is paused nothing lapses. The model is told with its
+// next tool call or stop, or woken (deliver). A phase agent's hold is the coordinator's (lapseHolds).
+func (l *Loop) lapseHold(v host.View, st state.State) {
+	e := st.Run.Escalation
+	if l.Store.Worker() != "" || !l.holdLapsed(v, st) {
+		return
+	}
+	fields := map[string]any{"by": state.ByTimeout, "after": l.Timing.HoldLapse.String()}
+	var phase string
+	var n int
+	var last, done bool
+	l.update(func(st *state.State) {
+		if x := st.Run.Escalation; x == nil || !x.Since.Equal(e.Since) || !l.holdLapsed(v, *st) {
+			return // the human answered it meanwhile
+		}
+		reason := st.Run.Escalation.Reason
+		st.Run.Escalation, done = nil, true
+		var say, tell string
+		if p := st.HeldProposal(e.Since); p != nil {
+			var answer string
+			id, what, undo, untimed := p.ID, p.What, decide.UndoOf(*p), p.Untimed != ""
+			answer, n, last = state.LapseHold(st, p, l.MaxAuto, v.Now)
+			phase = st.Current
+			if last {
+				phase = st.ReviewDue
+			}
+			say, tell = decide.HoldLapsed(id, what, undo, phase, l.Timing.HoldLapse, untimed, last)
+			fields["id"], fields["answer"] = id, answer
+		} else {
+			say, tell = decide.HoldLifted(reason, st.Current, l.Timing.HoldLapse)
+			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "hold_lapsed", Text: reason, At: v.Now})
+			fields["reason"] = reason
+		}
+		st.Run.Announce = append(st.Run.Announce, say)
+		state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: tell}, v.Now)
+	})
+	if !done {
+		return
+	}
+	l.Store.Event("hold_lapsed", fields)
+	if last {
+		l.Store.Event("review_due", map[string]any{"phase": phase, "decisions": n})
+	}
+}
+
+// holdLapsed reports a hold of the lead's for the human (an escalation of kind decision) that has gone
+// HoldLapse with no word from them, while the plan runs.
+func (l *Loop) holdLapsed(v host.View, st state.State) bool {
+	e := st.Run.Escalation
+	return e != nil && e.Kind == "decision" && st.Mode == state.ModeRunning && l.Timing.HoldLapse > 0 &&
+		!v.Now.Before(l.since(latest(e.Since, st.Run.HumanAt)).Add(l.Timing.HoldLapse))
 }
 
 // lapseQuestions answers baton's own question about the run for the human once it has waited the

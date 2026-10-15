@@ -283,6 +283,39 @@ func TestNudgeThenEscalateWhenTheModelDoesNotResume(t *testing.T) {
 	}
 }
 
+// Brought in, the human may be away: a model that has not resumed after a compaction is still reminded,
+// every StalledNudge, as a session that went quiet is, until it takes the phase up again.
+func TestAModelThatDoesNotResumeIsStillReminded(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, ByBaton: true, Reason: "boundary", Finished: r.now}
+	})
+	r.tick(0)
+	r.run(DefaultTiming.ResumeNudge + DefaultTiming.ResumeEscalate + 30*time.Second)
+	nudged := r.state().Run.Compaction.Nudged
+	if e := r.state().Run.Escalation; len(r.in.text) != 1 || e == nil || e.Kind != "stalled" {
+		t.Fatalf("typed %q, escalation %+v", r.in.text, e)
+	}
+	r.runTo(nudged.Add(DefaultTiming.StalledNudge - 20*time.Second))
+	if len(r.in.text) != 1 {
+		t.Fatalf("reminded again before StalledNudge: %q", r.in.text)
+	}
+	r.run(30 * time.Second)
+	if len(r.in.text) != 2 || r.in.text[1] != r.in.text[0] || !strings.HasPrefix(r.in.text[1], "[baton] Context compacted. Begin P1") {
+		t.Fatalf("not reminded again: %q", r.in.text)
+	}
+	if !hasEvent(r.events(), "resume_nudge", map[string]any{"stalled": true}) {
+		t.Errorf("events:\n%s", r.events())
+	}
+	if e := r.state().Run.Escalation; e == nil || e.Kind != "stalled" || strings.Count(r.events(), `"kind":"escalated"`) != 1 {
+		t.Errorf("escalation %+v; escalated more than once:\n%s", e, r.events())
+	}
+	r.run(DefaultTiming.StalledNudge)
+	if len(r.in.text) != 3 {
+		t.Errorf("not reminded a third time: %q", r.in.text)
+	}
+}
+
 func TestResumedModelIsNotNudged(t *testing.T) {
 	r := newRig(t)
 	r.set(func(st *state.State) {

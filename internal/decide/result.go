@@ -68,8 +68,10 @@ func short(commit string) string {
 
 // JobResult is a finished job's result for the model: what ran and how it ended, the end of its log, and
 // what to do about it. others are the phases red now (state.Red); those of other phases are named, so the
-// model leaves failures in their area to them.
-func JobResult(j state.Job, log, tail string, others []state.Job) string {
+// model leaves failures in their area to them. qa is the QA phase ahead of the job's phase while the plan
+// aggregates its heavy checks there (plan.QAAhead, aggregate_qa), "" otherwise: a red result then may be
+// other phases' work in progress, which only the QA phase need make whole.
+func JobResult(j state.Job, log, tail string, others []state.Job, qa string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
 	if tail = strings.TrimSpace(tail); tail != "" {
@@ -88,6 +90,9 @@ func JobResult(j state.Job, log, tail string, others []state.Job) string {
 	case j.Status == state.JobLaneError:
 		fmt.Fprintf(&b, "This is not a test result: the gate never ran on its own terms, so do not look for a bug in %s's code because of it. "+
 			"Run the gate in place instead, and `baton note` that you did. (baton status says how to set lanes up with a %s script.)", j.Phase, ".baton-lane")
+	case Hung(j):
+		b.WriteString("baton stopped it as hung, so nothing was checked: find what it waits on (a server that never answers, input, a lock) before you hand it to baton again, " +
+			"or run it in place with a timeout of its own.")
 	case j.Status == state.JobInterrupted:
 		b.WriteString("Nothing was checked. Hand it to baton again, or run it in place.")
 	case j.Kind == state.JobAwait:
@@ -99,10 +104,23 @@ func JobResult(j state.Job, log, tail string, others []state.Job) string {
 		fmt.Fprintf(&b, "Fix what failed, commit, and verify again (`baton verify`), or run a quick gate in place. "+
 			"`baton done %s` is refused while its latest verification is red.", j.Phase)
 	}
+	if j.Red() && qa != "" {
+		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))
+	}
 	if red := RedPhases(others, j.Phase); red != "" {
 		b.WriteString("\n" + red)
 	}
 	return b.String()
+}
+
+// othersMayBeWhy is what a red result of phase, not a QA phase, adds while the plan leaves its heavy checks
+// to the QA phase qa ("P10 (QA)"): the phases before qa run focused checks only and may leave work in
+// progress on the branch, so the failure may be theirs. The phase fixes its own part, and finishes over
+// the rest, which is a decision without the human, rather than waiting on what qa makes whole.
+func othersMayBeWhy(phase, qa string) string {
+	return fmt.Sprintf("This plan leaves its full checks to %s, and other phases' work in progress may be why this is red: "+
+		"fix what is %s's, and if the rest is not, finish with `baton done %s --despite-red \"<why>\"` (the human is told) and leave it to %s.",
+		qa, phase, phase, qa)
 }
 
 // RedPhases names the phases other than phase that are red now ("" for none): they share the branch with
@@ -123,6 +141,26 @@ func RedPhases(red []state.Job, phase string) string {
 	}
 	return "Red now: " + strings.Join(names, "; ") + ". Failures in their area are theirs, " + whose + ": leave them to " +
 		plural(len(names), "it", "them") + "."
+}
+
+// hungMark begins the reason of a job baton stopped as hung (HungReason).
+const hungMark = "hung — "
+
+// HungReason is why baton stopped a gate as hung (Job.Reason): its log had not grown, and its processes
+// had used no CPU, for quiet. Such a job has no verdict: its phase counts as unverified.
+func HungReason(quiet time.Duration) string {
+	return hungMark + "its log had not grown, and its processes had used no CPU, for " + Span(quiet)
+}
+
+// Hung reports a job baton stopped as hung (HungReason).
+func Hung(j state.Job) bool {
+	return j.Status == state.JobInterrupted && strings.HasPrefix(j.Reason, hungMark)
+}
+
+// JobHung tells the human that baton stops job j as hung, its log and its processes still for quiet.
+func JobHung(j state.Job, quiet time.Duration) string {
+	return fmt.Sprintf("baton: job %s (`%s`, %s) looks hung — its log has not grown, and its processes have used no CPU, for %s → baton stops it, and it counts as unverified",
+		j.ID, j.Command, j.Phase, Span(quiet))
 }
 
 // FinishedAside tells the human that job j, as it ended, was the job of a phase set aside while it ran:

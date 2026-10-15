@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -116,13 +117,14 @@ func (x *still) setSub(fn func(st *state.State)) {
 func TestARunThatStopsMovingSaysSo(t *testing.T) {
 	after := DefaultTiming.StallAfter
 	recent := after - 10*time.Minute // movement this long after t0, at a look at t0 + after + 1m
+	quiet := "the run has not moved for " + decide.Span(after+time.Minute)
 	for _, c := range []struct {
 		name string
 		set  func(x *still)
 		told []string // what the notice names; nil: no notice
 	}{
 		{"nothing moved, nothing busy", func(*still) {},
-			[]string{"the run has not moved for 31m — P0: the lead works on it", "P1: agent between turns", "P2: waits on P1", "lead: its turn over, with P0 in hand"}},
+			[]string{quiet + " — P0: the lead works on it", "P1: agent between turns", "P2: waits on P1", "lead: its turn over, with P0 in hand"}},
 		// Movement.
 		{"a hook of the lead's", func(x *still) { x.setLead(func(st *state.State) { st.Run.LastActivity = x.t0.Add(recent) }) }, nil},
 		{"the lead's turn began", func(x *still) { x.setLead(func(st *state.State) { st.Run.TurnStarted = x.t0.Add(recent) }) }, nil},
@@ -157,17 +159,20 @@ func TestARunThatStopsMovingSaysSo(t *testing.T) {
 				st.Run.ToolStarted(state.ToolCall{ID: "t1", Tool: "Bash", Since: x.t0.Add(after)})
 			})
 		}, nil},
+		// Background work younger than BackgroundIdle. (With the defaults, StallAfter and BackgroundIdle are
+		// both 20 minutes: work that runs as long as the run has not moved is past it.)
 		{"the model's own background work", func(x *still) {
+			x.c.Lead.Timing.BackgroundIdle = after + 10*time.Minute
 			x.setLead(func(st *state.State) {
 				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Description: "npm test", Since: x.t0}}
 			})
 		}, nil},
 		{"background work past BackgroundIdle", func(x *still) {
-			x.c.Lead.Timing.BackgroundIdle = 20 * time.Minute
+			x.c.Lead.Timing.BackgroundIdle = after
 			x.setLead(func(st *state.State) {
 				st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Description: "npm test", Since: x.t0}}
 			})
-		}, []string{"the run has not moved for 31m"}},
+		}, []string{quiet}},
 		// Never.
 		{"the usage limit", func(x *still) {
 			x.setLead(func(st *state.State) { st.Usage = &state.Usage{Limited: x.t0.Add(2 * after), Hit: x.t0, By: "lead"} })
@@ -209,7 +214,7 @@ func TestARunThatStopsMovingSaysSo(t *testing.T) {
 				}
 			}
 			ev, _ := os.ReadFile(filepath.Join(x.lead.Dir, "events.jsonl"))
-			if !hasEvent(string(ev), "run_stalled", map[string]any{"quiet": "31m0s"}) {
+			if !hasEvent(string(ev), "run_stalled", map[string]any{"quiet": (after + time.Minute).String()}) {
 				t.Errorf("events:\n%s", ev)
 			}
 		})
@@ -234,7 +239,7 @@ func TestAHungGateIsTold(t *testing.T) {
 		switch told := x.told(); {
 		case grows && len(told) != 0:
 			t.Errorf("a gate whose log grows: told %q", told)
-		case !grows && (len(told) != 1 || !strings.Contains(told[0], "P1: verifying 32m (job P1.j1), its log has not grown for 31m")):
+		case !grows && (len(told) != 1 || !strings.Contains(told[0], "P1: verifying "+decide.Span(after+2*time.Minute)+" (job P1.j1), its log has not grown for "+decide.Span(after+time.Minute))):
 			t.Errorf("a hung gate: told %q", told)
 		}
 	}
@@ -258,7 +263,7 @@ func TestTheStallAlarmIsPushedFromTheLeadsTick(t *testing.T) {
 	for i, k := range p.kinds {
 		if k == "run_stalled" {
 			n++
-			if !strings.Contains(p.details[i], "the run has not moved for 30m — P0:") {
+			if !strings.Contains(p.details[i], "the run has not moved for "+decide.Span(DefaultTiming.StallAfter)+" — P0:") {
 				t.Errorf("pushed %q", p.details[i])
 			}
 		}

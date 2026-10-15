@@ -141,7 +141,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle, "BATON_BACKGROUND_IDLE": &timing.BackgroundIdle,
-		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_RECOVER_AFTER": &timing.RecoverAfter, "BATON_RECOVER_EVERY": &timing.RecoverEvery} {
+		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_HOLD_LAPSE": &timing.HoldLapse, "BATON_RECOVER_AFTER": &timing.RecoverAfter, "BATON_RECOVER_EVERY": &timing.RecoverEvery} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
 			*field = d
 		}

@@ -24,6 +24,12 @@ const (
 	ByPaused   = "paused"   // the human chose Pause baton
 )
 
+// NotNow is the answer baton gives for the human to a proposal only they could let through (Untimed)
+// that it will not let wait on them any longer: it is not done on baton's word. The model does it only if
+// it is safely reversible and stays inside the project, and notes it; anything else is left for the human
+// (decide.NotNowRule).
+const NotNow = "Not now"
+
 // Decision is one note or proposal.
 type Decision struct {
 	ID      string `json:"id"` // d1, d2, … in the order they were made (P3.d1, … in a worker's sub-run)
@@ -50,6 +56,10 @@ type Decision struct {
 	// asks it itself, and its deadline counts from when the mod is told to ask it.
 	Relayed  bool        `json:"relayed,omitempty"`
 	Resolved *Resolution `json:"resolved,omitempty"`
+	// Lapsed is when baton lifted the hold on a proposal held for the human (they chose Wait for me, or
+	// its question went away unanswered), as nobody had written for loop's Timing.HoldLapse since
+	// (LapseHold): Resolved then says what baton answered for them.
+	Lapsed time.Time `json:"lapsed,omitzero"`
 	// Announced: shown in the session. Told: put in front of the human the next time they typed.
 	// Reviewed: the human went over it at a review stop.
 	Announced bool `json:"announced,omitempty"`
@@ -65,9 +75,22 @@ type Resolution struct {
 }
 
 // WithoutHuman reports a decision the run made without the human: a note, or a proposal baton went ahead
-// with because nobody answered.
+// with because nobody answered. One baton answered Not now was not done on its word: whatever the model
+// then did of it, it noted.
 func (d Decision) WithoutHuman() bool {
-	return d.Kind == Note || d.Kind == Proposal && d.Resolved != nil && d.Resolved.By == ByTimeout
+	return d.Kind == Note || d.Kind == Proposal && d.Resolved != nil && d.Resolved.By == ByTimeout && d.Resolved.Answer != NotNow
+}
+
+// HeldProposal is the proposal of the session's own that the hold raised at since holds for the human:
+// the latest one they chose Wait for me on, or whose question went away unanswered, then or later. One
+// held before (its hold over since, the human having written) is not. Nil for none.
+func (st *State) HeldProposal(since time.Time) *Decision {
+	for i := len(st.Decisions) - 1; i >= 0; i-- {
+		if d := &st.Decisions[i]; d.Kind == Proposal && d.Resolved != nil && (d.Resolved.By == ByHeld || d.Resolved.By == ByDeclined) && !d.Resolved.At.Before(since) {
+			return d
+		}
+	}
+	return nil
 }
 
 // PendingProposal is the proposal still waiting for its answer, or nil. There is at most one.
@@ -159,6 +182,33 @@ func WentAhead(st *State, p *Decision, maxAuto int, now time.Time) (n int, last 
 		return n, true
 	}
 	return n, false
+}
+
+// LapseHold settles proposal p, held for the human (they chose Wait for me, or its question went away
+// unanswered), whose hold lapsed with no word from them: baton answers for them, Go ahead, or Not now for
+// one only they could let through (Untimed), and a notice says so. Gone ahead, it is a decision without
+// the human, as in WentAhead, and when it was the last its phase may make (maxAuto) a review becomes due.
+// It reports the answer, how many decisions the phase has made without the human, and whether it was the
+// last.
+func LapseHold(st *State, p *Decision, maxAuto int, now time.Time) (answer string, n int, last bool) {
+	id, what, phase := p.ID, p.What, p.Phase
+	answer = "Go ahead"
+	if p.Untimed != "" {
+		answer = NotNow
+	}
+	Resolve(st, id, ByTimeout, answer, now)
+	for i := range st.Decisions {
+		if d := &st.Decisions[i]; d.ID == id {
+			d.Lapsed = now
+		}
+	}
+	st.Run.Notices = append(st.Run.Notices, Notice{Kind: "hold_lapsed", Text: what, At: now})
+	n = st.Unattended(phase)
+	if answer == NotNow || st.ReviewDue != "" || maxAuto <= 0 || n < maxAuto {
+		return answer, n, false
+	}
+	DueReview(st, phase, now)
+	return answer, n, true
 }
 
 // DueReview stops the run for the human to review the decisions phase made without them.

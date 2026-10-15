@@ -155,14 +155,14 @@ func TestAskAgain(t *testing.T) {
 	if AskAgain(&st, p, t0) {
 		t.Fatal("asked again before its answer was applied")
 	}
-	q.Applied = t0.Add(time.Minute)
+	q.Applied, q.Lapsed = t0.Add(time.Minute), t0.Add(30*time.Minute)
 	if !AskAgain(&st, p, t0.Add(time.Hour)) {
 		t.Fatal("not asked again")
 	}
 	if len(st.Relay) != 2 || !st.Relay[0].Same(b) || !st.Relay[1].Same(p) {
 		t.Fatalf("queue %+v: the question asked again goes last", st.Relay)
 	}
-	if r := st.Relay[1]; r.Answered != nil || !r.Applied.IsZero() || !r.Issued.IsZero() || r.Question != "" || r.Asked || r.Ask != 0 || r.Instance != "" || !r.Queued.Equal(t0.Add(time.Hour)) {
+	if r := st.Relay[1]; r.Answered != nil || !r.Applied.IsZero() || !r.Lapsed.IsZero() || !r.Issued.IsZero() || r.Question != "" || r.Asked || r.Ask != 0 || r.Instance != "" || !r.Queued.Equal(t0.Add(time.Hour)) {
 		t.Errorf("asked again %+v: it is asked afresh", r)
 	}
 	if AskAgain(&st, Relay{Phase: "P9", Kind: RelayBlocked}, t0) {

@@ -62,7 +62,89 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 			c.apply(now, s, st, r)
 		}
 	}
+	c.lapseHolds(now, s, st)
 	c.ask(now, s, b)
+}
+
+// lapseHolds lifts each hold a phase agent's proposal put on its phase for the human (they answered its
+// question Wait for me or Pause baton, or it went away unanswered or got that default, and the proposal
+// waits in the agent's sub-run) once nobody has written for Timing.HoldLapse, counted from that answer or
+// the human's last word in the lead's session, whichever is later: the run does not wait on them any
+// longer. It goes as the lead's does (Loop.lapseHold): a proposal baton could have let go ahead does, or a
+// more reversible way does; one only the human could let through is answered Not now. While the run is
+// paused nothing lapses, and /baton run asks the human again (state.AskAgain), which starts it over.
+func (c *Coordinator) lapseHolds(now time.Time, s *state.Store, st state.State) {
+	after := c.Lead.Timing.HoldLapse
+	if st.Mode != state.ModeRunning || after <= 0 {
+		return
+	}
+	for _, r := range st.Relay {
+		if r.Kind != state.RelayProposal || r.Answered == nil || r.Answered.By == state.ByWithdrawn || r.Applied.IsZero() || !r.Lapsed.IsZero() {
+			continue
+		}
+		if o := decide.RelayOutcome(r, r.Answered.Answer); o == decide.OutcomeGo || o == decide.OutcomeWords {
+			continue // not held
+		}
+		if now.Before(c.Lead.since(latest(r.Answered.At, st.Run.HumanAt)).Add(after)) {
+			continue
+		}
+		c.lapseHold(now, s, st, r)
+	}
+}
+
+// lapseHold lifts the hold phase agent question r put on its phase (lapseHolds), in the agent's sub-run,
+// which tells the agent, and records it in the run, which tells the human. Settled there meanwhile, or
+// with the agent gone, there is nothing to lift: it is only marked done with.
+func (c *Coordinator) lapseHold(now time.Time, s *state.Store, st state.State, r state.Relay) {
+	after := c.Lead.Timing.HoldLapse
+	var say, answer string
+	var n int
+	var last bool
+	if sub := c.subStore(st, r.Phase); sub != nil {
+		if _, err := sub.Update(func(sst *state.State) error {
+			say, answer, n, last = lapseRelayHold(sst, r, after, c.Fleet.MaxAuto, now)
+			return nil
+		}); err != nil {
+			return // tried again at the next step
+		}
+	}
+	s.Update(func(st *state.State) error {
+		if q := st.RelayOf(r); q != nil && q.Answered != nil && q.Lapsed.IsZero() {
+			q.Lapsed = now
+		}
+		if say != "" {
+			st.Run.Announce = append(st.Run.Announce, say)
+		}
+		return nil
+	})
+	if say == "" {
+		return
+	}
+	s.Event("hold_lapsed", relayFields(r, map[string]any{"by": state.ByTimeout, "answer": answer, "after": after.String()}))
+	if last {
+		s.Event("review_due", map[string]any{"phase": r.Phase, "decisions": n})
+	}
+}
+
+// lapseRelayHold lifts, in the agent's sub-run st, the hold phase agent question r put on its proposal,
+// nobody having written for after: baton answers it for the human (state.LapseHold), and the agent is
+// told, at its next tool call or stop, or woken. maxAuto caps the decisions the phase may make without
+// the human (max_auto_decisions; 0: no cap). It returns what the human is told ("" when the proposal was
+// settled there meanwhile), the answer, how many decisions the phase has made without the human, and
+// whether that was the last it may make.
+func lapseRelayHold(st *state.State, r state.Relay, after time.Duration, maxAuto int, now time.Time) (say, answer string, n int, last bool) {
+	if !st.Waits(r) {
+		return "", "", 0, false
+	}
+	if e := st.Run.Escalation; e != nil && e.Kind == "decision" {
+		st.Run.Escalation = nil
+	}
+	p := st.PendingProposal()
+	id, what, undo, untimed := p.ID, p.What, decide.UndoOf(*p), p.Untimed != ""
+	answer, n, last = state.LapseHold(st, p, maxAuto, now)
+	say, tell := decide.RelayHoldLapsed(id, what, undo, r.Phase, after, untimed, last)
+	state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: tell, About: r.Key()}, now)
+	return say, answer, n, last
 }
 
 // ask has the mod put the front question of the run's phase agents to the human (bridge.Ask): once it is

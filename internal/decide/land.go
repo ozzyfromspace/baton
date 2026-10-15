@@ -3,6 +3,7 @@ package decide
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -85,6 +86,36 @@ func ReverifyNotes(branch, notes string, byLead bool) string {
 	return n
 }
 
+// LandCommit asks the lead's model to commit its uncommitted changes to paths, which have held phase's
+// work from landing on branch (the run's branch) for waited: baton never lands over them. It commits them
+// by path, as they are; nothing it is asked to do discards them.
+func LandCommit(phase, branch string, paths []string, waited time.Duration) string {
+	them := plural(len(paths), "it", "them")
+	return fmt.Sprintf("[baton] %s's work, finished by its phase agent, has waited %s to land on %s: it changes %s, where you have uncommitted changes in the checkout, "+
+		"and baton never lands over them. Commit your changes to %s now, by path (git add -- %s, then git commit), as work in progress if they are not finished: "+
+		"baton then lands %s's work, merged with yours. If one is a generated or ignored file that does not belong in a commit, move it out of the way instead. "+
+		"Never stash, reset or discard your changes to make way.",
+		phase, Span(waited), branch, strings.Join(paths, ", "), them, strings.Join(paths, " "), phase)
+}
+
+// LandNudged tells the human that baton asked the lead to commit its changes to paths, which have held
+// phase's landing for waited.
+func LandNudged(phase string, paths []string, waited time.Duration) string {
+	return fmt.Sprintf("baton: %s has waited %s to land on the lead's uncommitted changes to %s → asked the lead to commit %s",
+		phase, Span(waited), strings.Join(paths, ", "), plural(len(paths), "it", "them"))
+}
+
+// LandOffBranch is the notice pushed to the human when phase's work cannot land because the checkout is
+// on another branch (on; "" for a detached HEAD) than the run's (branch): it lands once the checkout is
+// back.
+func LandOffBranch(phase, on, branch string) string {
+	where := fmt.Sprintf("on the branch %s", on)
+	if on == "" {
+		where = "on a detached HEAD"
+	}
+	return fmt.Sprintf("%s's work waits to land: the checkout is %s, not on the run's branch %s. baton lands it once the checkout is back on %s", phase, where, branch, branch)
+}
+
 // MailTyped is the line baton types to give an idle session the messages it has for it, which come
 // with the prompt.
 func MailTyped(kinds []string) string {
@@ -94,6 +125,8 @@ func MailTyped(kinds []string) string {
 			return "[baton] Your work did not land yet: baton's message, attached, says why and what to do."
 		case state.MessageAnswer:
 			return "[baton] Your question has its answer: baton's message, attached, says what it is and what to do."
+		case state.MessageCommit:
+			return "[baton] A phase's work waits to land on your uncommitted changes: baton's message, attached, says which files to commit."
 		}
 	}
 	return "[baton] baton has a message for you, attached."

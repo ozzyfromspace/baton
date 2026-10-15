@@ -233,6 +233,38 @@ on Claude Code 2.1.300 and 2.1.296 with Haiku:
 So in v0.8.2, baton types nothing where the mod runs: compactions and baton's lines go through the mod, and the box is
 never touched. In serial mode, where it still types, it never sends Ctrl-C while an agent may be live.
 
+## What spike 36 found (v0.8.4)
+
+baton held the lead's compaction, its deliveries and its switching while any dialog was open, so one phase agent's
+permission prompt held the whole run until the human answered it. [`spikes/36-agent-dialog`](../../spikes/36-agent-dialog)
+measured, on Claude Code 2.1.300 with Haiku, what goes on under an agent's prompt, and how each way of stopping an
+agent looks:
+
+- **An agent's permission prompt holds nothing of the lead's where the mod runs.** With one open, the mod's
+  `$.session.compact()` compacted the lead (the hooks, the boundary and the rewake's brief as in spike 35) and the
+  prompt stayed on screen, unanswered, through the compaction and every turn after; `$.prompt.submit` started a lead
+  turn that ran beneath it. Prompts queue in the order they open, one on screen: the lead's own call that needs one
+  waits behind the agent's. The `PermissionRequest` hook of an agent's call has `agent_id` and `agent_type`; the
+  lead's has neither.
+- **No band, so no question, under any dialog.** The mod's `AbovePrompt` band is not drawn while a prompt is on
+  screen, the lead's or an agent's, and the mod asks from the band's render, so baton's questions wait for every open
+  prompt to close. Their deadlines run meanwhile.
+- **Keys typed into an agent's prompt approve it.** `/compact` or a line, then Enter, chose the prompt's `1. Yes`:
+  the agent's command ran, and nothing compacted. Serial mode, which types, keeps holding on every dialog.
+- **The notifications:** `idle_prompt` never came while a prompt was open (none in 4.5 idle minutes); the
+  `permission_prompt` notification, 6 s after a prompt opens, has no `agent_id`.
+- **A human's stop looks the same every way, and only to a message.** x on a running row, ctrl+x ctrl+k (pressed
+  twice), Ctrl-C at the prompt and Esc in the agent's view each end its turn `aborted` and its row `killed`, with no
+  hook, and the mod's SendMessage after is refused: "was stopped by the user and was not resumed". baton's own
+  TaskStop looks the same up to there, but a message resumes the agent. Only ctrl+x ctrl+k tells the lead, as a
+  `task-notification` prompt. A finished agent has no row to stop.
+- **`/clear` kills the command an agent runs, not the agent.** It goes on to the end of its turn under the new
+  session, takes messages meanwhile, and only then is refused: "could not be resumed: … its worktree is not recorded
+  for this isolated agent". baton's `cleared` already waits for that.
+
+So v0.8.4 lets a phase agent's dialog hold only that agent where the mod runs, while the relay and the stall alarm
+still see it; serial mode keeps its hold; and a stopped agent is still told by the refusal its next message gets.
+
 ## What a real run taught (v0.8.2)
 
 The same v0.8.1 run, on a large private project with four phase agents beside the lead in auto mode, stopped for
