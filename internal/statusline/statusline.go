@@ -23,12 +23,18 @@ import (
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
 
+// mark begins baton's part of the status line.
+const mark = "◆ baton"
+
+// Inherited is baton's part of the status line in a session that only inherited baton's environment
+// (package hostcheck): no run is its own, so it shows none.
+func Inherited() string { return mark + " · " + decide.InheritedStatus }
+
 // Segment is baton's part of the status line, the lead session's own: the phase in hand, then a usage
 // limit the run waits on, the jobs baton runs for the lead's phases, and the context's size; or what
 // holds the lead (an escalation, a proposal, a compaction). The phase agents beside it are on baton's band
 // (internal/board).
 func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string {
-	const mark = "◆ baton"
 	if !havePlan || st.Mode == state.ModeIdle {
 		return mark
 	}

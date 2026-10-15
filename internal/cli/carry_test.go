@@ -11,6 +11,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/state"
+	"github.com/ozzyfromspace/baton/internal/statusline"
 )
 
 // A session with no plan of its own that runs a plan whose run another session left with no host (Claude
@@ -124,5 +125,16 @@ func TestInheritedSessionSaysSo(t *testing.T) {
 	}
 	if out := bg.must("", "status"); !strings.Contains(out, "(not hosted (inherited))") {
 		t.Errorf("status with a plan:\n%s", out)
+	}
+	// Its status line records nothing in the run of the host it inherited, whose lead's context the
+	// valves read, and shows none of it.
+	in := `{"session_id":"bg-sess","context_window":{"used_percentage":41,"context_window_size":1000000,` +
+		`"current_usage":{"input_tokens":2,"cache_read_input_tokens":410000,"output_tokens":90}}}`
+	bg.env["HOME"] = t.TempDir() // no status line of the user's after it
+	if out := bg.must(in, "statusline"); out != statusline.Inherited() {
+		t.Errorf("status line %q", out)
+	}
+	if st := s.state(); st.Run.Context != nil {
+		t.Errorf("the inherited session's context was recorded in the host's run: %+v", st.Run.Context)
 	}
 }

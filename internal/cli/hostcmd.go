@@ -402,7 +402,8 @@ func cmdStatusline(_ []string, io IO) int {
 	var st state.State
 	var pl plan.Plan
 	havePlan := false
-	if dir := io.Env("BATON_DIR"); dir != "" && io.Env("BATON_STATUSLINE_NESTED") == "" {
+	onlyInherited := inherited(io) // no run is its own: it records nothing, and shows none
+	if dir := io.Env("BATON_DIR"); dir != "" && io.Env("BATON_STATUSLINE_NESTED") == "" && !onlyInherited {
 		if p, err := state.OpenProject(dir, io.Now); err == nil {
 			if s, ok := p.Lookup(in.SessionID, io.Env("BATON_INSTANCE")); ok {
 				st, _ = recordContext(s, in, io)
@@ -424,7 +425,11 @@ func cmdStatusline(_ []string, io IO) int {
 	if cmd := statusline.UserCommand(projectDir, home); cmd != "" {
 		user = statusline.RunUser(cmd, raw, projectDir, 3*time.Second)
 	}
-	fmt.Fprint(io.Out, statusline.Compose(statusline.Segment(st, pl, havePlan, io.Now()), user))
+	segment := statusline.Segment(st, pl, havePlan, io.Now())
+	if onlyInherited {
+		segment = statusline.Inherited()
+	}
+	fmt.Fprint(io.Out, statusline.Compose(segment, user))
 	return 0
 }
 
