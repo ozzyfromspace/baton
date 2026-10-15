@@ -29,15 +29,16 @@ type Wait struct {
 
 // Bound is how long call (an AskUserQuestion call's questions, in order) may wait, put to the human in
 // the lead's session of s at asked (when the mod's hook first saw the call), as the lead's state stands
-// at now: a timed proposal of the lead's own goes ahead at its deadline, the context question is answered
-// Keep going after warnTimeout, baton's question about the run (or about a plan approved mid-run) gets its
-// default after escTimeout, and a phase agent's question gets its default at its deadline
-// (decide.RelayDefault). A call of the lead model's own, while the plan runs, gets an answer for each of
-// its questions after escTimeout (decide.OwnAnswer): nothing waits on the human for it any longer. None is
-// answered sooner than decide.MinWait after it was on screen: a question of the lead's model may be queued
-// behind another dialog, so its clock runs from when it was first seen in front (Dialog.Front, recorded
-// here); one of the mod's is asked only while no other dialog is open (the band it is asked from is not
-// drawn then).
+// at now: a proposal of the lead's own goes ahead at its deadline, or is answered Not now then if it is
+// outward, the context question is answered Keep going after warnTimeout, baton's question about the run
+// (or about a plan approved mid-run) gets its default after escTimeout, a block is answered Look again
+// once the host's loop found nobody answered it in time, and a phase agent's question gets its default at
+// its deadline (decide.RelayDefault). A call of the lead model's own, while the plan runs, gets an answer
+// for each of its questions after escTimeout (decide.OwnAnswer): nothing waits on the human for it any
+// longer. None is answered sooner than decide.MinWait after it was on screen: a question of the lead's
+// model may be queued behind another dialog, so its clock runs from when it was first seen in front
+// (Dialog.Front, recorded here); one of the mod's is asked only while no other dialog is open (the band
+// it is asked from is not drawn then).
 func Bound(s *state.Store, call []bridge.Asked, asked, now time.Time, warnTimeout, escTimeout time.Duration) (Wait, error) {
 	var w Wait
 	_, err := s.Update(func(st *state.State) error {
@@ -74,11 +75,11 @@ func bound(st *state.State, call []bridge.Asked, asked, now time.Time, warnTimeo
 	switch iq.kind {
 	case "proposal":
 		p := st.OwnProposal()
-		if p == nil || p.Untimed != "" || p.Deadline.IsZero() {
+		if p == nil || p.Deadline.IsZero() {
 			return Wait{}
 		}
 		shown, front := shownSince(st, question, now)
-		due, answer = latest(p.Deadline, shown.Add(decide.MinWait)), decide.ProposalOptions[2].Label
+		due, answer = latest(p.Deadline, shown.Add(decide.MinWait)), p.Default()
 		if !front {
 			return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: answer}
 		}
@@ -91,12 +92,25 @@ func bound(st *state.State, call []bridge.Asked, asked, now time.Time, warnTimeo
 	case "escalation", "replan":
 		// baton's own question about the run: the plan goes on (Continue), or a plan the human approved
 		// mid-run gets its default (decide.ReplanDefault). A block is the model's own choice to wait, and is
-		// never answered for the human.
+		// never answered Continue for the human: once the host's loop finds nobody has answered it for its
+		// BlockLook (State.LookDue), it is answered Look again, and until then the mod asks again.
 		answer = "Continue"
-		if iq.kind == "replan" {
+		e := st.Run.Escalation
+		switch {
+		case iq.kind == "replan":
 			answer = decide.ReplanDefault(st.Replan.Same)
-		} else if e := st.Run.Escalation; e == nil || e.Kind == "blocked" {
+		case e == nil:
 			return Wait{}
+		case e.Kind == "blocked":
+			shown, front := shownSince(st, question, now)
+			if !st.LookDue() {
+				return Wait{For: recheck, Answer: decide.LookAgain}
+			}
+			due = latest(st.Blocked.Lapsed, shown.Add(decide.MinWait))
+			if !front {
+				return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: decide.LookAgain}
+			}
+			return Wait{For: min(max(due.Sub(now), 0), recheck), Answer: decide.LookAgain}
 		}
 		shown, front := shownSince(st, question, now)
 		due = shown.Add(max(escTimeout, decide.MinWait))
@@ -170,7 +184,7 @@ func shownKey(st *state.State, key string, now time.Time) (time.Time, bool) {
 
 // Settle records that baton's mod answered question with answer at its deadline, in the lead's session
 // of s, as the call's result would have: its dialog is closed, and a question of the lead's own is
-// answered by baton (a proposal goes ahead, the context question keeps going, the run goes on, a plan
+// answered by baton (a proposal goes ahead or, outward, is answered Not now, the context question keeps going, the run goes on, a plan
 // approved mid-run gets its default), which the model is told at its next tool call or stop. A phase
 // agent's question is the coordinator's to settle, from the mod's report of its answer. It reports
 // whether the question was baton's.

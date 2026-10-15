@@ -23,22 +23,24 @@ type Relay struct {
 	// phase from the next: each is asked once.
 	Since time.Time `json:"since,omitzero"`
 	// What the question is about, as the worker's sub-run had it when it was queued: a proposal's action
-	// (What), what went wrong (Because) and why it has no deadline (Untimed); a block's reason (Because);
-	// how many decisions a review covers (Count).
+	// (What), what went wrong (Because) and why its action looks outward-facing or irreversible (Outward,
+	// answered Not now at its deadline, under the key it had when such a proposal had no deadline); a
+	// block's reason (Because); how many decisions a review covers (Count).
 	What    string `json:"what,omitempty"`
 	Because string `json:"because,omitempty"`
-	Untimed string `json:"untimed,omitempty"`
+	Outward string `json:"untimed,omitempty"`
 	Count   int    `json:"count,omitempty"`
-	// Wait is how long a timed proposal waits for the human, from when it was queued: the agent's own
-	// --wait, or baton's default (0 in a question queued before v0.8.3: the escalation timeout).
+	// Wait is how long a proposal waits for the human, from when it was queued: the agent's own --wait,
+	// or baton's default (0 in a question queued before v0.8.3: the escalation timeout).
 	Wait time.Duration `json:"wait,omitempty"`
 	// Question is the question exactly as the human is asked it, written when it is issued.
 	Question string    `json:"question,omitempty"`
 	Queued   time.Time `json:"queued"`
 	// Issued is when the host had the mod ask it (command Ask, of host instance Instance), and Deadline
-	// when baton answers it if nobody has: a timed proposal goes ahead then (the time its question names),
-	// and anything else waits for the human, who has it again with /baton run. Asked: it reached
-	// Claude Code's dialog queue, at AskedAt.
+	// when baton answers it if nobody has: a proposal gets its default then (the time its question names:
+	// Go ahead, or Not now for an outward one), a block is lifted for the agent to look again, and
+	// anything else waits for the human, who has it again with /baton run. Asked: it reached Claude Code's
+	// dialog queue, at AskedAt.
 	Issued   time.Time   `json:"issued,omitzero"`
 	Ask      int         `json:"ask,omitempty"`
 	Instance string      `json:"instance,omitempty"`
@@ -46,14 +48,14 @@ type Relay struct {
 	Asked    bool        `json:"asked,omitempty"`
 	AskedAt  time.Time   `json:"asked_at,omitzero"`
 	Answered *Resolution `json:"answered,omitempty"`
-	// Dismissed is when a timed proposal's dialog went away unanswered: it is not asked again, and goes
-	// ahead at its deadline.
+	// Dismissed is when the dialog of a proposal, or of a block, went away unanswered: it is not asked
+	// again, and gets its default at its deadline.
 	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Applied is when the answer reached the worker's sub-run.
 	Applied time.Time `json:"applied,omitzero"`
 	// Lapsed is when the coordinator was done with the hold an answer with no way on (Wait for me, Pause
-	// baton, none) put on a proposal's phase: it lifted it, as nobody had answered for loop's
-	// Timing.HoldLapse since, or found it settled already.
+	// baton, none) put on a proposal's phase, or a block's: it lifted it, as nobody had answered for loop's
+	// Timing.HoldLapse (a block's, Timing.BlockLook) since, or found it settled already.
 	Lapsed time.Time `json:"lapsed,omitzero"`
 }
 
@@ -82,10 +84,11 @@ func (r Relay) Key() string {
 	return r.Phase + " " + r.Kind + " " + r.Decision + " " + r.Since.UTC().Format(time.RFC3339Nano)
 }
 
-// Timed reports a proposal that goes ahead if nobody answers it.
-func (r Relay) Timed() bool { return r.Kind == RelayProposal && r.Untimed == "" }
+// Timed reports a proposal, which gets its default at the time its question names if nobody answers it:
+// Go ahead, or Not now for an outward one. Anything else waits for the human after its deadline.
+func (r Relay) Timed() bool { return r.Kind == RelayProposal }
 
-// Due is when timed proposal r goes ahead if nobody answers it: its wait after it was queued, so that a
+// Due is when proposal r gets its default if nobody answers it: its wait after it was queued, so that a
 // question the human never got to see (the lead's own went first) runs out all the same. fallback is the
 // wait of one queued before v0.8.3, which recorded none.
 func (r Relay) Due(fallback time.Duration) time.Time {

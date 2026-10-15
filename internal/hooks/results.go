@@ -24,10 +24,9 @@ const (
 
 // delivery is the results a hook took for the model under the state's lock; the logs are read after.
 type delivery struct {
-	jobs      []state.Job
-	red       []state.Job // the phases red now (state.Red)
-	complete  bool        // the plan is complete: these results are the last of it
-	decisions int         // the decisions the run made without the human
+	jobs     []state.Job
+	red      []state.Job // the phases red now (state.Red)
+	complete bool        // the plan is complete: these results are the last of it
 }
 
 // take takes the results due (state.TakeDue).
@@ -36,7 +35,7 @@ func take(st *state.State, now time.Time) delivery {
 	if len(jobs) == 0 {
 		return delivery{}
 	}
-	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete, decisions: len(decide.WithoutHuman(st.Decisions))}
+	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete}
 }
 
 func (d delivery) any() bool { return len(d.jobs) > 0 }
@@ -49,7 +48,9 @@ func (d delivery) text(s *state.Store, aggregate bool) string {
 		parts = append(parts, jobResult(s, pl, j, d.red, aggregate))
 	}
 	if d.complete {
-		parts = append(parts, decide.VerifiedComplete(d.decisions))
+		// The run's decisions, its phase agents' too: read without the lock, which no code holds twice.
+		st, _ := s.Load()
+		parts = append(parts, decide.VerifiedComplete(s.Decisions(st)))
 	}
 	return strings.Join(parts, "\n\n")
 }

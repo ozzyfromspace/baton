@@ -100,7 +100,7 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 		s.Event("review_due", map[string]any{"phase": id, "decisions": count})
 		line += " That makes as many decisions without the human as baton lets a phase make before they review them: end your turn now, and baton stops for the human to review them."
 	case st.Mode == state.ModeComplete:
-		line += " That was the last phase — the plan is complete. " + decide.PlanComplete(len(decide.WithoutHuman(st.Decisions)))
+		line += " That was the last phase — the plan is complete. " + decide.PlanComplete(s.Decisions(st))
 	case next != "":
 		np := pl.Phases[pl.Index(next)]
 		line += fmt.Sprintf(" Next phase: %s (%s). End your turn now: baton compacts the context, then starts %s with a fresh brief.", np.ID, np.Title, np.ID)

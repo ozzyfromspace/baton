@@ -10,9 +10,10 @@ import (
 
 // A phase agent's question reaches the human in Claude Code's own dialog, which baton's mod opens in the
 // lead's terminal (state.Relay). Its third option is what baton picks when nobody answers, as for the
-// lead's own questions: a timed proposal goes ahead at the time its question names, and anything else
-// waits for the human, who has it again with /baton run, so that nothing waits on an agent's question
-// on screen. These are the words the human and the agent read about all that.
+// lead's own questions: a proposal goes ahead at the time its question names, or is answered Not now
+// then if it is outward, a block is lifted then for the agent to look again (BlockLook), and anything
+// else waits for the human, who has it again with /baton run, so that nothing waits on an agent's
+// question on screen. These are the words the human and the agent read about all that.
 
 // RelayOptions are the answers to phase agent question r.
 func RelayOptions(r state.Relay) []Option {
@@ -20,20 +21,22 @@ func RelayOptions(r state.Relay) []Option {
 	wait := Option{"Wait for me", "Leave " + r.Phase + " waiting; /baton run asks me again"}
 	goAhead := Option{"Go ahead", "Do what it proposed"}
 	switch {
+	case r.Timed() && r.Outward != "":
+		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again"}, pause, {state.NotNow, notNowOption}, goAhead}
 	case r.Timed():
 		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again"}, pause, goAhead}
-	case r.Kind == state.RelayProposal:
-		return []Option{goAhead, pause, wait}
 	case r.Kind == state.RelayReview:
 		return []Option{{"Continue", "I've seen them; let " + r.Phase + " go on"}, pause, wait}
 	}
-	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, wait}
+	return []Option{{"Continue", "I've dealt with it; " + r.Phase + " carries on"}, pause, {LookAgain, "The agent looks for a safe way around it and proposes it first"}}
 }
 
 // What an answer to a phase agent's question does (RelayOutcome).
 const (
 	OutcomeGo    = "go"    // its proposal goes ahead
+	OutcomeLeft  = "left"  // its proposal was answered Not now: done only if safe, otherwise left for the human
 	OutcomeOn    = "on"    // its block or its review is over, and its phase goes on
+	OutcomeLook  = "look"  // its block is lifted, and its agent looks again for a safe way on
 	OutcomeWait  = "wait"  // its phase waits for the human
 	OutcomePause = "pause" // the run is paused, and its phase waits for the human
 	OutcomeWords = "words" // the human answered in their own words, which the agent follows
@@ -49,8 +52,12 @@ func RelayOutcome(r state.Relay, answer string) string {
 		return OutcomePause
 	case answer == "Go ahead" && r.Kind == state.RelayProposal:
 		return OutcomeGo
+	case answer == state.NotNow && r.Kind == state.RelayProposal:
+		return OutcomeLeft
 	case answer == "Continue" && r.Kind != state.RelayProposal:
 		return OutcomeOn
+	case answer == LookAgain && r.Kind == state.RelayBlocked:
+		return OutcomeLook
 	}
 	return OutcomeWords
 }
@@ -58,21 +65,23 @@ func RelayOutcome(r state.Relay, answer string) string {
 // RelayDefault is the answer baton picks for phase agent question r when nobody answers.
 func RelayDefault(r state.Relay) string { return RelayOptions(r)[2].Label }
 
-// RelayQuestion is the question that puts phase agent question r to the human. A timed proposal goes
-// ahead at deadline.
+// RelayQuestion is the question that puts phase agent question r to the human. A proposal goes ahead at
+// deadline, or is answered Not now then if it is outward, and a block is lifted then for the agent to
+// look again.
 func RelayQuestion(r state.Relay, deadline time.Time) Question {
 	who := "baton: the agent on " + r.Phase
 	var text string
 	switch {
+	case r.Timed() && r.Outward != "":
+		text = outwardText(who, r.Because, r.What, r.Outward, deadline)
 	case r.Timed():
 		text = fmt.Sprintf("%s: %s. Unless you answer by %s, I will %s.", who, clause(r.Because), deadline.Local().Format("15:04"), lowerFirst(clause(r.What)))
-	case r.Kind == state.RelayProposal:
-		text = fmt.Sprintf("%s: %s. I propose to %s, and will not do it without you (%s).", who, clause(r.Because), lowerFirst(clause(r.What)), r.Untimed)
 	case r.Kind == state.RelayReview:
 		text = fmt.Sprintf("%s has made %d decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let %s go on?",
 			who, r.Count, r.Phase)
 	default:
-		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on.", who, clause(r.Because), r.Phase)
+		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on. Unless you answer by %s, it looks again for a safe way around it.",
+			who, clause(r.Because), r.Phase, deadline.Local().Format("15:04"))
 	}
 	return Question{Text: Sanitize(text), Options: RelayOptions(r)}
 }
@@ -93,6 +102,13 @@ func RelayWentAhead(id, what, undo, phase string, deadline time.Time, last bool)
 			phase + " for them to review the decisions."
 	}
 	return s + " Then carry on with " + phase + "."
+}
+
+// RelayNotNow is what baton says to the human (say) and tells the agent on phase (tell) when its outward
+// proposal id, to do what, was answered Not now: by baton, as nobody answered by deadline, or by the human
+// (a zero deadline).
+func RelayNotNow(id, what, phase string, deadline time.Time) (say, tell string) {
+	return notNow(phase, id, what, phase, deadline)
 }
 
 // RelayHeld tells the agent on phase not to do what its proposal id proposed (what): why says what became

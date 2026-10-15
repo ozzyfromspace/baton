@@ -136,7 +136,7 @@ func TestNoSentenceHasABlankForThePhase(t *testing.T) {
 		if q != "baton: blocked on the plan: need a key" {
 			t.Fatalf("question %q", q)
 		}
-		out := f.fire("PostToolUse", answer(ask(q, escalationLabels...), "Continue"))
+		out := f.fire("PostToolUse", answer(ask(q, blockedLabels...), "Continue"))
 		if got := feedback(out); !strings.HasSuffix(got, "Carry on with the plan.") {
 			t.Fatalf("told %q", got)
 		}

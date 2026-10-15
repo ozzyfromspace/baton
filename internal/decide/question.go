@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // Option is one answer a question of baton's offers.
@@ -73,6 +75,26 @@ var ProposalOptions = []Option{
 	{"Go ahead", "Do what you proposed"},
 }
 
+// OutwardOptions are the answers to an outward proposal (Outward). Not now, what baton answers when
+// nobody does, is third for the same reason as Keep going; Go ahead, which only the human gives it, last.
+var OutwardOptions = []Option{
+	{"Wait for me", "Don't do it yet; I'll answer in the session"},
+	{"Pause baton", "I'm taking over; baton stops driving the plan"},
+	{state.NotNow, notNowOption},
+	{"Go ahead", "Do what you proposed"},
+}
+
+// notNowOption is what Not now does, as its option says it.
+const notNowOption = "Do it only if it is safely reversible and stays in the project; otherwise leave it for me"
+
+// OptionsOf are the answers to proposal p.
+func OptionsOf(p state.Decision) []Option {
+	if p.Outward != "" {
+		return OutwardOptions
+	}
+	return ProposalOptions
+}
+
 // NoPhase turns down a proposal or a block of the lead's (verb: "not recorded") while it holds no phase:
 // every phase left is a phase agent's, or waits on one or on a job, and what the plan says of a phase
 // agent's phase is that agent's to do, not the lead's.
@@ -80,9 +102,9 @@ func NoPhase(verb string) string {
 	return verb + " — no phase is in hand here: every phase left is a phase agent's, or waits for one or for a job, and nothing of a phase agent's is yours to do. End your turn; baton wakes you when there is something to do."
 }
 
-// AskFirst says to put a proposal to the human before anything else: until it is, nothing moves.
-func AskFirst(id, question string) string {
-	return fmt.Sprintf("put your proposal %s to the human first: %s", id, Question{question, ProposalOptions}.Call())
+// AskFirst says to put proposal p to the human before anything else: until it is, nothing moves.
+func AskFirst(p state.Decision) string {
+	return fmt.Sprintf("put your proposal %s to the human first: %s", p.ID, Question{p.Question, OptionsOf(p)}.Call())
 }
 
 // ContextWarning asks the model to put the context question to the human; call is its exact call.
@@ -104,8 +126,8 @@ func ReviewQuestion(phase string, n int) Question {
 	}
 }
 
-// Deadline is when a proposal made at now goes ahead: timeout later, rounded up to the minute, since the
-// question names it as HH:MM and baton must never go ahead before the time it gave.
+// Deadline is when baton answers a proposal made at now: timeout later, rounded up to the minute, since
+// the question names it as HH:MM and baton must never answer before the time it gave.
 func Deadline(now time.Time, timeout time.Duration) time.Time {
 	t := now.Add(timeout)
 	if r := t.Truncate(time.Minute); r.Before(t) {
@@ -147,19 +169,55 @@ func Continued(reason, phase string, deadline time.Time) (say, tell string) {
 	return say, tell
 }
 
-// ProposalDismissed tells the human that the question of the lead's proposal id went away unanswered: it
-// still goes ahead at deadline unless they write in the session first.
-func ProposalDismissed(id string, deadline time.Time) string {
-	return fmt.Sprintf("baton: the question of %s went away unanswered → baton goes ahead with it at %s, unless you write in the session first",
-		id, deadline.Local().Format("15:04"))
+// ProposalDismissed tells the human that the question of the lead's proposal p went away unanswered:
+// baton still answers it at its deadline (Go ahead, or Not now for an outward one) unless they write in
+// the session first.
+func ProposalDismissed(p state.Decision) string {
+	then := "baton goes ahead with it"
+	if p.Outward != "" {
+		then = "baton answers Not now for you (Claude does it only if it is safely reversible and stays in the project)"
+	}
+	return fmt.Sprintf("baton: the question of %s went away unanswered → %s at %s, unless you write in the session first",
+		p.ID, then, p.Deadline.Local().Format("15:04"))
 }
 
-// UntimedQuestion is the question for a proposal baton will not let go ahead without the human, and why.
-func UntimedQuestion(because, action, why string) Question {
-	return Question{
-		Text:    fmt.Sprintf("baton: %s. I propose to %s, and will not do it without you (%s).", clause(because), lowerFirst(clause(action)), why),
-		Options: ProposalOptions,
+// OutwardQuestion is the question that puts an outward proposal to the human: why it looks so, and what
+// baton answers at deadline if they do not (Not now). because and action must be sanitized already.
+func OutwardQuestion(because, action, why string, deadline time.Time) Question {
+	return Question{Text: outwardText("baton", because, action, why, deadline), Options: OutwardOptions}
+}
+
+// outwardText is the question of who ("baton", or "baton: the agent on P3") about an outward proposal.
+func outwardText(who, because, action, why string, deadline time.Time) string {
+	return fmt.Sprintf("%s: %s. I propose to %s, but %s: unless you answer by %s, I will do it only if it is safely reversible and stays in the project, "+
+		"and leave it for you otherwise.", who, clause(because), lowerFirst(clause(action)), why, deadline.Local().Format("15:04"))
+}
+
+// AnsweredNotNow is what baton says to the human (say) and tells the model (tell) when nobody answered
+// the lead's outward proposal id, to do what, by deadline, so baton answered Not now for them; the model
+// then carries on with phase. A zero deadline says the human chose Not now themselves.
+func AnsweredNotNow(id, what, phase string, deadline time.Time) (say, tell string) {
+	return notNow("", id, what, Named(phase), deadline)
+}
+
+// notNow words Not now on proposal id (to do what) of the agent on agent, or of the lead's (""): baton's
+// answer at deadline, or the human's own (a zero deadline). The model then carries on with phase.
+func notNow(agent, id, what, phase string, deadline time.Time) (say, tell string) {
+	whose, who := id, "Claude"
+	if agent != "" {
+		whose, who = "the proposal "+id+" of the agent on "+agent, "the agent"
 	}
+	then := fmt.Sprintf("%s does it only if it is safely reversible and stays in the project; otherwise it is left for you — %s", who, clause(what))
+	if deadline.IsZero() {
+		say = fmt.Sprintf("baton: you chose Not now on %s → %s", whose, then)
+		tell = fmt.Sprintf("[baton] The human chose Not now on your proposal %s (%s). %s Then carry on with %s.", id, clause(what), NotNowRule(), phase)
+		return say, tell
+	}
+	at := deadline.Local().Format("15:04")
+	say = fmt.Sprintf("baton: nobody answered by %s, so baton answered Not now for you on %s → %s", at, whose, then)
+	tell = fmt.Sprintf("[baton] Nobody answered your proposal %s (%s) by %s, so baton answered Not now for the human: the run does not wait on them. %s Then carry on with %s.",
+		id, clause(what), at, NotNowRule(), phase)
+	return say, tell
 }
 
 // clause trims what would double up with the punctuation around it.

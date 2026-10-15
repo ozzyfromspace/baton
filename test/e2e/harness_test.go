@@ -345,8 +345,8 @@ func (s *Session) PlanMode() bool {
 // prompts, plan-mode entry and plan approval). Tests that let the model act freely need it whatever the
 // permission mode: the suite was written when Haiku had no auto mode (Haiku 5.5 has it). A phase agent's
 // permission prompt is the lead's dialog too, shown in the lead's terminal, so it approves those as well;
-// and baton's own questions, where Enter picks the first option, but for its question about the run, which
-// it answers Continue (3, where baton keeps its default).
+// and baton's own questions, where Enter picks the first option, but for its question about the run other
+// than a block's, which it answers Continue (3, where baton keeps its default; a block's is first).
 func (s *Session) AutoApprove() {
 	go func() {
 		approved := 0
@@ -356,11 +356,14 @@ func (s *Session) AutoApprove() {
 				return
 			case <-time.After(500 * time.Millisecond):
 			}
-			opens, key := 0, "\r"
+			opens, key, escalated := 0, "\r", ""
 			for _, e := range s.Events() {
+				if e["kind"] == "escalated" {
+					escalated, _ = e["type"].(string)
+				}
 				if e["kind"] == "dialog_open" {
 					opens, key = opens+1, "\r"
-					if e["dialog"] == "escalation" {
+					if e["dialog"] == "escalation" && escalated != "blocked" {
 						key = "3"
 					}
 				}

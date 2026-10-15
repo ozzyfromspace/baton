@@ -699,7 +699,7 @@ func (f *fixture) blocked(reason string) string {
 	return e.Question
 }
 
-var escalationLabels = []string{"Pause baton", "Wait for me", "Continue"}
+var blockedLabels = []string{"Continue", "Pause baton", "Look again"}
 
 // labelsOf is the labels of opts, in order: how the model is told to offer them.
 func labelsOf(opts []decide.Option) []string {
@@ -722,7 +722,7 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	if q != "baton: blocked on P0: need a key" {
 		t.Fatalf("question %q", q)
 	}
-	if out := reply(f, q, escalationLabels, "Continue"); !strings.Contains(feedback(out), "baton has resumed") {
+	if out := reply(f, q, blockedLabels, "Continue"); !strings.Contains(feedback(out), "baton has resumed") {
 		t.Fatalf("continue: %v", out)
 	}
 	if st := f.state(); st.Blocked != nil || st.Run.Escalation != nil || st.Mode != state.ModeRunning {
@@ -732,7 +732,7 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 		t.Fatalf("events: %s", b)
 	}
 	q = f.blocked("something")
-	reply(f, q, escalationLabels, "Pause baton")
+	reply(f, q, blockedLabels, "Pause baton")
 	if f.state().Mode != state.ModePaused {
 		t.Fatal("not paused")
 	}
@@ -765,7 +765,7 @@ func TestAnswersToBatonsQuestionsAct(t *testing.T) {
 	f = newFixture(t, true)
 	f.store.Update(func(st *state.State) error { state.SetBlocked(st, "need a key", f.now); return nil })
 	for _, q := range []string{"Which color?", "baton: blocked on P0: need a key"} {
-		if out := reply(f, q, escalationLabels, "Continue"); out != nil || f.state().Blocked == nil {
+		if out := reply(f, q, blockedLabels, "Continue"); out != nil || f.state().Blocked == nil {
 			t.Fatalf("acted on %q: %v", q, out)
 		}
 	}
@@ -819,28 +819,28 @@ func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
 	}
 
 	q := f.blocked("need a key")
-	if d, _ := decide(f, ask(q, escalationLabels...)); d != "" {
+	if d, _ := decide(f, ask(q, blockedLabels...)); d != "" {
 		t.Fatalf("baton's question, as issued: %q", d)
 	}
-	if d, _ := decide(f, ask(strings.Replace(q, " ", "\n  ", 2), escalationLabels...)); d != "" {
+	if d, _ := decide(f, ask(strings.Replace(q, " ", "\n  ", 2), blockedLabels...)); d != "" {
 		t.Fatalf("baton's question, rewrapped: %q", d)
 	}
-	multi := ask(q, escalationLabels...)
+	multi := ask(q, blockedLabels...)
 	multi["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["multiSelect"] = true
-	two := ask(q, escalationLabels...)
+	two := ask(q, blockedLabels...)
 	ti := two["tool_input"].(map[string]any)
 	ti["questions"] = append(ti["questions"].([]any), map[string]any{"question": "And?"})
 	for name, in := range map[string]map[string]any{
-		"reordered":                            ask(q, "Continue", "Wait for me", "Pause baton"),
-		"an option more":                       ask(q, "Pause baton", "Wait for me", "Continue", "Skip it"),
-		"relabeled":                            ask(q, "Pause baton", "Wait for me", "Carry on"),
-		"reworded":                             ask(q+" Please hurry.", escalationLabels...),
+		"reordered":                            ask(q, "Pause baton", "Continue", "Look again"),
+		"an option more":                       ask(q, "Continue", "Pause baton", "Look again", "Skip it"),
+		"relabeled":                            ask(q, "Carry on", "Pause baton", "Look again"),
+		"reworded":                             ask(q+" Please hurry.", blockedLabels...),
 		"multi-select":                         multi,
 		"two questions":                        two,
 		"another question while baton's waits": ask("Which database should I use?", "Postgres", "SQLite"),
 	} {
 		d, why := decide(f, in)
-		if d != "deny" || !strings.Contains(why, `exactly one question, "`+q+`" (header "baton"), and exactly 3 options, in this order: "Pause baton"`) {
+		if d != "deny" || !strings.Contains(why, `exactly one question, "`+q+`" (header "baton"), and exactly 3 options, in this order: "Continue"`) {
 			t.Errorf("%s: %q %q", name, d, why)
 		}
 	}
@@ -851,7 +851,7 @@ func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
 	}
 	// Even then, a question passed off as baton's must be the one baton issued: Haiku dropped the
 	// question's last sentence once, and the host never recognized the dialog.
-	if d, why := decide(f, ask(strings.TrimSuffix(q, " need a key")+"?", escalationLabels...)); d != "deny" || !strings.Contains(why, `"`+q+`"`) {
+	if d, why := decide(f, ask(strings.TrimSuffix(q, " need a key")+"?", blockedLabels...)); d != "deny" || !strings.Contains(why, `"`+q+`"`) {
 		t.Fatalf("a trimmed baton question in a human-started turn: %q %q", d, why)
 	}
 	f.store.Update(func(st *state.State) error { st.Run.TurnBy = "baton"; st.Mode = state.ModePaused; return nil })
@@ -886,7 +886,7 @@ func TestOnlyTheIssuedQuestionIsMarkedAsBatons(t *testing.T) {
 		t.Fatalf("kinds %q", got)
 	}
 	eq := f.blocked("need a key") // the stop sweeps the main agent's dialogs; the subagent's stays
-	f.fire("PermissionRequest", ask(eq, escalationLabels...))
+	f.fire("PermissionRequest", ask(eq, blockedLabels...))
 	if got := kinds(f); !equal(got, []string{"", "escalation"}) {
 		t.Fatalf("kinds %q", got)
 	}
@@ -908,14 +908,14 @@ func TestAnAwkwardReasonStillMatches(t *testing.T) {
 	if why, _ := out["reason"].(string); !strings.Contains(why, `"`+q+`"`) {
 		t.Fatalf("the model is not shown the question verbatim: %q", why)
 	}
-	if out := f.fire("PreToolUse", ask(q, escalationLabels...)); out != nil {
+	if out := f.fire("PreToolUse", ask(q, blockedLabels...)); out != nil {
 		t.Fatalf("refused: %v", out)
 	}
-	f.fire("PermissionRequest", ask(q, escalationLabels...))
+	f.fire("PermissionRequest", ask(q, blockedLabels...))
 	if d, _ := f.state().Run.Dialogs.Only(); d.Kind != "escalation" {
 		t.Fatalf("dialog %+v", d)
 	}
-	f.fire("PostToolUse", answer(ask(q, escalationLabels...), "Continue"))
+	f.fire("PostToolUse", answer(ask(q, blockedLabels...), "Continue"))
 	if st := f.state(); st.Blocked != nil || st.Run.Dialogs.AnyOpen() {
 		t.Fatalf("not resumed: %+v", st)
 	}

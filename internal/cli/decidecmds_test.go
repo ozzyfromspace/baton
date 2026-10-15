@@ -208,7 +208,7 @@ func TestAProposalPrintsTheQuestionBatonWillRecognize(t *testing.T) {
 	}
 	st := s.state()
 	d := st.PendingProposal()
-	if d == nil || d.Question != question || d.Tried != "gpgconf --kill gpg-agent" || d.Untimed != "" || !d.Deadline.Equal(time.Date(2026, 10, 4, 12, 2, 0, 0, time.UTC)) {
+	if d == nil || d.Question != question || d.Tried != "gpgconf --kill gpg-agent" || d.Outward != "" || !d.Deadline.Equal(time.Date(2026, 10, 4, 12, 2, 0, 0, time.UTC)) {
 		t.Fatalf("pending %+v", d)
 	}
 	if !s.logged("proposed", map[string]any{"id": "d1", "deadline": "2026-10-04T12:02:00Z", "tried": "gpgconf --kill gpg-agent"}) {
@@ -272,19 +272,32 @@ func TestTheModelSetsAProposalsWait(t *testing.T) {
 	}
 }
 
-// A proposal that looks outward-facing or irreversible gets no deadline: only the human can let it go.
-func TestAnOutwardProposalHasNoTimer(t *testing.T) {
+// A proposal that looks outward-facing or irreversible waits like any other (its --wait), but at its
+// deadline baton answers Not now for the human, and the model is told so before it asks: it does it only
+// if it is safely reversible and stays in the project, and leaves it for them otherwise.
+func TestAnOutwardProposalIsAnsweredNotNowAtItsDeadline(t *testing.T) {
 	s := attached(t)
-	out := s.must("", "propose", "push the hotfix branch", "--because", "the fix is ready", "--undo", "git push --delete origin hotfix")
-	question := "baton: the fix is ready. I propose to push the hotfix branch, and will not do it without you ('push' looks outward-facing or irreversible)."
-	if !strings.Contains(out, "with no deadline: 'push' looks outward-facing or irreversible, so only the human can let it go ahead") || !strings.Contains(out, `"`+question+`"`) || strings.Contains(out, "If nobody answers") {
-		t.Fatalf("propose: %s", out)
+	out := s.must("", "propose", "push the hotfix branch", "--because", "the fix is ready", "--undo", "git push --delete origin hotfix", "--wait", "5m")
+	by := time.Date(2026, 10, 4, 12, 5, 0, 0, time.UTC).Local().Format("15:04")
+	question := "baton: the fix is ready. I propose to push the hotfix branch, but 'push' looks outward-facing or irreversible: unless you answer by " + by +
+		", I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise."
+	for _, want := range []string{`"` + question + `"`, "exactly 4 options", `"Not now" (description:`,
+		"Since 'push' looks outward-facing or irreversible, if nobody answers by " + by + ", baton answers Not now for them", decide.NotNowRule()} {
+		if !strings.Contains(out, want) {
+			t.Errorf("propose lacks %q:\n%s", want, out)
+		}
 	}
-	if st := s.state(); st.PendingProposal() == nil || st.PendingProposal().Untimed == "" || !st.PendingProposal().Deadline.IsZero() {
-		t.Fatalf("pending %+v", st.Decisions)
+	st := s.state()
+	p := st.PendingProposal()
+	if p == nil || p.Outward != "'push' looks outward-facing or irreversible" || !p.Deadline.Equal(time.Date(2026, 10, 4, 12, 5, 0, 0, time.UTC)) || p.Wait != 5*time.Minute || p.Question != question {
+		t.Fatalf("pending %+v", p)
 	}
-	if !s.logged("proposed", map[string]any{"untimed": "'push' looks outward-facing or irreversible"}) {
+	if !s.logged("proposed", map[string]any{"outward": "'push' looks outward-facing or irreversible", "deadline": "2026-10-04T12:05:00Z", "wait": "5m0s", "chosen": true}) {
 		t.Errorf("events: %s", s.events())
+	}
+	// baton status says what happens at the deadline.
+	if out := s.must("", "status"); !strings.Contains(out, "'push' looks outward-facing or irreversible, so at "+by+" baton answers Not now for you") {
+		t.Errorf("status:\n%s", out)
 	}
 }
 
@@ -395,6 +408,33 @@ func TestAProposalIsAskedBeforeAnythingElse(t *testing.T) {
 	s.must("", "note", "notes still go through") // a note stops nothing
 	s.set(func(x *state.State) { x.PendingProposal().Asked = true })
 	s.must("", "checkpoint")
+}
+
+// A proposal answered Not now, by baton at its deadline or by the human, is left for them: baton status
+// lists it apart from the decisions made without them, with what became of it and its undo.
+func TestStatusListsTheProposalsLeftForYou(t *testing.T) {
+	s := attached(t)
+	s.must("", "propose", "push the hotfix branch", "--because", "the fix is ready", "--undo", "git push --delete origin hotfix", "--wait", "5m")
+	if out := s.must("", "status"); strings.Contains(out, "left for you") {
+		t.Fatalf("listed before it was answered:\n%s", out)
+	}
+	st := s.state()
+	deadline := st.PendingProposal().Deadline
+	s.set(func(x *state.State) { state.LeftNotNow(x, x.PendingProposal(), deadline) })
+	s.must("", "propose", "email the vendor", "--because", "the API key expired", "--undo", "none", "--wait", "5m")
+	s.set(func(x *state.State) { state.Resolve(x, "d2", state.ByHuman, state.NotNow, deadline.Add(time.Minute)) })
+	out := s.must("", "status")
+	for _, want := range []string{"left for you (proposals answered Not now, oldest first):\n  d1   P0       " + deadline.Local().Format("Jan 2 15:04") +
+		"  nobody answered by " + deadline.Local().Format("15:04") + ", so baton answered Not now: done only if it was safely reversible and stayed in the project " +
+		"(a note then says so), otherwise left for you — push the hotfix branch\n       undo: git push --delete origin hotfix\n",
+		"  d2   P0       " + deadline.Add(time.Minute).Local().Format("Jan 2 15:04") + "  you answered Not now: done only if"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "decisions made without you") {
+		t.Errorf("a Not now counted as a decision made without them:\n%s", out)
+	}
 }
 
 // baton status is where the human finds what the run decided without them, each with its undo, and what

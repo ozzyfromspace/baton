@@ -173,3 +173,61 @@ func TestTheCrashEscalationClearsOnceClaudeRunsAgain(t *testing.T) {
 		})
 	}
 }
+
+// A conversation resumed while its last turn stands refused is left asleep: nothing is typed into a refused
+// conversation, and how it goes on is the human's. The recovery is told all the same, once.
+func TestAQuietResumeLeavesTheModelAsleep(t *testing.T) {
+	const why = "claude exited with code 137"
+	f := newFixture(t, true)
+	f.vars = map[string]string{"BATON_RECOVER": why}
+	f.set(func(st *state.State) {
+		st.Run.Recoveries = []state.Recovery{{At: f.now.Add(-time.Minute), Why: why, Quiet: true}}
+	})
+	if code, stderr := f.fireCode("SessionStartRewake", map[string]any{"source": "resume"}); code != 0 || stderr != "" {
+		t.Fatalf("woken: exit %d, %q", code, stderr)
+	}
+	if !f.logged("lead_resumed", map[string]any{"why": why, "woken": false, "refused": true}) || !f.state().Run.Recoveries[0].Told {
+		t.Fatalf("events:\n%s", f.eventLog())
+	}
+}
+
+// StopFailure records what Claude Code said of the error, and logs whether a fresh session avoids it.
+func TestStopFailureSaysWhetherAFreshSessionAvoidsIt(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		in     map[string]any
+		afresh bool
+	}{
+		{"too long", map[string]any{"error": "invalid_request", "error_details": "prompt is too long: 213456 tokens > 200000 maximum", "last_assistant_message": "Prompt is too long"}, true},
+		{"too long, said only on screen", map[string]any{"error": "invalid_request", "last_assistant_message": "Prompt is too long"}, true},
+		{"another invalid request", map[string]any{"error": "invalid_request", "error_details": "bad request", "last_assistant_message": "API Error: 400 bad request"}, false},
+		{"an expired login", map[string]any{"error": "authentication_failed", "last_assistant_message": "Please run /login"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.fire("StopFailure", c.in)
+			e := f.state().Run.LastError
+			if e == nil || e.Message != c.in["last_assistant_message"] || e.Afresh() != c.afresh {
+				t.Fatalf("recorded %+v", e)
+			}
+			if got := f.logged("stop_failure", map[string]any{"error": c.in["error"], "afresh": true}); got != c.afresh {
+				t.Fatalf("logged afresh %v, want %v:\n%s", got, c.afresh, f.eventLog())
+			}
+		})
+	}
+}
+
+// The hook paths recovery changed fail open: a panic in one exits 0 and writes nothing.
+func TestRecoveryPathsFailOpen(t *testing.T) {
+	failsOpen(t, []failCase{
+		{"a turn a fresh session avoids", "StopFailure", func(string) map[string]any {
+			return map[string]any{"error": "invalid_request", "error_details": "prompt is too long: 213456 tokens > 200000 maximum", "last_assistant_message": "Prompt is too long"}
+		}, nil},
+		{"a quiet resume", "SessionStartRewake", func(string) map[string]any { return map[string]any{"source": "resume"} }, func(f *fixture) {
+			f.vars = map[string]string{"BATON_RECOVER": "claude exited with code 137"}
+			f.set(func(st *state.State) {
+				st.Run.Recoveries = []state.Recovery{{At: f.now, Why: "claude exited with code 137", Quiet: true}}
+			})
+		}},
+	})
+}

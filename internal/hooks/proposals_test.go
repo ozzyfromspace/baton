@@ -14,23 +14,25 @@ import (
 )
 
 // propose records a pending proposal as `baton propose` would, and returns the exact question call baton
-// told the model to make. untimed gives it no deadline.
-func (f *fixture) propose(untimed bool) map[string]any {
+// told the model to make. outward makes it one answered Not now at its deadline.
+func (f *fixture) propose(outward bool) map[string]any {
 	f.t.Helper()
 	d := state.Decision{What: "commit P0 unsigned", Because: "gpg signing times out", Undo: "git commit --amend --no-edit -S"}
-	var q decide.Question
-	if untimed {
-		d.What, d.Untimed = "push the branch", decide.UntimedReason("push")
-		q = decide.UntimedQuestion(d.Because, d.What, d.Untimed)
-	} else {
-		d.Deadline = decide.Deadline(f.now, 5*time.Minute)
-		q = decide.ProposalQuestion(d.Because, d.What, d.Deadline)
+	d.Deadline = decide.Deadline(f.now, 5*time.Minute)
+	q := decide.ProposalQuestion(d.Because, d.What, d.Deadline)
+	if outward {
+		d.What, d.Outward = "push the branch", decide.OutwardReason("push")
+		q = decide.OutwardQuestion(d.Because, d.What, d.Outward, d.Deadline)
 	}
 	d.Question = q.Text
 	if _, err := f.store.Update(func(st *state.State) error { _, err := state.AddProposal(st, d, f.now); return err }); err != nil {
 		f.t.Fatal(err)
 	}
-	return ask(q.Text, "Wait for me", "Pause baton", "Go ahead")
+	var labels []string
+	for _, o := range q.Options {
+		labels = append(labels, o.Label)
+	}
+	return ask(q.Text, labels...)
 }
 
 // events lists the events logged so far, without their timestamps and instance.
@@ -90,6 +92,7 @@ func noticeKinds(st state.State) []string {
 func TestAProposalIsPutToTheHumanAndActedOn(t *testing.T) {
 	for _, c := range []struct {
 		name, answer string
+		outward      bool
 		auto         bool
 		by           string
 		mode         string
@@ -108,10 +111,21 @@ func TestAProposalIsPutToTheHumanAndActedOn(t *testing.T) {
 			tell: []string{"baton is paused", "is not to be done"}},
 		{name: "an answer in the human's own words", answer: "use the staging key instead", by: state.ByHuman, mode: state.ModeRunning,
 			tell: []string{`"use the staging key instead"`, "not a Go ahead"}},
+		// An outward one: baton answers Not now at its deadline, the human may too, and only they Go ahead.
+		{name: "outward: nobody answers by the deadline", answer: "Not now", outward: true, auto: true, by: state.ByTimeout, mode: state.ModeRunning,
+			tell: []string{"Nobody answered your proposal d1 (push the branch) by", "baton answered Not now for the human", "Do it only if it is safely reversible",
+				"baton note", "leave it undone for the human", "carry on with P0"},
+			notices: []string{"not_now"}},
+		{name: "outward: the human says not now", answer: "Not now", outward: true, by: state.ByHuman, mode: state.ModeRunning,
+			tell: []string{"The human chose Not now on your proposal d1 (push the branch)", "Do it only if it is safely reversible", "carry on with P0"}},
+		{name: "outward: the human says go ahead", answer: "Go ahead", outward: true, by: state.ByHuman, mode: state.ModeRunning,
+			tell: []string{"The human chose Go ahead", "Do what you proposed now: push the branch"}},
+		{name: "outward: wait for me", answer: "Wait for me", outward: true, by: state.ByHeld, mode: state.ModeRunning,
+			tell: []string{"do not do what you proposed", "End your turn now"}, notices: []string{"decision"}, held: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, true)
-			call := f.propose(false)
+			call := f.propose(c.outward)
 			if out := f.fire("PreToolUse", call); denyReason(out) != "" {
 				t.Fatalf("the issued question was refused: %s", denyReason(out))
 			}
@@ -171,9 +185,9 @@ func TestAProposalIsPutToTheHumanAndActedOn(t *testing.T) {
 	}
 }
 
-// A timed proposal whose question goes away unanswered (Esc, an interrupted turn, a restart) is nobody's
-// choice: it stays pending, dismissed, and goes ahead at its deadline (Loop.lapse); the run is not held
-// for the human. An untimed one is declined, and held for them like Wait for me.
+// A proposal whose question goes away unanswered (Esc, an interrupted turn, a restart) is nobody's
+// choice: it stays pending, dismissed, and baton answers it at its deadline (Loop.lapse): it goes ahead,
+// or an outward one is answered Not now. The run is not held for the human.
 func TestAProposalThatVanishes(t *testing.T) {
 	for _, c := range []struct {
 		event string
@@ -186,10 +200,10 @@ func TestAProposalThatVanishes(t *testing.T) {
 		{"UserPromptSubmit", map[string]any{"prompt": NudgePrefix + " No activity for 10m."}},
 		{"PostToolUseFailure", nil}, // the question's own call failed
 	} {
-		for _, untimed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/untimed=%v", c.event, untimed), func(t *testing.T) {
+		for _, outward := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/outward=%v", c.event, outward), func(t *testing.T) {
 				f := newFixture(t, true)
-				call := f.propose(untimed)
+				call := f.propose(outward)
 				f.fire("PermissionRequest", call)
 				input := c.input
 				if input == nil {
@@ -198,21 +212,6 @@ func TestAProposalThatVanishes(t *testing.T) {
 				f.fire(c.event, input)
 				st := f.state()
 				p := st.Decisions[0]
-				if untimed {
-					if r := p.Resolved; r == nil || r.By != state.ByDeclined {
-						t.Fatalf("resolved %+v", r)
-					}
-					if e := st.Run.Escalation; e == nil || e.Kind != "decision" || !e.Asked {
-						t.Fatalf("escalation %+v", e)
-					}
-					if _, _, held := st.Held(); !held {
-						t.Error("not held for the human")
-					}
-					if !f.logged("proposal_resolved", map[string]any{"by": state.ByDeclined}) || !f.logged("escalated", map[string]any{"type": "decision"}) {
-						t.Errorf("events: %v", f.events())
-					}
-					return
-				}
 				if p.Resolved != nil || p.Dismissed.IsZero() || st.PendingProposal() == nil {
 					t.Fatalf("proposal %+v: want it pending, dismissed", p)
 				}
@@ -222,7 +221,11 @@ func TestAProposalThatVanishes(t *testing.T) {
 				if !f.logged("proposal_dismissed", map[string]any{"id": p.ID}) || f.logged("proposal_resolved", nil) {
 					t.Errorf("events: %v", f.events())
 				}
-				if n := len(st.Run.Announce); n == 0 || !strings.Contains(st.Run.Announce[n-1], "goes ahead with it at") {
+				then := "goes ahead with it at"
+				if outward {
+					then = "baton answers Not now for you (Claude does it only if it is safely reversible and stays in the project) at"
+				}
+				if n := len(st.Run.Announce); n == 0 || !strings.Contains(st.Run.Announce[n-1], then) {
 					t.Errorf("announce: %q", st.Run.Announce)
 				}
 				// Seen gone again, it is dismissed already: nothing more.

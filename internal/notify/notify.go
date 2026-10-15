@@ -41,15 +41,19 @@ var headline = map[string]string{
 	"rate_limit":        "paused by a usage limit",
 	"dialog":            "claude is waiting for your answer",
 	"note":              "the run decided something without you",
-	"proposal":          "baton proposes something: answer, or it goes ahead",
+	"proposal":          "baton proposes something: answer, or baton answers for you",
 	"proceeded":         "baton went ahead with a proposal nobody answered",
+	"not_now":           "baton answered Not now on a proposal nobody answered: it may be left for you",
 	"decision":          "baton is holding a proposal for you",
 	"hold_lapsed":       "baton stopped holding a proposal nobody answered",
+	"block_lapsed":      "baton lifted a block nobody answered: Claude looks again",
 	"answered":          "baton answered Claude's question for you, as nobody did",
 	"review":            "baton needs you: review the decisions made without you",
 	"workers":           "baton needs you: its workers could not start",
 	"worker_held":       "baton needs you: a phase waits for you",
 	"run_stalled":       "baton needs you: the run stopped moving",
+	"recovery_backoff":  "claude keeps exiting: baton brings it back after a wait",
+	"afresh_later":      "a session keeps failing: baton starts a fresh one after a wait",
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a
