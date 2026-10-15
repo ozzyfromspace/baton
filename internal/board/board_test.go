@@ -112,6 +112,12 @@ func TestBand(t *testing.T) {
 			r.st.Run.Dialogs = state.DialogQueue{{Tool: "Bash", Agent: "a1b2c3d4e5", Since: now}}
 			return r
 		}, "", step2 + "P2 ▶ 5m · P3 needs you · P4 ready · P5 waits on P3 · lead: working on P2"},
+		{"a phase whose agent the human stopped", func() *run {
+			r := newRun()
+			r.agent("P3", "a1b2c3d4e5", 12*time.Minute)
+			r.st.Workers[0].Status = state.WorkerHeld
+			return r
+		}, "", step2 + "P2 ▶ 5m · P3 needs you · P4 ready · P5 waits on P3 · lead: working on P2"},
 		{"the lead needs the human", func() *run {
 			r := newRun()
 			r.st.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P2 stopped: the model declined the last turn"}
@@ -226,6 +232,21 @@ func TestLines(t *testing.T) {
 			"step 2  ▶ P2  Every hook knows its loop — the lead works on it 5m",
 			"        ⧗ P3  Phase agents — verifying 4m (job P3.j1) · agent a1b2c3d4",
 			"        ? P4  Gates and questions — needs you: a proposal, which goes ahead at " + now.Add(4*time.Minute).Format("15:04") + " · agent f6e5d4c3",
+			"step 3  · P5  baton's view — waits on P3",
+			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
+			"lead: working on P2, its turn 2m",
+		}},
+		{"a phase whose agent the human stopped", func() *run {
+			r := newRun()
+			r.agent("P3", "a1b2c3d4e5f6", 12*time.Minute)
+			r.st.Workers[0].Status = state.WorkerHeld
+			return r
+		}, "", 0, []string{
+			`◆ baton · "Workers you can see" · step 2 of 4`,
+			"step 1  ✓ P1  The mod — done",
+			"step 2  ▶ P2  Every hook knows its loop — the lead works on it 5m",
+			"        ? P3  Phase agents — needs you: its agent was stopped; /baton run starts a fresh one · agent a1b2c3d4",
+			"        · P4  Gates and questions — ready",
 			"step 3  · P5  baton's view — waits on P3",
 			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
 			"lead: working on P2, its turn 2m",

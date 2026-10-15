@@ -772,19 +772,22 @@ func (c *Coordinator) afresh(now time.Time, s *state.Store, b *bridge.Bridge, w 
 // holdAgent sets w's phase aside for the human, who stopped its agent from the agent panel: a message to
 // it is refused as stopped by the user, and Claude Code says to start a new agent for it only if the user
 // asks (spike 32). Its worker is held, its work kept in its worktree, until `baton run` asks for a fresh agent
-// on it; meanwhile its loop goes on watching its jobs, and nothing is sent to it.
+// on it; meanwhile its loop goes on watching its jobs, and nothing is sent to it. The phase waits for the
+// human, who is pushed at once: nothing else would tell them while they are away.
 func (c *Coordinator) holdAgent(s *state.Store, b *bridge.Bridge, w *worker) {
 	now := s.Now()
 	w.agent.in = nil
 	if agent := c.agentOf(s, w); agent != "" {
 		b.Forget(agent)
 	}
-	c.setEntry(s, w.entry, func(e *state.Worker) {
-		if e.Live() {
+	s.Update(func(st *state.State) error {
+		if e := st.Entry(w.entry); e != nil && e.Live() {
 			e.Status, e.Since, e.Why = state.WorkerHeld, now, "the human stopped its agent"
+			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "worker_held", Text: decide.PhaseHeld(w.phase), At: now})
 		}
+		return nil
 	})
-	s.Event("worker_held", map[string]any{"phase": w.phase, "why": "the human stopped its agent"})
+	s.Event("worker_held", map[string]any{"phase": w.phase, "why": "the human stopped its agent", "pushed": true})
 	c.announce(s, decide.AgentHeld(w.phase))
 }
 

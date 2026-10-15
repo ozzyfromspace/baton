@@ -120,6 +120,9 @@ func AgentHeld(phase string) string {
 		"/baton run starts a fresh agent on it", phase, phase)
 }
 
+// PhaseHeld is the notice pushed to the human as phase waits for them: they stopped its agent (AgentHeld).
+func PhaseHeld(phase string) string { return phase + " waits for you: " + NeedsAgentStopped }
+
 // AgentAfresh tells the human that a fresh phase agent takes phase up, as they asked (why: what became of
 // the one before it).
 func AgentAfresh(phase, why string) string {

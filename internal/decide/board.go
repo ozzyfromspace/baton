@@ -256,6 +256,9 @@ func NeedsProposal(deadline time.Time) string {
 // NeedsBlocked: the phase is blocked, for reason.
 func NeedsBlocked(reason string) string { return "blocked: " + reason }
 
+// NeedsAgentStopped: the human stopped the phase's agent (state.WorkerHeld), and the phase waits for them.
+const NeedsAgentStopped = "its agent was stopped; /baton run starts a fresh one"
+
 // NeedsPrompt: a permission prompt for tool waits in the lead's terminal.
 func NeedsPrompt(tool string) string {
 	if tool == "" {

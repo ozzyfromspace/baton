@@ -191,6 +191,9 @@ func agent(st state.State, subs map[string]state.State, id string, p *Phase) dec
 		return decide.Stand{Kind: decide.StandStarting, Since: w.Since}
 	case state.WorkerSuspended:
 		return decide.Stand{Kind: decide.StandSuspended, Since: w.Since, Why: w.Why}
+	case state.WorkerHeld:
+		// The human stopped its agent: the phase is theirs until they ask for a fresh agent.
+		return decide.Stand{Kind: decide.StandNeedsYou, Since: w.Since, Why: decide.NeedsAgentStopped}
 	case state.WorkerLanding:
 		s := decide.Stand{Kind: decide.StandLanding, Since: w.Since}
 		if m := w.Merge; m != nil {
