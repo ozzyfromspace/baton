@@ -2,6 +2,7 @@ package decide
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -18,6 +19,9 @@ func TestWaitWords(t *testing.T) {
 		{"no phase while a gate runs here", NoPhaseYet("job j3 (`make e2e`, P4)", &gate),
 			"baton: job j3 (`make e2e`, P4) runs its gate in this working tree, so no phase starts here until it ends — nothing is needed from you: baton takes the next one up then"},
 		{"no phase and no job", NoPhaseYet("", nil), "baton: no phase can start yet; baton takes the next one up as soon as one can"},
+		{"a run that stopped moving", RunStalled(41*time.Minute, []string{"P3: agent between turns 41m", "P4: verifying 50m (job P4.j1), " + LogQuiet(35*time.Minute)}, "lead: idle, with no phase in hand"),
+			"the run has not moved for 41m — P3: agent between turns 41m; P4: verifying 50m (job P4.j1), its log has not grown for 35m; lead: idle, with no phase in hand. " +
+				"/baton board shows where it stands"},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, c.got, c.want)

@@ -96,6 +96,9 @@ type Runtime struct {
 	Briefing *Briefing `json:"briefing,omitempty"`
 	// Notices are messages for the human that the host sends out of band (push and desktop), then clears.
 	Notices []Notice `json:"notices,omitempty"`
+	// Stalled is the host's last notice that the run as a whole stopped moving (loop's stall alarm), until
+	// the run moves again. It is no escalation: nothing waits on it.
+	Stalled *Stall `json:"stalled,omitempty"`
 	// Announce are lines for the human about what the host did on its own, such as a verification it
 	// settled: the host cannot write into the session, so the next hook that answers it shows them.
 	Announce []string `json:"announce,omitempty"`
@@ -143,6 +146,13 @@ type Runtime struct {
 	// not be resumed: once per phase. nil: none yet.
 	Recoveries []Recovery `json:"recoveries,omitempty"`
 	FreshFor   *string    `json:"fresh_for,omitempty"`
+}
+
+// Stall is the notice that the run stopped moving (Runtime.Stalled): pushed At, for a run that had not
+// moved since Since. The run moving after Since arms the alarm again.
+type Stall struct {
+	Since time.Time `json:"since"`
+	At    time.Time `json:"at"`
 }
 
 // Serial is a host's decision to run the plan's phases one at a time in the lead (Runtime.Serial): the

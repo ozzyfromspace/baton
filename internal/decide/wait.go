@@ -2,6 +2,9 @@ package decide
 
 import (
 	"fmt"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -28,3 +31,13 @@ func NoPhaseYet(waiting string, here *state.Job) string {
 	}
 	return "baton: no phase can start until " + waiting + " finishes — nothing is needed from you: baton takes the next one up then"
 }
+
+// RunStalled is the notice pushed to the human when nothing in the run has moved for quiet (loop's stall
+// alarm): what each phase left waits on (waits, as the board says it: "P3: agent between turns 41m"), and
+// where the lead stands (its line on the board).
+func RunStalled(quiet time.Duration, waits []string, lead string) string {
+	return fmt.Sprintf("the run has not moved for %s — %s. /baton board shows where it stands", Span(quiet), strings.Join(append(slices.Clip(waits), lead), "; "))
+}
+
+// LogQuiet says that a running job's log has not grown for d: its gate may hang.
+func LogQuiet(d time.Duration) string { return "its log has not grown for " + Span(d) }

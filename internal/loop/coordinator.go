@@ -21,9 +21,10 @@ type Lanes interface {
 // Coordinator drives a run from its host: the lead's Loop, ticked with the lead's View and injector on the
 // lead's tick (Tick), and what belongs to the run as a whole. After the lead's Loop, the coordinator does
 // the run's own duties: the lanes every session shares are swept once, and brought down once the run's plan
-// is complete (a worker's sub-run completing is only its phase done), and the run's phase agents are
-// started, watched and ended (fleet.go), each with a loop of its own (Agent). A panic in one part of the
-// tick leaves the others going. With no workers it is the lead's Loop alone.
+// is complete (a worker's sub-run completing is only its phase done), the run's phase agents are started,
+// watched and ended (fleet.go), each with a loop of its own (Agent), and a run that stops moving is told to
+// the human (stall.go). A panic in one part of the tick leaves the others going. With no workers it is the
+// lead's Loop alone, and the stall alarm.
 type Coordinator struct {
 	Lead  *Loop
 	Lanes Lanes  // the project's lanes (nil: none)
@@ -75,6 +76,11 @@ type Coordinator struct {
 	// retireStep and resumeStep are called after each step of retiring and resuming a worker (tests).
 	retireStep, resumeStep func(step string)
 
+	// stallAt is when the lead's tick last looked at whether the run stopped moving, and logs the running
+	// jobs' logs as it saw them (stall.go). Only the lead's tick touches them.
+	stallAt time.Time
+	logs    map[string]logSeen
+
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
 	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
@@ -109,6 +115,7 @@ func (c *Coordinator) duties(v host.View) {
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
 	c.lanes(s, st)
 	c.fleet(v, s, st)
+	c.stalls(v, s, st)
 }
 
 // worker is a phase agent this host asked baton's mod to start in the lead's claude: its roster entry, its
