@@ -51,6 +51,10 @@ const (
 	// Submit submits a line of baton's to the lead's model as a prompt of its own, read as one typed; the
 	// draft in the input box stays. One submitted while a turn runs waits for the turn's end.
 	Submit = "submit"
+	// Moved tells the mod that its host drives another run now (its session carried a run on, or the human
+	// switched conversations): the mod says hello again, which gives it that run's bridge, and acks
+	// nothing here. Its host takes it back if it drives this run again (Retract).
+	Moved = "moved"
 )
 
 // Report kinds.
@@ -422,7 +426,7 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 			if !slices.ContainsFunc(agents, func(a Agent) bool { return a.ID == c.Agent }) {
 				return ErrUnknownAgent
 			}
-		case Ask, Submit:
+		case Ask, Submit, Moved:
 		case Compact:
 			if c.Epoch <= 0 {
 				return fmt.Errorf("a compact names no compaction")
@@ -484,6 +488,26 @@ func (b *Bridge) Claim(instance string) error {
 		b.event("mod_voided", map[string]any{"ids": void})
 	}
 	return err
+}
+
+// Retract takes back the commands of kind that instance left open here, as Void does each, and reports
+// how many there were.
+func (b *Bridge) Retract(instance, kind string) (int, error) {
+	rec, err := b.read()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, o := range rec.Open {
+		if o.Instance == instance && o.Kind == kind {
+			if found, err := b.Void(instance, o.ID); err != nil {
+				return n, err
+			} else if found {
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // Void takes back command id of instance, not acked yet: its file goes, and the mod never runs it. A spawn

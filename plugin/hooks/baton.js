@@ -160,10 +160,17 @@ async function hello($) {
     M.dir = String(r.dir || '')
     if (M.hello) M.hello.cancel()
     M.hello = null
-    if (M.keep.seq < (r.seen || 0)) {
-      M.keep.seq = r.seen
-      await save($)
+    const run = String(r.run || '')
+    if (M.keep.run && M.keep.run !== run) {
+      // Another run's bridge (the host drives another run now): its commands are numbered afresh, and
+      // what the mod kept to report was the other run's.
+      M.keep.last = 0
+      M.keep.running = 0
+      M.keep.outbox = []
     }
+    M.keep.run = run
+    if (M.keep.seq < (r.seen || 0)) M.keep.seq = r.seen
+    await save($)
     await registerType($, r.agent)
     await registerBoard($, r.board)
     if (!M.poll) M.poll = $.clock.every(POLL_MS, () => poll($))
@@ -245,9 +252,7 @@ async function sendKept($) {
         continue
       }
       if (r.stale) {
-        M.ready = false
-        M.tries = 0
-        M.hello = $.clock.every(HELLO_FAST_MS, () => sayHello($))
+        helloAgain($)
       } else if (!r.retry) {
         M.ready = false
         M.off = true
@@ -257,6 +262,14 @@ async function sendKept($) {
   } catch (err) {
     // the store could not be written: the next poll sends what is kept
   }
+}
+
+// helloAgain has the mod say hello again before anything else, as it did first.
+function helloAgain($) {
+  M.ready = false
+  M.tries = 0
+  if (M.hello) M.hello.cancel()
+  M.hello = $.clock.every(HELLO_FAST_MS, () => sayHello($))
 }
 
 // agentsNow reads baton's agents as the host lists them.
@@ -315,6 +328,14 @@ async function poll($) {
         continue // acked meanwhile, or not written whole: the next poll reads it again
       }
       if (!c || c.instance !== e.instance || c.id !== id) continue
+      if (c.kind === 'moved') {
+        // The host drives another run now: the hello gives the mod that run's bridge. Nothing is acked
+        // here, as this bridge is no longer the mod's.
+        M.keep.last = id
+        await save($)
+        helloAgain($)
+        return
+      }
       M.keep.running = id
       await save($)
       const { later, ...result } = await run($, c)

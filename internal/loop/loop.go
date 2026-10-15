@@ -396,6 +396,7 @@ func (l *Loop) restartOn(v host.View, st state.State, in host.Injector) {
 func (l *Loop) drive(s *state.Store) {
 	if l.Store != nil {
 		l.logf("loop: now driving %s (was %s)", s.Dir, l.Store.Dir)
+		moved(l.Store, s, l.logf)
 	}
 	l.Store = s
 	l.halted, l.staleLog, l.dialogLog, l.idleNudged, l.dialogNotified = false, time.Time{}, time.Time{}, time.Time{}, time.Time{}

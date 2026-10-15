@@ -3,6 +3,7 @@ package loop
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -109,5 +110,47 @@ func TestARunIsSerialWithoutTheMod(t *testing.T) {
 				t.Errorf("pushed %q", p)
 			}
 		})
+	}
+}
+
+// The host drives another run mid-session (its session carried one on, or the human switched
+// conversations): the hello of the mod in its claude was the first run's, and the mod polls that run's
+// bridge, so no phase agent starts in the other run until the mod has said hello there, which the Moved
+// command left in the first run's bridge has it do. The other run's bridge is claimed afresh.
+func TestAnotherRunWaitsForTheModsHelloThere(t *testing.T) {
+	x := newCrew(t, 1)
+	x.tick(time.Second)
+	first := x.lead
+	if len(x.spawns()) != 1 {
+		t.Fatalf("no phase agent in the first run: %v", x.spawns())
+	}
+	other, err := x.proj.Bind(state.Binding{Session: "sess-2", Instance: "inst"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.WritePlan(x.pl)
+	other.Update(func(st *state.State) error {
+		*st = state.Reattach(*st, x.pl, x.now, state.Origin{})
+		st.RunBranch = "main"
+		return nil
+	})
+	x.lead = other
+	for range 3 {
+		x.tick(2 * time.Second)
+	}
+	if n := len(x.spawns()); n != 0 {
+		t.Fatalf("%d phase agents started in the other run before the mod said hello there", n)
+	}
+	rec, _ := bridge.Open(first.Dir, x.clock, nil).Peek()
+	if !slices.ContainsFunc(rec.Open, func(o bridge.Issued) bool { return o.Kind == bridge.Moved && o.Instance == "inst" }) {
+		t.Errorf("the first run's bridge has no move for the mod: %+v", rec.Open)
+	}
+	helloFrom(t, other)
+	x.tick(2 * time.Second)
+	if len(x.spawns()) != 1 {
+		t.Errorf("no phase agent in the other run once the mod said hello there: %v", x.spawns())
+	}
+	if strings.Contains(x.events(), `"kind":"serial"`) {
+		t.Errorf("the other run went serial:\n%s", x.events())
 	}
 }

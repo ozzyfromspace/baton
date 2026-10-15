@@ -55,9 +55,11 @@ type Coordinator struct {
 	claimed    bool
 	landAt     map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
 	// Whether baton's mod has said hello in the lead's claude, and since when the host has waited for it
-	// while a plan runs (mod.go). Only a step touches them.
+	// while a plan runs (mod.go), for the run a step last looked at (stepRun: claimed, off and these are
+	// that run's). Only a step touches them.
 	modReady bool
 	modSince time.Time
+	stepRun  string
 	// The machine's swap readings of the last minute, and why it had no room for another worker at the
 	// last step ("" if it had) (room.go).
 	swaps  []swapAt

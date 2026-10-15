@@ -361,6 +361,24 @@ test('a stale reply makes the mod say hello again, then send what it kept meanwh
   expect(kinds(w)).toEqual(['turn a1', 'turn a1'])
 })
 
+test("told its host drives another run now, the mod says hello again and runs that run's commands from its first", async ($, on) => {
+  const OTHER = '/proj/.baton/runs/other/mod'
+  let hellos = 0
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'send', agent: 'a1', text: 'One.' }),
+      ...command({ id: 2, kind: 'moved' }),
+      [OTHER + '/out/000001.json']: JSON.stringify({ instance: 'inst', id: 1, kind: 'send', agent: 'a2', text: 'Carried on.' }),
+    },
+    reply: (rep) => (rep.kind === 'hello' && hellos++ > 0 ? { ok: true, run: 'other', dir: OTHER, seen: 0, agent: AGENT, board: BOARD } : undefined),
+  })
+  await start($, w, 5_000)
+  expect(w.runs.filter((k) => k === 'hello').length).toBe(2)
+  expect(w.calls.filter((c) => c.startsWith('SendMessage'))).toEqual(['SendMessage a1 One.', 'SendMessage a2 Carried on.'])
+  expect(kinds(w)).toEqual(['ack 1', 'ack 1']) // the move itself is acked nowhere
+  expect(w.reports.map((r: any) => r.seq)).toEqual([1, 2])
+})
+
 test('the phase agent type stays offered, so that a message resumes its agents', async ($, on) => {
   world(on)
   const r = await $.agent.offer({ agent: 'baton:phase', description: 'x', source: 'plugin', provider: { plugin: 'baton', tier: 'user' } } as any)

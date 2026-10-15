@@ -487,6 +487,34 @@ func TestAVoidedCommandIsGone(t *testing.T) {
 	}
 }
 
+// A host that drives another run leaves the mod a move (Moved) in this run's bridge; driving this run again,
+// it takes back its own moves, and nothing else.
+func TestAMoveIsTakenBack(t *testing.T) {
+	r := newRig(t)
+	move := r.issue(Command{Kind: Moved})
+	line := r.issue(Command{Kind: Submit, Text: "Go on."})
+	if _, err := r.b.Issue(Command{Kind: Moved, Instance: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.b.Retract("inst", Moved); n != 1 || err != nil {
+		t.Fatalf("Retract = %d, %v", n, err)
+	}
+	rec, _ := r.b.Load()
+	var left []string
+	for _, o := range rec.Open {
+		left = append(left, o.Instance+" "+o.Kind)
+	}
+	if !slices.Equal(left, []string{"inst submit", "other moved"}) {
+		t.Errorf("open: %v", left)
+	}
+	if _, err := os.Stat(r.b.CommandPath(move.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the move's file: %v", err)
+	}
+	if _, err := os.Stat(r.b.CommandPath(line.ID)); err != nil {
+		t.Errorf("the line's file: %v", err)
+	}
+}
+
 // The lead's own commands: a compaction names the one it is for, and a line its text; neither waits for an
 // agent. Accept hands back the command an ack ended, as it was issued, so its epoch goes with it; one
 // voided first ends nothing. The mod's word that the compaction it ran is over carries the command too.

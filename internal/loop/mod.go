@@ -45,6 +45,24 @@ func (c *Coordinator) modWait(now time.Time, s *state.Store, st state.State) str
 	return "baton's mod has not said hello yet"
 }
 
+// moved tells baton's mod in this claude that the host drives run to now, not from: the mod polls the
+// bridge of the run it said hello in, and would never see to's commands. A Moved command in from's bridge
+// has it say hello again, which gives it to's (bridge.Moved). One such command this host left in to's
+// bridge, when it drove elsewhere before, is taken back: the mod is about to say hello there anyway.
+func moved(from, to *state.Store, logf func(string, ...any)) {
+	b := bridge.Open(from.Dir, from.Now, func(kind string, fields map[string]any) { from.Event(kind, fields) })
+	if rec, err := b.Peek(); err == nil && rec.Hello.Ready(from.Instance) {
+		if c, err := b.Issue(bridge.Command{Kind: bridge.Moved, Instance: from.Instance}); err != nil {
+			logf("loop: telling the mod the host drives another run: %v", err)
+		} else {
+			logf("loop: told the mod the host drives another run (command %d)", c.ID)
+		}
+	}
+	if _, err := bridge.Open(to.Dir, to.Now, nil).Retract(to.Instance, bridge.Moved); err != nil {
+		logf("loop: taking back a move told before: %v", err)
+	}
+}
+
 // serial makes the run's phases go one at a time in the lead, for why, and tells the human once.
 func (c *Coordinator) serial(now time.Time, s *state.Store, why string) {
 	if c.off != "" {

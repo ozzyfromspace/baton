@@ -264,6 +264,11 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 		c.retireLanded(now, s, st)
 		return
 	}
+	if s.Ref != c.stepRun {
+		// Another run than the step last looked at (the session carried one on, or the human switched
+		// conversations): its bridge is claimed afresh, and its mod's hello and the serial mode are its own.
+		c.stepRun, c.claimed, c.modReady, c.modSince, c.off = s.Ref, false, false, time.Time{}, ""
+	}
 	b := c.bridge(s)
 	if !c.claimed && b.Claim(s.Instance) == nil {
 		c.claimed = true // the commands an earlier host left for a claude that is gone are void

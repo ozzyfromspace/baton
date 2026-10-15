@@ -317,3 +317,44 @@ func TestTheLoopWaitsForAModAboutToSayHello(t *testing.T) {
 		t.Fatalf("no hello: typed %q", r.in.text)
 	}
 }
+
+// The host drives another run (its session carried one on, or the human switched conversations): the mod
+// in its claude still polls the bridge of the run it said hello in, so that bridge gets a Moved command,
+// which has the mod say hello again and so reach the other run's bridge. Driving the first run again takes
+// the move back there and leaves one in the other's.
+func TestASwitchOfRunsMovesTheMod(t *testing.T) {
+	r := modRig(t)
+	first := r.loop.Store
+	other, err := state.Open(t.TempDir(), "inst", first.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moves := func(s *state.Store) int {
+		rec, err := bridge.Open(s.Dir, s.Now, nil).Peek()
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, o := range rec.Open {
+			if o.Kind == bridge.Moved && o.Instance == "inst" {
+				n++
+			}
+		}
+		return n
+	}
+	r.loop.drive(other)
+	if moves(first) != 1 || moves(other) != 0 {
+		t.Fatalf("moves: %d in the first run's bridge, %d in the other's", moves(first), moves(other))
+	}
+	helloFrom(t, other) // the mod said hello again, there
+	r.loop.drive(first)
+	if moves(first) != 0 || moves(other) != 1 {
+		t.Errorf("back: %d in the first run's bridge, %d in the other's", moves(first), moves(other))
+	}
+	quiet := modRig(t) // a run whose mod never said hello in this claude is told nothing
+	say(t, quiet.loop.Store, bridge.HelloInfo{Instance: "inst-before", Protocol: bridge.Protocol})
+	quiet.loop.drive(other)
+	if moves(quiet.loop.Store) != 0 {
+		t.Errorf("a bridge with another claude's hello got a move")
+	}
+}
