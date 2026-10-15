@@ -17,13 +17,11 @@ func (p *Project) Orphans(file, except string) []RunInfo {
 	if file == "" {
 		return nil
 	}
-	if abs, err := filepath.Abs(file); err == nil {
-		file = abs
-	}
+	file = planPath(file)
 	now := p.Now()
 	var out []RunInfo
 	for _, r := range p.Runs() {
-		if r.ID != except && r.File == file && r.HasPlan() && r.State.Mode != ModeComplete && !r.Live(now) {
+		if r.ID != except && r.File != "" && planPath(r.File) == file && r.HasPlan() && r.State.Mode != ModeComplete && !r.Live(now) {
 			out = append(out, r)
 		}
 	}
@@ -38,9 +36,7 @@ func (p *Project) Carry(session, run, file string) error {
 	if !validID(session) || isWorker(run) {
 		return fmt.Errorf("cannot carry run %q on in session %q", run, session)
 	}
-	if abs, err := filepath.Abs(file); err == nil {
-		file = abs
-	}
+	file = planPath(file)
 	return p.withLock(func() error {
 		if !p.runExists(run) {
 			return fmt.Errorf("no run %q here", run)
@@ -55,11 +51,24 @@ func (p *Project) Carry(session, run, file string) error {
 			}
 		}
 		r := p.info(run, p.refDir(run, ""), nil)
-		if r.File != file || !r.HasPlan() || r.State.Mode == ModeComplete || r.Live(p.Now()) {
+		if r.File == "" || planPath(r.File) != file || !r.HasPlan() || r.State.Mode == ModeComplete || r.Live(p.Now()) {
 			return fmt.Errorf("run %s is not one of %s to carry on (%s, owned: %v)", run, file, r.State.Mode, r.Live(p.Now()))
 		}
 		return p.writeLink(run, sessionsDir, session)
 	})
+}
+
+// planPath is plan file as a carry compares it: absolute, and through any symlink as far as it resolves, so
+// that one file named two ways (/var and /private/var on macOS, a project reached through a link) is one
+// plan.
+func planPath(file string) string {
+	if abs, err := filepath.Abs(file); err == nil {
+		file = abs
+	}
+	if real, err := filepath.EvalSymlinks(file); err == nil {
+		return real
+	}
+	return file
 }
 
 // Left is the sessions that belonged to run r before session: those that left it.

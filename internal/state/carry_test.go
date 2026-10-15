@@ -1,6 +1,8 @@
 package state
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -101,5 +103,36 @@ func TestCarry(t *testing.T) {
 				t.Errorf("Left = %v", left)
 			}
 		})
+	}
+}
+
+// One plan file named two ways, its folder reached through a symlink (as /var is /private/var on macOS),
+// is one plan to carry on.
+func TestCarryThroughALink(t *testing.T) {
+	folder := t.TempDir()
+	file := filepath.Join(folder, "plan.md")
+	if err := os.WriteFile(file, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(folder, link); err != nil {
+		t.Skip(err)
+	}
+	p, clk := newProject(t)
+	s := bind(t, p, Binding{Session: "old", Instance: "host-old"})
+	pl := threePhases()
+	pl.Title, pl.File = "Plan old", file
+	if err := s.SavePlan(pl); err != nil {
+		t.Fatal(err)
+	}
+	s.Update(func(st *State) error { *st = Reattach(*st, pl, t0, Origin{}); return nil })
+	clk.t = clk.t.Add(OwnerTTL + time.Second)
+	bind(t, p, Binding{Session: "bg", Instance: "host-bg"})
+	via := filepath.Join(link, "plan.md")
+	if got := p.Orphans(via, "bg"); len(got) != 1 || got[0].ID != "old" {
+		t.Fatalf("Orphans(%s) = %v, want the run of %s", via, got, file)
+	}
+	if err := p.Carry("bg", "old", via); err != nil || p.RunOf("bg") != "old" {
+		t.Fatalf("carry through the link: %v, bg belongs to %q", err, p.RunOf("bg"))
 	}
 }
