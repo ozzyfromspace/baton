@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"time"
 )
@@ -25,7 +27,25 @@ const (
 	MessageLand   = "land"   // a worker's work did not land, and the worker must act on why
 	MessageAnswer = "answer" // the human answered a question of baton's, or baton did for them at its deadline
 	MessageRewind = "rewind" // the human rewound the conversation past what baton recorded, which stands
+	MessagePlan   = "plan"   // the human changed the plan, and a phase agent's part of it reads differently
 )
+
+// PlanText is what a worker's agent was given of the plan, as hashes (TextSum): the standing rules, and
+// its phase's section. It is kept in the worker's sub-run, from when it was made and each time its agent
+// is told of a change (loop's replan), so that a change is told once.
+type PlanText struct {
+	Rules   string `json:"rules,omitempty"`
+	Section string `json:"section,omitempty"`
+}
+
+// TextSum is the hash PlanText keeps of text: "" for none.
+func TextSum(text string) string {
+	if text == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:16])
+}
 
 // Tell leaves m for the session's model, in place of a message about the same thing not given yet.
 func Tell(st *State, m Message, now time.Time) {
@@ -34,6 +54,11 @@ func Tell(st *State, m Message, now time.Time) {
 		st.Inbox = slices.DeleteFunc(st.Inbox, func(o Message) bool { return o.About == m.About })
 	}
 	st.Inbox = append(st.Inbox, m)
+}
+
+// DropMail drops the messages of kind not given yet: a fresh agent's brief says what they would have.
+func DropMail(st *State, kind string) {
+	st.Inbox = slices.DeleteFunc(st.Inbox, func(m Message) bool { return m.Kind == kind })
 }
 
 // Mail lists the messages the model should be given now. None is given while a compaction is owed or

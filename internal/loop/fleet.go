@@ -234,10 +234,10 @@ func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
 }
 
 // step looks over the run's phase agents once: first, when a plan was attached (sweep), the workers other
-// runs left behind; then what the mod reported, the agents this host started, the merge queue and the
-// answers to their questions, the roster's workers no agent of this host works on, and whether a new one
-// can start. With no Fleet, it only retires the roster's workers: workers are off in this host, and their
-// phases go back to the lead.
+// runs left behind; then what the mod reported, the agents this host started, a change of the plan (passed
+// on to them: replan), the merge queue and the answers to their questions, the roster's workers no agent
+// of this host works on, and whether a new one can start. With no Fleet, it only retires the roster's
+// workers: workers are off in this host, and their phases go back to the lead.
 func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 	if sweep {
 		c.sweep(now, s)
@@ -273,6 +273,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 	for _, w := range c.launched() {
 		c.watch(now, s, b, st, pl, w)
 	}
+	c.replan(now, s, st, pl)
 	for _, w := range c.launched() {
 		w.agent.Tick(now)
 	}
@@ -674,7 +675,12 @@ func (c *Coordinator) subRun(s *state.Store, pl plan.Plan, e state.Worker) (*sta
 	if err := sub.SavePlan(only); err != nil {
 		return nil, err
 	}
-	_, err = sub.Update(func(st *state.State) error { *st = state.AttachWorker(*st, e.Phase); return nil })
+	doc, _ := os.ReadFile(pl.File) // what its brief reads (replan)
+	_, err = sub.Update(func(st *state.State) error {
+		*st = state.AttachWorker(*st, e.Phase)
+		st.PlanText = planText(only, doc)
+		return nil
+	})
 	return sub, err
 }
 

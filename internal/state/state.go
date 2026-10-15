@@ -165,6 +165,8 @@ type State struct {
 	IDPrefix string `json:"id_prefix,omitempty"`
 	// Inbox holds what baton has for the session's model that no hook could tell it yet (Message).
 	Inbox []Message `json:"inbox,omitempty"`
+	// PlanText is what a worker's agent was given of the plan (a sub-run's only).
+	PlanText *PlanText `json:"plan_text,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }

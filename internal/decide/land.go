@@ -110,6 +110,8 @@ func AgentMail(kinds []string) string {
 			return "[baton] Your work did not land yet: baton's message says why and what to do." + comes
 		case state.MessageAnswer:
 			return "[baton] Your question has its answer." + comes
+		case state.MessagePlan:
+			return "[baton] The human changed the plan: baton's message has the new text for you." + comes
 		}
 	}
 	return "[baton] baton has a message for you." + comes

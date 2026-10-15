@@ -82,7 +82,8 @@ func (h *handlers) spawned(c Context) (Result, error) {
 // baton has for it (its brief again, after a compaction of its own; its results, baton's messages) comes
 // with its next tool call or its stop, and the message that woke it (loop.line) says so. A fresh agent on a
 // phase its verification reopened, whose result no agent was given (the one before it had ended), is given
-// it in its brief, once: it is delivered there, so its first tool call does not give it again.
+// it in its brief, once: it is delivered there, so its first tool call does not give it again. Nor is a
+// fresh agent told of a change of the plan its brief reads already (state.MessagePlan).
 func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
 	path := agentTranscript(c.Input)
@@ -94,6 +95,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 			return nil
 		}
 		checkpointed, brief = state.Fresh(st, state.Started(s.Agent, c.Now), path, c.Now), true
+		state.DropMail(st, state.MessagePlan) // its brief reads the plan as it is now
 		if ps := st.Phases[st.Current]; st.Mode == state.ModeRunning && (ps == nil || ps.Status == state.PhasePending) {
 			state.Start(st, c.Now, origin)
 			started = true
