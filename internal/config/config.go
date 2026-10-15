@@ -39,8 +39,8 @@ type Config struct {
 	// duration from 1m to 2h, "5m" by default (BATON_ESCALATION_TIMEOUT, which may go down to 10s).
 	EscalationTimeout string `json:"escalation_timeout,omitempty"`
 	// MaxAutoDecisions is how many decisions a phase may make without the human (notes, and proposals
-	// nobody answered) before baton stops for them to review; 5 by default, 0 for no limit
-	// (BATON_MAX_AUTO_DECISIONS).
+	// nobody answered) before baton stops for them to review. Off (0) unless set: baton never waits on the
+	// human for its own count (BATON_MAX_AUTO_DECISIONS).
 	MaxAutoDecisions *int `json:"max_auto_decisions,omitempty"`
 	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
@@ -84,7 +84,7 @@ const (
 	DefaultNtfyServer    = "https://ntfy.sh"
 
 	DefaultEscalationTimeout = 5 * time.Minute
-	DefaultMaxAutoDecisions  = 5
+	DefaultMaxAutoDecisions  = 0
 	DefaultVerifyTimeout     = 3 * time.Hour
 	DefaultSwitchAfter       = 5 * time.Minute
 	DefaultForegroundMax     = 2 * time.Minute

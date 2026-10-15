@@ -70,9 +70,9 @@ func TestEscalationSettings(t *testing.T) {
 		want Escalation
 		err  string
 	}{
-		{"defaults", `{}`, nil, Escalation{5 * time.Minute, 5}, ""},
-		{"file", `{"escalation_timeout":"90s","max_auto_decisions":0}`, nil, Escalation{90 * time.Second, 0}, ""},
-		{"file bounds", `{"escalation_timeout":"2h"}`, nil, Escalation{2 * time.Hour, 5}, ""},
+		{"defaults: no cap unless the human opts in", `{}`, nil, Escalation{5 * time.Minute, 0}, ""},
+		{"file", `{"escalation_timeout":"90s","max_auto_decisions":5}`, nil, Escalation{90 * time.Second, 5}, ""},
+		{"file bounds", `{"escalation_timeout":"2h"}`, nil, Escalation{2 * time.Hour, 0}, ""},
 		{"env wins", `{"escalation_timeout":"10m","max_auto_decisions":3}`, map[string]string{"BATON_ESCALATION_TIMEOUT": "10s", "BATON_MAX_AUTO_DECISIONS": "8"}, Escalation{10 * time.Second, 8}, ""},
 		{"too short in the file", `{"escalation_timeout":"30s"}`, nil, Escalation{}, `escalation_timeout "30s" is not valid: use a duration from 1m to 2h`},
 		{"too long", `{"escalation_timeout":"3h"}`, nil, Escalation{}, "from 1m to 2h"},
