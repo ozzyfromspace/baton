@@ -686,6 +686,13 @@ func TestAGateWakesAnIdlePhaseAgent(t *testing.T) {
 		t.Error("the lead's compaction touched the phase agent")
 	}
 
+	// The lead compacts in seconds: the agent may still be ending its turn on the wait.
+	started := s.Events()[first(s.Events(), is("worker_started", "phase", "P1"))]
+	if !s.Until("the phase agent to end its turn", 3*time.Minute, func() bool {
+		return first(s.Events(), is("mod_turn", "agent", fmt.Sprint(started["agent"]))) >= 0
+	}) {
+		t.Fatalf("the phase agent never ended its turn on the wait:\n%s", eventLog(s))
+	}
 	sends := count(s.Events(), is("mod_command", "command", "send", "phase", "P1"))
 	release(t, dir)
 	s.Until("the plan to complete", 6*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })

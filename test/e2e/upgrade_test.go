@@ -109,7 +109,7 @@ func TestARunningPlanRestartsAtThePhaseBoundary(t *testing.T) {
 	Attach(t, dir, twoPhasePlan)
 	home := installVersions(t, "v9.1.0", "v9.1.1")
 	linkVersion(t, home, "v9.1.1") // installed before the run starts: the restart still waits for the boundary
-	s := StartProgram(t, dir, []string{"BATON_HOME=" + home}, filepath.Join(home, "bin", "v9.1.0", "baton"), "--model", "haiku",
+	s := StartProgram(t, dir, []string{"BATON_HOME=" + home}, filepath.Join(home, "bin", "v9.1.0", "baton"), "--model", "haiku", "--plugin-dir", pluginDir(t),
 		"Start the attached plan. For phase P0, run `echo hello` with the Bash tool, then run "+
 			"`baton done P0 --notes \"said hello\"` and end your turn. After that, follow baton's instructions.")
 	s.Trust()

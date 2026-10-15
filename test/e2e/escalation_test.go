@@ -47,7 +47,7 @@ func kind(k string) func(map[string]any) bool {
 func TestSilentStopIsRefusedThenReported(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
-	s := Start(t, dir, "--model", "haiku", "Quick question before anything else: what is 2+2? Answer in one word.")
+	s := Start(t, dir, "--model", "haiku", "Quick question before anything else: what is 2+2? Answer in one word, then end your turn.")
 	s.Trust()
 	waitSequence(t, s, 3*time.Minute,
 		kind("stop_refused"),
