@@ -17,9 +17,9 @@ So baton takes those decisions away from the model. The model does the work; det
 1. **Plan.** `/baton plan <goal>` plans in plan mode, with a heading per phase (`## P0 — …`). Under each heading, a line says what the phase needs done first: `After: P1, P3`, `After: none` or `After: all`. Without the line, a phase follows the one before it.
 2. **Approve.** baton attaches the plan when you approve it, compacts the planning conversation away, and starts P0 from a brief: the phase's section of the plan, the standing rules, and the notes of earlier phases.
 3. **Work.** Your session, the **lead**, works the phase in your checkout and reports with `baton done`. A stop without a status is refused, with instructions.
-4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
-5. **Gates off the critical path.** A gate that takes more than a couple of minutes goes to baton (`baton verify`), which runs it on the committed code outside your checkout while the model works on. A finished phase is reported done while its gate runs: it is done when the gate passes, and reopens if it fails.
-6. **Boundaries.** When a phase is done, baton waits until nothing is in the way (a turn, a dialog, your typing) and types `/compact` itself. Once it has proof that the compaction happened, it briefs the next phase and wakes the model.
+4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for, at least 2 minutes apart, so the machine shows each one's load before the next starts. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
+5. **Gates off the critical path.** A gate that takes more than a couple of minutes goes to baton (`baton verify`), which runs it on the committed code outside your checkout while the model works on. A finished phase is reported done while its gate runs: it is done when the gate passes, and reopens if it fails. A phase agent's failed gate goes back to that agent, with the result.
+6. **Boundaries.** When a phase is done, baton waits until nothing is in the way (a turn, a dialog) and has its mod compact the session, with your unsent draft left in the input box. Once it has proof that the compaction happened, it briefs the next phase and wakes the model. When baton takes up a phase by itself (a gate's verdict, a landing), a turn under way, yours included, runs to its end first.
 7. **Landing.** If your branch moved on while a phase agent worked, baton merges it into the agent's branch (a conflict goes back to the agent, which merges it itself), verifies it again, and fast-forwards your branch between your session's tool calls. Nothing is rebased, so no commit is ever rewritten. Your session is told which commits and files moved.
 
 ## What you see
@@ -30,9 +30,9 @@ So baton takes those decisions away from the model. The model does the work; det
 - **The status line** starts with your session's segment: `◆ baton · P6 6/23 <title> · ctx 412k/810k`. It also shows a job your session waits on, `? proposal · goes ahead 15:33`, or `⚠ waiting on you`.
 - **Every action** baton takes is announced in the session and logged to `.baton/runs/<session>/events.jsonl`.
 
-A phase agent reports to baton, not to your session's model: its transcript line reads *"P3's report went to baton, not to Claude"*.
+A phase agent reports to baton, not to your session's model: its transcript line reads *"P3's report went to baton, not to Claude"*. In auto mode Claude Code also hands each agent's report back as a message from another session; baton's mod drops that too, and it never counts as yours.
 
-Phase agents need baton's mod, which ships in its plugin. Where Claude Code doesn't load the mod (an organization that allows only managed mods, or an older Claude Code), the plan runs one phase at a time in your session, and baton says so.
+Phase agents need baton's mod, which ships in its plugin. Where Claude Code doesn't load the mod (an organization that allows only managed mods, or an older Claude Code), or loads one from another baton release, the plan runs one phase at a time in your session, and baton says so. There baton types `/compact` itself (see [Privacy and safety](#privacy-and-safety)).
 
 ## When it needs you
 
@@ -47,6 +47,8 @@ A run must not stop for something it can work around. When something goes wrong 
 - **A proposal** reads *"baton: gpg signing timed out. Unless you answer by 15:33, I will commit P4 unsigned."*, and you can answer Wait for me, Pause baton or Go ahead. A proposal that looks outward-facing or irreversible (push, publish, deploy, delete, …) gets no deadline.
 - **Every decision made without you is kept, with its undo.** The model is handed the ones you haven't seen the next time you type, so "undo the unsigned commit" still works hours later. After 5 in one phase, baton stops for you to review them.
 - **A phase agent's question** comes to you in Claude Code's own question dialog, naming its phase, and your answer goes to the agent. Wait for me leaves only that phase waiting, until `/baton run` asks you again.
+- **A phase agent you stop** from the agent panel leaves its phase waiting for you. baton pushes that, the board shows it, and `/baton run` starts a fresh agent.
+- **A run that stops moving** tells you: when nothing in it has moved for 30 minutes and nothing is at work (no tool call, no gate whose log still grows), baton pushes one notice naming what each phase left waits on.
 - **A permission prompt**, your session's or a phase agent's, is never answered or typed through by baton. It shows in your terminal, the band shows `P3 needs you`, and baton pushes if it waits. Only that phase waits.
 - **A turn the model's safeguards refuse** is never retried, and baton never switches models. baton tells you which phase stopped, and the two ways on: rewind (Esc Esc) to before the flagged turn and take a different approach, or `/clear` for a fresh conversation from the phase's brief. Phases that don't need it carry on.
 - **Whenever the run halts**, baton first saves any uncommitted work into a private ref under `refs/baton/snapshots/`. `baton status` lists them, with the command to restore one.
@@ -60,7 +62,7 @@ baton also handles the stops that aren't the model's to report:
 
 ## Install
 
-You need Claude Code 2.1.289 or newer, on macOS or Linux. Phase agents were verified on 2.1.296.
+You need Claude Code 2.1.289 or newer, on macOS or Linux. Phase agents were verified on 2.1.296 and 2.1.300.
 
 ```sh
 claude plugin marketplace add ozzyfromspace/baton
@@ -85,16 +87,18 @@ Start sessions with `baton` instead of `claude`; it takes the same arguments. In
 |---|---|
 | `/baton plan <goal>` | Plan in plan mode, in a form baton can run. baton runs it once you approve. |
 | `/baton run [plan.md]` | Run a plan. This session's own plan goes on where it stopped (a pause, a block, phases you added to it); any other plan is attached and started. |
-| `/baton status` | Where the run stands: phases, jobs, decisions with their undo, snapshots. |
+| `/baton status` | Where the run stands: phases, jobs, decisions with their undo, snapshots, and the run's earlier plans. |
 | `/baton board` | The plan step by step. |
 | `/baton pause` | Take the wheel; `/baton run` gives it back. |
-| `/baton drop` | Drop the run. Its phase agents end, with their work saved, and baton does nothing until the next plan. |
+| `/baton drop` | Drop the run. Its phase agents end, with their work saved, the plan's record is kept, and baton does nothing until the next plan. |
 | `/baton exit` | Leave baton; the conversation goes on as plain `claude`. |
-| `/baton drafts` | Drafts baton saved out of the input box to let a compaction through. |
+| `/baton drafts` | Drafts baton saved out of the input box to let a compaction through, where its mod doesn't run. |
 | `/baton clean` | End what no live session uses: the phase agents and jobs of runs nobody will come back to, lanes, worktrees, leftover files (`--dry-run` only looks). |
 | `/baton version`, `setup`, `update` | Which baton runs; check this machine; update. |
 
 `baton --help` lists every command.
+
+You can edit the plan file while it runs: baton follows the new text, and a phase agent at work is told when its phase or the standing rules change. If a phase agent's work reached your branch some other way (merged by hand), `baton done <phase>` in your session records it landed. `/baton pause` hands you the session: a `/compact` of yours while paused counts for the compaction baton owed, so `/baton run` doesn't compact again unless the conversation has grown much since, and a plan attached while paused waits for `/baton run`. A plan that another replaces, or that you drop, is kept in `.baton/runs/<run>/gen-<N>/`.
 
 Each session has a run of its own in `.baton/runs/` (kept out of git), so several terminals can each run a plan in one project. A run follows its conversation through `--resume` and `/clear`. Without git, a plan runs the same way; baton just has nothing to commit or snapshot.
 
@@ -103,7 +107,7 @@ Each session has a run of its own in `.baton/runs/` (kept out of git), so severa
 | The model runs | What baton does |
 |---|---|
 | `baton verify "<command>" --notes "…"` | Runs the gate on `HEAD` in a lane (a worktree outside your checkout), so edits meanwhile can't disturb it. |
-| `baton verify --here "<command>" --notes "…"` | Runs it on `HEAD` in the checkout itself, for a gate that needs the checkout's running services. Edits and landings there wait until it ends. |
+| `baton verify --here "<command>" --notes "…"` | Runs it on `HEAD` in the checkout itself, for a gate that needs the checkout's running services. Edits and landings there wait until it ends. In a phase agent's worktree it holds one of the project's lanes while it runs, so here gates and lane gates take turns (one at a time without a `.baton-lane`). |
 | `baton await "<command>" --notes "…"` | Waits on something outside the project, such as a CI run. No git needed. |
 
 The result reaches the model at its next tool call or stop, or wakes it. If a phase can't go on without its result and another phase can start, baton sets the phase aside after 5 minutes, and comes back to it when the result is in.
@@ -121,7 +125,7 @@ slots) echo 2 ;;                        # lanes at once (1 to 4)
 esac
 ```
 
-It runs with `BATON_LANE` (the lane's number, for ports and names), `BATON_LANE_DIR`, `BATON_ROOT` (your checkout) and `BATON_COMMIT` set.
+It runs with `BATON_LANE` (the lane's number, for ports and names), `BATON_LANE_DIR`, `BATON_ROOT` (your checkout) and `BATON_COMMIT` set. A phase agent's `--here` gate runs its command directly in the agent's worktree, with the same variables for the lane it holds (`BATON_LANE_DIR` is the worktree), so a test database or Compose project named by lane stays its own.
 
 ## Settings
 
@@ -130,7 +134,7 @@ Settings go in `~/.baton/config.json`. Most have an environment variable too (`B
 | Key | Default | Meaning |
 |---|---|---|
 | `ntfy_topic` | none | Pushes to your phone through ntfy. Treat the topic like a password. |
-| `workers` | `auto` | How many phase agents may work at once. `auto` sizes it to the machine (one per 2 CPUs or 4 GiB, whichever allows fewer, less one for your session, at most 8). A number from 1 to 8 sets the most; `0` runs one phase at a time. |
+| `workers` | `auto` | How many phase agents may work at once. `auto` sizes it to the machine (one per 2 CPUs or 4 GiB, whichever allows fewer, less one for your session, at most 8). A number from 1 to 8 sets the most; `0` runs one phase at a time. Phase agents start at least 2 minutes apart. |
 | `autocompact` | `810k` | The context cap claude starts with: `auto`, 100k to 1m, or `off`. |
 | `escalation_timeout` | `5m` | How long a proposal waits for you before it goes ahead. |
 | `max_auto_decisions` | `5` | How many decisions one phase may make without you before baton stops for a review. |
@@ -140,8 +144,8 @@ The rest are described in [`internal/config/config.go`](internal/config/config.g
 
 ## Privacy and safety
 
-- **Typing.** baton types into the terminal it hosts: `/compact` at boundaries, and a short `[baton] …` line to wake a stalled session. It never types while a dialog is open or you've just typed, and never into a phase agent. The one exception: where its mod doesn't run, baton answers its own unanswered question by typing `3`, and only while that question is the only dialog open. An unsent draft in the way of a compaction is saved (`baton drafts`) and cleared.
-- **The mod.** baton's plugin carries a mod: JavaScript that Claude Code runs in your session. It starts, messages and stops the phase agents, asks baton's questions in Claude Code's dialog, and draws the band. It acts only on baton's say-so, and does nothing in a session baton doesn't host.
+- **Typing.** Where its mod runs, baton types nothing into your session: the mod compacts it and submits baton's short `[baton] …` lines, and your unsent draft stays in the input box. Where the mod doesn't run, baton types `/compact` at boundaries and a `[baton] …` line to wake a stalled session, never while a dialog is open or you've just typed. There it answers its own unanswered question by typing `3`, only while that question is the only dialog open, and saves an unsent draft in the way of a compaction (`baton drafts`) and clears the box, unless one of the model's own background agents may be at work: the Ctrl-C that clears the box would stop every background agent. baton never types into a phase agent.
+- **The mod.** baton's plugin carries a mod: JavaScript that Claude Code runs in your session. It starts, messages and stops the phase agents, compacts your session and submits baton's lines, asks baton's questions in Claude Code's dialog, drops the agents' reports before your session's model reads them, and draws the band. It acts only on baton's say-so, and does nothing in a session baton doesn't host.
 - **Git.** baton never commits or stages your files. It writes:
   - snapshot refs under `refs/baton/`, and a line in `.git/info/exclude`;
   - worktrees for lanes and phase agents under `~/.baton/`;

@@ -87,7 +87,7 @@ Run `baton pause` and report the result in one line. It hands the session to the
 
 ## drop
 
-Run `baton drop` and report the result in one line. The run's plan is set aside (its history stays in baton's log), and baton does nothing in this session until the next plan. The session stays hosted.
+Run `baton drop` and report the result in one line. The run's plan is set aside (its record is kept, and `baton status` lists it among the run's earlier plans), and baton does nothing in this session until the next plan. The session stays hosted.
 
 ## clean
 
@@ -165,10 +165,12 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 ### Phase agents and other sessions
 
 - baton may run phase agents beside you: background agents of this session that baton starts, each on another phase of the plan, in a worktree and on a branch of its own. Leave the phases they have alone, and leave the agents to baton: it starts, messages and stops them, and their reports are for baton, not for you. baton lands each one's work on your branch by itself, and the phases that need it wait until then.
+- If a phase agent's work reached your branch some other way (merged by hand, never by a rebase), `baton done <its phase>` records it landed, as a decision made without the human, and baton retires its agent. While the agent's branch has commits that are not on your branch, baton refuses that and says how to finish the phase.
 - When baton lands a phase agent's work, it tells you which commits and files moved under you. Read those files again before you edit them, and never amend, reset, rebase or revert commits you did not make (baton refuses to amend, reset or rebase over them).
 - Another baton session may be running its own plan in the same checkout. While one is, baton refuses git commands that take every change (`git add -A` or `.`, `commit -a`, `stash`, `reset --hard`, `checkout .`, `clean -f`): stage and commit your own files by path, and leave the rest alone.
 
 ### Compaction
 
 - Never type `/compact` yourself. baton does that at the right moment.
+- When baton takes up a phase by itself while your turn runs (a gate's verdict, a landing), it tells you once that the phase comes after this turn: finish what the turn is doing, but don't start that phase in it. baton compacts at the turn's end and gives you the phase's brief.
 - baton leaves the human's unsent draft in the input box: it compacts and gives you its lines around it. Only where it runs without its mod, and no agent is at work, does it save a draft that is in the way among its drafts and clear the box. Either needs nothing from you; if they ask where their message went, run `baton drafts`.

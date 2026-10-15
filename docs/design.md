@@ -28,8 +28,11 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
 
 - **The host** starts `claude` with baton's hooks, its status line, an allow rule for `baton` and the
   `--autocompact` cap, all in `claude --settings`, so a plain session carries none of them. It sets `BATON_HOST=1`.
-  It types only when no turn or dialog is open and the human hasn't typed for a few seconds. Escape, Ctrl-C or a
-  prompt from the human hands that turn to the human.
+  Where its mod runs, it types nothing: the mod compacts the lead and submits baton's lines, and the human's draft
+  stays in the input box. In serial mode it types only when no turn or dialog is open and the human hasn't typed for
+  a few seconds, and never sends Ctrl-C while an agent may be live: one at an idle prompt stops every background
+  agent for good ([`research/visible-workers.md`](research/visible-workers.md)). Escape, Ctrl-C or a prompt from the
+  human hands that turn to the human.
 - **Hooks record facts:** who started a turn, the open dialogs (as a queue), the subagents, and the context size from
   the status line. `baton hook` recovers panics and exits 0 on any internal error. Only the rewake path exits 2,
   which is Claude Code's "block".
@@ -48,19 +51,31 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
    plan complete, when the run is paused or blocked, and when the phase waits on a job or on background work. It
    refuses a stop without a status, even in a turn the human started (to talk without the plan, the human pauses
    baton), and names the way forward. After three refusals in a row, it escalates.
-2. The host types `/compact` once nothing is in the way: no turn, no dialog, none of the lead's own subagents. An
-   unsent draft is saved and cleared after a grace period.
+   The boundary that the model's own `done` owes holds the rest of its turn, and its stop queues the compaction; so
+   does the lead's `done` of a worker's phase (below).
+2. The host asks the mod to compact the lead once nothing is in the way: no turn, no dialog, none of the lead's own
+   subagents at work. The human's draft stays in the box. A compaction Claude Code refuses because a turn runs is
+   asked again after it, using up no try. In serial mode the host types `/compact`, and an unsent draft is saved and
+   cleared after a grace period, unless an agent may be live: then the draft holds the compaction, and the human is
+   told why.
 3. **Only proof moves a compaction.** A phase agent's compaction fires `PreCompact`, `SessionStart(compact)` and
    `PostCompact` with no `agent_id` and the lead's transcript, so those hooks cannot tell whose compaction it is.
    They log `compact_seen` and change nothing. `state.Proof` has one constructor per source of proof:
-   - the mod's report of the lead's compaction, which it sees before and after;
+   - the mod's report of the lead's compaction, which it sees before and after, or of the one it ran on baton's
+     command, counted once by that command whatever trigger Claude Code gives it;
    - a new `compact_boundary` entry in a loop's own transcript: the lead's, or a phase agent's
      `subagents/agent-<id>.jsonl`.
 
-   Every transition past "typed" takes a Proof.
+   Every transition past "typed" (the host has asked, by the mod or its keys) takes a Proof.
 4. `PostCompactRewake`, registered for every trigger, waits a bounded time for the proof. Then it wakes the model
    with the next phase's brief: the phase's section of the plan, the standing rules, the notes, and the decisions
    made without the human.
+
+**A boundary baton queues itself** (a gate's verdict, a landing, a switch to a phase that can go on) never cuts a
+turn short. A turn under way when it was queued, or one the human started, runs to its end: the model is told once,
+with a call's result, that the next phase comes after this turn and not to start it there, and the compaction waits
+for the turn's stop. A boundary that does hold a turn says what comes next: the phase begins, resumes, or reopens
+after its verification failed.
 
 **Mid-phase valves.** The status line gives the exact context size. At 60% of the limit (the model's window, or the
 `--autocompact` cap if smaller), the model is asked to checkpoint at its next safe point, which goes through the same
@@ -69,13 +84,22 @@ baton keeps going. Claude Code's own compaction, 33k tokens below the limit, is 
 
 **The watchdog** catches a run that has gone quiet: idle turns, stale gates, unanswered prompts, usage limits and API
 errors. Everything baton waits on either clears by itself or expires into action, except an open permission prompt.
+Each loop's watchdog stays quiet while it waits on something that ends by itself, so **the stall alarm** looks at the
+run as a whole, about once a minute: with the plan running and phases left, nothing busy (a tool call, the model's
+own background work, a gate whose log still grows), and nothing in the lead's run or any phase agent's sub-run moved
+for 30 minutes, it pushes the human one notice naming what each phase waits on. It holds nothing, and the run moving
+arms it again. A usage limit, an open dialog and a machine just woken are never a stall.
 
 ## Gates
 
 A long gate goes to baton:
 - `baton verify` runs it on `HEAD` in a lane: a detached worktree under `~/.baton/lanes/`, set up by the project's
   `.baton-lane`.
-- `verify --here` runs it in the checkout, and holds edits and landings there until it ends.
+- `verify --here` runs it in the checkout, and holds edits and landings there until it ends. In a phase agent's
+  worktree it also holds one of the project's lanes while it runs, with `BATON_LANE` set to it, so here and lane
+  gates together never run more at once than the lanes allow, and per-lane resources (a test database, a Compose
+  project) stay apart. With no `.baton-lane` there is one lane, so agents' here gates take turns. A gate waiting for a
+  lane is announced with how many are ahead of it.
 - `baton await` waits on something outside the project.
 
 The job runs detached (`baton lane-run`), so it outlives claude. Its result reaches the model at its next tool call
@@ -89,9 +113,10 @@ The plan's `After:` lines make a graph. The lead, the session in the human's ter
 Each other phase that can start runs as a **phase agent**: a background agent of the lead's session.
 
 - **The mod is a thin executor.** `plugin/hooks/baton.js` is JavaScript that Claude Code runs in the lead's claude.
-  It spawns and messages `baton:phase` agents, asks the human in Claude Code's own dialog, drops the agents' reports
-  before the lead's model reads them, draws the band, and reports what it sees. It decides nothing and words
-  nothing: the host does both.
+  It spawns and messages `baton:phase` agents, asks the human in Claude Code's own dialog, compacts the lead and
+  submits baton's lines to it, drops the agents' reports before the lead's model reads them (a task notification, or
+  in auto mode a peer hand-back), draws the band, and reports what it sees. It decides nothing and words nothing:
+  the host does both. A mod of another baton release speaks another protocol, and the run is serial.
 - **The bridge** is files and the CLI:
   - host to mod: numbered command files under `.baton/runs/<run>/mod/`, each addressed to one host instance,
     idempotent, and retried until acked;
@@ -107,10 +132,17 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   - A resumed agent is given nothing of `SubagentStart`, so what baton has for it comes at its next tool call or its
     stop.
   - The agent's context is read from its own transcript, and its checkpoint starts a fresh agent from its notes.
-  - A refused, errored or interrupted turn is the host's to handle.
+  - Nothing compacts a phase agent at a boundary, so its sub-run never owes one. When its gate fails after its
+    `baton done`, or a landing's verification fails, the phase is taken up again in place, and the result goes to
+    the agent; one that ended is started afresh, with the result in its brief.
+  - A change to the plan reaches the agents at work: when the standing rules or an agent's own section read
+    differently from what it was given, it gets the new text as a message, once.
+  - A refused, errored or interrupted turn is the host's to handle. An agent the human stopped from the agent panel
+    leaves its phase waiting for them; baton pushes that, and `/baton run` starts a fresh agent.
   - A model's own call to the `baton:phase` type is refused.
-- **Room.** `workers: auto` sizes the fleet to the machine. A new agent also waits while the machine is busy, the
-  lanes fall behind, landings keep conflicting, or a usage limit holds. Every hold is host code.
+- **Room.** `workers: auto` sizes the fleet to the machine. New agents start at least 2 minutes apart, since the
+  machine's readings lag the load an agent brings. A new agent also waits while the machine is busy, the lanes fall
+  behind, landings keep conflicting, or a usage limit holds. Every hold is host code.
 - **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, it is merged into the phase's
   branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Nothing baton
   runs, or asks an agent to run, rewrites a commit: a rebase can drop a resolved conflict without a word, and Claude
@@ -119,6 +151,10 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   once for the checkout's own commits). Then the run's branch is fast-forwarded to it with `git merge --ff-only`
   between the lead's tool calls, never over a file the lead has uncommitted. The lead is told what moved, and never
   to rewrite it.
+- **Landed some other way.** When every commit of a phase's branch is on the run's branch already (merged by hand),
+  the lead's `baton done <phase>` records it landed, as a decision without the human with its undo, and the host
+  retires the agent, saving what it had not committed as a snapshot first. Otherwise the refusal says how to finish
+  the phase: its agent's own `done`, or a merge into the run's branch first.
 - **Serial mode.** With no hello from the mod, there are no phase agents: the lead works the phases in turn, as
   `workers: 0` does.
 
@@ -158,9 +194,25 @@ interface had made *notify* and *halt* the same operation.
   working tree, the index, `HEAD` and gpg untouched.
 - **Every decision made without the human is recorded,** with its undo, in baton's state. It is announced, listed by
   `baton status` and `baton done`, carried in each brief, and handed to the model when the human next types, so a
-  late answer works after any compaction. After `max_auto_decisions` in one phase, baton stops for a review. The
-  model cannot clear its own block.
+  late answer works after any compaction. After `max_auto_decisions` in one phase, baton stops for a review; a
+  decision made with no phase in hand is the run's, and counts toward no phase's review. The model cannot clear its
+  own block.
 - **Without git** there is no gate and no snapshot, and baton says "complete" rather than "committed".
+
+## When the human steps in
+
+- **A turn the human starts runs to its end,** even when baton takes up a phase meanwhile (above).
+- **`/baton pause`** hands the session over: baton stops compacting, nudging and escalating until `/baton run`. A
+  compaction proven while paused, the human's own `/compact` or one baton queued before the pause, covers the one
+  the run owed. At `/baton run` the owed phase starts from its brief with no compaction of baton's, unless the
+  conversation has grown by more than 20k tokens since, when the model checkpoints first.
+- **A plan attached while paused** stays paused until `/baton run`, unless the human's answer to baton's question
+  about it is to start it now.
+- **A plan's record is kept.** Before another plan replaces it, or `baton drop` sets it aside, its state, anchors and
+  handoff are copied into `.baton/runs/<run>/gen-<N>/`, and `baton status` lists the run's earlier plans with how
+  many phases each finished.
+- **The plan file may change while it runs.** baton follows the new text, and the phase agents at work hear of a
+  change to their part of it (above).
 
 ## Recovery
 

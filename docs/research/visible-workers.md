@@ -7,8 +7,10 @@ compaction hooks look like the lead's, so only a proof (the mod's report, or a l
 compaction. Every delivery to an agent is a message, `/clear` ends every agent, and nothing types into a dialog where
 the mod runs. A phase's work lands by a merge, never a rebase (v0.8.1). A Ctrl-C at an idle prompt stops every
 background agent, so where the mod runs baton types nothing: the mod compacts and submits, and the human's draft
-stays in the box; in auto mode agents' reports come back as peer prompts, which the mod drops (v0.8.2). Workflows
-were ruled out: a workflow agent cannot wait.
+stays in the box; in auto mode agents' reports come back as peer prompts, which the mod drops (v0.8.2). A real run
+taught that nothing may wait on a phase agent's compaction: a sub-run never owes one, so an agent's red gate goes
+back to it; agents start 2 minutes apart, their `--here` gates take lane slots, and a run that stops moving tells the
+human (v0.8.2). Workflows were ruled out: a workflow agent cannot wait.
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
@@ -230,6 +232,48 @@ on Claude Code 2.1.300 and 2.1.296 with Haiku:
 
 So in v0.8.2, baton types nothing where the mod runs: compactions and baton's lines go through the mod, and the box is
 never touched. In serial mode, where it still types, it never sends Ctrl-C while an agent may be live.
+
+## What a real run taught (v0.8.2)
+
+The same v0.8.1 run, on a large private project with four phase agents beside the lead in auto mode, stopped for
+hours with nobody told. Its events and Claude Code's transcripts showed eight faults, each since confirmed in the code
+and replayed by an end-to-end scenario on real Claude Code (`test/e2e/nostall_test.go`):
+
+- **A phase agent's red gate stalled the run for three hours.** The agent ran `baton done` while its gate ran, and the
+  gate failed. Its sub-run reopened the phase as the lead's run does, with a boundary owed and a compaction queued.
+  But nothing compacts a phase agent: while that compaction was in flight the sub-run delivered nothing, every tool
+  call of the agent was held, and each loop's watchdog stayed quiet, since a compaction ends by itself. A landing's
+  re-verification that fails fell into the same trap. So a sub-run never owes a boundary: the phase is taken up
+  again in place, and the result goes to its agent, or to a fresh one in its brief. And since every watchdog had a
+  reason to wait, the run as a whole is now watched too: nothing moved for 30 minutes, with nothing at work, pushes
+  the human one notice.
+- **baton's Ctrl-C ended a phase agent** (spike 35, above) and threw the human's draft away. baton then took the
+  agent's end for the human's doing and held its phase for over an hour, said only in the session. Now a held phase
+  is pushed and shown on the board.
+- **A compaction while paused did not count.** The human paused at a boundary and ran `/compact`; `/baton run`
+  compacted again a minute later. It now covers the compaction the run owed.
+- **Agents' reports were taken for the human's turns** (spike 35): each hand-back released baton's holds and handed
+  the lead the run's decisions as if the human had typed.
+- **Agents started faster than the machine showed their load.** Four started within seconds, at a load above the
+  machine's CPU count: the one-minute load average baton read had not caught up. Their `verify --here` gates, each
+  bringing up services of its own, ran at once outside any lane. A linter was killed for memory, browsers crashed,
+  and two test runs shared one test database. So agents start 2 minutes apart (v0.6 had a one-minute ramp, which
+  v0.8 dropped), and an agent's here gate holds a lane slot, with `BATON_LANE` set.
+- **The human's edit to the plan never reached the agents at work:** a sub-run's plan was fixed when its agent
+  started. Now each change to the standing rules or an agent's section reaches it as a message.
+- **Work landed by hand could not be recorded.** The lead's `baton done` of a worker's phase was refused, so the lead
+  attached the plan again over the run, which took the finished phases off the board and kept nothing of the
+  replaced plan's record. Now that `done` records the phase landed when its branch is on the run's branch, a
+  replaced plan is archived, and attaching while paused stays paused.
+- **A turn the human asked for was cut short:** a gate's verdict made baton owe a boundary at once, and every tool
+  call in the human's turn was refused, with a sentence saying the phase was done when it had just failed. Sentences
+  built from the phase in hand also had a blank where it went when the lead held none.
+
+The end-to-end runs added two things. Claude Code takes the permission mode from the user's own settings, so every
+scenario ran in auto mode, and every agent's end came back as a hand-back, which the mod dropped. And with the mod
+compacting it, the lead's compaction is over within seconds of baton's ask; a restarted host waits for its new mod's
+hello before it asks, and a mod of another release (another protocol) makes the run serial, where baton types
+`/compact`, as designed.
 
 ## What it means for baton
 
