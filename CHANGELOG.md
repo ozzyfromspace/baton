@@ -4,6 +4,77 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-15
+
+A real v0.8.1 run, with four phase agents beside the lead, stopped for over three hours with nobody told.
+A phase agent's gate had failed after its `baton done`, and its phase waited for a compaction nothing
+would ever run. The same run showed seven more faults: baton's Ctrl-C ended an agent and threw away your
+draft, agents' reports counted as your turns, a `/compact` while paused didn't count, agents started
+faster than the machine showed their load, your edit to the plan never reached them, work merged by hand
+couldn't be recorded, and a turn you asked for was cut short. Each is fixed, and each is replayed by an
+end-to-end scenario on real Claude Code. The evidence is in
+[docs/research/visible-workers.md](docs/research/visible-workers.md).
+
+A session on v0.8.x moves to v0.8.2 by itself at its next restart point. baton's host and its mod must
+now be of the same release: with a mod of another, the plan runs one phase at a time, and baton says so.
+`baton update` updates both.
+
+### Fixed
+- **A phase agent's failed gate goes back to its agent.** When its gate fails after its `baton done`, or a
+  landing's verification fails, the phase is taken up again in place, and the agent is given the result
+  at its next tool call or stop; an agent that ended is started afresh, with the result in its brief. A
+  phase agent never owes a compaction, and a sub-run already stuck that way heals by itself.
+- **baton types nothing where its mod runs.** The mod compacts your session and submits baton's lines,
+  and your unsent draft stays in the input box, through the compaction and the turn after it. Where the
+  mod doesn't run, baton types as before, but never sends the Ctrl-C that clears a draft while an agent
+  may be at work: one Ctrl-C at an idle prompt stops every background agent for good, the model's own
+  too. The draft holds baton then, and you're told why.
+- **A compaction while paused counts.** Your `/compact` while paused at a boundary, or baton's queued
+  before the pause, covers the one the run owed, and `/baton run` starts the next phase from its brief
+  with no second compaction, unless the conversation has grown much since.
+- **An agent's report handed back is never yours.** In auto mode Claude Code hands each agent's report
+  back to your session as a message from another session. baton's mod now drops it, and baton never takes
+  it for your turn: it no longer releases holds or hands your session the run's decisions.
+- **A turn runs to its end.** When baton takes up a phase by itself (a gate's verdict, a landing, a
+  switch), a turn under way, or one you started, is no longer cut short: the model is told once that the
+  phase comes after this turn, and baton compacts at its end. A held boundary says what comes next (the
+  phase begins, resumes, or reopens after its verification failed), not that a failed phase is done.
+- **Attaching while paused stays paused.** A plan attached over a paused run waits for `/baton run`, and
+  `baton attach` says so.
+- **No sentence leaves a blank where a phase goes.** With no phase in hand, baton's sentences name the
+  plan, and `baton note` records the note on the run, counting toward no phase's review.
+
+### Added
+- **A run that stops moving says so.** With the plan running, nothing at work, and nothing moved for 30
+  minutes, baton pushes you one notice naming what each phase left waits on (`run_stalled`). It holds
+  nothing, and the run moving arms it again. A gate whose log has stopped growing is named a hung gate.
+- **A phase held for you is pushed and on the board.** A phase agent you stopped from the agent panel
+  leaves its phase waiting for you; baton now pushes that, and the board shows it.
+- **Plan changes reach the agents at work.** Edit the plan file while it runs, and each phase agent whose
+  section or standing rules changed is given the new text, once.
+- **The lead's `baton done` of a worker's phase** records it landed when every commit of its branch is on
+  the run's branch already (merged by hand), as a decision without you, with its undo. baton retires the
+  agent, saving what it hadn't committed as a snapshot first. Otherwise the refusal says how to finish it.
+- **A replaced plan keeps its record.** Before another plan replaces it, or `baton drop` sets it aside,
+  its state, plan and handoff are copied into `.baton/runs/<run>/gen-<N>/`, and `baton status` lists the
+  run's earlier plans, with how many phases each finished.
+- End-to-end scenarios for each of the run's stalls (`test/e2e/nostall_test.go`): an agent's red gate
+  after `done`, a landing's red re-verification, a draft through a compaction with an agent mid-command,
+  your `/compact` while paused, attaching while paused, an agent's hand-back in auto mode, a gate result
+  in your turn, a plan change reaching an agent, and the stall notice.
+
+### Changed
+- **Phase agents start at least 2 minutes apart,** whatever `workers` says: the machine's readings lag
+  the load an agent brings. A resumed or restarted agent doesn't wait.
+- **A phase agent's `verify --here` gate takes a lane.** It holds one of the project's lanes while it runs
+  in its worktree, with a lane gate's variables set (`BATON_LANE` the lane's number, `BATON_LANE_DIR` the
+  worktree), so here gates and lane gates
+  together never run more at once than the lanes allow, and a test database named by lane stays its own.
+  Without a `.baton-lane` there is one lane, so agents' here gates take turns. Your session's here gate is
+  unchanged.
+- **A gate waiting for a lane** is announced with how many gates are ahead of it.
+- **The bridge protocol is 2,** for the mod's two new commands, compact and submit.
+
 ## [0.8.1] - 2026-10-12
 
 A phase agent's work used to land by a rebase, and a conflict went back to the agent with "rebase it
@@ -770,7 +841,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/ozzyfromspace/baton/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ozzyfromspace/baton/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ozzyfromspace/baton/compare/v0.6.0...v0.7.0
