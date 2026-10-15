@@ -63,6 +63,7 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 		}
 	}
 	c.lapseHolds(now, s, st)
+	c.stoppedAgain(now, s, st)
 	c.ask(now, s, b)
 }
 
@@ -342,6 +343,15 @@ func (c *Coordinator) subStore(st state.State, phase string) *state.Store {
 
 // unneeded says why phase agent question r needs no answer any more, or "" while it does.
 func (c *Coordinator) unneeded(st state.State, r state.Relay) string {
+	if r.AboutAgent() { // a question of the run's roster, not of the agent's sub-run
+		switch {
+		case st.WorkerOn(r.Phase) == nil:
+			return "its agent is gone"
+		case !st.AgentWaits(r):
+			return "it was settled meanwhile"
+		}
+		return ""
+	}
 	sub := c.subStore(st, r.Phase)
 	if sub == nil {
 		return "its agent is gone"
@@ -375,6 +385,10 @@ func (c *Coordinator) withdraw(now time.Time, s *state.Store, r state.Relay, why
 // apply applies the answer to phase agent question r to the agent's sub-run, and records that it did.
 // With the agent gone, there is nothing to apply it to. Pause baton pauses the run as well.
 func (c *Coordinator) apply(now time.Time, s *state.Store, st state.State, r state.Relay) {
+	if r.AboutAgent() {
+		c.applyStop(now, s, st, r)
+		return
+	}
 	result := "its agent is gone"
 	t := c.Lead.Timing
 	if sub := c.subStore(st, r.Phase); sub != nil {

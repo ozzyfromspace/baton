@@ -188,6 +188,12 @@ func TestARunThatStopsMovingSaysSo(t *testing.T) {
 		{"a phase held for the human", func(x *still) {
 			x.setLead(func(st *state.State) { st.Workers[0].Status, st.Workers[0].Since = state.WorkerHeld, x.t0 })
 		}, []string{"P1: needs you: its agent was stopped; /baton run starts a fresh one"}},
+		{"a phase whose agent baton took down, stopped twice", func(x *still) {
+			x.setLead(func(st *state.State) {
+				w := &st.Workers[0]
+				w.Status, w.Since, w.Stops, w.StoppedAt, w.TakenDown = state.WorkerHeld, x.t0, 2, x.t0, x.t0
+			})
+		}, []string{"P1: needs you: its agent was stopped twice; waiting for your answer"}},
 		{"an escalation pushed already", func(x *still) {
 			x.setLead(func(st *state.State) {
 				st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "no activity on P0 for 20m, even after a reminder", Since: x.t0, Pushed: true}

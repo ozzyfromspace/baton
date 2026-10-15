@@ -192,8 +192,9 @@ func agent(st state.State, subs map[string]state.State, id string, p *Phase) dec
 	case state.WorkerSuspended:
 		return decide.Stand{Kind: decide.StandSuspended, Since: w.Since, Why: w.Why}
 	case state.WorkerHeld:
-		// The human stopped its agent: the phase is theirs until they ask for a fresh agent.
-		return decide.Stand{Kind: decide.StandNeedsYou, Since: w.Since, Why: decide.NeedsAgentStopped}
+		// The human stopped its agent: baton asks them whether to restart it, or the phase is theirs until
+		// they ask for a fresh agent.
+		return decide.Stand{Kind: decide.StandNeedsYou, Since: w.Since, Why: decide.AgentStoppedStand(*w, st.StopAsked(id))}
 	case state.WorkerLanding:
 		s := decide.Stand{Kind: decide.StandLanding, Since: w.Since}
 		if m := w.Merge; m != nil {
@@ -249,8 +250,8 @@ func needs(st state.State, w *state.Worker, sub state.State, ok bool) string {
 		}
 	}
 	for _, r := range st.Relay {
-		if r.Phase != w.Phase || r.Answered != nil {
-			continue
+		if r.Phase != w.Phase || r.Answered != nil || r.AboutAgent() {
+			continue // a question about a restarted agent only tells the human: the agent works on
 		}
 		switch r.Kind {
 		case state.RelayBlocked:

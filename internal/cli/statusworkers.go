@@ -46,7 +46,12 @@ func printWorkers(io IO, s *state.Store, st state.State) {
 			case state.WorkerSuspended:
 				lines = append(lines, "         "+w.Why+"; a fresh agent takes it up as soon as one may start (with the lead's baton session)")
 			case state.WorkerHeld:
-				lines = append(lines, "         "+w.Why+"; it waits for you: /baton run starts a fresh agent on it")
+				// Its agent was stopped: baton asks whether to restart it, or it waits for the human.
+				if asked := st.StopAsked(w.Phase); asked || !w.TakenDown.IsZero() {
+					lines = append(lines, "         "+decide.AgentStoppedStand(w, asked)+" (/baton run starts a fresh agent on it)")
+				} else {
+					lines = append(lines, "         "+w.Why+"; it waits for you: /baton run starts a fresh agent on it")
+				}
 			}
 		case w.Status == state.WorkerFailed && w.Unlanded > 0 && !slices.ContainsFunc(st.Workers[i+1:], func(o state.Worker) bool { return o.Phase == w.Phase }) &&
 			gitx.RevParse(s.Checkout, "refs/heads/"+w.Branch) != "":

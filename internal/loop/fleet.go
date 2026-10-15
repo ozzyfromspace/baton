@@ -157,10 +157,14 @@ func newestAgent(st state.State) (phase string, at time.Time) {
 }
 
 // planWorkers counts the live workers of the plan attached now: a worker of a replaced plan is on its
-// way out.
+// way out, and one whose agent the human stopped, with no question left about it, waits for them for as
+// long as they take, with no agent: only its phase, and those that need it, wait (stopped.go).
 func planWorkers(st state.State) int {
 	n := 0
 	for _, w := range st.LiveWorkers() {
+		if w.Status == state.WorkerHeld && !st.StopAsked(w.Phase) {
+			continue
+		}
 		if w.Generation == st.Generation {
 			n++
 		}
@@ -546,6 +550,16 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 			}
 		})
 		w.store.Event("agent_checkpointed", map[string]any{"agent": w.entry.AgentID})
+	case c.needsAgent(st, w, *e):
+		// The agent the human stopped was let go with its work done (stopped.go), which needs one again.
+		c.setEntry(s, w.entry, func(x *state.Worker) {
+			if x.Status == state.WorkerWorking {
+				x.Status, x.Since, x.Why, x.Resume, x.Released = state.WorkerSuspended, now, decide.AgentNeededAgain, "", time.Time{}
+				x.Restarted = now
+			}
+		})
+		s.Event("agent_restarted", map[string]any{"phase": w.phase, "by": "baton", "why": decide.AgentNeededAgain})
+		c.announce(s, decide.AgentWorkReopened(w.phase))
 	case c.erred(now, w):
 		c.takeAfresh(now, s, w) // its conversation is what the API refused: a fresh agent goes on
 	case w.spawn != 0 && now.Sub(w.launched) > c.Lead.Timing.AgentStart:
@@ -731,7 +745,7 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 			return errKept
 		}
 		again = w.AgentID != "" && w.Resume != "" && w.Resume == st.Run.SessionID
-		w.Since, w.Why, w.Ended, w.Merge, w.Resume = now, "", now, nil, ""
+		w.Since, w.Why, w.Ended, w.Merge, w.Resume, w.Released = now, "", now, nil, "", time.Time{}
 		w.Retiring, w.Retirer = time.Time{}, ""
 		if again {
 			w.Status = state.WorkerWorking
@@ -800,28 +814,6 @@ func (c *Coordinator) afresh(now time.Time, s *state.Store, b *bridge.Bridge, w 
 	}
 	c.Lead.logf("loop: %s: a fresh agent takes it up: %s", w.phase, e.Why)
 	s.Event("worker_ended", map[string]any{"phase": w.phase, "why": e.Why, "suspended": true})
-}
-
-// holdAgent sets w's phase aside for the human, who stopped its agent from the agent panel: a message to
-// it is refused as stopped by the user, and Claude Code says to start a new agent for it only if the user
-// asks (spike 32). Its worker is held, its work kept in its worktree, until `baton run` asks for a fresh agent
-// on it; meanwhile its loop goes on watching its jobs, and nothing is sent to it. The phase waits for the
-// human, who is pushed at once: nothing else would tell them while they are away.
-func (c *Coordinator) holdAgent(s *state.Store, b *bridge.Bridge, w *worker) {
-	now := s.Now()
-	w.agent.in = nil
-	if agent := c.agentOf(s, w); agent != "" {
-		b.Forget(agent)
-	}
-	s.Update(func(st *state.State) error {
-		if e := st.Entry(w.entry); e != nil && e.Live() {
-			e.Status, e.Since, e.Why = state.WorkerHeld, now, "the human stopped its agent"
-			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "worker_held", Text: decide.PhaseHeld(w.phase), At: now})
-		}
-		return nil
-	})
-	s.Event("worker_held", map[string]any{"phase": w.phase, "why": "the human stopped its agent", "pushed": true})
-	c.announce(s, decide.AgentHeld(w.phase))
 }
 
 // retireLanded retires the workers of run st whose work landed that nobody retires yet, and on which no

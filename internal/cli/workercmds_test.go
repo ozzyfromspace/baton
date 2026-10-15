@@ -190,6 +190,47 @@ func TestAttachRecordsTheRunsBranch(t *testing.T) {
 	}
 }
 
+// baton status says how a phase whose agent the human stopped stands: baton asks whether to restart it,
+// and once it took the agent down after a second stop, the question waits for the human with no deadline.
+func TestStatusSaysAStoppedAgentsStand(t *testing.T) {
+	_, lead := asWorker(t)
+	lead.set(func(st *state.State) {
+		e := st.Workers[0]
+		e.Status, e.AgentID = state.WorkerWorking, "a1"
+		st.Workers[0] = e
+		state.StopAgent(st, e, "a1", "one", lead.now)
+	})
+	out := lead.must("", "status")
+	for _, want := range []string{"         its agent was stopped; baton asks you whether to restart it (/baton run starts a fresh agent on it)",
+		"  ? P1     you stopped its agent: restart it? — next"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	lead.set(func(st *state.State) {
+		w := &st.Workers[0]
+		state.AnswerRelay(&st.Relay[0], state.ByTimeout, "Let baton decide", lead.now)
+		st.Relay[0].Applied = lead.now
+		down := lead.now.Add(11 * time.Minute)
+		w.Stops, w.TakenDown = 2, down
+		state.QueueRelay(st, state.Relay{Phase: "P1", Kind: state.RelayStopped, Since: down, Count: 2, Persist: decide.AgentPersistent}, down)
+	})
+	out = lead.must("", "status")
+	for _, want := range []string{"         its agent was stopped twice; waiting for your answer (/baton run starts a fresh agent on it)",
+		"  ? P1     you stopped its agent twice, and baton took it down: what should become of P1? — next"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	lead.set(func(st *state.State) {
+		state.AnswerRelay(&st.Relay[1], state.ByTimeout, "Ask me later", lead.now)
+		st.Relay[1].Applied = lead.now
+	})
+	if out = lead.must("", "status"); !strings.Contains(out, "  ? P1     you stopped its agent twice, and baton took it down: what should become of P1? — asked again when you next write") {
+		t.Errorf("status:\n%s", out)
+	}
+}
+
 // baton status lists the phase agents' questions: those baton puts to the human, and those that wait for
 // them, which /baton run asks them again. An agent's own status says baton puts its proposal to the human.
 func TestStatusListsTheAgentsQuestions(t *testing.T) {
@@ -585,6 +626,10 @@ func TestBatonRunAsksForAFreshAgent(t *testing.T) {
 		why  string // "" for none
 	}{
 		{"held", func(e *state.Worker, _ *state.State) { e.Status = state.WorkerHeld }, "you stopped the agent before it"},
+		// Stopped twice and taken down: asking for a fresh agent counts the stops afresh, as Restart it does.
+		{"taken down", func(e *state.Worker, _ *state.State) {
+			e.Status, e.Stops, e.TakenDown = state.WorkerHeld, 2, time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+		}, "you stopped the agent before it"},
 		{"refused", func(_ *state.Worker, sub *state.State) {
 			sub.Run.Escalation = &state.Escalation{Kind: "refused", Reason: "P1 stopped"}
 			sub.Run.LastError = &state.StopError{Error: state.ErrRefusal}
@@ -624,7 +669,8 @@ func TestBatonRunAsksForAFreshAgent(t *testing.T) {
 			if !strings.Contains(out, decide.AgentAfresh("P1", c.why)) || strings.Contains(out, "already running") {
 				t.Errorf("out: %s", out)
 			}
-			if got.Status != state.WorkerSuspended || got.Why != "the human asked for a fresh agent: "+c.why || !got.Since.Equal(lead.now) || !got.Is(e) || got.Resume != "" {
+			if got.Status != state.WorkerSuspended || got.Why != "the human asked for a fresh agent: "+c.why || !got.Since.Equal(lead.now) || !got.Is(e) || got.Resume != "" ||
+				got.Stops != 0 || !got.TakenDown.IsZero() {
 				t.Errorf("the worker %+v", got)
 			}
 			if sst.Run.Escalation != nil || sst.Run.LastError != nil {

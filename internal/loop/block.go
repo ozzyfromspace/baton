@@ -73,14 +73,18 @@ func (l *Loop) blockLapsed(v host.View, st state.State) bool {
 
 // relayDue is when phase agent question r gets its default if nobody has answered it, counted from when
 // it was queued, and whether it does even unasked, or with its dialog gone: a timed proposal goes ahead at
-// its wait, and a block is lifted after BlockLook for the agent to look again. Anything else waits for the
-// human.
+// its wait, a block is lifted after BlockLook for the agent to look again, and a question about a stopped
+// agent, or one baton restarted, is decided from the record after the escalation timeout (stopped.go).
+// Anything else waits for the human: a review, and the question with no deadline about a phase whose
+// agent baton took down.
 func (c *Coordinator) relayDue(r state.Relay) (time.Time, bool) {
 	switch {
 	case r.Timed():
 		return r.Due(c.Lead.Timing.EscalationTimeout), true
 	case r.Kind == state.RelayBlocked:
 		return r.Due(c.Lead.Timing.blockLook()), true
+	case r.AboutAgent() && !r.Persistent():
+		return r.Due(c.Lead.Timing.EscalationTimeout), true
 	}
 	return time.Time{}, false
 }

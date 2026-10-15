@@ -74,6 +74,18 @@ type Worker struct {
 	// not be saved), or "" when it was removed.
 	WorktreeKept string `json:"worktree_kept,omitempty"`
 	Merge        *Merge `json:"merge,omitempty"`
+	// What became of its agents the human stopped (loop/stopped.go). Stops counts the stops since it was
+	// assigned, or since the human last chose to restart it on a second one; StoppedAt is when baton last
+	// learned of one, and Stopped the agent it was (that agent refusing again is no new stop). Restarted is
+	// when baton last started a fresh agent on it after a stop; Released when it let a stopped agent go,
+	// its work being done, which lands without it; TakenDown when it took a twice-stopped agent down,
+	// nobody having answered, and the phase waits for the human's answer, with no deadline.
+	Stops     int       `json:"stops,omitempty"`
+	StoppedAt time.Time `json:"stopped_at,omitzero"`
+	Stopped   string    `json:"stopped_agent,omitempty"`
+	Restarted time.Time `json:"restarted,omitzero"`
+	Released  time.Time `json:"released,omitzero"`
+	TakenDown time.Time `json:"taken_down,omitzero"`
 }
 
 // Is reports whether w and o are the same entry of the roster: the same sub-run, assigned at the same
