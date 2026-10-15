@@ -225,6 +225,53 @@ func TestAProposalPrintsTheQuestionBatonWillRecognize(t *testing.T) {
 	}
 }
 
+// The model sizes a proposal's wait with --wait, from 5 to 20 minutes; with none, or one baton will not
+// take, it waits escalation_timeout (10 minutes by default), and baton says why.
+func TestTheModelSetsAProposalsWait(t *testing.T) {
+	for _, c := range []struct {
+		name, wait string
+		want       time.Duration
+		chosen     bool
+		says       string
+	}{
+		{"none", "", 10 * time.Minute, false, ""},
+		{"the shortest", "5m", 5 * time.Minute, true, ""},
+		{"the longest", "20m", 20 * time.Minute, true, ""},
+		{"too short", "4m", 10 * time.Minute, false, "It waits 10 minutes, baton's default, since --wait 4m is outside 5 minutes to 20 minutes"},
+		{"too long", "21m", 10 * time.Minute, false, "--wait 21m is outside 5 minutes to 20 minutes"},
+		{"not a duration", "soon", 10 * time.Minute, false, `--wait "soon" is not a duration such as 5m`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := attached(t)
+			args := []string{"propose", "commit P0 unsigned", "--because", "gpg times out", "--undo", "git commit --amend --no-edit -S"}
+			if c.wait != "" {
+				args = append(args, "--wait", c.wait)
+			}
+			out := s.must("", args...)
+			st := s.state()
+			p := st.PendingProposal()
+			if p == nil || p.Wait != c.want || !p.Deadline.Equal(decide.Deadline(time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC), c.want)) {
+				t.Fatalf("pending %+v, want a wait of %s", p, c.want)
+			}
+			if c.says != "" && (!strings.Contains(out, c.says) || !strings.Contains(out, "every minute a proposal waits is implementation time the run loses")) {
+				t.Errorf("propose lacks %q and the advice:\n%s", c.says, out)
+			}
+			if c.says == "" && strings.Contains(out, "baton's default") {
+				t.Errorf("propose names a default it did not use:\n%s", out)
+			}
+			fields := map[string]any{"wait": c.want.String(), "chosen": c.chosen}
+			if !s.logged("proposed", fields) || strings.Contains(s.events(), `"wait_refused"`) != (c.says != "") {
+				t.Errorf("events: %s", s.events())
+			}
+		})
+	}
+	// The usage says how to size it.
+	s := attached(t)
+	if why := s.fails("propose", "commit P0 unsigned"); !strings.Contains(why, "[--wait 5m]") || !strings.Contains(why, "Give the shortest wait that fits") {
+		t.Errorf("usage: %s", why)
+	}
+}
+
 // A proposal that looks outward-facing or irreversible gets no deadline: only the human can let it go.
 func TestAnOutwardProposalHasNoTimer(t *testing.T) {
 	s := attached(t)

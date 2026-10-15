@@ -29,6 +29,9 @@ type Relay struct {
 	Because string `json:"because,omitempty"`
 	Untimed string `json:"untimed,omitempty"`
 	Count   int    `json:"count,omitempty"`
+	// Wait is how long a timed proposal waits for the human, from when it was queued: the agent's own
+	// --wait, or baton's default (0 in a question queued before v0.8.3: the escalation timeout).
+	Wait time.Duration `json:"wait,omitempty"`
 	// Question is the question exactly as the human is asked it, written when it is issued.
 	Question string    `json:"question,omitempty"`
 	Queued   time.Time `json:"queued"`
@@ -43,6 +46,9 @@ type Relay struct {
 	Asked    bool        `json:"asked,omitempty"`
 	AskedAt  time.Time   `json:"asked_at,omitzero"`
 	Answered *Resolution `json:"answered,omitempty"`
+	// Dismissed is when a timed proposal's dialog went away unanswered: it is not asked again, and goes
+	// ahead at its deadline.
+	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Applied is when the answer reached the worker's sub-run.
 	Applied time.Time `json:"applied,omitzero"`
 }
@@ -75,6 +81,21 @@ func (r Relay) Key() string {
 // Timed reports a proposal that goes ahead if nobody answers it.
 func (r Relay) Timed() bool { return r.Kind == RelayProposal && r.Untimed == "" }
 
+// Due is when timed proposal r goes ahead if nobody answers it: its wait after it was queued, so that a
+// question the human never got to see (the lead's own went first) runs out all the same. fallback is the
+// wait of one queued before v0.8.3, which recorded none.
+func (r Relay) Due(fallback time.Duration) time.Time {
+	wait := r.Wait
+	if wait <= 0 {
+		wait = fallback
+	}
+	t := r.Queued.Add(wait)
+	if c := t.Truncate(time.Minute); c.Before(t) {
+		t = c.Add(time.Minute) // its question names it as HH:MM: never sooner
+	}
+	return t
+}
+
 // QueueRelay queues r, a question of r.Phase's agent for the human, unless it was queued already: the
 // agent's commands and hooks may each queue the same question, and each must be able to retry. A question
 // answered once is asked again only when the human asks for it (AskAgain). It reports whether r joined
@@ -90,7 +111,7 @@ func QueueRelay(st *State, r Relay, now time.Time) bool {
 // fresh is r as it joins the queue at now: asked of nobody yet.
 func fresh(r Relay, now time.Time) Relay {
 	r.Queued, r.Question, r.Issued, r.Ask, r.Instance, r.Deadline = now, "", time.Time{}, 0, "", time.Time{}
-	r.Asked, r.AskedAt, r.Answered, r.Applied = false, time.Time{}, nil, time.Time{}
+	r.Asked, r.AskedAt, r.Answered, r.Applied, r.Dismissed = false, time.Time{}, nil, time.Time{}, time.Time{}
 	return r
 }
 

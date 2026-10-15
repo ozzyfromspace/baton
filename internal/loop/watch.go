@@ -18,6 +18,7 @@ import (
 func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
 	l.answerOwnQuestion(v, st, in)
+	l.lapse(v, st)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || l.resuming(st) {
 		return // the compaction checks own this stretch
@@ -358,4 +359,41 @@ func latest(ts ...time.Time) time.Time {
 		}
 	}
 	return out
+}
+
+// lapse goes ahead with the lead's own timed proposal whose question went away unanswered (dismissed)
+// once its deadline passes, as baton would have answered it on screen: nobody chose anything, so nothing
+// waits on the human for it. The human writing first answers it instead (hooks.vanished). The model is
+// told with its next tool call or stop, or woken (deliver).
+func (l *Loop) lapse(v host.View, st state.State) {
+	p := st.OwnProposal()
+	if l.Store.Worker() != "" || p == nil || p.Dismissed.IsZero() || p.Untimed != "" || p.Deadline.IsZero() ||
+		st.Mode != state.ModeRunning || v.Now.Before(p.Deadline) || st.Run.Dialogs.Has("proposal") {
+		return
+	}
+	var id string
+	var n int
+	var last bool
+	l.update(func(st *state.State) {
+		q := st.OwnProposal()
+		if q == nil || q.ID != p.ID || q.Dismissed.IsZero() {
+			return
+		}
+		id = q.ID
+		n, last = state.WentAhead(st, q, l.MaxAuto, v.Now)
+		phase := st.Current
+		if last {
+			phase = q.Phase
+		}
+		say, tell := decide.WentAhead(q.ID, q.What, q.Undo, phase, q.Deadline, last)
+		st.Run.Announce = append(st.Run.Announce, say)
+		state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: tell}, v.Now)
+	})
+	if id == "" {
+		return
+	}
+	l.Store.Event("proposal_resolved", map[string]any{"id": id, "by": state.ByTimeout, "answer": "Go ahead", "via": "lapsed"})
+	if last {
+		l.Store.Event("review_due", map[string]any{"phase": p.Phase, "decisions": n})
+	}
 }

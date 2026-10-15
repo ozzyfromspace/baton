@@ -187,7 +187,7 @@ func TestTheSkillNamesTheThreeTiers(t *testing.T) {
 	skill := string(b)
 	for _, want := range []string{
 		"`baton note \"<what you did>\" --undo \"<how to reverse it>\"`",
-		"`baton propose \"<what you will do>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"`",
+		"`baton propose \"<what you will do>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\" --wait 5m`",
 		"`baton blocked \"<why>\" --tried \"<what you tried>\"`",
 		"waiting, doing nothing or stopping is not a proposal",
 		"One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.",
@@ -268,6 +268,30 @@ func TestWorkersAttached(t *testing.T) {
 			if strings.Contains(got, a) {
 				t.Errorf("%s: %q in %q", c.name, a, got)
 			}
+		}
+	}
+}
+
+// The model's --wait is taken from 5 to 20 minutes; anything else falls back to escalation_timeout, with
+// the reason, and nothing is refused.
+func TestProposalWait(t *testing.T) {
+	for _, c := range []struct {
+		given string
+		want  time.Duration
+		why   string
+	}{
+		{"", 10 * time.Minute, ""},
+		{"  ", 10 * time.Minute, ""},
+		{"5m", 5 * time.Minute, ""},
+		{"7m30s", 7*time.Minute + 30*time.Second, ""},
+		{"20m", 20 * time.Minute, ""},
+		{"299s", 10 * time.Minute, "--wait 299s is outside 5 minutes to 20 minutes"},
+		{"1h", 10 * time.Minute, "--wait 1h is outside 5 minutes to 20 minutes"},
+		{"10", 10 * time.Minute, `--wait "10" is not a duration such as 5m`},
+	} {
+		got, why := ProposalWait(c.given, 10*time.Minute)
+		if got != c.want || why != c.why {
+			t.Errorf("ProposalWait(%q) = %s, %q; want %s, %q", c.given, got, why, c.want, c.why)
 		}
 	}
 }

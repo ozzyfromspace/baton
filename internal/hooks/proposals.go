@@ -69,22 +69,17 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 	v := valveAction{event: "proposal_resolved", fields: map[string]any{"id": p.ID, "by": by, "answer": answer}}
 	switch answer {
 	case "Go ahead":
-		state.Resolve(st, p.ID, by, answer, c.Now)
 		if by == state.ByHuman {
+			state.Resolve(st, p.ID, by, answer, c.Now)
 			v.say = "baton: you chose Go ahead on " + p.ID
 			v.tell = fmt.Sprintf("%s The human chose Go ahead. Do what you proposed now: %s. Then carry on with %s.", NudgePrefix, p.What, decide.Named(st.Current))
 			break
 		}
-		notice(st, "proceeded", p.What, c.Now)
-		v.say = fmt.Sprintf("baton: nobody answered by %s, so baton went ahead with %s — %s", p.Deadline.Local().Format("15:04"), p.ID, p.What)
-		v.tell = fmt.Sprintf("%s Nobody answered your proposal %s by %s, so baton chose Go ahead for the human. Do what you proposed now: %s. "+
-			"If they later ask, it is undone with: %s.", NudgePrefix, p.ID, p.Deadline.Local().Format("15:04"), p.What, p.Undo)
-		if n := st.Unattended(p.Phase); st.ReviewDue == "" && decide.CapReached(n, config.EscalationFromEnv(c.Env).MaxAuto) {
-			state.DueReview(st, p.Phase, c.Now)
+		if n, last := state.WentAhead(st, p, config.EscalationFromEnv(c.Env).MaxAuto, c.Now); last {
 			v.also = append(v.also, event{"review_due", map[string]any{"phase": p.Phase, "decisions": n}})
-			v.tell += " That was the last decision baton lets " + p.Phase + " make without the human: once it is done, end your turn, and baton stops for them to review the decisions."
+			v.say, v.tell = decide.WentAhead(p.ID, p.What, p.Undo, p.Phase, p.Deadline, true)
 		} else {
-			v.tell += " Then carry on with " + decide.Named(st.Current) + "."
+			v.say, v.tell = decide.WentAhead(p.ID, p.What, p.Undo, st.Current, p.Deadline, false)
 		}
 	case "Wait for me":
 		v.also = holdProposal(st, p, state.ByHeld, answer, c.Now)
@@ -123,20 +118,30 @@ func holdProposal(st *state.State, p *state.Decision, by, answer string, now tim
 }
 
 // vanished settles a proposal whose question went away without an answer: the turn was interrupted
-// (Esc), the session restarted, or Claude Code went idle with it gone. Nobody said Go ahead, so it is
-// declined, which holds it for the human like Wait for me. If the human is the one who just typed, they
-// are here: nothing is held, and their message is the answer (tell says so to the model).
+// (Esc), the session restarted, or Claude Code went idle with it gone. If the human is the one who just
+// typed, they are here: it is declined, and their message is the answer (tell says so to the model).
+// Otherwise nobody chose anything: a timed proposal stays pending, dismissed, and goes ahead at its
+// deadline (the lead's loop, Loop.lapse); an untimed one is declined, which holds it for the human like
+// Wait for me.
 func vanished(st *state.State, now time.Time, human bool) (events []event, tell string) {
 	p := st.PendingProposal()
 	if p == nil || !p.Asked || st.Run.Dialogs.Has("proposal") {
 		return nil, ""
 	}
-	events = []event{{"proposal_resolved", map[string]any{"id": p.ID, "by": state.ByDeclined}}}
-	if human {
+	declined := []event{{"proposal_resolved", map[string]any{"id": p.ID, "by": state.ByDeclined}}}
+	switch {
+	case human:
 		state.Resolve(st, p.ID, state.ByDeclined, "", now)
-		return events, heldTell(*p)
+		return declined, heldTell(*p)
+	case p.Untimed == "" && !p.Deadline.IsZero():
+		if !p.Dismissed.IsZero() {
+			return nil, "" // dismissed already: it goes ahead at its deadline
+		}
+		p.Dismissed = now
+		st.Run.Announce = append(st.Run.Announce, decide.ProposalDismissed(p.ID, p.Deadline))
+		return []event{{"proposal_dismissed", map[string]any{"id": p.ID, "deadline": p.Deadline.UTC().Format(time.RFC3339)}}}, ""
 	}
-	return append(events, holdProposal(st, p, state.ByDeclined, "", now)...), ""
+	return append(declined, holdProposal(st, p, state.ByDeclined, "", now)...), ""
 }
 
 // released ends a hold when the human writes in the session: their message is the answer to it.

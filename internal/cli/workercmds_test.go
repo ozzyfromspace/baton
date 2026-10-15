@@ -82,7 +82,7 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	w, lead := asWorker(t)
 	out := w.must("", "propose", "use a fake clock", "--because", "the real one drifts", "--undo", "revert the commit")
 	for _, want := range []string{"baton: proposal P1.d1 recorded. baton puts it to the human, and gives you their answer here",
-		"If nobody answers within 5 minutes of being asked, baton picks Go ahead for them", "Until then, do not do what you proposed"} {
+		"If nobody answers within 10 minutes, baton picks Go ahead for them", "Until then, do not do what you proposed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in:\n%s", want, out)
 		}
@@ -91,6 +91,9 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	p := ws.PendingProposal()
 	if p == nil || p.ID != "P1.d1" || !p.Relayed || p.Question != "" || !p.Deadline.IsZero() || p.Asked {
 		t.Fatalf("the worker's proposal: %+v", p)
+	}
+	if r := lead.state().Relay; len(r) != 1 || r[0].Wait != 10*time.Minute {
+		t.Errorf("relay %+v: want the default wait of 10 minutes on record", r)
 	}
 	if got := relays(lead); got != "P1/proposal/P1.d1" || !lead.logged("relay_queued", map[string]any{"phase": "P1", "type": "proposal", "decision": "P1.d1"}) {
 		t.Errorf("the run's relay queue %q; events:\n%s", got, lead.events())

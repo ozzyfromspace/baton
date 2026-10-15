@@ -55,6 +55,8 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 				c.withdraw(now, s, r, why)
 			} else if r.Asked && now.After(latest(r.Deadline, r.AskedAt.Add(decide.MinWait)).Add(relayLate)) {
 				c.answered(now, s, r.Question, decide.RelayDefault(r), state.ByTimeout, "late")
+			} else if r.Timed() && !r.Asked && st.Mode == state.ModeRunning && !now.Before(r.Due(c.Lead.Timing.EscalationTimeout)) {
+				c.lapsed(now, s, b, r)
 			}
 		default:
 			c.apply(now, s, st, r)
@@ -81,6 +83,8 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 		if st.RelayDue() == nil {
 			return // the plan does not run, or the lead's own question goes first
 		}
+	case !r.Dismissed.IsZero():
+		return // the human dismissed it: it goes ahead at its deadline (lapsed), and the next question waits behind it
 	case r.Instance == s.Instance && (r.Asked || st.Run.Dialogs.AnyOpen() || now.Sub(r.Issued) < relayLost):
 		return // the mod has it
 	}
@@ -88,7 +92,7 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	if !again {
 		deadline = now.Add(c.Lead.Timing.EscalationTimeout)
 		if r.Timed() {
-			deadline = decide.Deadline(now, c.Lead.Timing.EscalationTimeout) // the time its question names
+			deadline = r.Due(c.Lead.Timing.EscalationTimeout) // the time its question names, from when it was made
 		}
 	}
 	q := decide.RelayQuestion(*r, deadline)
@@ -129,10 +133,12 @@ func labels(options []decide.Option) []string {
 }
 
 // asked takes the mod's report r of the answer to a question it put to the human: theirs, the default it
-// gave the question at its deadline, or none (the dialog went away unanswered, which holds it for them
-// like Wait for me).
+// gave the question at its deadline, or none: the dialog went away unanswered, which goes ahead with a
+// timed proposal at its deadline all the same (dismissed), and holds anything else for them like Wait for
+// me.
 func (c *Coordinator) asked(now time.Time, s *state.Store, r bridge.Report) {
 	switch {
+	case r.Dismissed && c.dismissed(now, s, r.Question):
 	case r.Dismissed:
 		c.answered(now, s, r.Question, "", state.ByDeclined, "mod")
 	case r.Deadline:
@@ -169,6 +175,55 @@ func (c *Coordinator) answered(now time.Time, s *state.Store, question, answer, 
 		fields["answer"] = answer
 	}
 	s.Event("relay_answered", relayFields(r, fields))
+}
+
+// dismissed records that the dialog of the timed proposal the mod was told to ask as question went away
+// unanswered: nobody chose anything, so it is not held for the human but goes ahead at its deadline, unless
+// they answer first (lapsed). It reports whether question was such a proposal.
+func (c *Coordinator) dismissed(now time.Time, s *state.Store, question string) bool {
+	var r state.Relay
+	found := false
+	s.Update(func(st *state.State) error {
+		q := st.RelayIssued()
+		if q == nil || !q.Timed() || decide.Normalize(q.Question) != decide.Normalize(question) {
+			return nil
+		}
+		q.Asked, q.Dismissed = false, now
+		st.Run.Dialogs.CloseExact("", "AskUserQuestion", decide.Normalize(question))
+		r, found = *q, true
+		return nil
+	})
+	if found {
+		s.Event("relay_dismissed", relayFields(r, map[string]any{"deadline": r.Due(c.Lead.Timing.EscalationTimeout).UTC().Format(time.RFC3339)}))
+	}
+	return found
+}
+
+// lapsed settles timed proposal r, which reached its deadline with nobody's answer and not on screen: the
+// lead's own question went first, the run waited on something else, or its dialog was dismissed. Nobody
+// said no, so it goes ahead, as one on screen would have (state.ByTimeout); the mod's command to ask it,
+// if one is open, is voided.
+func (c *Coordinator) lapsed(now time.Time, s *state.Store, b *bridge.Bridge, r state.Relay) {
+	due := r.Due(c.Lead.Timing.EscalationTimeout)
+	done := false
+	s.Update(func(st *state.State) error {
+		if q := st.RelayOf(r); q != nil && q.Answered == nil && !q.Asked {
+			q.Deadline = due // the time the agent is told it went ahead
+			state.AnswerRelay(q, state.ByTimeout, decide.RelayDefault(*q), now)
+			if q.Question != "" {
+				st.Run.Dialogs.CloseExact("", "AskUserQuestion", decide.Normalize(q.Question))
+			}
+			r, done = *q, true
+		}
+		return nil
+	})
+	if !done {
+		return
+	}
+	if r.Ask != 0 && b != nil {
+		b.Void(r.Instance, r.Ask)
+	}
+	s.Event("relay_answered", relayFields(r, map[string]any{"by": state.ByTimeout, "via": "lapsed", "answer": r.Answered.Answer}))
 }
 
 // subStore is the sub-run of the live phase agent on phase, or nil.

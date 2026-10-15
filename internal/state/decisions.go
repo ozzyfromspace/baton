@@ -40,8 +40,12 @@ type Decision struct {
 	// none: its action looks outward-facing or irreversible, so only the human can let it through.
 	Deadline time.Time `json:"deadline,omitzero"`
 	Untimed  string    `json:"untimed,omitempty"`
-	// Asked: the question reached the human's screen.
-	Asked bool `json:"asked,omitempty"`
+	// Wait is how long a timed proposal waits for the human: the model's own --wait, or baton's default.
+	Wait time.Duration `json:"wait,omitempty"`
+	// Asked: the question reached the human's screen. Dismissed: it went away again unanswered (Esc, a
+	// restart); the proposal still goes ahead at its deadline unless the human writes first.
+	Asked     bool      `json:"asked,omitempty"`
+	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Relayed: a phase agent's proposal, which baton's mod puts to the human (Relay). The agent never
 	// asks it itself, and its deadline counts from when the mod is told to ask it.
 	Relayed  bool        `json:"relayed,omitempty"`
@@ -140,6 +144,21 @@ func Resolve(st *State, id, by, answer string, now time.Time) error {
 		}
 	}
 	return fmt.Errorf("no proposal %s", id)
+}
+
+// WentAhead resolves proposal p as nobody answered it by its deadline: baton chose Go ahead for the human,
+// and a notice says so. When that was the last decision its phase may make without them (maxAuto, which
+// the human set; 0: no cap), a review becomes due: it reports how many decisions the phase has made so,
+// and whether it was the last.
+func WentAhead(st *State, p *Decision, maxAuto int, now time.Time) (n int, last bool) {
+	Resolve(st, p.ID, ByTimeout, "Go ahead", now)
+	st.Run.Notices = append(st.Run.Notices, Notice{Kind: "proceeded", Text: p.What, At: now})
+	n = st.Unattended(p.Phase)
+	if st.ReviewDue == "" && maxAuto > 0 && n >= maxAuto {
+		DueReview(st, p.Phase, now)
+		return n, true
+	}
+	return n, false
 }
 
 // DueReview stops the run for the human to review the decisions phase made without them.

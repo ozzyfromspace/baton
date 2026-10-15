@@ -219,10 +219,13 @@ func WorkerPlanRefused(phase string) string {
 }
 
 // WorkerProposed acknowledges a worker's proposal id, which baton puts to the human. untimed
-// says why it has no deadline ("" for a timed one); a timed one goes ahead timeout after the human is
-// asked.
-func WorkerProposed(id, untimed string, timeout time.Duration) string {
-	how := fmt.Sprintf("If nobody answers within %s of being asked, baton picks Go ahead for them, and you do it.", Spell(timeout))
+// says why it has no deadline ("" for a timed one); a timed one goes ahead wait after it was made (why:
+// why that is not the wait the agent asked for, "" if it is).
+func WorkerProposed(id, untimed string, wait time.Duration, why string) string {
+	how := fmt.Sprintf("If nobody answers within %s, baton picks Go ahead for them, and you do it.", Spell(wait))
+	if why != "" {
+		how += " " + WaitUsed(wait, why)
+	}
 	if untimed != "" {
 		how = "It has no deadline: " + untimed + ", so only the human can let it go ahead."
 	}

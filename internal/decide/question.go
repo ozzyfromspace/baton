@@ -119,6 +119,28 @@ func ProposalQuestion(because, action string, deadline time.Time) Question {
 	}
 }
 
+// WentAhead is what baton says to the human (say) and tells the model (tell) when nobody answered the lead's
+// proposal id, to do what (undone with undo), by deadline, so baton chose Go ahead for them. last says it
+// was the last decision phase may make without the human before they review them (max_auto_decisions,
+// which the human set); otherwise the model carries on with phase.
+func WentAhead(id, what, undo, phase string, deadline time.Time, last bool) (say, tell string) {
+	at := deadline.Local().Format("15:04")
+	say = fmt.Sprintf("baton: nobody answered by %s, so baton went ahead with %s — %s", at, id, what)
+	tell = fmt.Sprintf("[baton] Nobody answered your proposal %s by %s, so baton chose Go ahead for the human. Do what you proposed now: %s. "+
+		"If they later ask, it is undone with: %s.", id, at, what, undo)
+	if last {
+		return say, tell + " That was the last decision baton lets " + phase + " make without the human: once it is done, end your turn, and baton stops for them to review the decisions."
+	}
+	return say, tell + " Then carry on with " + Named(phase) + "."
+}
+
+// ProposalDismissed tells the human that the question of the lead's proposal id went away unanswered: it
+// still goes ahead at deadline unless they write in the session first.
+func ProposalDismissed(id string, deadline time.Time) string {
+	return fmt.Sprintf("baton: the question of %s went away unanswered → baton goes ahead with it at %s, unless you write in the session first",
+		id, deadline.Local().Format("15:04"))
+}
+
 // UntimedQuestion is the question for a proposal baton will not let go ahead without the human, and why.
 func UntimedQuestion(because, action, why string) Question {
 	return Question{

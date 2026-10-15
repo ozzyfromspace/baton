@@ -116,6 +116,9 @@ type Loop struct {
 	// Workers says the run has workers beside the lead (the coordinator's Fleet): while the lead is
 	// stopped, the phases that do not need its phase go on.
 	Workers bool
+	// MaxAuto is max_auto_decisions: the decisions a phase may make without the human before they review
+	// them (0: no cap, the default).
+	MaxAuto int
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open

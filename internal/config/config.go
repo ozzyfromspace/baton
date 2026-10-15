@@ -36,7 +36,8 @@ type Config struct {
 	// baton asks the human, through AskUserQuestion, whether to checkpoint (BATON_WARN_PCT). 0 disables it.
 	WarnPct *float64 `json:"warn_pct,omitempty"`
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it: a
-	// duration from 1m to 2h, "5m" by default (BATON_ESCALATION_TIMEOUT, which may go down to 10s).
+	// duration from 1m to 2h, "10m" by default (BATON_ESCALATION_TIMEOUT, which may go down to 10s). It is
+	// the wait of a proposal whose model gave no --wait from 5m to 20m, and of baton's own questions.
 	EscalationTimeout string `json:"escalation_timeout,omitempty"`
 	// MaxAutoDecisions is how many decisions a phase may make without the human (notes, and proposals
 	// nobody answered) before baton stops for them to review. Off (0) unless set: baton never waits on the
@@ -83,7 +84,7 @@ const (
 	DefaultWarnPct       = 90.0
 	DefaultNtfyServer    = "https://ntfy.sh"
 
-	DefaultEscalationTimeout = 5 * time.Minute
+	DefaultEscalationTimeout = 10 * time.Minute
 	DefaultMaxAutoDecisions  = 0
 	DefaultVerifyTimeout     = 3 * time.Hour
 	DefaultSwitchAfter       = 5 * time.Minute

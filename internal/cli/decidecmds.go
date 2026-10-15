@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -97,12 +98,12 @@ func cmdNote(args []string, io IO) int {
 }
 
 func cmdPropose(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"because", "undo", "tried"}, nil)
+	p, err := parseArgs(args, []string{"because", "undo", "tried", "wait"}, nil)
 	action, because, undo := decide.Sanitize(strings.Join(p.pos, " ")), decide.Sanitize(p.vals["because"]), decide.Sanitize(p.vals["undo"])
 	if err != nil || action == "" || because == "" || undo == "" {
-		return fail(io, "usage: baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\" [--tried \"<what you tried>\"]%s\n"+
+		return fail(io, "usage: baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\" [--tried \"<what you tried>\"] [--wait 5m]%s\n"+
 			"A proposal is an action that makes progress and can be undone. Waiting, doing nothing or stopping is not a proposal; "+
-			"if every way forward is irreversible, run baton blocked \"<why>\" --tried \"<what you tried>\" instead.", errSuffix(err))
+			"if every way forward is irreversible, run baton blocked \"<why>\" --tried \"<what you tried>\" instead. "+decide.WaitAdvice(), errSuffix(err))
 	}
 	s, _, ok := storeAndPlan(io)
 	if !ok {
@@ -113,6 +114,7 @@ func cmdPropose(args []string, io IO) int {
 		return fail(io, "not recorded — this session is not hosted by baton, so nothing would put your proposal to the human or go ahead with it. Ask the human directly.")
 	}
 	timeout := config.EscalationFromEnv(io.Env).Timeout
+	wait, waitWhy := decide.ProposalWait(p.vals["wait"], timeout)
 	// A worker's proposal is put to the human by the lead session, which words the question and starts its
 	// deadline when it asks it (Relayed).
 	relayed := s.Worker() != ""
@@ -123,8 +125,10 @@ func cmdPropose(args []string, io IO) int {
 		d.Untimed = decide.UntimedReason(term)
 		q = decide.UntimedQuestion(because, action, d.Untimed)
 	case !relayed:
-		d.Deadline = decide.Deadline(io.Now(), timeout)
+		d.Wait, d.Deadline = wait, decide.Deadline(io.Now(), wait)
 		q = decide.ProposalQuestion(because, action, d.Deadline)
+	default:
+		d.Wait = wait // its deadline counts from when it joins the relay queue (state.Relay.Due)
 	}
 	if !relayed {
 		d.Question = q.Text
@@ -165,15 +169,21 @@ func cmdPropose(args []string, io IO) int {
 	case !d.Deadline.IsZero():
 		fields["deadline"] = d.Deadline.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}
+	if d.Untimed == "" {
+		fields["wait"], fields["chosen"] = d.Wait.String(), p.vals["wait"] != "" && waitWhy == ""
+		if waitWhy != "" {
+			fields["wait_refused"] = waitWhy
+		}
+	}
 	if relayed {
 		fields["relayed"] = true
 	}
 	s.Event("proposed", fields)
 	if relayed {
-		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID, What: d.What, Because: d.Because, Untimed: d.Untimed}); err != nil {
+		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID, What: d.What, Because: d.Because, Untimed: d.Untimed, Wait: d.Wait}); err != nil {
 			fmt.Fprintf(io.Err, "baton: warning — could not queue it for the lead session yet (%v); baton queues it again when you end your turn.\n", err)
 		}
-		fmt.Fprintln(io.Out, "baton: "+decide.WorkerProposed(d.ID, d.Untimed, timeout))
+		fmt.Fprintln(io.Out, "baton: "+decide.WorkerProposed(d.ID, d.Untimed, wait, waitWhy))
 		return 0
 	}
 	if d.Untimed != "" {
@@ -181,9 +191,17 @@ func cmdPropose(args []string, io IO) int {
 			"Do nothing else until it is answered; then follow what baton tells you.\n", d.ID, d.Untimed, q.Call())
 		return 0
 	}
-	fmt.Fprintf(io.Out, "baton: proposal %s recorded. Now put it to the human: %s. If nobody answers by %s, baton picks Go ahead for them, and you do it. "+
-		"Do nothing else until it is answered; then follow what baton tells you.\n", d.ID, q.Call(), d.Deadline.Local().Format("15:04"))
+	fmt.Fprintf(io.Out, "baton: proposal %s recorded. Now put it to the human: %s. If nobody answers by %s, baton picks Go ahead for them, and you do it. %s"+
+		"Do nothing else until it is answered; then follow what baton tells you.\n", d.ID, q.Call(), d.Deadline.Local().Format("15:04"), waitNote(wait, waitWhy))
 	return 0
+}
+
+// waitNote says why a proposal's wait is not the one the model asked for, with a space after it; "" when it is.
+func waitNote(wait time.Duration, why string) string {
+	if why == "" {
+		return ""
+	}
+	return decide.WaitUsed(wait, why) + " "
 }
 
 // guard turns down a command the model could use to get out of a halt only the human may clear (a hard

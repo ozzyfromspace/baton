@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -309,7 +310,6 @@ func TestTheModsAnswerSettlesTheQuestion(t *testing.T) {
 	}{
 		{"the human's", "Go ahead", false, false, state.ByHuman, "goes ahead", true, false},
 		{"at the deadline", "Go ahead", true, false, state.ByTimeout, "went ahead, as nobody answered", false, false},
-		{"none", "", false, true, state.ByDeclined, "waits for the human", false, false},
 		{"pause", "Pause baton", false, false, state.ByHuman, "waits for the human", true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -348,6 +348,91 @@ func TestTheModsAnswerSettlesTheQuestion(t *testing.T) {
 	x.tick(time.Second)
 	if st := x.state(); st.Relay[0].Answered != nil {
 		t.Errorf("an answer to another question settled it: %+v", st.Relay[0])
+	}
+}
+
+// A timed proposal whose dialog the human dismissed is nobody's answer: it is not held for them, nor asked
+// again, and goes ahead at its deadline, which ran from when the agent proposed it.
+func TestAnAgentsDismissedProposalGoesAheadAtItsDeadline(t *testing.T) {
+	x := relayCrew(t)
+	x.tick(time.Second)
+	q := x.question()
+	x.lead.Update(func(st *state.State) error {
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q), Since: x.now, Kind: "relay"})
+		return nil
+	})
+	x.answers("", false, true)
+	x.tick(time.Second)
+	r := x.state().Relay[0]
+	if r.Answered != nil || r.Dismissed.IsZero() || r.Asked || x.state().Run.Dialogs.AnyOpen() {
+		t.Fatalf("relay %+v, dialogs %+v: want it dismissed, unanswered, its dialog closed", r, x.state().Run.Dialogs)
+	}
+	if !x.logged("relay_dismissed", map[string]any{"phase": "P1"}) {
+		t.Errorf("events:\n%s", x.events())
+	}
+	if want := r.Due(x.c.Lead.Timing.EscalationTimeout); !r.Deadline.Equal(want) {
+		t.Errorf("deadline %s, want %s: its wait counts from when it was queued (%s)", r.Deadline, want, r.Queued)
+	}
+	asks := len(x.asks)
+	x.tick(time.Minute) // past relayLost: a dismissed question is not asked again
+	if len(x.asks) != asks {
+		t.Fatalf("asked again: %+v", x.asks[asks:])
+	}
+	x.advance(r.Deadline.Sub(x.clock()) - 2*time.Second)
+	x.tick(time.Second)
+	if r := x.state().Relay[0]; r.Answered != nil {
+		t.Fatalf("taken before its deadline: %+v", r)
+	}
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if r := x.state().Relay[0]; r.Answered == nil || r.Answered.By != state.ByTimeout || r.Answered.Answer != "Go ahead" || r.Applied.IsZero() {
+		t.Fatalf("relay %+v", r)
+	}
+	if !x.logged("relay_answered", map[string]any{"by": state.ByTimeout, "via": "lapsed"}) || !x.has("relay_applied", `"result":"went ahead, as nobody answered"`) {
+		t.Errorf("events:\n%s", x.events())
+	}
+}
+
+// A timed proposal the human never got to see, since something of the lead's own waited on them all
+// along, goes ahead at its deadline all the same; while the run is paused, nothing does.
+func TestAnUnaskedProposalGoesAheadAtItsDeadline(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(fmt.Sprintf("paused=%v", paused), func(t *testing.T) {
+			x := relayCrew(t)
+			x.lead.Update(func(st *state.State) error {
+				st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "quiet", Since: x.now}
+				if paused {
+					st.Mode = state.ModePaused
+				}
+				return nil
+			})
+			x.tick(time.Second)
+			r := x.state().Relay[0]
+			if len(x.asks) != 0 || !r.Issued.IsZero() {
+				t.Fatalf("asked while the lead's own question waits: %+v", r)
+			}
+			due := r.Due(x.c.Lead.Timing.EscalationTimeout)
+			x.advance(due.Sub(x.clock()))
+			x.tick(time.Second)
+			x.tick(time.Second)
+			r = x.state().Relay[0]
+			if paused {
+				if r.Answered != nil {
+					t.Fatalf("settled while paused: %+v", r)
+				}
+				return
+			}
+			if r.Answered == nil || r.Answered.By != state.ByTimeout || r.Answered.Answer != "Go ahead" || !r.Deadline.Equal(due) {
+				t.Fatalf("relay %+v, want it gone ahead at %s", r, due)
+			}
+			sst, _ := x.sub("P1").Load()
+			if d := sst.Decisions[0]; d.Resolved == nil || d.Resolved.By != state.ByTimeout {
+				t.Fatalf("the worker's proposal: %+v", d)
+			}
+			if !x.logged("relay_answered", map[string]any{"via": "lapsed"}) {
+				t.Errorf("events:\n%s", x.events())
+			}
+		})
 	}
 }
 

@@ -46,6 +46,17 @@ func (f *fixture) events() []map[string]any {
 	return out
 }
 
+// eventsOf lists the events of kind logged so far.
+func (f *fixture) eventsOf(kind string) []map[string]any {
+	var out []map[string]any
+	for _, e := range f.events() {
+		if e["kind"] == kind {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // logged reports an event of kind whose fields include every one in want.
 func (f *fixture) logged(kind string, want map[string]any) bool {
 	for _, e := range f.events() {
@@ -160,9 +171,10 @@ func TestAProposalIsPutToTheHumanAndActedOn(t *testing.T) {
 	}
 }
 
-// A proposal whose question goes away unanswered (Esc, an interrupted turn, a restart) is declined, and
-// held for the human like Wait for me. Nothing anyone said was Go ahead.
-func TestAProposalThatVanishesIsHeld(t *testing.T) {
+// A timed proposal whose question goes away unanswered (Esc, an interrupted turn, a restart) is nobody's
+// choice: it stays pending, dismissed, and goes ahead at its deadline (Loop.lapse); the run is not held
+// for the human. An untimed one is declined, and held for them like Wait for me.
+func TestAProposalThatVanishes(t *testing.T) {
 	for _, c := range []struct {
 		event string
 		input map[string]any
@@ -174,36 +186,71 @@ func TestAProposalThatVanishesIsHeld(t *testing.T) {
 		{"UserPromptSubmit", map[string]any{"prompt": NudgePrefix + " No activity for 10m."}},
 		{"PostToolUseFailure", nil}, // the question's own call failed
 	} {
-		t.Run(c.event, func(t *testing.T) {
-			f := newFixture(t, true)
-			call := f.propose(false)
-			f.fire("PermissionRequest", call)
-			input := c.input
-			if input == nil {
-				input = call
-			}
-			f.fire(c.event, input)
-			st := f.state()
-			if r := st.Decisions[0].Resolved; r == nil || r.By != state.ByDeclined {
-				t.Fatalf("resolved %+v", r)
-			}
-			if e := st.Run.Escalation; e == nil || e.Kind != "decision" || !e.Asked {
-				t.Fatalf("escalation %+v", e)
-			}
-			if _, _, held := st.Held(); !held {
-				t.Error("not held for the human")
-			}
-			if !f.logged("proposal_resolved", map[string]any{"by": state.ByDeclined}) || !f.logged("escalated", map[string]any{"type": "decision"}) {
-				t.Errorf("events: %v", f.events())
-			}
-		})
+		for _, untimed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/untimed=%v", c.event, untimed), func(t *testing.T) {
+				f := newFixture(t, true)
+				call := f.propose(untimed)
+				f.fire("PermissionRequest", call)
+				input := c.input
+				if input == nil {
+					input = call
+				}
+				f.fire(c.event, input)
+				st := f.state()
+				p := st.Decisions[0]
+				if untimed {
+					if r := p.Resolved; r == nil || r.By != state.ByDeclined {
+						t.Fatalf("resolved %+v", r)
+					}
+					if e := st.Run.Escalation; e == nil || e.Kind != "decision" || !e.Asked {
+						t.Fatalf("escalation %+v", e)
+					}
+					if _, _, held := st.Held(); !held {
+						t.Error("not held for the human")
+					}
+					if !f.logged("proposal_resolved", map[string]any{"by": state.ByDeclined}) || !f.logged("escalated", map[string]any{"type": "decision"}) {
+						t.Errorf("events: %v", f.events())
+					}
+					return
+				}
+				if p.Resolved != nil || p.Dismissed.IsZero() || st.PendingProposal() == nil {
+					t.Fatalf("proposal %+v: want it pending, dismissed", p)
+				}
+				if _, _, held := st.Held(); held || st.Run.Escalation != nil {
+					t.Fatalf("held for the human: escalation %+v", st.Run.Escalation)
+				}
+				if !f.logged("proposal_dismissed", map[string]any{"id": p.ID}) || f.logged("proposal_resolved", nil) {
+					t.Errorf("events: %v", f.events())
+				}
+				if n := len(st.Run.Announce); n == 0 || !strings.Contains(st.Run.Announce[n-1], "goes ahead with it at") {
+					t.Errorf("announce: %q", st.Run.Announce)
+				}
+				// Seen gone again, it is dismissed already: nothing more.
+				f.fire("Stop", map[string]any{})
+				if n := len(f.eventsOf("proposal_dismissed")); n != 1 {
+					t.Errorf("dismissed %d times", n)
+				}
+			})
+		}
+	}
+
+	// The human writing after a dismissal is there to answer: their message is the answer.
+	f := newFixture(t, true)
+	f.fire("PermissionRequest", f.propose(false))
+	f.fire("Stop", map[string]any{})
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "no, keep it signed"})
+	if r := f.state().Decisions[0].Resolved; r == nil || r.By != state.ByDeclined {
+		t.Fatalf("resolved %+v", r)
+	}
+	if !strings.Contains(additionalContext(out), "their message is the answer") {
+		t.Fatalf("context: %v", out)
 	}
 
 	// The human typing instead of answering is there to answer: nothing is held, and the model is told
 	// their message is the answer.
-	f := newFixture(t, true)
+	f = newFixture(t, true)
 	f.fire("PermissionRequest", f.propose(false))
-	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "no, keep it signed"})
+	out = f.fire("UserPromptSubmit", map[string]any{"prompt": "no, keep it signed"})
 	st := f.state()
 	if r := st.Decisions[0].Resolved; r == nil || r.By != state.ByDeclined || st.Run.Escalation != nil {
 		t.Fatalf("resolved %+v, escalation %+v", r, st.Run.Escalation)

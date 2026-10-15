@@ -32,6 +32,46 @@ func UntimedReason(term string) string {
 	return fmt.Sprintf("'%s' looks outward-facing or irreversible", term)
 }
 
+// The model sizes each proposal's wait by how small and reversible its action is: from ProposalWaitMin,
+// for a trivial one, to ProposalWaitMax, for one the human would most want to see. A short wait keeps the
+// run moving; none waits forever.
+const (
+	ProposalWaitMin = 5 * time.Minute
+	ProposalWaitMax = 20 * time.Minute
+)
+
+// ProposalWait is the wait of a proposal whose model asked for given (--wait; "" for none): given, from
+// ProposalWaitMin to ProposalWaitMax; otherwise fallback (escalation_timeout), and why the model's was not
+// used ("" when it named none). Nothing is refused for it: the proposal goes on with the wait baton chose.
+func ProposalWait(given string, fallback time.Duration) (wait time.Duration, why string) {
+	if strings.TrimSpace(given) == "" {
+		return fallback, ""
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(given))
+	switch {
+	case err != nil:
+		return fallback, fmt.Sprintf("--wait %q is not a duration such as 5m", given)
+	case d < ProposalWaitMin || d > ProposalWaitMax:
+		return fallback, fmt.Sprintf("--wait %s is outside %s to %s", given, Spell(ProposalWaitMin), Spell(ProposalWaitMax))
+	}
+	return d, ""
+}
+
+// WaitAdvice tells the model how to size a proposal's wait. baton keeps to the bounds; the size is the
+// model's call, so it is told what a wait costs.
+func WaitAdvice() string {
+	return fmt.Sprintf("Give the shortest wait that fits, with --wait from %s to %s: every minute a proposal waits is implementation time the run loses. "+
+		"%s for most; longer only for an action the human would most want to catch before it happens.", Spell(ProposalWaitMin), Spell(ProposalWaitMax), Spell(ProposalWaitMin))
+}
+
+// WaitUsed says which wait a proposal got (wait), and why it is not the one the model asked for (why).
+func WaitUsed(wait time.Duration, why string) string {
+	if why == "" {
+		return "It waits " + Spell(wait) + "."
+	}
+	return fmt.Sprintf("It waits %s, baton's default, since %s. Next time: %s", Spell(wait), why, WaitAdvice())
+}
+
 // CapReached reports that a phase has made as many decisions without the human as max allows (0: no
 // limit), so baton stops for them to review those decisions before anything else.
 func CapReached(unattended, max int) bool { return max > 0 && unattended >= max }

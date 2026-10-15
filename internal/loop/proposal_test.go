@@ -66,6 +66,48 @@ func TestAProposalGoesAheadAtItsDeadline(t *testing.T) {
 	}
 }
 
+// A proposal whose question the human dismissed is nobody's answer: at its deadline baton goes ahead
+// with it all the same, with no dialog to answer, and tells the model.
+func TestTheLeadsDismissedProposalGoesAheadAtItsDeadline(t *testing.T) {
+	r, deadline := proposalRig(t, false)
+	r.set(func(st *state.State) {
+		st.Run.Dialogs = nil
+		st.Run.TurnOpen, st.Run.LastStop = false, r.now
+		st.PendingProposal().Dismissed = r.now
+	})
+	r.runTo(deadline.Add(-10 * time.Second))
+	if st := r.state(); st.PendingProposal() == nil {
+		t.Fatal("settled before its deadline")
+	}
+	r.run(20 * time.Second)
+	st := r.state()
+	d := st.Decisions[0]
+	if d.Resolved == nil || d.Resolved.By != state.ByTimeout || d.Resolved.Answer != "Go ahead" {
+		t.Fatalf("proposal %+v", d)
+	}
+	told := false
+	for _, m := range st.Inbox {
+		told = told || m.Kind == state.MessageAnswer && strings.Contains(m.Text, "Nobody answered your proposal d1")
+	}
+	if !told {
+		t.Errorf("the model is not told: inbox %+v", st.Inbox)
+	}
+	b, _ := os.ReadFile(filepath.Join(r.loop.Store.Dir, "events.jsonl"))
+	if !strings.Contains(string(b), `"kind":"proposal_resolved"`) || !strings.Contains(string(b), `"via":"lapsed"`) {
+		t.Fatalf("events: %s", b)
+	}
+	if !strings.Contains(strings.Join(st.Run.Announce, "\n"), "went ahead with d1") {
+		t.Errorf("not announced: %q", st.Run.Announce)
+	}
+	// Not dismissed, the question is on screen, and baton answers it there (above), never here.
+	r, deadline = proposalRig(t, false)
+	r.set(func(st *state.State) { st.Run.Dialogs = nil })
+	r.runTo(deadline.Add(time.Minute))
+	if st := r.state(); st.PendingProposal() == nil {
+		t.Fatal("a proposal nobody dismissed was settled with no dialog to answer")
+	}
+}
+
 func TestWhenAProposalGoesAhead(t *testing.T) {
 	cases := []struct {
 		name  string

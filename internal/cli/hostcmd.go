@@ -173,7 +173,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		batonEnv = append(batonEnv, "BATON_TTY="+tty)
 	}
 	runners := newHostRunners(io, exe, proj, instance)
-	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version,
+	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto,
 		Runners: runners}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
