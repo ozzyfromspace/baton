@@ -16,7 +16,7 @@ import (
 
 func init() {
 	register("note", "tell the human about a reversible step you took without them; the run continues: note <what you did> [--undo HOW]", cmdNote)
-	register("propose", "put a reversible way forward to the human; it goes ahead if nobody answers by the deadline: propose <action> --because WHY --undo HOW [--tried TEXT]", cmdPropose)
+	register("propose", "put a reversible way forward to the human; it goes ahead if nobody answers by the deadline (an outward one is answered Not now): propose <action> --because WHY --undo HOW [--wait 5m-20m] [--tried TEXT]", cmdPropose)
 }
 
 // refusal is a command baton turned down, decided under the state lock so that nothing changes. why is
