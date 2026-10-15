@@ -10,14 +10,19 @@ import (
 
 // Answers when the human approves a plan while a run has one. Claude Code writes every plan a session
 // makes to the same file, so a plan in the run's own file is a revision of it; one in another file
-// (planned after a /clear) is a new plan, and the current run's document is still there to keep.
+// (planned after a /clear) is a new plan, and the current run's document is still there to keep. Each
+// default (ReplanDefault) is third, where the host's 3 lands where baton's mod does not run
+// (EscalationOptions), and Wait for me holds the approved plan for the human, which lapses into the
+// default like any hold (HoldLapse).
 var (
 	ReviseOptions = []Option{
-		{"Continue with the revised plan", "Phases already done stay done; the run goes on from the first one left"},
 		{"Start the new plan from P0", "Drop this run's progress and run the approved plan from the beginning"},
+		{"Wait for me", "Change nothing yet; I'll write in the session"},
+		{"Continue with the revised plan", "Phases already done stay done; the run goes on from the first one left"},
 	}
 	ReplaceOptions = []Option{
 		{"Start the new plan from P0", "Stop the current run and run the plan you just approved"},
+		{"Wait for me", "Change nothing yet; I'll write in the session"},
 		{"Keep the current run", "Leave the approved plan aside; the current run goes on"},
 	}
 )
@@ -64,9 +69,9 @@ func (w Words) AttachedNow(title string, phases int, file, first, firstTitle str
 // another plan is left aside for /baton run, since starting it would set the current run's progress aside.
 func ReplanDefault(same bool) string {
 	if same {
-		return ReviseOptions[0].Label
+		return ReviseOptions[2].Label
 	}
-	return ReplaceOptions[1].Label
+	return ReplaceOptions[2].Label
 }
 
 // Chose says who chose an answer: the human, or baton for them since nobody answered by deadline
@@ -83,4 +88,34 @@ func Chose(auto bool, deadline time.Time) string {
 func ReplanWaits(answer string, deadline time.Time) string {
 	return fmt.Sprintf("baton: Claude did not ask you about the plan you approved → baton answers %q at %s unless you do first (/baton run <file> attaches a plan any time)",
 		answer, deadline.Local().Format("15:04"))
+}
+
+// ReplanHolding is what baton says to the human (say) and tells the model (tell) as it holds the plan they
+// approved mid-run (file) at their word (Wait for me): nothing changes until they write, and with no word
+// from them in lapse, baton answers answer (ReplanDefault) for them.
+func ReplanHolding(file, answer string, lapse time.Duration) (say, tell string) {
+	say = fmt.Sprintf("baton: holding the plan you approved for you — write in the session; with no word from you in %s, baton answers %q", Spell(lapse), answer)
+	tell = fmt.Sprintf("[baton] The human chose Wait for me about the plan they approved (%s): change nothing, and end your turn now. "+
+		"The run waits for them, and their answer will reach you here; with no word from them in %s, baton answers %q for them and tells you.", file, Spell(lapse), answer)
+	return say, tell
+}
+
+// ReplanHeldWaits tells the human, when the model stops, that the plan they approved waits for their word
+// (Wait for me) until deadline, when baton answers answer.
+func ReplanHeldWaits(answer string, deadline time.Time) string {
+	return fmt.Sprintf("baton: waiting on you about the plan you approved → baton answers %q at %s unless you write first", answer, deadline.Local().Format("15:04"))
+}
+
+// ReplanHeldTurn is why the model ends its turn while the plan the human approved waits for their word.
+const ReplanHeldTurn = "the human chose Wait for me about the plan they approved, and the run waits for them"
+
+// ReplanUnsettled tells the model that the human wrote while baton's question about the plan they
+// approved (file) was unsettled, unanswered or held for them (held): baton changed nothing, and their
+// message is what to do.
+func ReplanUnsettled(file string, held bool) string {
+	what := "baton's question about the plan the human approved (" + file + ") went unanswered"
+	if held {
+		what = "the human chose Wait for me on baton's question about the plan they approved (" + file + "), and has now written"
+	}
+	return "[baton] " + what + ", so baton changed nothing. Their message is what to do; if they want that plan run, `/baton run` attaches it."
 }

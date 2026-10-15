@@ -86,3 +86,20 @@ func HoldLifted(reason, phase string, after time.Duration) (say, tell string) {
 		"the run does not wait on them any longer. Carry on with %s.", clause(reason), Spell(after), Named(phase))
 	return say, tell
 }
+
+// HoldingRun is what baton says to the human (say) and tells the model (tell) as it holds the run for
+// them at their word (Wait for me) on its question about reason: how long the hold lasts with no word from
+// them (lapse), and that the plan goes on then.
+func HoldingRun(reason string, lapse time.Duration) (say, tell string) {
+	say = fmt.Sprintf("baton: holding the run for you — answer in the session; with no word from you in %s, baton lifts the hold and the plan goes on (%s)",
+		Spell(lapse), clause(reason))
+	tell = fmt.Sprintf("[baton] The human chose Wait for me on baton's question (%s): the run waits for them. End your turn now; their answer will reach you here. "+
+		"With no word from them in %s, baton lifts the hold and tells you.", clause(reason), Spell(lapse))
+	return say, tell
+}
+
+// HoldReleased tells the model that the human wrote while the run was held for them (reason) with no
+// proposal of its own behind the hold: their message is the answer.
+func HoldReleased(reason string) string {
+	return fmt.Sprintf("[baton] The run was held for the human (%s), and they have now written to you: their message is what to do.", clause(reason))
+}

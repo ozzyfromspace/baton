@@ -217,6 +217,12 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.StopBlocks = 0
 		q := decide.ReviewQuestion(st.ReviewDue, st.Unattended(st.ReviewDue))
 		escalateAsking(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", q, now)
+	case st.Replan != nil && !st.Replan.Held.IsZero():
+		// The human chose Wait for me about the plan they approved: the stop is right, and their next
+		// message answers it; with no word from them, baton answers its default (loop's lapseQuestions).
+		st.Run.StopBlocks = 0
+		answer := decide.ReplanDefault(st.Replan.Same)
+		d.say(decide.ReplanHeldWaits(answer, latest(st.Replan.Held, st.Run.HumanAt).Add(decide.HoldLapse)))
 	case st.Replan != nil:
 		// The human approved a plan mid-run, and the model stopped without asking what to do with it.
 		st.Run.StopBlocks++

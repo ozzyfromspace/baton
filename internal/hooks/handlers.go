@@ -402,6 +402,8 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 	case p != nil && !p.Asked:
 		return NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
+	case st.Replan != nil && !st.Replan.Held.IsZero():
+		return endTurn(decide.ReplanHeldTurn)
 	case st.Replan != nil:
 		return replanHold(st.Replan)
 	}
@@ -996,11 +998,11 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 				tell = strings.TrimSpace(tell + "\n\n" + record)
 			}
 			if r := st.Replan; r != nil {
-				// The question about the plan they approved went unanswered, and they wrote instead.
+				// The question about the plan they approved went unanswered, or they chose Wait for me, and
+				// they wrote.
 				st.Replan = nil
 				events = append(events, event{"replan_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
-				tell = strings.TrimSpace(tell + "\n\n" + NudgePrefix + " baton's question about the plan the human approved (" + r.File +
-					") went unanswered, so baton changed nothing. Their message is what to do; if they want that plan run, `/baton run` attaches it.")
+				tell = strings.TrimSpace(tell + "\n\n" + decide.ReplanUnsettled(r.File, !r.Held.IsZero()))
 			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
@@ -1200,8 +1202,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			case tool == "ExitPlanMode":
 				v = approved(st, s, c, approvedFile(c.Input), false, w)
 			case tool == "AskUserQuestion":
-				auto := !closed.AutoAnswered.IsZero()
-				if v = answeredReplan(st, s, c, w, false); v.event == "" {
+				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
+				if v = answeredReplan(st, s, c, w, auto); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
 							v = answered(st, c, auto, w)
@@ -1313,6 +1315,18 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 				continue
 			}
 			event, say, tell = "paused", "baton: paused — the human is driving", NudgePrefix+" The human chose Pause baton: baton is paused. Wait for the human's instructions."
+		case "Wait for me":
+			// The run is held for the human: a hold, which their next message answers (released), and which
+			// lapses with no word from them (loop's lapseHold), when the plan goes on as Continue would have.
+			e := st.Run.Escalation
+			if iq.kind != "escalation" || e == nil || auto {
+				continue
+			}
+			st.Run.Escalation = &state.Escalation{Kind: "decision", Reason: e.Reason, Since: c.Now, Asked: true}
+			event = "escalated"
+			say, tell = decide.HoldingRun(e.Reason, decide.HoldLapse)
+			st.Run.HumanAt = c.Now
+			return valveAction{event: event, fields: map[string]any{"type": "decision", "reason": e.Reason, "answer": answer, "by": state.ByHuman}, say: say, tell: tell}
 		case "Checkpoint now":
 			if iq.kind != "context_warning" || st.Mode != state.ModeRunning {
 				continue

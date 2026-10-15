@@ -48,6 +48,34 @@ func TestDeadlineRoundsUpToTheMinute(t *testing.T) {
 	}
 }
 
+// Every question of baton's that has a default keeps it third, where the host's 3 lands in serial mode,
+// with Wait for me second in the questions about the run and about a plan approved mid-run.
+func TestEachDefaultIsThird(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts []Option
+		dflt string
+	}{
+		{"escalation", EscalationOptions, "Continue"},
+		{"revised plan", ReviseOptions, ReplanDefault(true)},
+		{"another plan", ReplaceOptions, ReplanDefault(false)},
+		{"context", WarnOptions, "Keep going"},
+		{"proposal", ProposalOptions, "Go ahead"},
+	} {
+		if len(c.opts) != 3 || c.opts[2].Label != c.dflt {
+			t.Errorf("%s: options %+v, default %q", c.name, c.opts, c.dflt)
+		}
+	}
+	for _, opts := range [][]Option{EscalationOptions, ReviseOptions, ReplaceOptions} {
+		if opts[1].Label != "Wait for me" {
+			t.Errorf("options %+v: Wait for me is not second", opts)
+		}
+	}
+	if ReplanDefault(true) != "Continue with the revised plan" || ReplanDefault(false) != "Keep the current run" {
+		t.Errorf("replan defaults %q, %q", ReplanDefault(true), ReplanDefault(false))
+	}
+}
+
 func TestProposalQuestions(t *testing.T) {
 	deadline := time.Date(2026, 10, 5, 15, 33, 0, 0, time.Local)
 	q := ProposalQuestion("gpg signing times out after the restart.", "Commit P4 unsigned", deadline)

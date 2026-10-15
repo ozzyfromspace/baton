@@ -699,7 +699,17 @@ func (f *fixture) blocked(reason string) string {
 	return e.Question
 }
 
-var escalationLabels = []string{"Continue", "Pause baton"}
+var escalationLabels = []string{"Pause baton", "Wait for me", "Continue"}
+
+// labelsOf is the labels of opts, in order: how the model is told to offer them.
+func labelsOf(opts []decide.Option) []string {
+	var out []string
+	for _, o := range opts {
+		out = append(out, o.Label)
+	}
+	return out
+}
+
 var warnLabels = []string{"Checkpoint now", "Pause baton", "Keep going"}
 
 // The human's answer to baton's own question acts by itself: the model need not remember to run anything.
@@ -821,16 +831,16 @@ func TestModelQuestionsAreRefusedWhileAPlanRuns(t *testing.T) {
 	ti := two["tool_input"].(map[string]any)
 	ti["questions"] = append(ti["questions"].([]any), map[string]any{"question": "And?"})
 	for name, in := range map[string]map[string]any{
-		"reordered":                            ask(q, "Pause baton", "Continue"),
-		"an option more":                       ask(q, "Continue", "Pause baton", "Skip it"),
-		"relabeled":                            ask(q, "Carry on", "Pause baton"),
+		"reordered":                            ask(q, "Continue", "Wait for me", "Pause baton"),
+		"an option more":                       ask(q, "Pause baton", "Wait for me", "Continue", "Skip it"),
+		"relabeled":                            ask(q, "Pause baton", "Wait for me", "Carry on"),
 		"reworded":                             ask(q+" Please hurry.", escalationLabels...),
 		"multi-select":                         multi,
 		"two questions":                        two,
 		"another question while baton's waits": ask("Which database should I use?", "Postgres", "SQLite"),
 	} {
 		d, why := decide(f, in)
-		if d != "deny" || !strings.Contains(why, `exactly one question, "`+q+`" (header "baton"), and exactly 2 options, in this order: "Continue"`) {
+		if d != "deny" || !strings.Contains(why, `exactly one question, "`+q+`" (header "baton"), and exactly 3 options, in this order: "Pause baton"`) {
 			t.Errorf("%s: %q %q", name, d, why)
 		}
 	}

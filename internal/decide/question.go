@@ -38,10 +38,14 @@ func optionList(opts []Option) string {
 	return strings.Join(parts, ", ")
 }
 
-// EscalationOptions are the answers to an escalation.
+// EscalationOptions are the answers to an escalation. The default, Continue, is third, as in every
+// question of baton's that has one: where baton's mod does not run, the host answers it by typing 3 at its
+// deadline, which in a permission prompt is "No" (docs/research/escalation.md). Wait for me holds the run
+// for the human, and lapses like any hold (HoldLapse).
 var EscalationOptions = []Option{
-	{"Continue", "I've handled it; carry on with the plan"},
 	{"Pause baton", "I'll take it from here"},
+	{"Wait for me", "Hold the run until I write in the session"},
+	{"Continue", "I've handled it; carry on with the plan"},
 }
 
 // ReviewOptions are the answers to a review of the decisions a phase made without the human.

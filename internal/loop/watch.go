@@ -198,9 +198,11 @@ func agentPhase(st state.State, agent string) string {
 
 // answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context
 // question (Keep going) after WarnTimeout, since it only warns and Claude Code compacts on its own when
-// the context is full; and a timed proposal (Go ahead) at its deadline, since a run must not stop for
-// something it can work around (docs/design.md). An untimed proposal is never answered: only the
-// human can let it go ahead. The answer arrives through the usual hook.
+// the context is full; a timed proposal (Go ahead) at its deadline, since a run must not stop for
+// something it can work around (docs/design.md); and baton's question about the run (Continue) or about
+// a plan the human approved mid-run (decide.ReplanDefault) after EscalationTimeout, as the mod answers
+// them where it runs. An untimed proposal is never answered: only the human can let it go ahead; nor is
+// a block, the model's own choice to wait. The answer arrives through the usual hook.
 //
 // It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
 // baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog; nor
@@ -242,6 +244,17 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		// the wake (the minute alone does that).
 		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
 		fields["id"] = p.ID
+	case "escalation", "replan":
+		// baton's question about the run (Continue), or about a plan the human approved mid-run (its
+		// default), after the escalation timeout. A block is the model's own choice to wait, and is never
+		// answered for the human.
+		if !l.ownOpen(st, d) {
+			return
+		}
+		if !l.alone.Same(d) {
+			l.alone, l.aloneAt = d, v.Now
+		}
+		due = l.since(latest(d.Since, l.aloneAt, v.LastHumanKey)).Add(max(l.Timing.EscalationTimeout, MinProposalWait))
 	default:
 		return
 	}
@@ -262,6 +275,20 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 
 // ownAnswerKey picks the third option of baton's own questions, where the default sits.
 const ownAnswerKey = "3"
+
+// ownOpen reports whether dialog d, of kind escalation or replan, is the question baton has open now, as
+// issued: an escalation's of a kind baton answers (not a block's), or a plan's approved mid-run.
+func (l *Loop) ownOpen(st state.State, d state.Dialog) bool {
+	switch d.Kind {
+	case "escalation":
+		e := st.Run.Escalation
+		return e != nil && e.Question != "" && e.Kind != "blocked" && e.Kind != "review" && decide.Normalize(e.Question) == d.Key
+	case "replan":
+		r := st.Replan
+		return r != nil && r.Question != "" && decide.Normalize(r.Question) == d.Key
+	}
+	return false
+}
 
 // MinProposalWait is the least time a proposal's question is on screen, alone, before baton answers it.
 const MinProposalWait = decide.MinWait
@@ -481,14 +508,20 @@ func (l *Loop) holdLapsed(v host.View, st state.State) bool {
 // escalation timeout with no dialog of it on screen, since the model never put it to them or it went
 // away: the plan goes on (Continue), and a plan the human approved mid-run gets its default
 // (decide.ReplanDefault). Where its dialog is on screen, the mod answers it there at the same time
-// (hooks.Bound). A block is the model's own choice to wait, and a review one the human opted into: neither
-// is answered for them.
+// (hooks.Bound). A plan the human chose Wait for me on gets its default once nobody has written for
+// HoldLapse, as any hold for them lapses (lapseHold). A block is the model's own choice to wait, and a
+// review one the human opted into: neither is answered for them.
 func (l *Loop) lapseQuestions(v host.View, st state.State) {
 	if l.Lapse == nil || l.Store.Worker() != "" || st.Mode != state.ModeRunning {
 		return
 	}
 	var question, answer, kind string
 	switch e, r := st.Run.Escalation, st.Replan; {
+	case r != nil && r.Question != "" && !r.Held.IsZero():
+		if l.Timing.HoldLapse <= 0 || st.Run.Dialogs.Has("replan") || v.Now.Before(l.since(latest(r.Held, st.Run.HumanAt)).Add(l.Timing.HoldLapse)) {
+			return
+		}
+		question, answer, kind = r.Question, decide.ReplanDefault(r.Same), "replan"
 	case r != nil && r.Question != "" && !st.Run.Dialogs.Has("replan") && !v.Now.Before(r.Since.Add(l.Timing.EscalationTimeout)):
 		question, answer, kind = r.Question, decide.ReplanDefault(r.Same), "replan"
 	case e != nil && e.Question != "" && e.Kind != "blocked" && e.Kind != "review" && !st.Run.Dialogs.Has("escalation") &&

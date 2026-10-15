@@ -476,6 +476,97 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 	}
 }
 
+// Where the mod does not run, baton's question about the run and its question about a plan approved
+// mid-run are answered with their default's key (3, where each keeps it) after the escalation timeout,
+// alone on screen, exactly as issued. A block's question, a review's, one baton no longer has open, or any
+// with the mod in the lead's claude: none is typed into.
+func TestBatonsQuestionsAboutTheRunAreAnsweredInSerialMode(t *testing.T) {
+	escalation := func(kind string) func(st *state.State, now time.Time) {
+		return func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: kind, Reason: "r", Since: now, Question: "baton: r", Asked: true}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: r"), Since: now, Kind: "escalation"})
+		}
+	}
+	replan := func(same bool) func(st *state.State, now time.Time) {
+		return func(st *state.State, now time.Time) {
+			st.Replan = &state.Replan{File: "p.md", Same: same, Question: "baton: which?", Since: now}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: which?"), Since: now, Kind: "replan"})
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		set   func(st *state.State, now time.Time)
+		mod   bool
+		typed bool
+	}{
+		{"a stall's question", escalation("stalled"), false, true},
+		{"a revised plan's", replan(true), false, true},
+		{"another plan's", replan(false), false, true},
+		{"a block's", escalation("blocked"), false, false},
+		{"a review's", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "review", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: r"), Since: now, Kind: "review"})
+		}, false, false},
+		{"one no longer open", func(st *state.State, now time.Time) {
+			escalation("stalled")(st, now)
+			st.Run.Escalation.Question = "baton: something else"
+		}, false, false},
+		{"with the mod", escalation("stalled"), true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newIdleRig(t)
+			if c.mod {
+				helloFrom(t, r.loop.Store)
+			}
+			r.set(func(st *state.State) { c.set(st, r.now) })
+			r.run(DefaultTiming.EscalationTimeout - time.Minute)
+			if len(r.in.text) != 0 {
+				t.Fatalf("answered early: %q", r.in.text)
+			}
+			r.run(2 * time.Minute)
+			if !c.typed {
+				if len(r.in.text) != 0 {
+					t.Fatalf("typed %q", r.in.text)
+				}
+				return
+			}
+			if len(r.in.text) != 1 || r.in.text[0] != "3" {
+				t.Fatalf("typed %q", r.in.text)
+			}
+			if d, _ := r.state().Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
+				t.Fatal("the answer is not marked as baton's own")
+			}
+			r.run(DefaultTiming.EscalationTimeout)
+			if len(r.in.text) != 1 {
+				t.Fatalf("answered twice: %q", r.in.text)
+			}
+		})
+	}
+}
+
+// A plan the human chose Wait for me on is held for them: no answer at the escalation timeout, and its
+// default once nobody has written for HoldLapse.
+func TestAHeldPlanLapsesIntoItsDefault(t *testing.T) {
+	r := newIdleRig(t)
+	var got []string
+	r.loop.Lapse = func(s *state.Store, question, answer string, now time.Time) error {
+		got = append(got, answer)
+		return nil
+	}
+	r.set(func(st *state.State) {
+		st.Replan = &state.Replan{File: "q.md", Question: "baton: which?", Since: r.now.Add(-time.Hour), Held: r.now}
+		st.Run.HumanAt = r.now
+	})
+	r.run(DefaultTiming.HoldLapse - time.Minute)
+	if len(got) != 0 {
+		t.Fatalf("answered before the hold lapsed: %q", got)
+	}
+	r.run(2 * time.Minute)
+	if len(got) == 0 || got[0] != "Keep the current run" {
+		t.Fatalf("answered %q", got)
+	}
+}
+
 // Every key the human presses starts the clock over: somebody at the keyboard is answering.
 func TestAKeyRestartsTheClock(t *testing.T) {
 	r := newIdleRig(t)

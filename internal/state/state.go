@@ -178,6 +178,9 @@ type Replan struct {
 	Same     bool      `json:"same"`
 	Question string    `json:"question"` // the question baton issued, exactly as issued
 	Since    time.Time `json:"since"`
+	// Held is when the human answered Wait for me: nothing changes until they write, or until the hold
+	// lapses (loop's Timing.HoldLapse) and baton answers its default.
+	Held time.Time `json:"held,omitzero"`
 }
 
 // New is the state of a project with no plan attached.

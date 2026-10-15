@@ -69,7 +69,7 @@ func TestBlockedAsksTheHumanAndResumes(t *testing.T) {
 		func(e map[string]any) bool { return e["kind"] == "dialog_open" && e["tool"] == "AskUserQuestion" },
 	)
 	time.Sleep(2 * time.Second)
-	s.pty.Write([]byte("\r")) // the human picks the first option: "Continue"
+	s.pty.Write([]byte("3")) // the human picks the third option: "Continue" (a key picks its option at once)
 	waitSequence(t, s, 2*time.Minute,
 		func(e map[string]any) bool { return e["kind"] == "notified" && e["notice"] == "blocked" },
 		kind("resumed"),

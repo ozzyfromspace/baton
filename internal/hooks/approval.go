@@ -168,6 +168,15 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 	if !found {
 		return valveAction{}
 	}
+	auto = auto && answer == decide.ReplanDefault(r.Same) // baton only ever answers the default
+	if answer == "Wait for me" {
+		// Held for the human: nothing changes until they write (userPromptSubmit), and with no word from
+		// them the hold lapses into the default (loop's lapseQuestions).
+		st.Run.HumanAt, r.Held = c.Now, c.Now
+		v := valveAction{event: "replan_held", fields: map[string]any{"plan": r.File, "answer": answer, "by": "human"}}
+		v.say, v.tell = decide.ReplanHolding(r.File, decide.ReplanDefault(r.Same), decide.HoldLapse)
+		return v
+	}
 	st.Replan = nil
 	by, chose := "human", decide.Chose(auto, c.Now)
 	if auto {

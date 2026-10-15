@@ -171,7 +171,7 @@ func TestNoSentenceHasABlankForThePhase(t *testing.T) {
 		f.startRun()
 		f.set(none)
 		f.approve(f.writePlan("after-clear.md", approvedDoc))
-		q := ask(f.state().Replan.Question, "Start the new plan from P0", "Keep the current run")
+		q := ask(f.state().Replan.Question, "Start the new plan from P0", "Wait for me", "Keep the current run")
 		if strings.Contains(q["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string), "(at )") {
 			t.Fatalf("asked %v", q)
 		}
@@ -190,4 +190,40 @@ func TestNoSentenceHasABlankForThePhase(t *testing.T) {
 			t.Errorf("phaseTitle of P1: %q", got)
 		}
 	})
+}
+
+// Wait for me on baton's question about the run holds the run for the human: a hold, which their next
+// message answers (an older proposal held for them is not what it answers), and which lapses with no word
+// from them (loop's lapseHold). The model ends its turn, and its stop goes through.
+func TestWaitForMeHoldsTheRun(t *testing.T) {
+	f := newFixture(t, true)
+	reason := "the model stopped 4 times on P0 without reporting status"
+	f.set(func(st *state.State) {
+		old, _ := state.AddProposal(st, state.Decision{What: "use a fake clock", Because: "b", Undo: "x", Deadline: f.now.Add(-time.Hour), Question: "baton: old?"}, f.now.Add(-2*time.Hour))
+		state.Resolve(st, old.ID, state.ByHeld, "Wait for me", f.now.Add(-2*time.Hour))
+		st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: reason, Since: f.now, Question: "baton: " + reason, Asked: true}
+	})
+	f.now = f.now.Add(time.Minute)
+	q := ask("baton: "+reason, labelsOf(decide.EscalationOptions)...)
+	f.fire("PermissionRequest", q)
+	if d, _ := f.state().Run.Dialogs.Front(); d.Kind != "escalation" {
+		t.Fatalf("dialog %+v", d)
+	}
+	out := f.fire("PostToolUse", answer(q, "Wait for me"))
+	e := f.state().Run.Escalation
+	if e == nil || e.Kind != "decision" || e.Reason != reason || !e.Since.Equal(f.now) || !e.Asked || e.Question != "" {
+		t.Fatalf("escalation %+v", e)
+	}
+	if !strings.Contains(say(out), "holding the run for you") || !strings.Contains(feedback(out), "End your turn now") ||
+		!f.logged("escalated", map[string]any{"type": "decision", "answer": "Wait for me", "by": state.ByHuman}) {
+		t.Fatalf("out %v; events:\n%s", out, f.eventLog())
+	}
+	if stop := f.fire("Stop", map[string]any{}); stop["decision"] == "block" || !strings.Contains(say(stop), "waiting on you — "+reason) {
+		t.Fatalf("stop %v", stop)
+	}
+	out = f.fire("UserPromptSubmit", map[string]any{"prompt": "go on, but skip the flaky test"})
+	if f.state().Run.Escalation != nil || !strings.Contains(additionalContext(out), decide.HoldReleased(reason)) ||
+		!f.logged("hold_released", map[string]any{"reason": reason, "by": state.ByHuman}) || f.logged("hold_released", map[string]any{"id": "d1"}) {
+		t.Fatalf("after the human wrote: %v; events:\n%s", out, f.eventLog())
+	}
 }

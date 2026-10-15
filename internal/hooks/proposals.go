@@ -144,19 +144,18 @@ func vanished(st *state.State, now time.Time, human bool) (events []event, tell 
 	return append(declined, holdProposal(st, p, state.ByDeclined, "", now)...), ""
 }
 
-// released ends a hold when the human writes in the session: their message is the answer to it.
+// released ends a hold when the human writes in the session: their message is the answer to it, and to
+// the proposal held behind it, if there is one (the run itself may be held, at their Wait for me on
+// baton's question about it).
 func released(st *state.State) (event, string, bool) {
 	e := st.Run.Escalation
 	if e == nil || e.Kind != "decision" {
 		return event{}, "", false
 	}
-	for i := len(st.Decisions) - 1; i >= 0; i-- {
-		d := st.Decisions[i]
-		if r := d.Resolved; d.Kind == state.Proposal && r != nil && (r.By == state.ByHeld || r.By == state.ByDeclined) {
-			return event{"hold_released", map[string]any{"id": d.ID, "by": state.ByHuman}}, heldTell(d), true
-		}
+	if d := st.HeldProposal(e.Since); d != nil {
+		return event{"hold_released", map[string]any{"id": d.ID, "by": state.ByHuman}}, heldTell(*d), true
 	}
-	return event{}, "", false
+	return event{"hold_released", map[string]any{"reason": e.Reason, "by": state.ByHuman}}, decide.HoldReleased(e.Reason), true
 }
 
 func heldTell(p state.Decision) string {
