@@ -132,6 +132,10 @@ func TestARevisedPlanApprovedMidRunIsPutToTheHuman(t *testing.T) {
 	if pl, _ := f.store.LoadPlan(); len(pl.Phases) != 4 || pl.SHA256 != pl.SHA() {
 		t.Fatalf("plan %+v", pl)
 	}
+	// The plan as it was before the revision keeps its record.
+	if got := f.store.Archives(); len(got) != 1 || got[0].Phases != 3 || got[0].Done != 1 || !f.logged("plan_archived", nil) {
+		t.Errorf("archives %+v; events %v", got, f.events())
+	}
 }
 
 // A revision whose phases left all wait for a verification still running: nothing starts, and the model is
@@ -173,6 +177,19 @@ func TestANewPlanApprovedMidRunCanStartOver(t *testing.T) {
 	st := f.state()
 	if pl, _ := f.store.LoadPlan(); pl.File != file || st.Current != "P0" || !st.BoundaryOwed || st.Phases["P0"].Status != state.PhasePending {
 		t.Fatalf("after starting over: %+v %+v", pl, st)
+	}
+	if got := f.store.Archives(); len(got) != 1 || got[0].Title != "Demo" {
+		t.Errorf("the replaced plan's record: %+v", got)
+	}
+
+	// Approved while paused: the human's answer starts it.
+	f = newFixture(t, false)
+	f.startRun()
+	f.store.Update(func(st *state.State) error { return state.Pause(st) })
+	f.approve(f.writePlan("after-clear.md", approvedDoc))
+	f.fire("PostToolUse", answer(ask(strings.Replace(q, "is running", "is paused", 1), "Start the new plan from P0", "Keep the current run"), "Start the new plan from P0"))
+	if st := f.state(); st.Mode != state.ModeRunning || st.Current != "P0" || !st.BoundaryOwed || !f.logged("resumed", map[string]any{"by": "replan"}) {
+		t.Fatalf("after starting over from a pause: mode %s current %s; events %v", st.Mode, st.Current, f.events())
 	}
 
 	f = newFixture(t, false)

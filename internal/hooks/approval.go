@@ -72,14 +72,22 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 	return attach(st, s, c, pl, fresh, w)
 }
 
-// attach makes pl the run's plan, from its first phase.
+// attach makes pl the run's plan, from its first phase, keeping the record of the plan it replaces
+// (Store.Archive).
 func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool, w decide.Words) valveAction {
-	if err := s.WritePlan(pl); err != nil {
+	kept, err := s.Archive(*st)
+	if err == nil {
+		err = s.WritePlan(pl)
+	}
+	if err != nil {
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": err.Error()},
 			say: "baton: plan approved, but baton could not attach it: " + err.Error()}
 	}
 	first := pl.Phases[0]
 	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
+	if kept != "" {
+		v.also = append(v.also, archived(*st, kept))
+	}
 	branch := gitx.Branch(s.Root) // workers branch off it, and their work lands on it
 	workers := ""
 	if line := workersAttached(c, s.Checkout, pl); line != "" {
@@ -90,7 +98,7 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 		st.RunBranch = branch
 		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
-		v.also = []event{{"phase_started", map[string]any{"phase": first.ID}}}
+		v.also = append(v.also, event{"phase_started", map[string]any{"phase": first.ID}})
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
@@ -98,6 +106,11 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	return v
+}
+
+// archived is the event of the record of the plan st runs, kept in dir as another replaces it.
+func archived(st state.State, dir string) event {
+	return event{"plan_archived", map[string]any{"generation": st.Generation, "dir": dir}}
 }
 
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
@@ -174,14 +187,25 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 			a := attach(st, s, c, pl, false, w)
 			a.event, a.fields = v.event, v.fields
 			a.also = append([]event{{"attached", attachedFields(pl, s.Root)}}, a.also...)
+			if st.Mode == state.ModePaused {
+				state.Resume(st) // the human's answer starts it, paused or not
+				a.also = append(a.also, event{"resumed", map[string]any{"by": "replan"}})
+			}
 			return a
 		}
-		if err := s.WritePlan(pl); err != nil {
+		kept, err := s.Archive(*st)
+		if err == nil {
+			err = s.WritePlan(pl)
+		}
+		if err != nil {
 			v.say = "baton: could not write the revised plan: " + err.Error()
 			return v
 		}
+		if kept != "" {
+			v.also = append(v.also, archived(*st, kept))
+		}
 		next := state.Revise(st, pl, c.Now)
-		v.also = []event{{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}}}
+		v.also = append(v.also, event{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}})
 		switch {
 		case next == "" && st.Mode == state.ModeRunning:
 			v.say = "baton: revised — no phase of the revision can start until a job finishes"

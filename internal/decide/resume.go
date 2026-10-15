@@ -43,3 +43,9 @@ func ResumeKept(title string, starts, resumed bool) string {
 	}
 	return fmt.Sprintf("The context was compacted while baton was paused, and has grown little since, so %s %s now, with no compaction of its own: its brief comes with this command's result, and has your instructions.", title, verb)
 }
+
+// AttachedPaused is what baton attach says of a plan attached while the run it replaces was paused: it
+// stays paused, and first does not start until the human runs /baton run.
+func AttachedPaused(first string) string {
+	return fmt.Sprintf("baton was paused, and stays paused: %s starts when the human runs /baton run.", first)
+}

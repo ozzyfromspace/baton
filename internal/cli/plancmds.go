@@ -190,9 +190,7 @@ func cmdAttach(args []string, io IO) int {
 	if (cur.Mode == state.ModeRunning || cur.Mode == state.ModePaused) && !p.bools["replace"] {
 		return fail(io, "a plan is already %s here; pass --replace to discard its progress", cur.Mode)
 	}
-	if err := s.SavePlan(pl); err != nil {
-		return fail(io, "%v", err)
-	}
+	replaced, _ := s.LoadPlan()
 	root := s.Root
 	if err := state.ExcludeFromGit(root); err != nil {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
@@ -200,7 +198,18 @@ func cmdAttach(args []string, io IO) int {
 	origin, branch := state.OriginOf(root), gitx.Branch(root)
 	inSession := io.Env("CLAUDE_CODE_SESSION_ID") != ""
 	var boundary bool
-	if _, err := s.Update(func(st *state.State) error {
+	var kept string
+	var gen int
+	st, err := s.Update(func(st *state.State) error {
+		// The plan this replaces keeps its record (its state, plan and notes) before anything overwrites it.
+		var err error
+		if kept, err = s.Archive(*st); err != nil {
+			return fmt.Errorf("could not keep the record of the plan this replaces: %w", err)
+		}
+		gen = st.Generation
+		if err := s.WritePlan(pl); err != nil {
+			return err
+		}
 		// The first phase starts from a brief, after a compaction, unless there is nothing before it to
 		// compact: a hosted conversation whose first turn this is, or a shell (the next session starts
 		// fresh). A plain session is resumed under baton to run the plan, and compacts then.
@@ -212,18 +221,28 @@ func cmdAttach(args []string, io IO) int {
 		}
 		st.RunBranch = branch // workers branch off it, and their work lands on it
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return fail(io, "%v", err)
 	}
+	if kept != "" {
+		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
+	}
+	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
 	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
 	if branch != "" {
 		attached["branch"] = branch
 	}
+	if paused {
+		attached["paused"] = true
+	}
 	s.Event("attached", attached)
 	first := pl.Phases[0]
 	fmt.Fprintf(io.Out, "baton: attached %q — %d phases (%s). ", pl.Title, len(pl.Phases), pl.Dependencies())
 	switch {
+	case paused:
+		fmt.Fprintln(io.Out, decide.AttachedPaused(first.ID+" ("+first.Title+")"))
 	case boundary && hosted(io):
 		fmt.Fprintf(io.Out, "End your turn now: baton compacts this conversation, then starts %s (%s) with a fresh brief.\n", first.ID, first.Title)
 	case boundary:
@@ -231,12 +250,23 @@ func cmdAttach(args []string, io IO) int {
 	default:
 		fmt.Fprintf(io.Out, "Current phase: %s (%s).\n", first.ID, first.Title)
 	}
+	if kept != "" {
+		fmt.Fprintf(io.Out, "baton: the record of %q (its state, plan and notes) is kept in %s.\n", replaced.Title, shown(s, kept))
+	}
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
 	} else if line := workersAttached(io, s.Checkout, pl); line != "" {
 		fmt.Fprintln(io.Out, "baton: tell the human: "+line) // it is theirs to act on, not the model's
 	}
 	return 0
+}
+
+// shown is a path in the run's directory as the human finds it from the project's checkout.
+func shown(s *state.Store, path string) string {
+	if rel, err := filepath.Rel(s.Checkout, path); err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.ToSlash(rel)
+	}
+	return path
 }
 
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
@@ -376,8 +406,27 @@ func cmdStatus(args []string, io IO) int {
 	}
 	printDecisions(io, s.Decisions(st))
 	printSnapshots(io, snaps)
+	printEarlier(io, s)
 	printOthers(io, s)
 	return 0
+}
+
+// printEarlier lists the run's earlier plans, each kept as another replaced it (Store.Archive).
+func printEarlier(io IO, s *state.Store) {
+	earlier := s.Archives()
+	if len(earlier) == 0 {
+		return
+	}
+	fmt.Fprintln(io.Out, "earlier plans of this run:")
+	for _, a := range earlier {
+		title := a.Title
+		if title == "" {
+			title = "(no plan.json)"
+		} else {
+			title = fmt.Sprintf("%q", title)
+		}
+		fmt.Fprintf(io.Out, "  %s — %d of %d phases done, kept in %s\n", title, a.Done, a.Phases, shown(s, a.Dir))
+	}
 }
 
 // phaseNote says where a phase not done stands, for baton status: how long it has been active, or why it
@@ -1410,14 +1459,27 @@ func cmdDrop(args []string, io IO) int {
 	var stopped []state.Job
 	var logs int
 	var workers []string
+	var kept string
+	var gen int
 	if _, err := s.Update(func(st *state.State) error {
 		stopped, logs = st.Unfinished(), len(st.Jobs)
 		for _, w := range st.LiveWorkers() {
 			workers = append(workers, w.Phase)
 		}
+		if st.Mode == state.ModeIdle {
+			return state.Detach(st) // refused: nothing to drop
+		}
+		var err error
+		if kept, err = s.Archive(*st); err != nil {
+			return fmt.Errorf("could not keep the record of the plan: %w", err)
+		}
+		gen = st.Generation
 		return state.Detach(st)
 	}); err != nil {
 		return refused(io, s, "drop", err)
+	}
+	if kept != "" {
+		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
 	}
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
 	stopRunners(stopped, io.Now())
@@ -1429,6 +1491,9 @@ func cmdDrop(args []string, io IO) int {
 	}
 	s.Event("dropped", dropped)
 	fmt.Fprintf(io.Out, "baton: dropped %q. Its plan is set aside (its history stays in baton's event log), and baton does nothing in this session until the next plan: /baton plan or /baton run.\n", pl.Title)
+	if kept != "" {
+		fmt.Fprintf(io.Out, "baton: its record (its state, plan and notes) is kept in %s.\n", shown(s, kept))
+	}
 	switch {
 	case len(stopped) > 0:
 		fmt.Fprintf(io.Out, "baton: it stopped %s, and removed the logs of the run's jobs.\n", jobLabels(stopped))

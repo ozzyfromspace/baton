@@ -290,3 +290,43 @@ func TestRunKeepsACompactionMadeWhilePaused(t *testing.T) {
 		})
 	}
 }
+
+// A plan attached over a paused run stays paused until /baton run, and keeps the record of the plan it
+// replaced, which baton status lists; dropping a plan keeps its record too.
+func TestAttachWhilePausedKeepsThePauseAndTheRecord(t *testing.T) {
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	s.must("", "done", "P0")
+	s.must("", "pause")
+	out := s.must(s.must("", "attach", planFile, "--suggest"), "attach", planFile, "--spec", "-", "--replace")
+	for _, want := range []string{"baton was paused, and stays paused: P0 (The overlay) starts when the human runs /baton run.",
+		`the record of "The widget campaign" (its state, plan and notes) is kept in .baton/runs/`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("attach said:\n%s\nwant %q", out, want)
+		}
+	}
+	if strings.Contains(out, "End your turn now") {
+		t.Errorf("attach told the model to end its turn while paused:\n%s", out)
+	}
+	st := s.state()
+	if st.Mode != state.ModePaused || st.Generation != 2 || st.Phases["P0"].Status == state.PhaseDone {
+		t.Fatalf("after attach: mode %s, generation %d, P0 %s", st.Mode, st.Generation, st.Phases["P0"].Status)
+	}
+	if !s.logged("attached", map[string]any{"paused": true}) || !s.logged("plan_archived", map[string]any{"generation": float64(1)}) {
+		t.Errorf("events: %s", s.events())
+	}
+	status := s.must("", "status")
+	if !strings.Contains(status, "earlier plans of this run:\n  \"The widget campaign\" — 1 of 3 phases done, kept in .baton/runs/") || !strings.Contains(status, "/gen-1\n") {
+		t.Errorf("status:\n%s", status)
+	}
+	if out := s.must("", "run"); !strings.Contains(out, "resumed") || s.state().Mode != state.ModeRunning {
+		t.Fatalf("run: %s", out)
+	}
+
+	if out := s.must("", "drop"); !strings.Contains(out, "its record (its state, plan and notes) is kept in .baton/runs/") || !strings.Contains(out, "/gen-2.") {
+		t.Errorf("drop said:\n%s", out)
+	}
+	if got := s.store().Archives(); len(got) != 2 || got[1].Generation != 2 {
+		t.Errorf("archives: %+v", got)
+	}
+}

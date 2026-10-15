@@ -295,6 +295,10 @@ func attachKeeping(prev State, run *Runtime, p plan.Plan, now time.Time, o Origi
 		st.Run = *run
 	}
 	st.Mode = ModeRunning
+	if prev.Mode == ModePaused {
+		// The human has the wheel: the new plan waits for /baton run, as the one it replaces did.
+		st.Mode, st.PauseContext, st.PauseCompacted = ModePaused, prev.PauseContext, prev.PauseCompacted
+	}
 	for _, ph := range p.Phases {
 		st.Phases[ph.ID] = &PhaseState{Status: PhasePending}
 	}

@@ -467,3 +467,77 @@ func TestOwedAt(t *testing.T) {
 		}
 	}
 }
+
+// A plan attached over a paused run stays paused, for /baton run to start: nothing in it starts
+// meanwhile. One attached over a run that was not paused runs.
+func TestAttachWhilePausedStaysPaused(t *testing.T) {
+	prev := underway(t)
+	prev.Run.Context = &ContextUse{Tokens: 50_000, At: t0}
+	Pause(&prev)
+	for name, st := range map[string]State{
+		"reattached":          Reattach(prev, threePhases(), t0, Origin{}),
+		"attached at a bound": AttachAtBoundary(prev, threePhases(), t0),
+	} {
+		if st.Mode != ModePaused || st.PauseContext != 50_000 || st.Generation != prev.Generation+1 {
+			t.Errorf("%s: mode %s, pause context %d, generation %d", name, st.Mode, st.PauseContext, st.Generation)
+		}
+		if err := Resume(&st); err != nil || st.Mode != ModeRunning {
+			t.Errorf("%s: resume: %v %s", name, err, st.Mode)
+		}
+	}
+	if st := Reattach(underway(t), threePhases(), t0, Origin{}); st.Mode != ModeRunning {
+		t.Errorf("over a running run: %s", st.Mode)
+	}
+}
+
+// A plan replaced keeps its record: state, plan and notes, in gen-<N> of the run's directory, a second
+// record of one generation beside the first; Archives lists them with how far each got.
+func TestArchiveKeepsAReplacedPlan(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), DirName), "i", func() time.Time { return t0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := s.Archive(underway(t)); dir != "" || err != nil {
+		t.Fatalf("archived a run with no plan.json: %q %v", dir, err)
+	}
+	pl := threePhases()
+	pl.Title = "The widget"
+	if err := s.SavePlan(pl); err != nil {
+		t.Fatal(err)
+	}
+	s.AppendHandoff("P0", "half the widget")
+	st := underway(t)
+	Done(&st, pl, "P0", t0, DoneOpts{})
+	if dir, err := s.Archive(New()); dir != "" || err != nil {
+		t.Fatalf("archived a run with no plan attached: %q %v", dir, err)
+	}
+	first, err := s.Archive(st)
+	if err != nil || filepath.Base(first) != "gen-1" {
+		t.Fatalf("archive: %q %v", first, err)
+	}
+	for _, f := range []string{"state.json", "plan.json", "handoff.md"} {
+		if _, err := os.Stat(filepath.Join(first, f)); err != nil {
+			t.Errorf("%s not kept: %v", f, err)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(first, "handoff.md")); !strings.Contains(string(b), "half the widget") {
+		t.Errorf("handoff: %q", b)
+	}
+	again, err := s.Archive(st)
+	if err != nil || filepath.Base(again) != "gen-1.2" {
+		t.Fatalf("a second record of generation 1: %q %v", again, err)
+	}
+	got := s.Archives()
+	if len(got) != 2 || got[0].Dir != first || got[1].Dir != again {
+		t.Fatalf("archives: %+v", got)
+	}
+	if a := got[0]; a.Title != "The widget" || a.Generation != 1 || a.Phases != 3 || a.Done != 1 {
+		t.Errorf("listed %+v", a)
+	}
+
+	w := *s
+	w.Parent = "lead"
+	if dir, _ := w.Archive(st); dir != "" {
+		t.Errorf("a worker's sub-run kept a record: %s", dir)
+	}
+}
