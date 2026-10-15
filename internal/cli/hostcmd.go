@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/notify"
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -33,8 +35,14 @@ func init() {
 // HostBinary is the binary a command run inside a hosted session should hand itself to: the one hosting
 // the session, when the `baton` that ran is another. After an update, the newest baton comes first on the
 // PATH while the host still runs its own version, and a session must stay on one version (its hooks, its
-// CLI and its /baton instructions) until the host restarts it. "" means run here.
+// CLI and its /baton instructions) until the host restarts it. "" means run here, as in a session that
+// only inherited baton's environment: its BATON_BIN names the binary of a host that is not above it.
 func HostBinary(env func(string) string) string {
+	return hostBinary(env, func() hostcheck.Status { return hostcheck.Of(env) })
+}
+
+// hostBinary is HostBinary, with how baton stands to the session read by status, asked last.
+func hostBinary(env func(string) string, status func() hostcheck.Status) string {
 	bin := env("BATON_BIN")
 	if env("BATON_HOST") != "1" || bin == "" || !upgrade.CanRestart {
 		return ""
@@ -48,7 +56,7 @@ func HostBinary(env func(string) string) string {
 		rb, berr := filepath.EvalSymlinks(b)
 		return aerr == nil && berr == nil && ra == rb
 	}
-	if fi, err := os.Stat(bin); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 || same(exe, bin) {
+	if fi, err := os.Stat(bin); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 || same(exe, bin) || status() != hostcheck.Hosted {
 		return ""
 	}
 	return bin
@@ -58,13 +66,16 @@ func HostBinary(env func(string) string) string {
 // session: there, a mistyped or retired command name would be taken for a prompt, and another claude
 // would start inside the Bash tool.
 func runHost(args []string, io IO) int {
-	if hosted, inSession := io.Env("BATON_HOST") == "1", io.Env("CLAUDE_CODE_SESSION_ID") != ""; hosted || inSession {
+	if hosted, inSession := hosted(io), io.Env("CLAUDE_CODE_SESSION_ID") != ""; hosted || inSession {
 		what := "`baton` starts a new claude session"
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			what = fmt.Sprintf("%q is not a baton command, and `baton <prompt>` starts a new claude session", args[0])
 		}
-		if hosted {
+		switch {
+		case hosted:
 			return fail(io, "%s; this is already one, hosted by baton. `baton help` lists baton's commands.", what)
+		case inherited(io):
+			return fail(io, "%s; this is already one. %s", what, strings.TrimPrefix(decide.Inherited(io.Env("CLAUDE_CODE_SESSION_ID")), "baton: "))
 		}
 		return fail(io, "%s; this is already one. To hand it to baton, run /baton start; `baton help` lists baton's commands.", what)
 	}
@@ -73,7 +84,7 @@ func runHost(args []string, io IO) int {
 
 // runHostWith is runHost with extra environment for the session (e.g. BATON_PENDING after elevation).
 func runHostWith(args []string, io IO, extraEnv []string) int {
-	if io.Env("BATON_HOST") == "1" {
+	if hosted(io) { // one that only inherited baton's environment may start a host: it drops every BATON_*
 		return fail(io, "this is already a baton-hosted session; run claude's own commands here instead")
 	}
 	exe, err := os.Executable()

@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
@@ -34,11 +36,25 @@ type IO struct {
 	// Dir is the directory the command runs in ("": the process's working directory). In a phase agent, it
 	// says which phase's the command is (inPhase).
 	Dir string
+	// Hosted says how baton stands to the session the command runs in (nil: BATON_HOST alone says, as in
+	// tests, which run under no host): hosted by a live baton host above it, or a session that only
+	// inherited baton's environment (package hostcheck).
+	Hosted func() hostcheck.Status
 }
 
-// StdIO is the real process environment.
+// StdIO is the real process environment. It reads the processes above it once, at the first command that
+// asks whether the session is hosted.
 func StdIO() IO {
-	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now, Machine: machine.Read}
+	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now, Machine: machine.Read,
+		Hosted: sync.OnceValue(func() hostcheck.Status { return hostcheck.Of(os.Getenv) })}
+}
+
+// host is how baton stands to the session the command runs in (IO.Hosted).
+func (io IO) host() hostcheck.Status {
+	if io.Hosted == nil {
+		return hostcheck.Trust(io.Env)
+	}
+	return io.Hosted()
 }
 
 // wd is the directory the command runs in (IO.Dir).
@@ -169,7 +185,7 @@ func runHook(args []string, io IO) (code int) {
 		return 0
 	}
 	var errs bytes.Buffer
-	code = hooks.Dispatch(args[0], io.In, io.Out, multiWriter(io.Err, &errs), io.Env, io.Now, hookHandlers)
+	code = hooks.DispatchAs(io.host(), args[0], io.In, io.Out, multiWriter(io.Err, &errs), io.Env, io.Now, hookHandlers)
 	if code == 0 && errs.Len() > 0 {
 		recordHookFailure(args[0], errs.String(), io)
 	}
@@ -184,7 +200,7 @@ var multiWriter = io.MultiWriter
 // invisible; the event log is where a stall gets diagnosed.
 func recordHookFailure(event, msg string, io IO) {
 	dir := io.Env("BATON_DIR")
-	if dir == "" || io.Env("BATON_HOST") != "1" {
+	if dir == "" || !hosted(io) {
 		return
 	}
 	msg = strings.TrimSpace(strings.SplitN(msg, "\n", 2)[0])

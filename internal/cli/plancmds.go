@@ -14,6 +14,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -112,7 +113,40 @@ func fail(io IO, format string, a ...any) int {
 	return 1
 }
 
-func hosted(io IO) bool { return io.Env("BATON_HOST") == "1" }
+// hosted reports whether a live baton host is above the session the command runs in (hostcheck.Hosted).
+func hosted(io IO) bool { return io.host() == hostcheck.Hosted }
+
+// inherited reports a session that only inherited baton's environment, with no baton host above it
+// (hostcheck.Inherited): baton leaves it alone, and says how to give it back (decide.Inherited).
+func inherited(io IO) bool { return io.host() == hostcheck.Inherited }
+
+// hostLabel is how `baton status` names the session's standing with baton.
+func hostLabel(io IO) string {
+	switch io.host() {
+	case hostcheck.Hosted:
+		return "hosted"
+	case hostcheck.Inherited:
+		return decide.InheritedStatus
+	}
+	return "not hosted"
+}
+
+// wayBack tells the human, in a session that only inherited baton's environment, how to give it back to
+// baton.
+func wayBack(io IO) {
+	if inherited(io) {
+		fmt.Fprintln(io.Out, decide.Inherited(io.Env("CLAUDE_CODE_SESSION_ID")))
+	}
+}
+
+// notHostedNote is the note for a command that did its part in a session no baton host is above, where
+// nothing compacts the context: how to give the session to baton.
+func notHostedNote(io IO, what string) string {
+	if inherited(io) {
+		return "baton: note — " + what + ". " + strings.TrimPrefix(decide.Inherited(io.Env("CLAUDE_CODE_SESSION_ID")), "baton: ")
+	}
+	return "baton: note — " + what + ". Run /baton start (or start claude with `baton`)."
+}
 
 // worker reports whether a command runs for a worker, which works on one phase of its run: in a phase
 // agent (inPhase).
@@ -178,6 +212,11 @@ func cmdAttach(args []string, io IO) int {
 	pl, err := plan.Build(file, doc, spec)
 	if err != nil {
 		return fail(io, "the spec does not match the plan document:\n%v", err)
+	}
+	if !p.bools["replace"] {
+		if c, ok := carry(io, file); ok { // a run of this plan another session left: go on where it stood
+			return runCarried(io, c)
+		}
 	}
 	s, err := attachTo(io)
 	if err != nil {
@@ -254,7 +293,7 @@ func cmdAttach(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "baton: the record of %q (its state, plan and notes) is kept in %s.\n", replaced.Title, shown(s, kept))
 	}
 	if !hosted(io) {
-		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
+		fmt.Fprintln(io.Out, notHostedNote(io, "this session is not hosted by baton, so nothing will compact automatically"))
 	} else if line := workersAttached(io, s.Checkout, pl); line != "" {
 		fmt.Fprintln(io.Out, "baton: tell the human: "+line) // it is theirs to act on, not the model's
 	}
@@ -299,10 +338,14 @@ func cmdStatus(args []string, io IO) int {
 		printRuns(io, several.Runs, p.bools["json"])
 		return 0
 	case errors.Is(err, state.ErrNoPlan):
-		if p.bools["json"] {
+		switch {
+		case p.bools["json"] && inherited(io):
+			fmt.Fprintln(io.Out, `{"state": null, "hosted": false, "inherited": true}`)
+		case p.bools["json"]:
 			fmt.Fprintln(io.Out, `{"state": null}`)
-		} else {
+		default:
 			fmt.Fprintln(io.Out, "baton: no plan attached here.")
+			wayBack(io)
 		}
 		return 0
 	case err != nil:
@@ -316,6 +359,9 @@ func cmdStatus(args []string, io IO) int {
 	snaps := gitx.Snapshots(s.Root)
 	if p.bools["json"] {
 		out := map[string]any{"state": st, "baton_dir": s.Dir, "run": s.Ref, "hosted": hosted(io)}
+		if inherited(io) {
+			out["inherited"] = true
+		}
 		if perr == nil {
 			out["plan"] = pl
 		}
@@ -331,9 +377,11 @@ func cmdStatus(args []string, io IO) int {
 	}
 	if st.Mode == state.ModeIdle || perr != nil {
 		fmt.Fprintln(io.Out, "baton: no plan attached here.")
+		wayBack(io)
 		return 0
 	}
-	fmt.Fprintf(io.Out, "baton: %q — %s%s\nplan: %s\n", pl.Title, st.Mode, map[bool]string{true: " (hosted)", false: " (not hosted)"}[hosted(io)], pl.File)
+	fmt.Fprintf(io.Out, "baton: %q — %s (%s)\nplan: %s\n", pl.Title, st.Mode, hostLabel(io), pl.File)
+	wayBack(io)
 	if sha := pl.SHA(); sha != pl.SHA256 && st.Mode != state.ModeComplete {
 		fmt.Fprintln(io.Out, "  (the plan file changed since baton last read it; baton checks it again at the next stop)")
 	}
@@ -928,7 +976,9 @@ func cmdDone(args []string, io IO) int {
 	}
 	np := pl.Phases[pl.Index(next)]
 	fmt.Fprintf(io.Out, "%s Next phase: %s (%s). End your turn now: baton compacts the context, then starts %s with a fresh brief.\n", finished, np.ID, np.Title, np.ID)
-	if !hosted(io) {
+	if inherited(io) {
+		fmt.Fprintln(io.Out, notHostedNote(io, "this session is not hosted by baton, so no compaction will happen automatically"))
+	} else if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so no compaction will happen automatically.")
 	}
 	return 0
@@ -1200,6 +1250,9 @@ func cmdRun(args []string, io IO) int {
 	s, err := store(io)
 	switch {
 	case errors.Is(err, state.ErrNoPlan):
+		if c, ok := carry(io, file); ok {
+			return runCarried(io, c)
+		}
 		return attach("no plan is underway in this session")
 	case err != nil:
 		return fail(io, "%v", err)
@@ -1210,6 +1263,9 @@ func cmdRun(args []string, io IO) int {
 	}
 	pl, perr := s.LoadPlan()
 	if st.Mode == state.ModeIdle || perr != nil {
+		if c, ok := carry(io, file); ok {
+			return runCarried(io, c)
+		}
 		return attach("no plan is underway in this session")
 	}
 	same := file == "" || file == pl.File
@@ -1367,7 +1423,7 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 		return 0
 	}
 	fmt.Fprintf(io.Out, "%s starts once baton has compacted this conversation.\n", phaseLabel(pl, next))
-	fmt.Fprintln(io.Out, "baton: note — this session is not hosted by baton, so nothing will compact automatically. Run /baton start (or start claude with `baton`).")
+	fmt.Fprintln(io.Out, notHostedNote(io, "this session is not hosted by baton, so nothing will compact automatically"))
 	return 0
 }
 

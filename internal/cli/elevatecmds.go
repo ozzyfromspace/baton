@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -33,6 +34,12 @@ func cmdStart(args []string, io IO) int {
 		return 0
 	}
 	sid := io.Env("CLAUDE_CODE_SESSION_ID")
+	if inherited(io) && sid != "" {
+		// It runs where no shell of the human's would resume it (Claude Code's background service, say):
+		// stopping claude for a relaunch would only stop it.
+		fmt.Fprintln(io.Out, decide.Inherited(sid))
+		return 0
+	}
 	if sid == "" {
 		return runHost(args, io)
 	}
@@ -84,6 +91,7 @@ func cmdExit(args []string, io IO) int {
 	}
 	if !hosted(io) {
 		fmt.Fprintln(io.Out, "baton: this session is not hosted by baton; there is nothing to leave.")
+		wayBack(io)
 		return 0
 	}
 	pid, sid := io.Env("CLAUDE_PID"), io.Env("CLAUDE_CODE_SESSION_ID")

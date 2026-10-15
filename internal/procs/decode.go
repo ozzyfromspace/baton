@@ -84,6 +84,19 @@ func fromProc(fsys fs.FS, uid, self int) ([]Proc, error) {
 	return out, nil
 }
 
+// parentFromProc reads process pid of fsys, rooted at / (Linux's /proc): its parent and its name.
+func parentFromProc(fsys fs.FS, pid int) (int, string, error) {
+	b, err := fs.ReadFile(fsys, "proc/"+strconv.Itoa(pid)+"/stat")
+	if err != nil {
+		return 0, "", err
+	}
+	p, _, err := parseStat(b)
+	if err != nil {
+		return 0, "", err
+	}
+	return p.PPID, p.Comm, nil
+}
+
 // parseStat reads /proc/<pid>/stat: "pid (comm) state ppid pgrp session …". The command name may hold
 // spaces and parentheses, so the fields after it are found from the last ')'.
 func parseStat(b []byte) (Proc, byte, error) {

@@ -23,6 +23,9 @@ import (
 //	                         worktree of its own (named in the sub-run's worktree file; see NewWorker)
 //	.baton/sessions/<id>     the run a session belongs to (one line: the run's ref)
 //	.baton/hosts/<instance>  the run a baton host drives (one line: the run's ref)
+//	.baton/hosts/<instance>.pid
+//	                         the host's process, while its claude runs (SetHostPID; package hostcheck)
+//	.baton/inherited/<id>    a session told that it only inherited baton's environment (TellInherited)
 //	.baton/agents/<agent>    the sub-run a phase agent works in (one line: the sub-run's ref; LinkAgent)
 //	.baton/pending           a run attached outside any session, for the next baton session started here
 //	.baton/lock              held while sessions and hosts are bound to runs
@@ -454,6 +457,7 @@ type RunInfo struct {
 	Worktree string   // a worker's sub-run: the worktree it works in
 	Pending  bool     // attached outside any session; the next session started here takes it
 	Title    string   // the attached plan's title, "" without one
+	File     string   // the attached plan's file, "" without one
 	State    State
 	Updated  time.Time // when its state last changed
 }
@@ -529,9 +533,10 @@ func (p *Project) info(ref, dir string, sessions map[string][]string) RunInfo {
 	if b, err := os.ReadFile(filepath.Join(dir, "plan.json")); err == nil {
 		var pl struct {
 			Title string `json:"title"`
+			File  string `json:"plan_file"`
 		}
 		json.Unmarshal(b, &pl)
-		info.Title = pl.Title
+		info.Title, info.File = pl.Title, pl.File
 	}
 	return info
 }
@@ -637,13 +642,14 @@ const sweepAge = 10 * time.Minute
 
 // Sweep removes what no one can use any more: runs that never had a plan, drafts or notes and that no
 // host drives (every hosted session starts one), links to runs (workers' sub-runs among them) that are
-// gone, from sessions and from phase agents, and links to hosts that no longer drive their run. Hosts call
-// it when they start.
+// gone, from sessions and from phase agents, links to hosts that no longer drive their run, and the
+// records of hosts' processes whose links are gone. Hosts call it when they start.
 func (p *Project) Sweep() { p.Swept(false, nil) }
 
 // Swept is Sweep, saying what it removed, each as its path under the project's .baton directory, with
-// forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>, agents/<agent>). With dry, it removes nothing, and says what Sweep
-// would remove. keep (nil: none) names hosts whose links stay, though they do not drive their run now.
+// forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>, hosts/<instance>.pid,
+// agents/<agent>). With dry, it removes nothing, and says what Sweep would remove. keep (nil: none) names
+// hosts whose links and records stay, though they do not drive their run now.
 func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 	var out []string
 	p.withLock(func() error {
@@ -663,9 +669,13 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 				os.RemoveAll(dir)
 			}
 		}
+		unlinked := map[string]bool{} // hosts whose links this sweep removes
 		for _, sub := range []string{sessionsDir, hostsDir, agentsDir} {
 			links, _ := os.ReadDir(p.path(sub))
 			for _, l := range links {
+				if sub == hostsDir && strings.HasSuffix(l.Name(), pidSuffix) {
+					continue // a host's process, swept below
+				}
 				id := p.readLink(sub, l.Name())
 				run, _, _ := splitRef(id)
 				stale := !p.runExists(id) || gone[run]
@@ -678,10 +688,29 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 				}
 				if stale {
 					out = append(out, path.Join(sub, l.Name()))
+					if sub == hostsDir {
+						unlinked[l.Name()] = true
+					}
 					if !dry {
 						os.Remove(p.path(sub, l.Name()))
 					}
 				}
+			}
+		}
+		// A host's record of its process goes with its link, as a host that crashed never drops it, but
+		// not before it is sweepAge old: a host that just started has no link yet.
+		records, _ := os.ReadDir(p.path(hostsDir))
+		for _, r := range records {
+			inst, ok := strings.CutSuffix(r.Name(), pidSuffix)
+			if !ok || keep != nil && keep(inst) || exists(p.path(hostsDir, inst)) && !unlinked[inst] {
+				continue
+			}
+			if fi, err := r.Info(); err != nil || now.Sub(fi.ModTime()) < sweepAge {
+				continue
+			}
+			out = append(out, path.Join(hostsDir, r.Name()))
+			if !dry {
+				os.Remove(p.path(hostsDir, r.Name()))
 			}
 		}
 		return nil

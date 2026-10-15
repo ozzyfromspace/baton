@@ -112,7 +112,8 @@ func bind(cfg Config) {
 	}
 }
 
-// Release lets go of the run the host drives, if any, once claude has exited.
+// Release lets go of the run the host drives, if any, once claude has exited, and of the record of its
+// process: nothing hosted is left under it.
 func Release(p *state.Project, instance string) {
 	if p == nil {
 		return
@@ -121,6 +122,7 @@ func Release(p *state.Project, instance string) {
 		s.Event("host_stopped", nil)
 	}
 	p.Unbind(instance)
+	p.DropHostPID(instance)
 }
 
 func exitCode(cmd *exec.Cmd, err error) int {

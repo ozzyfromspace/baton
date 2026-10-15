@@ -60,3 +60,9 @@ func cstr(b []byte) string {
 	}
 	return string(b)
 }
+
+// Parent reads one process, pid: its parent's pid and the name of its executable (as Proc.Comm). It reads
+// that process alone, not the table, so it is cheap enough for every hook (hostcheck walks a session's
+// ancestors with it). An error for a process that is gone, and ErrUnsupported where baton reads no
+// process table.
+func Parent(pid int) (ppid int, comm string, err error) { return parent(pid) }

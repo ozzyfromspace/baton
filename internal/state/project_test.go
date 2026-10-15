@@ -304,6 +304,55 @@ func TestSweepRemovesOnlyWhatNobodyCanUse(t *testing.T) {
 	}
 }
 
+// A host records its process beside its link, and the record goes once the link has: a host that is
+// gone (its link stale, or already removed) loses it, one that just started (no link yet) keeps it.
+func TestHostPIDRecords(t *testing.T) {
+	p, c := newProject(t)
+	for i, h := range []string{"live", "gone", "fresh", "unlinked", "kept"} {
+		if err := p.SetHostPID(h, 100+i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := HostPID(p.Dir, "gone"); got != 101 {
+		t.Fatalf("HostPID = %d, want 101", got)
+	}
+	for _, bad := range []string{"", "nobody", "../x"} {
+		if got := HostPID(p.Dir, bad); got != 0 {
+			t.Errorf("HostPID(%q) = %d", bad, got)
+		}
+	}
+	live := bind(t, p, Binding{Session: "a", Instance: "live"})
+	withPlan(t, live, "Kept")
+	gone := bind(t, p, Binding{Session: "b", Instance: "gone"})
+	withPlan(t, gone, "Kept too")
+	bind(t, p, Binding{Session: "c", Instance: "kept"})
+	gone.Update(func(st *State) error { Release(st, "gone"); return nil })
+	c.t = c.t.Add(time.Hour)
+	live.Update(func(st *State) error { return Claim(st, "live", 1, c.t) })
+	old := c.t.Add(-time.Hour)
+	for _, h := range []string{"live", "gone", "unlinked", "kept"} {
+		os.Chtimes(p.path(hostsDir, h+pidSuffix), old, old)
+	}
+	os.Chtimes(p.path(hostsDir, "fresh"+pidSuffix), c.t, c.t)
+	want := []string{"hosts/gone", "hosts/gone.pid", "hosts/unlinked.pid"}
+	keep := func(h string) bool { return h == "kept" }
+	if got := p.Swept(true, keep); !reflect.DeepEqual(got, want) || HostPID(p.Dir, "gone") == 0 {
+		t.Fatalf("a dry sweep says %q (want %q), and removes nothing", got, want)
+	}
+	if got := p.Swept(false, keep); !reflect.DeepEqual(got, want) {
+		t.Fatalf("swept %q, want %q", got, want)
+	}
+	for h, pid := range map[string]int{"live": 100, "gone": 0, "fresh": 102, "unlinked": 0, "kept": 104} {
+		if got := HostPID(p.Dir, h); got != pid {
+			t.Errorf("after the sweep, %s's record reads %d, want %d", h, got, pid)
+		}
+	}
+	p.DropHostPID("live")
+	if HostPID(p.Dir, "live") != 0 || p.HostRun("live") == "" {
+		t.Error("DropHostPID drops the record alone")
+	}
+}
+
 func TestAProjectFromBeforeRunsMovesIntoOne(t *testing.T) {
 	c := &clock{t0}
 	dir := filepath.Join(t.TempDir(), ".baton")

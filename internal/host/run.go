@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -33,6 +34,12 @@ func Run(cfg Config) (Exit, error) {
 		cfg.HangupGrace = defaultHangupGrace
 	}
 	bind(cfg)
+	if cfg.Project != nil {
+		// What says the session is hosted, and not one that inherited its environment (package hostcheck).
+		if err := cfg.Project.SetHostPID(cfg.Instance, os.Getpid()); err != nil {
+			cfg.Logf("host: recording its process: %v", err)
+		}
+	}
 	args := append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, cfg.Args...)
 	if cfg.Autocompact != "" {
 		args = append([]string{"--autocompact", cfg.Autocompact}, args...)

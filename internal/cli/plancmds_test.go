@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/elevate"
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -19,8 +20,9 @@ type session struct {
 	t       *testing.T
 	env     map[string]string
 	now     time.Time
-	machine *machine.Reading // what the machine reads (nil: roomy)
-	dir     string           // where its commands run ("": the test's working directory)
+	machine *machine.Reading        // what the machine reads (nil: roomy)
+	dir     string                  // where its commands run ("": the test's working directory)
+	host    func() hostcheck.Status // how baton stands to the session (nil: BATON_HOST alone says)
 }
 
 func newSession(t *testing.T) (*session, string) {
@@ -59,7 +61,7 @@ func (s *session) store() *state.Store {
 
 func (s *session) run(stdin string, args ...string) (int, string, string) {
 	io, out, errb := testIO(stdin, s.env)
-	io.Now, io.Dir = func() time.Time { return s.now }, s.dir
+	io.Now, io.Dir, io.Hosted = func() time.Time { return s.now }, s.dir, s.host
 	if m := s.machine; m != nil {
 		io.Machine = func() machine.Reading { return *m }
 	}

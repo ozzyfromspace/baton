@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/machine"
 )
 
@@ -53,15 +54,28 @@ type Result struct {
 type Handler func(Context) (Result, error)
 
 // Dispatch runs the handler for event and returns the process exit code. It never returns 2 unless the
-// handler deliberately asked for a rewake, and it is a no-op unless the session is hosted by baton.
-func Dispatch(event string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string, now func() time.Time, handlers map[string]Handler) (code int) {
+// handler deliberately asked for a rewake, and it is a no-op unless the session is hosted by baton, as
+// BATON_HOST alone says (DispatchAs takes hostcheck's answer).
+func Dispatch(event string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string, now func() time.Time, handlers map[string]Handler) int {
+	return DispatchAs(hostcheck.Trust(env), event, stdin, stdout, stderr, env, now, handlers)
+}
+
+// DispatchAs is Dispatch in a session whose standing with baton is status (hostcheck.Check). A session
+// that only inherited baton's environment (hostcheck.Inherited) is dormant: no handler runs, so nothing
+// binds or claims a run or moves a host's link; baton only tells the human, once, that it does not host
+// the session and how to give it back (inherited).
+func DispatchAs(status hostcheck.Status, event string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string, now func() time.Time, handlers map[string]Handler) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(stderr, "baton: hook %s failed open after a panic: %v\n", event, r)
 			code = 0
 		}
 	}()
-	if env("BATON_HOST") != "1" {
+	switch status {
+	case hostcheck.Plain:
+		return 0
+	case hostcheck.Inherited:
+		inherited(event, stdin, stdout, stderr, env, now)
 		return 0
 	}
 	h, ok := handlers[event]

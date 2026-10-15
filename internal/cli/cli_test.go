@@ -14,6 +14,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -296,18 +297,27 @@ func TestHostBinary(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "baton")
 	os.Symlink(exe, link)
 	for _, tc := range []struct {
-		env  map[string]string
-		want string
+		env       map[string]string
+		inherited bool // no baton host is above the session
+		want      string
 	}{
-		{map[string]string{"BATON_HOST": "1", "BATON_BIN": other}, other},
-		{map[string]string{"BATON_HOST": "1", "BATON_BIN": exe}, ""},
-		{map[string]string{"BATON_HOST": "1", "BATON_BIN": link}, ""}, // itself, through a link
-		{map[string]string{"BATON_BIN": other}, ""},                   // not hosted
-		{map[string]string{"BATON_HOST": "1", "BATON_BIN": filepath.Join(t.TempDir(), "gone")}, ""},
-		{map[string]string{"BATON_HOST": "1"}, ""},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": other}, false, other},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": exe}, false, ""},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": link}, false, ""}, // itself, through a link
+		{map[string]string{"BATON_BIN": other}, false, ""},                   // not hosted
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": filepath.Join(t.TempDir(), "gone")}, false, ""},
+		{map[string]string{"BATON_HOST": "1"}, false, ""},
+		{map[string]string{"BATON_HOST": "1", "BATON_BIN": other}, true, ""}, // the binary of a host that is not above it
 	} {
-		if got := HostBinary(func(k string) string { return tc.env[k] }); got != tc.want {
-			t.Errorf("%v: %q, want %q", tc.env, got, tc.want)
+		env := func(k string) string { return tc.env[k] }
+		status := func() hostcheck.Status {
+			if tc.inherited {
+				return hostcheck.Inherited
+			}
+			return hostcheck.Trust(env)
+		}
+		if got := hostBinary(env, status); got != tc.want {
+			t.Errorf("%v (inherited %v): %q, want %q", tc.env, tc.inherited, got, tc.want)
 		}
 	}
 }

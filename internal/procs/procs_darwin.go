@@ -57,3 +57,15 @@ func cwd(pid int) (string, error) {
 	}
 	return cstr(buf[vnodeInfoSize : vnodeInfoSize+maxPath]), nil
 }
+
+// parent reads pid's kinfo_proc alone (kern.proc.pid).
+func parent(pid int) (int, string, error) {
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		return 0, "", fmt.Errorf("kern.proc.pid %d: %w", pid, err)
+	}
+	if int(k.Proc.P_pid) != pid {
+		return 0, "", fmt.Errorf("kern.proc.pid %d: no such process", pid)
+	}
+	return int(k.Eproc.Ppid), cstr(k.Proc.P_comm[:]), nil
+}

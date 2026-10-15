@@ -44,6 +44,24 @@ func TestList(t *testing.T) {
 	}
 }
 
+// Parent reads one process: a process left running has this one as its parent, and one that ended
+// reads as an error.
+func TestParent(t *testing.T) {
+	cmd := helper(t, "sleep", t.TempDir())
+	ppid, comm, err := Parent(cmd.Process.Pid)
+	if err != nil || ppid != os.Getpid() || comm == "" {
+		t.Fatalf("Parent(%d) = %d, %q, %v; want parent %d", cmd.Process.Pid, ppid, comm, err, os.Getpid())
+	}
+	cmd.Process.Kill() // helper's own Wait reaps it
+	for range 50 {
+		if _, _, err := Parent(cmd.Process.Pid); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("Parent(%d) still reads a process that ended", cmd.Process.Pid)
+}
+
 func syscallPgid(t *testing.T) int {
 	pgid, err := syscall.Getpgid(os.Getpid())
 	if err != nil {

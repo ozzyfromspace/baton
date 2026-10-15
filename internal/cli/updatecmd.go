@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/upgrade"
 	"github.com/ozzyfromspace/baton/internal/version"
@@ -149,6 +150,9 @@ func cmdVersion(_ []string, io IO) int {
 	switch {
 	case hosted(io):
 		fmt.Fprintf(io.Out, "this session: hosted by baton %s\n", io.Env("BATON_VERSION"))
+	case inherited(io):
+		fmt.Fprintf(io.Out, "this session: %s\n", decide.InheritedStatus)
+		wayBack(io)
 	case io.Env("CLAUDE_CODE_SESSION_ID") != "":
 		fmt.Fprintln(io.Out, "this session: plain Claude Code, not hosted by baton (/baton start hands it over)")
 	}

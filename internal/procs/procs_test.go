@@ -121,6 +121,21 @@ func TestFromProc(t *testing.T) {
 	if !got[1].Hidden() || got[0].Hidden() {
 		t.Error("Hidden is an environment that could not be read")
 	}
+
+	for _, c := range []struct {
+		pid, ppid int
+		comm      string
+		err       bool
+	}{
+		{100, 1, "node", false},
+		{101, 100, "my (odd) name", false},
+		{999, 0, "", true}, // gone
+	} {
+		ppid, comm, err := parentFromProc(fsys, c.pid)
+		if ppid != c.ppid || comm != c.comm || (err != nil) != c.err {
+			t.Errorf("parentFromProc(%d) = %d, %q, %v", c.pid, ppid, comm, err)
+		}
+	}
 }
 
 // Where baton reads no process table, List says so.
@@ -130,5 +145,8 @@ func TestListUnsupported(t *testing.T) {
 	}
 	if _, err := List(); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("List on %s = %v", runtime.GOOS, err)
+	}
+	if _, _, err := Parent(os.Getpid()); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Parent on %s = %v", runtime.GOOS, err)
 	}
 }
