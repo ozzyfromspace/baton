@@ -20,7 +20,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
 	l.answerOwnQuestion(v, st, in)
 	comp := st.Run.Compaction
-	if comp.InFlight() || comp.Status == state.CompactFailed || comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished) {
+	if comp.InFlight() || comp.Status == state.CompactFailed || l.resuming(st) {
 		return // the compaction checks own this stretch
 	}
 	// An API error that ended the last turn is retried even while an older escalation is open: the
@@ -88,6 +88,15 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.update(func(st *state.State) { st.Run.IdleNudges++ })
 	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1})
 	in.Type(msg, true)
+}
+
+// resuming reports the stretch after a compaction baton asked for, until the model's turn after it begins:
+// the compaction checks own it (checkResumed). A phase agent has no such stretch: its compactions are
+// proven by its own transcript and briefed again by its loop (Agent.rebrief), and the checkpoint a fresh
+// agent ends (state.Fresh) is over as that agent's turn starts, at the very instant its start records.
+func (l *Loop) resuming(st state.State) bool {
+	comp := st.Run.Compaction
+	return l.Store.Worker() == "" && comp.Status == state.CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished)
 }
 
 func (l *Loop) idleMessage(v host.View, st state.State) string {

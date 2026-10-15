@@ -80,11 +80,14 @@ func (h *handlers) spawned(c Context) (Result, error) {
 // compactions. A message that starts it again, idle, finds it briefed: it keeps its conversation, and is
 // given nothing here, since Claude Code gives a resumed agent nothing of SubagentStart's context (P7). What
 // baton has for it (its brief again, after a compaction of its own; its results, baton's messages) comes
-// with its next tool call or its stop, and the message that woke it (loop.line) says so.
+// with its next tool call or its stop, and the message that woke it (loop.line) says so. A fresh agent on a
+// phase its verification reopened, whose result no agent was given (the one before it had ended), is given
+// it in its brief, once: it is delivered there, so its first tool call does not give it again.
 func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	origin := state.OriginOf(s.Root) // read before taking the lock: git can be slow
 	path := agentTranscript(c.Input)
 	brief, started, checkpointed := false, false, false
+	var result *state.Job
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.TurnBy = true, c.Now, "baton"
 		if st.Mode == state.ModeIdle || st.Run.Briefed == s.Agent {
@@ -94,6 +97,11 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 		if ps := st.Phases[st.Current]; st.Mode == state.ModeRunning && (ps == nil || ps.Status == state.PhasePending) {
 			state.Start(st, c.Now, origin)
 			started = true
+		}
+		if j := parkResult(st); j != nil && st.InHand() {
+			j.Delivered = c.Now
+			given := *j
+			result = &given
 		}
 		return nil
 	})
@@ -113,10 +121,23 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	if started {
 		s.Event("phase_started", map[string]any{"phase": st.Current, "agent": s.Agent})
 	}
-	text := h.workerBrief(c, s, pl, st, !started, checkpointed)
+	text := h.workerBrief(c, s, pl, st, !started, checkpointed, result)
 	return Result{Output: map[string]any{
 		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
 	}}, nil
+}
+
+// parkResult is the result the phase in hand of st was set aside or reopened on that no agent was given
+// yet: the finished job its park names, not delivered. nil for none.
+func parkResult(st *state.State) *state.Job {
+	ps := st.Phases[st.Current]
+	if ps == nil || ps.Park == nil || ps.Park.Job == "" {
+		return nil
+	}
+	if j := st.Job(ps.Park.Job); j != nil && j.Finished() && j.Delivered.IsZero() {
+		return j
+	}
+	return nil
 }
 
 // agentStop is SubagentStop for the phase agent of s: its stop is decided by the Stop table, for its sub-run,

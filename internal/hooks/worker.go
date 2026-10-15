@@ -16,13 +16,20 @@ import (
 // touches the project's checkout and never plans, its work lands on the run's branch once it is done, and
 // its questions are queued for the human (state.Store.Relay) instead of asked by its own model.
 
-// workerBrief is the brief a worker starts its phase from, in its sub-run s, and logs it.
-func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state.State, again, checkpointed bool) string {
+// workerBrief is the brief a worker starts its phase from, in its sub-run s, and logs it. result is the
+// result its phase was set aside or reopened on, which it is given here (nil for none).
+func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state.State, again, checkpointed bool, result *state.Job) string {
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
 	in := brief.Input{Kind: brief.Worker, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s),
 		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current), Decisions: s.Decisions(st), Again: again, Checkpointed: checkpointed}
+	if result != nil {
+		in.Result = jobResult(s, *result, nil)
+	}
 	text := brief.Write(in)
+	if result != nil {
+		delivery{jobs: []state.Job{*result}}.event(s, "brief")
+	}
 	s.Event("brief", map[string]any{"type": brief.Worker, "phase": st.Current, "chars": len(text)})
 	return text
 }

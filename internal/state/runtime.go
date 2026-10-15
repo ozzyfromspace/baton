@@ -328,7 +328,8 @@ const (
 	CompactActive = "active" // proven begun: Claude Code is summarizing
 	CompactDone   = "done"   // proven over
 	CompactFailed = "failed" // no acknowledgement or completion in time; escalated
-	// CompactCancelled: a switch called off before its compaction was typed, as the job it was for ended.
+	// CompactCancelled: a switch called off before its compaction was typed, as the job it was for ended
+	// (Unswitch), or a boundary a phase's sub-run owed, which nothing compacts (Retake).
 	CompactCancelled = "cancelled"
 )
 

@@ -100,9 +100,10 @@ func (l *Loop) lost(v host.View, j state.Job, reason string) {
 
 // settle applies what finished jobs decided (state.Settle): a phase verifying on a job that passed is
 // done, and one whose job failed reopens. With no phase in hand, the run takes up the next phase that can
-// start, after a compaction the loop queues itself, since the session is idle and no Stop will. What it
-// did is logged, and left for the human to read in the session (Runtime.Announce). It returns the state
-// as it left it.
+// start, after a compaction the loop queues itself, since the session is idle and no Stop will. A phase's
+// sub-run owes no compaction (nothing compacts a phase agent): its phase, reopened, is its agent's again at
+// once (state.Retake), and the result is due to it. What it did is logged, and left for the human to read
+// in the session (Runtime.Announce; a phase agent's, in the lead's). It returns the state as it left it.
 func (l *Loop) settle(v host.View, st state.State) state.State {
 	if !state.Unsettled(st) || v.Now.Sub(l.settled) < settleEvery {
 		return st
@@ -113,17 +114,29 @@ func (l *Loop) settle(v host.View, st state.State) state.State {
 		l.logf("loop: settling the run's jobs: %v", err)
 		return st
 	}
+	agent := l.Store.Worker() != ""
+	var origin state.Origin
+	if agent {
+		origin = state.OriginOf(l.Store.Root) // read before taking the lock: git can be slow
+	}
 	var out state.Settled
 	var epoch int
+	var retook *state.Verdict
 	nst, err := l.Store.Update(func(st *state.State) error {
 		if out = state.Settle(st, pl, v.Now); !out.Changed() {
 			return nil
 		}
+		if agent && out.Taken != "" && state.Retake(st, v.Now, origin) {
+			vd := st.ParkedOn()
+			retook = &vd
+		}
 		var says []string
 		for _, vd := range out.Verdicts {
-			says = append(says, verdictLine(vd))
+			if retook == nil || vd.Phase != retook.Phase {
+				says = append(says, verdictLine(vd))
+			}
 		}
-		if out.Taken != "" {
+		if out.Taken != "" && !agent {
 			st.Run.Compaction.Queue("boundary", v.Now)
 			epoch = st.Run.Compaction.Epoch
 			verb := "starts"
@@ -146,7 +159,10 @@ func (l *Loop) settle(v host.View, st state.State) state.State {
 		}
 		l.Store.Event("phase_parked", map[string]any{"phase": vd.Phase, "reason": vd.Park, "job": vd.Job.ID, "status": vd.Job.Status})
 	}
-	if out.Taken != "" {
+	switch {
+	case retook != nil:
+		l.retook(*retook, "settle")
+	case out.Taken != "" && !agent:
 		l.Store.Event("compact_queued", map[string]any{"reason": "boundary", "epoch": epoch, "next": out.Taken, "by": "settle"})
 	}
 	return nst
@@ -154,6 +170,45 @@ func (l *Loop) settle(v host.View, st state.State) state.State {
 
 // settleEvery spaces out attempts to settle a run that Settle cannot move: each reads the plan.
 const settleEvery = time.Second
+
+// retakeEvery spaces out looks for a phase a phase's sub-run owes a boundary before (Agent.retake): one
+// reads the worktree.
+const retakeEvery = time.Second
+
+// retake takes up again, in a phase's sub-run, a phase that is parked with a boundary owed before it
+// (state.Retake): a sub-run that a baton before v0.8.2 left so, whose agent nothing would ever compact,
+// wake or replace, and whose every tool call was held. settle retakes its own; this is for what it never
+// reaches, as it moves only a run with no phase in hand. It returns the state as it left it.
+func (l *Loop) retake(v host.View, st state.State) state.State {
+	if l.Store.Worker() == "" || !state.Retakable(st) || v.Now.Sub(l.retaken) < retakeEvery {
+		return st
+	}
+	l.retaken = v.Now
+	origin := state.OriginOf(l.Store.Root) // read before taking the lock: git can be slow
+	var retook *state.Verdict
+	nst, err := l.Store.Update(func(st *state.State) error {
+		if state.Retake(st, v.Now, origin) {
+			vd := st.ParkedOn()
+			retook = &vd
+		}
+		return nil
+	})
+	if err != nil {
+		l.logf("loop: taking %s up again: %v", st.Current, err)
+		return st
+	}
+	if retook != nil {
+		l.retook(*retook, "tick")
+	}
+	return nst
+}
+
+// retook logs that a phase's sub-run took its phase up again at once (state.Retake), as verdict vd
+// reopened it, by what found it, and tells the human in the lead's session (Store.Retook).
+func (l *Loop) retook(vd state.Verdict, by string) {
+	l.logf("loop: %s reopened (%s): its agent takes it up again", vd.Phase, vd.Park)
+	l.Store.Retook(vd, by, decide.AgentRetakes(vd.Phase, vd.Job))
+}
 
 // verdictLine tells the human what a verdict did.
 func verdictLine(vd state.Verdict) string {

@@ -129,6 +129,7 @@ type Loop struct {
 
 	owner      bool      // this session has owned the project
 	settled    time.Time // when the run's jobs were last settled
+	retaken    time.Time // when a phase's sub-run last looked for its phase to take up again (retake)
 	switchNext time.Time // when a switch may be tried next
 	switchHeld string    // the job whose switch uncommitted work holds, reported once
 	typedFor   string    // the jobs whose results baton last typed a line for, and when

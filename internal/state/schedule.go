@@ -425,3 +425,42 @@ func (st State) Resumed() bool {
 	ps := st.Phases[st.Current]
 	return ps != nil && ps.Park != nil && !ps.Park.Resumed.IsZero()
 }
+
+// ParkedOn is the verdict the phase in hand was parked on, as its park says (Park "" when it has none),
+// with the job the park names as it ended (zero when it is gone from the record).
+func (st State) ParkedOn() Verdict {
+	vd := Verdict{Phase: st.Current}
+	if ps := st.Phases[st.Current]; ps != nil && ps.Park != nil {
+		vd.Park = ps.Park.Reason
+		if j := st.Job(ps.Park.Job); j != nil && ps.Park.Job != "" {
+			vd.Job = *j
+		}
+	}
+	return vd
+}
+
+// Retakable reports a run that Retake would move: the plan runs, and the phase in hand is parked with a
+// boundary owed before it starts again.
+func Retakable(st State) bool {
+	ps := st.Phases[st.Current]
+	return st.Mode == ModeRunning && st.BoundaryOwed && ps != nil && ps.Status == PhaseParked
+}
+
+// Retake takes the phase in hand up again at once, with no compaction first: the phase's agent, in a
+// phase's sub-run, whose phase reopened because its verification failed (Settle, or the merge queue's
+// Reverify). advance owes a boundary before a phase resumes, as the lead's conversation carries another
+// phase's; a sub-run holds its own phase alone, and nothing compacts a phase agent. The phase is active
+// again (Start), what it is held to starts from o, and a boundary compaction queued for it is cancelled. A
+// checkpoint queued or owed is left alone: it is the agent's, and a fresh agent ends it (state.Fresh). The
+// result the phase reopened on stays undelivered, so Due hands it over. It reports whether it took the
+// phase up; callers test Retakable on the state they loaded first, and read o before taking the lock.
+func Retake(st *State, now time.Time, o Origin) bool {
+	if !Retakable(*st) {
+		return false
+	}
+	Start(st, now, o)
+	if c := &st.Run.Compaction; c.InFlight() && c.Reason == "boundary" {
+		c.Status = CompactCancelled
+	}
+	return true
+}

@@ -343,6 +343,79 @@ func TestSettleWithNothingInHand(t *testing.T) {
 	}
 }
 
+// A phase's sub-run whose verification failed after done is taken up again at once, by its agent: no
+// boundary is owed, a boundary queued for it is cancelled, and the result is due. A checkpoint, or a run
+// that Retake would not move, is left as it is.
+func TestRetake(t *testing.T) {
+	t1 := t0.Add(time.Hour)
+	o := Origin{Head: "abc", Dirty: &Dirt{}}
+	one := graph("P1:")
+	reopened := func() State {
+		st := AttachWorker(New(), "P1")
+		Start(&st, t0, Origin{})
+		st.Jobs = []Job{{ID: "P1.j1", Phase: "P1", Kind: JobVerify, Status: JobRunning, Notes: "all in"}}
+		if _, err := Done(&st, one, "P1", t0, DoneOpts{}); err != nil {
+			t.Fatal(err)
+		}
+		st.Jobs[0].Status, st.Jobs[0].Exit, st.Jobs[0].Ended = JobFailed, 1, t1
+		if got := Settle(&st, one, t1); got.Taken != "P1" || !st.BoundaryOwed {
+			t.Fatalf("settled %+v, state %+v", got, st)
+		}
+		st.Run.Compaction.Queue("boundary", t1) // as a host before v0.8.2 queued it
+		return st
+	}
+	for _, c := range []struct {
+		name   string
+		set    func(*State)
+		retake bool
+	}{
+		{"reopened red, its boundary queued", func(*State) {}, true},
+		{"reopened red, nothing queued", func(st *State) { st.Run.Compaction = Compaction{Epoch: 1} }, true},
+		{"reopened with no verdict", func(st *State) { st.Phases["P1"].Park.Reason = ParkUnverified }, true},
+		{"its checkpoint queued", func(st *State) { st.CheckpointOwed = true; st.Run.Compaction.Queue("checkpoint", t1) }, true},
+		{"paused", func(st *State) { st.Mode = ModePaused }, false},
+		{"no boundary owed", func(st *State) { st.BoundaryOwed = false }, false},
+		{"its phase active", func(st *State) { st.Phases["P1"].Status = PhaseActive }, false},
+		{"no phase in hand", func(st *State) { st.Current = "" }, false},
+	} {
+		st := reopened()
+		c.set(&st)
+		before := st.Run.Compaction
+		if got := Retakable(st); got != c.retake {
+			t.Errorf("%s: retakable %v", c.name, got)
+		}
+		if got := Retake(&st, t1, o); got != c.retake {
+			t.Errorf("%s: retook %v", c.name, got)
+			continue
+		}
+		if !c.retake {
+			if st.Run.Compaction != before {
+				t.Errorf("%s: the compaction changed: %+v", c.name, st.Run.Compaction)
+			}
+			continue
+		}
+		ps := st.Phases["P1"]
+		if st.BoundaryOwed || ps.Status != PhaseActive || ps.Park == nil || !ps.Park.Resumed.Equal(t1) || ps.StartHead != "abc" || ps.StartDirty != o.Dirty {
+			t.Errorf("%s: owed %v, P1 %+v park %+v", c.name, st.BoundaryOwed, ps, ps.Park)
+		}
+		switch comp := st.Run.Compaction; {
+		case before.Reason == "checkpoint":
+			if comp != before || !st.CheckpointOwed {
+				t.Errorf("%s: the checkpoint was touched: %+v owed %v", c.name, comp, st.CheckpointOwed)
+			}
+			if len(st.Due()) != 0 {
+				t.Errorf("%s: due before the checkpoint: %+v", c.name, st.Due())
+			}
+			continue
+		case before.InFlight() && comp.Status != CompactCancelled, comp.InFlight():
+			t.Errorf("%s: compaction %+v", c.name, comp)
+		}
+		if due := st.Due(); len(due) != 1 || due[0].ID != "P1.j1" || !st.InHand() {
+			t.Errorf("%s: due %+v, in hand %v", c.name, due, st.InHand())
+		}
+	}
+}
+
 // A phase whose latest job is red is not finished, unless the model says why it is despite that.
 func TestDoneRefusesRed(t *testing.T) {
 	p := graph("P0:", "P1:")

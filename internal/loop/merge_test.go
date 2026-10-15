@@ -226,8 +226,23 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 			if gitx.Head(x.repo) == merged || sst.Mode != state.ModeRunning || sst.Current != "P1" || x.worker("P1").Status != state.WorkerWorking || x.worker("P1").Merge != nil {
 				t.Fatalf("after red: sub-run %s on %q; worker %+v", sst.Mode, sst.Current, x.worker("P1"))
 			}
+			// The phase is its agent's again at once: nothing compacts a phase agent, so no boundary is owed,
+			// and the result is due to it.
+			if ps := sst.Phases["P1"]; sst.BoundaryOwed || sst.Run.Compaction.InFlight() || ps.Status != state.PhaseActive {
+				t.Fatalf("after red: owed %v, compaction %+v, P1 %+v", sst.BoundaryOwed, sst.Run.Compaction, ps)
+			}
+			if due := sst.Due(); len(due) != 1 || due[0].ID != j.ID || x.subLogged("P1", "compact_queued", nil) {
+				t.Errorf("after red: due %+v\n%s", due, x.subEvents("P1"))
+			}
 			if !x.has("land_returned", `"phase":"P1"`) || x.state().Conflicts != 0 {
 				t.Errorf("a red verification counted as a conflict (%d)\nevents:\n%s", x.state().Conflicts, x.events())
+			}
+			x.tick(5 * time.Second)
+			if len(x.sent) != 1 || !strings.Contains(x.sent[0].text, "[baton] Job "+j.ID+" (P1) finished") {
+				t.Errorf("sent %+v", x.sent)
+			}
+			if got := x.endTurn("P1"); !strings.Contains(got, j.ID) || !strings.Contains(got, "failed (exit 0)") {
+				t.Errorf("its stop gave it %q", got)
 			}
 		})
 	}

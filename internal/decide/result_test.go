@@ -116,6 +116,29 @@ func TestRedRefusal(t *testing.T) {
 	}
 }
 
+// A phase agent brought back to its phase by its verification: the human hears why, and the agent's
+// brief says what to do.
+func TestReopenedWords(t *testing.T) {
+	t0 := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	j := state.Job{ID: "P2.j1", Phase: "P2", Command: "make test", Status: state.JobFailed, Exit: 1, Started: t0, Ended: t0.Add(3 * time.Minute)}
+	lane := j
+	lane.Status, lane.Reason = state.JobLaneError, "no lane"
+	for _, c := range []struct{ got, want string }{
+		{AgentRetakes("P2", j), "baton: P2's verification failed (exit 1) after 3m (job P2.j1) → its agent takes P2 up again"},
+		{AgentRetakes("P2", lane), "baton: P2's verification could not run: no lane (job P2.j1), with no verdict → its agent takes P2 up again"},
+		{AgentRetakes("P2", state.Job{}), "baton: P2's verification is gone from the record → its agent takes P2 up again"},
+		{ReopenedNow("P2 — Two", state.ParkRed), "Now: continue P2 — Two. It was finished, but its verification failed (its result is below): fix what failed, commit, and finish it again."},
+		{ReopenedNow("P2 — Two", state.ParkCheckpoint), ""},
+	} {
+		if c.got != c.want {
+			t.Errorf("%q, want %q", c.got, c.want)
+		}
+	}
+	if got := ReopenedNow("P2 — Two", state.ParkUnverified); !strings.Contains(got, "ended without a verdict") {
+		t.Errorf("unverified: %q", got)
+	}
+}
+
 func TestSpan(t *testing.T) {
 	for d, want := range map[time.Duration]string{45 * time.Second: "45s", 12 * time.Minute: "12m", 125 * time.Minute: "2h05m"} {
 		if got := Span(d); got != want {

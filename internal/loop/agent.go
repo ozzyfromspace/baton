@@ -15,8 +15,10 @@ import (
 // work on the workers. A phase agent has no session of its own to tick a Loop: its hooks, routed to its
 // sub-run, keep what its conversation does (its turns, its activity, its stops), and Agent does the rest,
 // with the lead's own code: it keeps the sub-run's claim fresh (the owner's heartbeat, which tells every
-// other baton process that the worker is at work), runs the sub-run's jobs and settles them, saves the
-// worktree's uncommitted work when the sub-run halts, and sends the human the sub-run's notices. Once the
+// other baton process that the worker is at work), runs the sub-run's jobs and settles them, takes its
+// phase up again when its verification reopened it (Loop.retake: nothing compacts an agent, so it owes no
+// boundary), saves the worktree's uncommitted work when the sub-run halts, and sends the human the
+// sub-run's notices. Once the
 // agent is at work, its watchdog is the lead's (Loop.watch), reaching it through its line (line.go) as the
 // lead's reaches the lead through the keyboard: an idle agent is woken for its results and baton's
 // messages, reminded when it stops with its phase unreported, and its turn retried after an API error; a
@@ -73,6 +75,7 @@ func (a *Agent) tick(now time.Time) {
 	a.loop.saveWork(v, st)
 	a.loop.jobs(v, st)
 	st = a.loop.settle(v, st)
+	st = a.loop.retake(v, st)
 	st = a.read(now, st)
 	if a.in == nil || st.Mode != state.ModeRunning {
 		return

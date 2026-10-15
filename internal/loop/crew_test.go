@@ -44,6 +44,7 @@ type crew struct {
 	// if it does.
 	ran      map[int]bool
 	agents   []started
+	briefs   map[string]string // what each agent it started was given as it started (its SubagentStart's context)
 	stopped  []string
 	sent     []sent
 	resumes  []string
@@ -212,7 +213,15 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 		x.hook("PostToolUse", call)
 		return agent, ""
 	}
-	x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree, "transcript_path": x.leadTranscript()})
+	_, out := x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree, "transcript_path": x.leadTranscript()})
+	var start struct {
+		HookSpecificOutput struct{ AdditionalContext string } `json:"hookSpecificOutput"`
+	}
+	json.Unmarshal([]byte(out), &start)
+	if x.briefs == nil {
+		x.briefs = map[string]string{}
+	}
+	x.briefs[agent] = start.HookSpecificOutput.AdditionalContext
 	call["tool_response"] = map[string]any{"agentId": agent, "status": "async_launched"}
 	x.hook("PostToolUse", call)
 	return agent, ""

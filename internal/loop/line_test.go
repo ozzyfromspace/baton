@@ -36,6 +36,32 @@ func (x *crew) passed(phase, id string) {
 	})
 }
 
+// red ends job id of phase's sub-run: it failed.
+func (x *crew) red(phase, id string) {
+	x.sub(phase).Update(func(st *state.State) error {
+		j := st.Job(id)
+		j.Status, j.Exit, j.Ended = state.JobFailed, 1, x.now
+		return nil
+	})
+}
+
+// done reports phase done in its sub-run, as its agent's `baton done` does while its gate runs: the phase
+// verifies on it.
+func (x *crew) done(phase string) {
+	x.t.Helper()
+	sub := x.sub(phase)
+	pl, err := sub.LoadPlan()
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	if _, err := sub.Update(func(st *state.State) error { _, err := state.Done(st, pl, phase, x.now, state.DoneOpts{}); return err }); err != nil {
+		x.t.Fatal(err)
+	}
+	if st, _ := sub.Load(); st.Phases[phase].Status != state.PhaseVerifying {
+		x.t.Fatalf("%s %+v", phase, st.Phases[phase])
+	}
+}
+
 // wait ticks for d, a minute at a time at most: a longer gap between ticks is the machine sleeping, and
 // every deadline starts over from the wake.
 func (x *crew) wait(d time.Duration) {
@@ -99,6 +125,121 @@ func TestAnIdleAgentIsWokenForItsResult(t *testing.T) {
 	}
 	if len(x.sent) != 1 {
 		t.Errorf("sent again: %+v", x.sent)
+	}
+}
+
+// A phase agent's gate that fails after its `baton done` brings the agent back to its phase: it is sent
+// one message, and given the result as it ends that turn, once. Nothing compacts a phase agent, so its
+// sub-run owes no boundary, and the human is told in the lead's session.
+func TestAnAgentsRedGateAfterDoneBringsItBack(t *testing.T) {
+	x := newCrew(t, 1)
+	x.atWork("P1")
+	id := x.waiting("P1")
+	x.done("P1")
+	x.tick(5 * time.Second)
+	x.red("P1", id)
+	x.tick(5 * time.Second)
+	a := x.agent("P1")
+	if len(x.sent) != 1 || x.sent[0].agent != a.id || !strings.Contains(x.sent[0].text, "[baton] Job "+id+" (P1) finished") {
+		t.Fatalf("sent %+v", x.sent)
+	}
+	st, _ := x.sub("P1").Load()
+	if ps := st.Phases["P1"]; st.Current != "P1" || st.BoundaryOwed || st.Run.Compaction.InFlight() || ps.Status != state.PhaseActive || !st.InHand() {
+		t.Fatalf("in hand %q, owed %v, compaction %+v, P1 %+v", st.Current, st.BoundaryOwed, st.Run.Compaction, ps)
+	}
+	if !x.subLogged("P1", "phase_resumed", map[string]any{"phase": "P1", "reason": "red", "by": "settle"}) || x.subLogged("P1", "compact_queued", nil) {
+		t.Errorf("the sub-run's events:\n%s", x.subEvents("P1"))
+	}
+	if want := "→ its agent takes P1 up again"; !strings.Contains(x.announced(), want) {
+		t.Errorf("told the lead %q", x.announced())
+	}
+	if got := x.endTurn("P1"); !strings.Contains(got, "Job "+id+" (P1) failed (exit 1)") {
+		t.Fatalf("its stop gave it %q", got)
+	}
+	x.sub("P1").Update(func(st *state.State) error { st.Run.TurnOpen, st.Run.LastStop = false, x.now; return nil })
+	for range 4 {
+		x.tick(30 * time.Second)
+	}
+	if len(x.sent) != 1 {
+		t.Errorf("sent again: %+v", x.sent)
+	}
+}
+
+// A fresh agent after a checkpoint is woken for its results as any other: the checkpoint it ended is over
+// at the instant its start records, which is no compaction of baton's for its loop to wait out.
+func TestAFreshAgentAfterACheckpointIsWokenForItsResult(t *testing.T) {
+	for _, status := range []string{state.JobPassed, state.JobFailed} {
+		t.Run(status, func(t *testing.T) {
+			x := newCrew(t, 1)
+			x.atWork("P1")
+			first := x.agent("P1")
+			x.sub("P1").Update(func(st *state.State) error { return state.SetCheckpoint(st) })
+			x.stops("P1")
+			for range 4 {
+				x.tick(time.Second)
+			}
+			fresh := x.agent("P1")
+			if fresh.id == first.id || x.status("P1") != state.WorkerWorking {
+				t.Fatalf("no fresh agent: %+v", x.agents)
+			}
+			id := x.waiting("P1")
+			x.tick(5 * time.Second)
+			if status == state.JobPassed {
+				x.passed("P1", id)
+			} else {
+				x.red("P1", id)
+			}
+			x.tick(5 * time.Second)
+			if len(x.sent) != 1 || x.sent[0].agent != fresh.id || !strings.Contains(x.sent[0].text, "[baton] Job "+id+" (P1) finished") {
+				t.Fatalf("sent %+v", x.sent)
+			}
+			if got := x.endTurn("P1"); !strings.Contains(got, id) {
+				t.Errorf("its stop gave it %q", got)
+			}
+		})
+	}
+}
+
+// A phase agent that ended before its red result could reach it (Claude Code cannot start it again) is
+// replaced by a fresh agent in its worktree, whose brief carries the result and says the verification
+// failed: given there once, and never again with a tool call or a stop.
+func TestAFreshAgentIsBriefedWithTheRedResult(t *testing.T) {
+	x := newCrew(t, 1)
+	x.atWork("P1")
+	first := x.agent("P1")
+	id := x.waiting("P1")
+	x.done("P1")
+	x.sendErr = "Agent " + first.id + " could not be resumed: No transcript found for agent ID"
+	x.red("P1", id)
+	x.tick(5 * time.Second)
+	x.sendErr = ""
+	for range 4 {
+		x.tick(time.Second)
+	}
+	fresh := x.agent("P1")
+	if fresh.id == first.id || x.status("P1") != state.WorkerWorking {
+		t.Fatalf("no fresh agent: %+v; P1's worker %+v", x.agents, x.worker("P1"))
+	}
+	brief := x.briefs[fresh.id]
+	for _, want := range []string{"Now: continue P1 — one. It was finished, but its verification failed", "The result of the job P1 was set aside for", "Job " + id + " (P1) failed (exit 1)"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("the brief lacks %q:\n%s", want, brief)
+		}
+	}
+	st, _ := x.sub("P1").Load()
+	if st.Job(id).Delivered.IsZero() || !x.subLogged("P1", "results_delivered", map[string]any{"via": "brief"}) || len(st.Due()) != 0 {
+		t.Errorf("the result was not given in the brief: %+v, due %+v\n%s", st.Job(id), st.Due(), x.subEvents("P1"))
+	}
+	_, out := x.hook("PostToolUse", map[string]any{"agent_id": fresh.id, "agent_type": state.PhaseAgent, "cwd": fresh.tree, "tool_name": "Bash",
+		"tool_use_id": "toolu_1", "tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{}})
+	if strings.Contains(out, id) {
+		t.Errorf("given again with a tool call: %s", out)
+	}
+	if got := x.endTurn("P1"); strings.Contains(got, id) {
+		t.Errorf("given again at its stop: %q", got)
+	}
+	if n := strings.Count(x.subEvents("P1"), `"kind":"results_delivered"`); n != 1 {
+		t.Errorf("delivered %d times\n%s", n, x.subEvents("P1"))
 	}
 }
 

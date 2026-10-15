@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // A worker is a phase agent: an agent of the lead session on one phase of a run, in a git worktree of its
@@ -41,6 +43,31 @@ func WorkerCheckpointed(phase string) string {
 // before it (title: "P3 — Title").
 func CheckpointNow(title string) string {
 	return fmt.Sprintf("Now: continue %s from where the agent before you left off (see its notes below and the repository's state).", title)
+}
+
+// ReopenedNow is the "Now:" line of the brief of an agent that takes up phase (title: "P3 — Title")
+// after its verification reopened it (reason: state.ParkRed, or state.ParkUnverified), with the result
+// below; "" for any other reason.
+func ReopenedNow(title, reason string) string {
+	switch reason {
+	case state.ParkRed:
+		return fmt.Sprintf("Now: continue %s. It was finished, but its verification failed (its result is below): fix what failed, commit, and finish it again.", title)
+	case state.ParkUnverified:
+		return fmt.Sprintf("Now: continue %s. It was finished, but its verification ended without a verdict (its result is below): check it again (in place if the lane cannot run it), then finish it again.", title)
+	}
+	return ""
+}
+
+// AgentRetakes tells the human that the phase agent on phase takes it up again: its verification, job j
+// as it ended (zero when it is gone from the record), reopened it, and the agent is given the result.
+func AgentRetakes(phase string, j state.Job) string {
+	switch {
+	case j.ID == "":
+		return fmt.Sprintf("baton: %s's verification is gone from the record → its agent takes %s up again", phase, phase)
+	case j.Red():
+		return fmt.Sprintf("baton: %s's verification %s (job %s) → its agent takes %s up again", phase, Outcome(j), j.ID, phase)
+	}
+	return fmt.Sprintf("baton: %s's verification %s (job %s), with no verdict → its agent takes %s up again", phase, Outcome(j), j.ID, phase)
 }
 
 // AgentBriefAgain is the message that wakes the phase agent on phase, idle, for the brief baton gives it

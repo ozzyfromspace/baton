@@ -100,6 +100,21 @@ func (s *Store) Relay(r Relay) error {
 	return nil
 }
 
+// Retook logs that this worker's sub-run took its phase up again at once (Retake), as verdict vd reopened
+// it, by what found it (settle, its loop's tick, its stop), and leaves line for the human in the run it
+// works for: nobody watches a phase agent's session. The parent run's lock is taken on its own, after the
+// sub-run's update.
+func (s *Store) Retook(vd Verdict, by, line string) {
+	fields := map[string]any{"phase": vd.Phase, "reason": vd.Park, "by": by}
+	if vd.Job.ID != "" {
+		fields["job"] = vd.Job.ID
+	}
+	s.Event("phase_resumed", fields)
+	if up, err := s.ParentRun(); err == nil {
+		up.Update(func(st *State) error { st.Run.Announce = append(st.Run.Announce, line); return nil })
+	}
+}
+
 func (s *Store) path(name string) string { return filepath.Join(s.Dir, name) }
 
 // PlanPath is where plan.json lives.

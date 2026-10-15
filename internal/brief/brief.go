@@ -131,6 +131,9 @@ func Write(in Input) string {
 		park = ps.Park
 	}
 	switch {
+	case in.Kind == Worker && in.Again && in.Result != "" && park != nil && decide.ReopenedNow(title, park.Reason) != "":
+		// Its verification reopened the phase after the agent before it ended: the result comes below.
+		b.WriteString(decide.ReopenedNow(title, park.Reason) + "\n\n")
 	case in.Kind == Worker && in.Again && in.Checkpointed:
 		b.WriteString(decide.CheckpointNow(title) + "\n\n")
 	case in.Kind == Worker && in.Again:

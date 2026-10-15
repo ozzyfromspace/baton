@@ -23,14 +23,30 @@ func (h *handlers) stop(c Context) (Result, error) {
 		return Result{}, err
 	}
 	pl, _ := s.LoadPlan()
+	// A phase's sub-run whose phase reopened, owing a boundary before it (a baton before v0.8.2 left it so,
+	// or its loop has not looked yet), takes it up again now (state.Retake): nothing compacts a phase agent,
+	// so the row of decideStop that queues a boundary must never be reached there. The worktree is read
+	// before taking the lock.
+	var origin state.Origin
+	retake := false
+	if s.Worker() != "" {
+		if cur, err := s.Load(); err == nil && state.Retakable(cur) {
+			origin, retake = state.OriginOf(s.Root), true
+		}
+	}
 	var d decision
 	var ann string
 	var owed *state.Briefing
+	var retook *state.Verdict
 	_, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		if s.Agent != "" {
 			// A phase agent's brief again, after a compaction of its own, not given with a tool call yet:
 			// a resumed agent is given nothing as it starts, so its stop is where it comes.
 			owed = takeBriefing(c, st)
+		}
+		if retake && state.Retake(st, c.Now, origin) {
+			vd := st.ParkedOn()
+			retook = &vd
 		}
 		recordStop(st, c)
 		ann = announced(st)
@@ -68,6 +84,9 @@ func (h *handlers) stop(c Context) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, ok(err)
+	}
+	if retook != nil {
+		s.Retook(*retook, "stop", decide.AgentRetakes(retook.Phase, retook.Job))
 	}
 	for _, e := range d.events {
 		s.Event(e.kind, e.fields)
@@ -196,7 +215,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		}
 		st.Replan = nil
 		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times without asking you about the plan you approved", st.Run.StopBlocks), now)
-	case st.BoundaryOwed:
+	case st.BoundaryOwed && !w.Worker:
+		// (A phase's sub-run owes no boundary: nothing compacts a phase agent, and its stop took a phase
+		// reopened so up again first, Retake.)
 		queueCompaction(st, "boundary", now)
 		st.Run.StopBlocks = 0
 		d.say(boundaryLine(st, pl, "phase done"))

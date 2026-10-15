@@ -373,6 +373,15 @@ func TestAWorkersHooksFailOpen(t *testing.T) {
 			state.AddProposal(st, state.Decision{What: "x", Relayed: true}, now)
 		}},
 		{"its phase done", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, _ time.Time) { st.Mode = state.ModeComplete }},
+		{"its phase reopened", "SubagentStop", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) {
+			st.Jobs = append(st.Jobs, state.Job{ID: "P2.j1", Phase: "P2", Kind: state.JobVerify, Status: state.JobFailed, Exit: 1, Ended: now})
+			st.Phases["P2"].Status, st.Phases["P2"].Park, st.BoundaryOwed = state.PhaseParked, &state.Park{Reason: state.ParkRed, Job: "P2.j1", Since: now}, true
+			st.Run.Compaction.Queue("boundary", now)
+		}},
+		{"a fresh agent on its reopened phase", "SubagentStart", func(*fixture) map[string]any { return map[string]any{} }, func(st *state.State, now time.Time) {
+			st.Jobs = append(st.Jobs, state.Job{ID: "P2.j1", Phase: "P2", Kind: state.JobVerify, Status: state.JobFailed, Exit: 1, Ended: now})
+			st.Phases["P2"].Status, st.Phases["P2"].Park = state.PhaseActive, &state.Park{Reason: state.ParkRed, Job: "P2.j1", Since: now, Resumed: now}
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for _, how := range []string{"panic", "unreachable run"} {
@@ -605,6 +614,102 @@ func TestAPhaseAgentsCheckpointIsAFreshAgent(t *testing.T) {
 	}
 	if lead.state().Run.Compaction.Status != "" || lead.state().CheckpointOwed {
 		t.Errorf("the lead's run was touched: %+v", lead.state().Run.Compaction)
+	}
+}
+
+// reopenedRed leaves w's sub-run as a red verification after `baton done` left it under a baton before
+// v0.8.2: the phase parked red with a boundary owed before it, and that boundary queued, which nothing
+// would ever compact. It returns the job.
+func reopenedRed(t *testing.T, w *fixture) string {
+	t.Helper()
+	pl, err := w.store.LoadPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	w.set(func(st *state.State) {
+		q, _, _ := state.QueueJob(st, state.Job{Phase: "P2", Kind: state.JobVerify, Command: "make test", Commit: "c1", Notes: "all in"}, w.now)
+		id = q.ID
+		j := st.Job(id)
+		j.Status, j.Started = state.JobRunning, w.now
+		if _, err := state.Done(st, pl, "P2", w.now, state.DoneOpts{}); err != nil {
+			t.Fatal(err)
+		}
+		j = st.Job(id)
+		j.Status, j.Exit, j.Ended = state.JobFailed, 1, w.now
+		if out := state.Settle(st, pl, w.now); out.Taken != "P2" || !st.BoundaryOwed {
+			t.Fatalf("settled %+v", out)
+		}
+		st.Run.Compaction.Queue("boundary", w.now)
+	})
+	return id
+}
+
+// A phase agent whose phase reopened owing a boundary before it (a red gate after its `baton done`) takes
+// it up again at its stop, before anything else: the boundary is cancelled, never queued, and the stop is
+// refused with the result. The human is told in the lead's session.
+func TestAPhaseAgentsStopTakesItsReopenedPhaseUp(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	id := reopenedRed(t, w)
+	w.now = w.now.Add(time.Minute)
+	out := w.fire("SubagentStop", map[string]any{"stop_hook_active": false})
+	if reason, _ := out["reason"].(string); out["decision"] != "block" || !strings.Contains(reason, "Job "+id+" (P2) failed (exit 1)") {
+		t.Fatalf("its stop: %v", out)
+	}
+	st := w.state()
+	if ps := st.Phases["P2"]; st.BoundaryOwed || ps.Status != state.PhaseActive || st.Run.Compaction.Status != state.CompactCancelled || st.Job(id).Delivered.IsZero() {
+		t.Errorf("owed %v, P2 %+v, compaction %+v, job %+v", st.BoundaryOwed, ps, st.Run.Compaction, st.Job(id))
+	}
+	if !w.logged("phase_resumed", map[string]any{"phase": "P2", "reason": "red", "job": id, "by": "stop"}) || w.logged("compact_queued", map[string]any{}) {
+		t.Errorf("events:\n%s", w.eventLog())
+	}
+	if ann := strings.Join(lead.state().Run.Announce, "\n"); !strings.Contains(ann, "baton: P2's verification failed (exit 1) after 0s (job "+id+") → its agent takes P2 up again") {
+		t.Errorf("told the lead %q", ann)
+	}
+}
+
+// A phase's sub-run owes no boundary: a stop with one owed before a phase that is not parked queues no
+// compaction, which nothing would ever type into a phase agent.
+func TestAPhaseAgentsStopQueuesNoBoundary(t *testing.T) {
+	w, _, _ := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	w.set(func(st *state.State) { st.BoundaryOwed = true })
+	w.fire("SubagentStop", map[string]any{"stop_hook_active": false})
+	if c := w.state().Run.Compaction; c.InFlight() || w.logged("compact_queued", map[string]any{}) {
+		t.Errorf("compaction %+v\n%s", c, w.eventLog())
+	}
+}
+
+// A fresh agent on a phase its verification reopened after the agent before it ended is given the result
+// in its brief, whose "Now:" line says the verification failed; once there, it is not given again.
+func TestAFreshAgentOnAReopenedPhaseIsBriefedWithItsResult(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	id := reopenedRed(t, w)
+	w.set(func(st *state.State) { state.Retake(st, w.now, state.Origin{}) })
+	w.now = w.now.Add(time.Minute)
+	p, _ := state.OpenProject(w.dir, w.clock)
+	p.LinkAgent(lead.store.Ref, "P2", "agent-p2b")
+	b := additionalContext(w.fire("SubagentStart", map[string]any{"agent_id": "agent-p2b", "agent_type": state.PhaseAgent}))
+	for _, want := range []string{decide.WorkerTakesUp("P2"), decide.ReopenedNow("P2 — Third", state.ParkRed), "The result of the job P2 was set aside for", "Job " + id + " (P2) failed (exit 1)", "all in"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the fresh agent's brief lacks %q:\n%s", want, b)
+		}
+	}
+	if st := w.state(); st.Job(id).Delivered.IsZero() || len(st.Due()) != 0 || !w.logged("results_delivered", map[string]any{"via": "brief"}) {
+		t.Errorf("job %+v, due %+v\n%s", st.Job(id), st.Due(), w.eventLog())
+	}
+	in := map[string]any{"agent_id": "agent-p2b", "agent_type": state.PhaseAgent, "tool_name": "Bash", "tool_input": map[string]any{"command": "go test"}}
+	if tell := feedback(w.fire("PostToolUse", in)); strings.Contains(tell, id) {
+		t.Errorf("given again at its tool call: %s", tell)
+	}
+	// One whose phase has nothing new to say is briefed as before.
+	w.now = w.now.Add(time.Minute)
+	p.LinkAgent(lead.store.Ref, "P2", "agent-p2c")
+	b = additionalContext(w.fire("SubagentStart", map[string]any{"agent_id": "agent-p2c", "agent_type": state.PhaseAgent}))
+	if strings.Contains(b, "its verification failed") || strings.Contains(b, "The result of the job") || !strings.Contains(b, "Now: continue P2 — Third. Some of it may be done already") {
+		t.Errorf("a later agent's brief:\n%s", b)
 	}
 }
 
