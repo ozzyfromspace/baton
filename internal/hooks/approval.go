@@ -222,7 +222,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 		}
 	case "Keep the current run":
 		v.say = "baton: keeping the current run; the approved plan is set aside"
-		v.tell = NudgePrefix + " The human chose to keep the current run. Leave the plan they approved aside and carry on with " + st.Current + "."
+		v.tell = NudgePrefix + " The human chose to keep the current run. Leave the plan they approved aside and carry on with " + decide.Named(st.Current) + "."
 	default:
 		v.say = "baton: your answer about the approved plan went to Claude; the run is unchanged"
 		v.tell = fmt.Sprintf("%s The human answered baton's question about the plan they approved in their own words: %s. baton changed nothing. "+

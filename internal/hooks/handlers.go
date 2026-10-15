@@ -1258,7 +1258,7 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 			if iq.kind != "escalation" || state.Resume(st) != nil {
 				continue
 			}
-			event, say, tell = "resumed", "baton: resumed", NudgePrefix+" The human chose Continue: baton has resumed the plan. Carry on with "+st.Current+"."
+			event, say, tell = "resumed", "baton: resumed", NudgePrefix+" The human chose Continue: baton has resumed the plan. Carry on with "+decide.Named(st.Current)+"."
 		case "Pause baton":
 			if state.Pause(st) != nil {
 				continue
@@ -1279,7 +1279,7 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 			event, say = "answered", "baton: keep going — Claude Code compacts on its own when the context is full"
 			if auto {
 				say = "baton: nobody answered, so baton chose Keep going — Claude Code compacts on its own when the context is full"
-				tell = NudgePrefix + " Nobody answered the context question, so baton chose Keep going for the human. Carry on with " + st.Current + "."
+				tell = NudgePrefix + " Nobody answered the context question, so baton chose Keep going for the human. Carry on with " + decide.Named(st.Current) + "."
 			}
 		default:
 			continue

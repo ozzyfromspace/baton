@@ -255,7 +255,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "proposal not asked"})
 			return d
 		}
-		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without putting its proposal %s to you", st.Run.StopBlocks, st.Current, p.ID), now)
+		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without putting its proposal %s to you", st.Run.StopBlocks, decide.Named(st.Current), p.ID), now)
 	case st.Run.Escalation != nil && st.Run.Escalation.Kind == "decision":
 		// A proposal held for the human (Wait for me, or its question went away unanswered). They were
 		// asked already, and pushed; their next message is the answer.
@@ -264,9 +264,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 	case st.Blocked != nil && w.Worker:
 		// A phase agent's block stops its phase alone, and is put to the human by baton.
 		st.Run.StopBlocks = 0
-		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked, Since: st.Blocked.Since, Because: st.Blocked.Reason}, now)
+		relayed(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", decide.Named(st.Current), st.Blocked.Reason), state.Relay{Kind: state.RelayBlocked, Since: st.Blocked.Since, Because: st.Blocked.Reason}, now)
 	case st.Blocked != nil:
-		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", st.Current, st.Blocked.Reason), now)
+		escalate(st, &d, "blocked", fmt.Sprintf("blocked on %s: %s", decide.Named(st.Current), st.Blocked.Reason), now)
 	case st.Run.WarnOwed && st.Run.WarnQuestion != "":
 		// The model was asked to put the context question to the human and stopped without doing so.
 		// Refused once: the context warning is advice, so a second stop goes on as it would have.
@@ -338,7 +338,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks})
 			return d
 		}
-		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without reporting status", st.Run.StopBlocks, st.Current), now)
+		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without reporting status", st.Run.StopBlocks, decide.Named(st.Current)), now)
 	}
 	return d
 }
@@ -421,9 +421,10 @@ func started(st *state.State) bool {
 	return false
 }
 
+// phaseTitle names phase id of pl in a sentence: "P3 (Title)", or "the plan" for none (decide.Named).
 func phaseTitle(pl plan.Plan, id string) string {
 	if i := pl.Index(id); i >= 0 {
 		return id + " (" + pl.Phases[i].Title + ")"
 	}
-	return id
+	return decide.Named(id)
 }

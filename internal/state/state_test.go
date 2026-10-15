@@ -437,6 +437,7 @@ func TestResumeAfterTheContextGrewOwesACheckpoint(t *testing.T) {
 		{name: "size not known at pause", after: at(200_000)},
 		{name: "a boundary compaction is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.BoundaryOwed = true }},
 		{name: "a checkpoint is owed already", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.CheckpointOwed = true }},
+		{name: "no phase in hand", paused: at(60_000), after: at(200_000), owed: func(st *State) { st.Current = "" }},
 		{name: "compacted while paused, then grew past the line", paused: at(150_000), since: []int{30_000, 30_000 + ResumeGrowth + 1}, due: true},
 		{name: "compacted while paused, then grew a little", paused: at(150_000), since: []int{30_000, 30_000 + ResumeGrowth}},
 		{name: "compacted while paused, read stale first", paused: at(150_000), since: []int{150_000, 30_000, 30_000 + ResumeGrowth + 1}, due: true},

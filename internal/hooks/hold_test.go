@@ -124,3 +124,70 @@ func TestABoundaryBatonQueuedLetsTheTurnRunOn(t *testing.T) {
 		})
 	}
 }
+
+// Wherever baton's sentences name the phase in hand and the lead holds none (every phase left is a phase
+// agent's or waits on a job), they name the plan instead of leaving a blank.
+func TestNoSentenceHasABlankForThePhase(t *testing.T) {
+	none := func(st *state.State) { st.Current = "" }
+	t.Run("a block, and the human's Continue", func(t *testing.T) {
+		f := newFixture(t, true)
+		f.set(none)
+		q := f.blocked("need a key")
+		if q != "baton: blocked on the plan: need a key" {
+			t.Fatalf("question %q", q)
+		}
+		out := f.fire("PostToolUse", answer(ask(q, escalationLabels...), "Continue"))
+		if got := feedback(out); !strings.HasSuffix(got, "Carry on with the plan.") {
+			t.Fatalf("told %q", got)
+		}
+	})
+	t.Run("a proposal's Go ahead", func(t *testing.T) {
+		f := newFixture(t, true)
+		call := f.propose(false)
+		f.fire("PermissionRequest", call)
+		f.set(none)
+		out := f.fire("PostToolUse", answer(call, "Go ahead"))
+		if got := feedback(out); !strings.Contains(got, "Then carry on with the plan.") {
+			t.Fatalf("told %q", got)
+		}
+	})
+	t.Run("a review's Continue", func(t *testing.T) {
+		f := newFixture(t, true)
+		f.set(func(st *state.State) {
+			state.AddNote(st, "skipped the flaky test", "re-enable it", f.now)
+			state.DueReview(st, "P0", f.now)
+			st.Current = ""
+		})
+		f.fire("Stop", map[string]any{})
+		q := ask(f.state().Run.Escalation.Question, "Continue", "Pause baton")
+		f.fire("PermissionRequest", q)
+		out := f.fire("PostToolUse", answer(q, "Continue"))
+		if got := feedback(out); !strings.HasSuffix(got, "Carry on with the plan.") {
+			t.Fatalf("told %q", got)
+		}
+	})
+	t.Run("a new plan approved, and the run kept", func(t *testing.T) {
+		f := newFixture(t, false)
+		f.startRun()
+		f.set(none)
+		f.approve(f.writePlan("after-clear.md", approvedDoc))
+		q := ask(f.state().Replan.Question, "Start the new plan from P0", "Keep the current run")
+		if strings.Contains(q["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string), "(at )") {
+			t.Fatalf("asked %v", q)
+		}
+		out := f.fire("PostToolUse", answer(q, "Keep the current run"))
+		if got := feedback(out); !strings.HasSuffix(got, "carry on with the plan.") {
+			t.Fatalf("told %q", got)
+		}
+	})
+	t.Run("the phase's title", func(t *testing.T) {
+		f := newFixture(t, true)
+		pl, _ := f.store.LoadPlan()
+		if got := phaseTitle(pl, ""); got != "the plan" {
+			t.Errorf("phaseTitle of none: %q", got)
+		}
+		if got := phaseTitle(pl, "P1"); got != "P1 (Second)" {
+			t.Errorf("phaseTitle of P1: %q", got)
+		}
+	})
+}

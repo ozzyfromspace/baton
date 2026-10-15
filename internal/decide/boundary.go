@@ -64,3 +64,9 @@ func BoundaryWaitsSay(st state.State) string {
 	_, next := takenUp(st)
 	return "baton: this turn runs to its end; then baton compacts the context, and " + next
 }
+
+// NotedRun is what baton note says of a note recorded with no phase in hand: it is the run's, and
+// counts toward no phase's review.
+func NotedRun(id string) string {
+	return fmt.Sprintf("baton: noted (%s), on the run as a whole: no phase is in hand; the human will be told.", id)
+}

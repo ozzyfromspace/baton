@@ -61,7 +61,8 @@ func cmdNote(args []string, io IO) int {
 			return err
 		}
 		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "note", Text: what, At: io.Now()})
-		if count = st.Unattended(d.Phase); decide.CapReached(count, most) {
+		// A note with no phase in hand is the run's: no phase's review counts it.
+		if count = st.Unattended(d.Phase); d.Phase != "" && decide.CapReached(count, most) {
 			state.DueReview(st, d.Phase, io.Now())
 		}
 		return nil
@@ -73,9 +74,13 @@ func cmdNote(args []string, io IO) int {
 	if up, err := s.ParentRun(); err == nil {
 		// Nobody watches a worker's session: the human reads its note in the lead's.
 		up.Update(func(st *state.State) error {
-			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: the worker on %s noted — %s (%s)", d.Phase, d.What, d.ID))
+			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: the worker on %s noted — %s (%s)", s.Worker(), d.What, d.ID))
 			return nil
 		})
+	}
+	if d.Phase == "" {
+		fmt.Fprintln(io.Out, decide.NotedRun(d.ID))
+		return 0
 	}
 	tally := fmt.Sprintf("%d %s without the human in %s", count, plural(count, "decision", "decisions"), d.Phase)
 	if most > 0 {

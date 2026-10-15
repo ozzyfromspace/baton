@@ -72,7 +72,7 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		state.Resolve(st, p.ID, by, answer, c.Now)
 		if by == state.ByHuman {
 			v.say = "baton: you chose Go ahead on " + p.ID
-			v.tell = fmt.Sprintf("%s The human chose Go ahead. Do what you proposed now: %s. Then carry on with %s.", NudgePrefix, p.What, st.Current)
+			v.tell = fmt.Sprintf("%s The human chose Go ahead. Do what you proposed now: %s. Then carry on with %s.", NudgePrefix, p.What, decide.Named(st.Current))
 			break
 		}
 		notice(st, "proceeded", p.What, c.Now)
@@ -84,7 +84,7 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 			v.also = append(v.also, event{"review_due", map[string]any{"phase": p.Phase, "decisions": n}})
 			v.tell += " That was the last decision baton lets " + p.Phase + " make without the human: once it is done, end your turn, and baton stops for them to review the decisions."
 		} else {
-			v.tell += " Then carry on with " + st.Current + "."
+			v.tell += " Then carry on with " + decide.Named(st.Current) + "."
 		}
 	case "Wait for me":
 		v.also = holdProposal(st, p, state.ByHeld, answer, c.Now)
@@ -103,7 +103,7 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		state.Resolve(st, p.ID, state.ByHuman, answer, c.Now)
 		v.say = "baton: your answer to " + p.ID + " went to Claude"
 		v.tell = fmt.Sprintf("%s The human answered your proposal %s (%s) in their own words: %s. That is their instruction, not a Go ahead: "+
-			"do what it says, and do what you proposed only if it says so. Then carry on with %s.", NudgePrefix, p.ID, p.What, strconv.Quote(answer), st.Current)
+			"do what it says, and do what you proposed only if it says so. Then carry on with %s.", NudgePrefix, p.ID, p.What, strconv.Quote(answer), decide.Named(st.Current))
 	}
 	if p.Resolved != nil {
 		v.fields["by"] = p.Resolved.By // held, paused: what the record says
@@ -183,12 +183,12 @@ func answeredReview(st *state.State, c Context) valveAction {
 	case "Continue":
 		state.Resume(st)
 		v.say = "baton: reviewed — the run goes on"
-		v.tell = NudgePrefix + " The human reviewed the decisions " + phase + " made without them and chose Continue. Carry on with " + st.Current + "."
+		v.tell = NudgePrefix + " The human reviewed the decisions " + phase + " made without them and chose Continue. Carry on with " + decide.Named(st.Current) + "."
 	default:
 		state.Resume(st)
 		v.say = "baton: your answer to the review went to Claude"
 		v.tell = fmt.Sprintf("%s The human answered the review of the decisions %s made without them in their own words: %s. "+
-			"That is their instruction: follow it, then carry on with %s.", NudgePrefix, phase, strconv.Quote(answer), st.Current)
+			"That is their instruction: follow it, then carry on with %s.", NudgePrefix, phase, strconv.Quote(answer), decide.Named(st.Current))
 	}
 	return v
 }

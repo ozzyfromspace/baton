@@ -64,3 +64,19 @@ func TestBoundaryWords(t *testing.T) {
 		}
 	}
 }
+
+// With no phase in hand, a sentence names the plan.
+func TestNoPhaseInHandIsThePlan(t *testing.T) {
+	for _, c := range []struct{ name, got, want string }{
+		{"a phase", Named("P3"), "P3"},
+		{"none", Named(""), "the plan"},
+		{"a checkpoint on resume", CheckpointOnResume(""), "The conversation grew while baton was paused, so baton compacts it before the plan goes on. " +
+			"First record where the plan stands: run `baton checkpoint --notes \"<what is done, what is left, and anything from the paused conversation the rest of the phase needs>\"`, then end your turn. " +
+			"baton compacts the context, and you continue the plan from your notes."},
+		{"a note", NotedRun("d4"), "baton: noted (d4), on the run as a whole: no phase is in hand; the human will be told."},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, c.got, c.want)
+		}
+	}
+}

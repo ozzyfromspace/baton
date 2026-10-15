@@ -497,13 +497,14 @@ func (st State) Resumable() bool {
 
 // Resume gives the session back to baton and clears any block. If the context grew by more than
 // ResumeGrowth while the run was paused, a checkpoint is due before the phase goes on (CheckpointDue),
-// unless a compaction is owed already.
+// unless a compaction is owed already, or no phase is in hand to go on.
 func Resume(st *State) error {
 	if !st.Resumable() {
 		return fmt.Errorf("nothing to resume (mode: %s)", st.Mode)
 	}
 	if st.Mode == ModePaused {
-		if st.GrownWhilePaused() > ResumeGrowth && !st.BoundaryOwed && !st.CheckpointOwed {
+		ps := st.Phases[st.Current]
+		if st.GrownWhilePaused() > ResumeGrowth && !st.BoundaryOwed && !st.CheckpointOwed && ps != nil && ps.Status == PhaseActive {
 			st.CheckpointDue = true
 		}
 		st.Mode, st.PauseContext, st.PauseCompacted, st.Covered = ModeRunning, 0, time.Time{}, time.Time{}

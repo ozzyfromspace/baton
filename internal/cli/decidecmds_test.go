@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -104,6 +105,26 @@ func TestNotesCountTowardAReview(t *testing.T) {
 	s.env["BATON_MAX_AUTO_DECISIONS"] = "0"
 	if out := s.must("", "note", "a"); !strings.Contains(out, "noted (d1, 1 decision without the human in P0)") {
 		t.Errorf("no cap: %s", out)
+	}
+}
+
+// A note with no phase in hand (every phase left waits for a job or a phase agent) is the run's: it is
+// recorded and told, names no blank phase, and counts toward no phase's review, at any cap.
+func TestANoteWithNoPhaseInHandIsTheRuns(t *testing.T) {
+	s := attached(t)
+	s.env["BATON_MAX_AUTO_DECISIONS"] = "1"
+	s.set(func(x *state.State) { x.Current = "" })
+	for _, id := range []string{"d1", "d2"} {
+		if out := s.must("", "note", "restarted the flaky lane", "--undo", "nothing to undo"); !strings.Contains(out, decide.NotedRun(id)) {
+			t.Fatalf("note %s: %s", id, out)
+		}
+	}
+	st := s.state()
+	if len(st.Decisions) != 2 || st.Decisions[0].Phase != "" || st.ReviewDue != "" || !st.ReviewAt.IsZero() || len(st.Run.Notices) != 2 {
+		t.Fatalf("decisions %+v, review due %q at %v, notices %+v", st.Decisions, st.ReviewDue, st.ReviewAt, st.Run.Notices)
+	}
+	if !s.logged("note", map[string]any{"id": "d2", "phase": ""}) || s.logged("review_due", nil) {
+		t.Errorf("events: %s", s.events())
 	}
 }
 
