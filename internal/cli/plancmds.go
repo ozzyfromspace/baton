@@ -1331,7 +1331,7 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 }
 
 // resume gives a paused or stopped run back to baton. A plan file that changed so that baton can no
-// longer follow it keeps the run paused. A compaction the run kept while it was paused counts as the one
+// longer follow it is reported, and the run goes on with the plan as attached. A compaction the run kept while it was paused counts as the one
 // it owed (state.Keep): the phase owed starts with no compaction of its own, its brief handed over with
 // this command's result (hooks.Owe), or the checkpoint is over. Otherwise, if the conversation grew by
 // more than state.ResumeGrowth while the run was paused, the phase goes on from a compacted context: the
@@ -1342,9 +1342,10 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(cur, pl))
 	if err != nil {
 		first := strings.SplitN(err.Error(), "\n", 2)[0]
-		s.Event("refused", map[string]any{"command": "run", "why": "plan file changed"})
-		return fail(io, "not resumed — the plan file changed, and baton can no longer follow it: %s. Fix %s so that every phase still to run is there, then /baton run again. "+
-			"To run the edited plan from P0 instead, ask the human, and only if they agree, attach it with --replace.", first, filepath.Base(pl.File))
+		s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": false, "why": first, "kept": true, "by": "run"})
+		fmt.Fprintf(io.Out, "baton: the plan file changed, and baton cannot follow it (%s): the run goes on with the plan as attached. Fix %s and baton follows the file again.\n",
+			first, filepath.Base(pl.File))
+		changed = false
 	}
 	if changed {
 		if err := s.WritePlan(adopted); err != nil {

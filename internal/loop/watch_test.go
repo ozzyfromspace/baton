@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -51,11 +52,52 @@ func TestIdleSessionIsRemindedThenEscalated(t *testing.T) {
 	if len(r.push.kinds) != 1 || r.push.kinds[0] != "stalled" {
 		t.Fatalf("push %v", r.push.kinds)
 	}
-	for i := 0; i < 30; i++ {
+	// The human may be asleep: the model is still reminded, every StalledNudge.
+	for i := 0; i < 25; i++ {
 		r.tick(time.Minute)
 	}
 	if len(r.in.text) != 1 {
-		t.Fatalf("kept nudging while the human has it: %q", r.in.text)
+		t.Fatalf("nudged again before StalledNudge: %q", r.in.text)
+	}
+	for i := 0; i < 6; i++ {
+		r.tick(time.Minute)
+	}
+	if len(r.in.text) != 2 || !strings.Contains(r.in.text[1], "No activity for") {
+		t.Fatalf("a stalled session was not reminded again: %q", r.in.text)
+	}
+	b, _ := os.ReadFile(filepath.Join(r.loop.Store.Dir, "events.jsonl"))
+	if !strings.Contains(string(b), `"stalled":true`) {
+		t.Errorf("events: %s", b)
+	}
+}
+
+// A result that arrives while the watchdog has the session down as stalled is given to it: that is the
+// very thing that gets it going again. One held behind a refused turn is not: a refused turn is never
+// retried by baton.
+func TestAResultReachesAStalledSession(t *testing.T) {
+	for _, c := range []struct {
+		kind      string
+		watchdog  bool
+		delivered bool
+	}{
+		{"stalled", true, true},
+		{"refused", true, false},
+		{"stalled", false, false}, // the stop table's: its question is the human's to answer, or baton's at its deadline
+	} {
+		t.Run(fmt.Sprintf("%s/watchdog=%v", c.kind, c.watchdog), func(t *testing.T) {
+			r := newIdleRig(t)
+			r.set(func(st *state.State) {
+				st.Run.Escalation = &state.Escalation{Kind: c.kind, Reason: "r", Since: r.now, Watchdog: c.watchdog}
+				if c.kind == "refused" {
+					st.Run.TurnStarted, st.Run.LastError = r.now.Add(-time.Minute), &state.StopError{Error: state.ErrRefusal, At: r.now}
+				}
+				state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: "[baton] something for you"}, r.now)
+			})
+			r.run(time.Minute)
+			if got := len(r.in.text) > 0; got != c.delivered {
+				t.Fatalf("typed %q, want delivered %v", r.in.text, c.delivered)
+			}
+		})
 	}
 }
 

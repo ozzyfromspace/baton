@@ -267,11 +267,13 @@ func TestThePlanFileIsWatched(t *testing.T) {
 	}
 	os.WriteFile(file, []byte("# Something else\n\n## P0 — Other\nx\n"), 0o644)
 	msg := say(f.fire("Stop", map[string]any{}))
-	if !strings.Contains(msg, "paused — the plan file changed, and baton can no longer follow it") || !strings.Contains(msg, "## P1 — Second") {
+	if !strings.Contains(msg, "the plan file changed, and baton cannot follow it") || !strings.Contains(msg, "## P1 — Second") ||
+		!strings.Contains(msg, "it goes on with the plan as attached") {
 		t.Fatalf("a change that loses phases: %q", msg)
 	}
-	if st := f.state(); st.Mode != state.ModePaused || len(st.Run.Notices) == 0 {
-		t.Fatalf("not paused: %+v", st)
+	// Nothing waits on the human to fix it: the run goes on with the plan as attached, and they are told.
+	if st := f.state(); st.Mode != state.ModeRunning || len(st.Run.Notices) == 0 {
+		t.Fatalf("not going on: %+v", st)
 	}
 	f.fire("Stop", map[string]any{})
 	if n := strings.Count(f.eventLog(), `"kind":"plan_changed"`); n != 2 {

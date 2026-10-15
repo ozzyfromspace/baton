@@ -34,7 +34,8 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	}
 	l.errRetries, l.rateNotified = 0, false
 
-	if st.Run.Escalation != nil || st.Blocked != nil || l.why == gateTurn || st.Run.Dialogs.AnyOpen() {
+	stalled := quietStall(st.Run.Escalation) // escalated already, and pushed: results still go in, and reminders go on
+	if st.Run.Escalation != nil && !stalled || st.Blocked != nil || l.why == gateTurn || st.Run.Dialogs.AnyOpen() {
 		l.idleNudged = time.Time{} // the human has it, or the model is working: nothing is stalled
 		return
 	}
@@ -65,6 +66,14 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	if busy := st.Run.BusyBackground(); len(busy) > 0 && v.Now.Sub(l.since(backgroundSince(busy, st.Run.LastStop))) < l.Timing.BackgroundIdle {
 		return // the model's own background work wakes the session when it ends; baton looks in once it has run long
 	}
+	if stalled {
+		// The human was told, and may be asleep: the model is still reminded, more slowly, so a session
+		// that went quiet picks the plan up again by itself.
+		if v.Now.Sub(latest(quietSince, st.Run.Escalation.Since)) >= l.Timing.StalledNudge {
+			l.nudge(v, st, in, quietSince, true)
+		}
+		return
+	}
 	if v.Now.Sub(quietSince) < l.Timing.IdleNudge {
 		return
 	}
@@ -79,6 +88,11 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.escalate("stalled", fmt.Sprintf("%s has not moved after %d reminders", st.Current, st.Run.IdleNudges))
 		return
 	}
+	l.nudge(v, st, in, quietSince, false)
+}
+
+// nudge reminds the idle model of the phase in hand. stalled says the watchdog escalated it already.
+func (l *Loop) nudge(v host.View, st state.State, in host.Injector, quietSince time.Time, stalled bool) {
 	if l.why != "" {
 		l.held(v, st, "remind the idle model")
 		return
@@ -90,7 +104,11 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	}
 	l.idleNudged = v.Now
 	l.update(func(st *state.State) { st.Run.IdleNudges++ })
-	l.Store.Event("idle_nudge", map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1, "via": l.via()})
+	fields := map[string]any{"phase": st.Current, "quiet_for": v.Now.Sub(quietSince).Round(time.Second).String(), "count": st.Run.IdleNudges + 1, "via": l.via()}
+	if stalled {
+		fields["stalled"] = true
+	}
+	l.Store.Event("idle_nudge", fields)
 }
 
 // resuming reports the stretch after a compaction baton asked for, until the model's turn after it begins:

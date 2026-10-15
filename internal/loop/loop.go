@@ -35,6 +35,8 @@ type Timing struct {
 	AckTimeout     time.Duration // a compaction must show it began (the mod's report) this soon after typing /compact (where the mod compacts, its ack says)
 	CompactTimeout time.Duration // and its proof must come this soon after it began
 	FailedRetry    time.Duration // a failed compaction is tried again after this, then 3× longer each round
+	FailedRetryMax time.Duration // but never further apart than this: it is tried again for as long as it fails
+	StalledNudge   time.Duration // a session the watchdog escalated as stalled is still reminded this often
 	ResumeNudge    time.Duration // no turn this long after a compaction: type a reminder
 	ResumeEscalate time.Duration // still nothing this long after the reminder: bring the human in
 	DraftGrace     time.Duration // a draft holding baton this long is saved and cleared, and baton carries on
@@ -66,7 +68,7 @@ type Timing struct {
 // DefaultTiming is baton's production timing.
 var DefaultTiming = Timing{
 	Quiet: 1500 * time.Millisecond, QuietMax: 30 * time.Second, HandsOff: 3 * time.Second,
-	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute,
+	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute, FailedRetryMax: 15 * time.Minute, StalledNudge: 30 * time.Minute,
 	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
 	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, BackgroundMax: 30 * time.Minute, BackgroundIdle: time.Hour,
@@ -80,7 +82,8 @@ var DefaultTiming = Timing{
 // before it gives up on the round.
 const MaxTries = 2
 
-// MaxRounds is how many rounds of attempts a failed compaction gets (5, 15 and 45 minutes apart).
+// MaxRounds is how many rounds of attempts a failed compaction gets before baton says it keeps trying
+// every FailedRetryMax: nothing gives up on it, since the run waits on it.
 const MaxRounds = 3
 
 // MaxIdleNudges is how many reminders baton types without the plan moving before it brings the human in.
@@ -690,16 +693,19 @@ func (l *Loop) typeCompact(v host.View, st state.State, in host.Injector) {
 	}
 }
 
-// retryFailed starts a failed compaction over, with backoff. It stays owed (the model is held until it
-// happens), so giving up would park the run for good.
+// retryFailed starts a failed compaction over, with backoff, for as long as it fails. It stays owed (the
+// model is held until it happens), so giving up would park the run for good.
 func (l *Loop) retryFailed(v host.View, st state.State) {
 	comp := st.Run.Compaction
-	if comp.Rounds+1 >= MaxRounds || !(st.BoundaryOwed || st.CheckpointOwed) {
+	if !(st.BoundaryOwed || st.CheckpointOwed) {
 		return
 	}
 	wait := l.Timing.FailedRetry
-	for i := 0; i < comp.Rounds; i++ {
+	for i := 0; i < comp.Rounds && wait < l.Timing.FailedRetryMax; i++ {
 		wait *= 3
+	}
+	if l.Timing.FailedRetryMax > 0 {
+		wait = min(wait, l.Timing.FailedRetryMax)
 	}
 	if v.Now.Sub(l.since(comp.FailedAt)) < wait {
 		return
@@ -756,7 +762,7 @@ func (l *Loop) fail(comp state.Compaction, reason string) {
 	if comp.Rounds+1 < MaxRounds {
 		reason += "; baton will try again"
 	} else {
-		reason += "; type /compact yourself once the turn is over"
+		reason += fmt.Sprintf("; baton keeps trying every %s (or type /compact yourself once the turn is over)", decide.Spell(l.Timing.FailedRetryMax))
 	}
 	l.escalate("compaction_failed", reason)
 }

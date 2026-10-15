@@ -231,7 +231,7 @@ func verdictLine(vd state.Verdict) string {
 // reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	due, mail := st.Due(), st.Mail()
-	if len(due) == 0 && len(mail) == 0 || st.Run.Escalation != nil || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
+	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {
@@ -282,3 +282,11 @@ func jobIDs(jobs []state.Job) string {
 	}
 	return strings.Join(ids, " ")
 }
+
+// holdsDeliveries reports an escalation that keeps baton from giving the session its results and mail:
+// any but a watchdog's stall, whose remedy is exactly something arriving to work on. A refused turn or an
+// API error is never retried by a delivery of baton's.
+func holdsDeliveries(e *state.Escalation) bool { return e != nil && !quietStall(e) }
+
+// quietStall reports the watchdog's own stall escalation: the session went quiet with a phase in hand.
+func quietStall(e *state.Escalation) bool { return e != nil && e.Watchdog && e.Kind == "stalled" }

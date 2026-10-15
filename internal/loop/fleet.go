@@ -95,13 +95,12 @@ func (c *Coordinator) worktree(checkout, run, phase string) (string, error) {
 }
 
 // launchable says why no worker may start or be resumed now, or "" if one may: the run must be running,
-// with nothing waiting on the human, and no session waiting on a usage limit.
+// with no review the human opted into due, and no session waiting on a usage limit. A block of the lead's
+// holds the lead alone: the phases that do not need its phase go on.
 func launchable(st state.State, now time.Time) string {
 	switch {
 	case st.Mode != state.ModeRunning:
 		return "the run is " + st.Mode
-	case st.Blocked != nil:
-		return "the run is blocked"
 	case st.ReviewDue != "":
 		return "the run waits on a review of its decisions"
 	case st.Usage != nil && now.Before(st.Usage.Limited):

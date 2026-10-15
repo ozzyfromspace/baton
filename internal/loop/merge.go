@@ -118,8 +118,8 @@ func (c *Coordinator) merge(now time.Time, s *state.Store) {
 			c.queue(now, s, w, *e)
 		}
 	}
-	if st, err = s.Load(); err != nil || st.Mode != state.ModeRunning || st.Blocked != nil {
-		return // a paused run lands nothing: its workers' results wait
+	if st, err = s.Load(); err != nil || st.Mode != state.ModeRunning {
+		return // a paused run lands nothing: its workers' results wait (a block of the lead's holds the lead alone)
 	}
 	queued := slices.DeleteFunc(slices.Clone(st.Workers), func(e state.Worker) bool { return e.Status != state.WorkerLanding || e.Merge == nil })
 	slices.SortStableFunc(queued, func(a, b state.Worker) int { return a.Merge.Queued.Compare(b.Merge.Queued) })

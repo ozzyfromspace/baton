@@ -222,6 +222,22 @@ func TestSerialCompactionWaitsForItsProof(t *testing.T) {
 	}
 }
 
+// A compaction still owed is never given up on: past MaxRounds it is tried again every FailedRetryMax.
+func TestAFailedCompactionIsNeverAbandoned(t *testing.T) {
+	r := newRig(t)
+	r.set(func(st *state.State) {
+		st.Run.Compaction.Status, st.Run.Compaction.FailedAt, st.Run.Compaction.Rounds = state.CompactFailed, r.now, MaxRounds+2
+	})
+	r.run(DefaultTiming.FailedRetryMax - 20*time.Second)
+	if c := r.state().Run.Compaction; c.Status != state.CompactFailed {
+		t.Fatalf("tried again too soon: %+v", c)
+	}
+	r.run(30 * time.Second)
+	if c := r.state().Run.Compaction; c.Status == state.CompactFailed || c.Rounds != MaxRounds+3 {
+		t.Fatalf("not tried again: %+v", c)
+	}
+}
+
 func TestAcknowledgedCompactionIsLeftAlone(t *testing.T) {
 	r := newRig(t)
 	r.tick(time.Second)

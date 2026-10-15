@@ -269,8 +269,8 @@ func replanQuestion(r *state.Replan) decide.Question {
 }
 
 // planDrift checks the run's plan document against the text baton attached (plan.Recheck). A change that
-// keeps every phase still to run is followed; one that loses any pauses a running run, since baton
-// would brief the next phase from text that is no longer there. Each change is reported once. A run
+// keeps every phase still to run is followed; one that loses any is reported, and the run goes on with the
+// plan as attached, since nothing would answer for the human while they are away. Each change is reported once. A run
 // that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
 // took: it starts after the boundary compaction this stop queues.
 func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
@@ -314,10 +314,11 @@ func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (sa
 	}
 	st.PlanDrift = sha
 	first := strings.SplitN(err.Error(), "\n", 2)[0]
-	ev = &event{"plan_changed", map[string]any{"plan": pl.File, "adopted": false, "why": first}}
-	if st.Mode != state.ModeRunning || state.Pause(st) != nil {
-		return "baton: the plan file changed, and baton can no longer follow it: " + first, ev, ""
-	}
-	notice(st, "plan_changed", fmt.Sprintf("%s paused: the plan file changed (%s)", pl.Title, first), now)
-	return fmt.Sprintf("baton: paused — the plan file changed, and baton can no longer follow it: %s. Fix %s, then /baton run", first, filepath.Base(pl.File)), ev, ""
+	ev = &event{"plan_changed", map[string]any{"plan": pl.File, "adopted": false, "why": first, "kept": true}}
+	// The run goes on with the plan as attached rather than waiting on the human to fix the file: the
+	// phases' briefs say what they cannot quote, and the model reads the file itself. baton follows the
+	// file again once it reads.
+	notice(st, "plan_changed", fmt.Sprintf("%s goes on with the plan as attached: the plan file changed so baton cannot follow it (%s)", pl.Title, first), now)
+	return fmt.Sprintf("baton: the plan file changed, and baton cannot follow it (%s) → it goes on with the plan as attached; fix %s and baton follows the file again",
+		first, filepath.Base(pl.File)), ev, ""
 }

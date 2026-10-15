@@ -125,17 +125,18 @@ func TestRunDecidesWhatRunningMeans(t *testing.T) {
 		t.Fatalf("not resumed: %s", st.Mode)
 	}
 
-	// A plan file baton can no longer follow keeps the run paused.
+	// A plan file baton can no longer follow is reported, and the run goes on with the plan as attached.
 	s.must("", "pause")
 	doc, _ := os.ReadFile(planFile)
 	os.WriteFile(planFile, []byte(strings.Replace(string(doc), "## P1", "## Q1", 1)), 0o644)
-	if errs := s.fails("run"); !strings.Contains(errs, "not resumed — the plan file changed, and baton can no longer follow it") {
-		t.Errorf("run with a broken plan: %s", errs)
+	if out := s.must("", "run"); !strings.Contains(out, "baton cannot follow it") || !strings.Contains(out, "the run goes on with the plan as attached") || !strings.Contains(out, "resumed") {
+		t.Errorf("run with a broken plan: %s", out)
 	}
-	if st := s.state(); st.Mode != state.ModePaused {
-		t.Fatalf("resumed onto a plan baton cannot follow: %s", st.Mode)
+	if st := s.state(); st.Mode != state.ModeRunning {
+		t.Fatalf("not resumed: %s", st.Mode)
 	}
 	os.WriteFile(planFile, doc, 0o644)
+	s.must("", "pause")
 	says("resumed")
 
 	s.set(func(x *state.State) { x.Mode, x.Current = state.ModeComplete, "" })

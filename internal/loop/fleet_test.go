@@ -138,7 +138,7 @@ func TestWhenAWorkerStarts(t *testing.T) {
 		}, "", "no other phase can start", ""},
 		{"a chain", Fleet{Max: 1}, room{}, chain, nil, "", "no other phase can start", ""},
 		{"paused", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Mode = state.ModePaused }, "", "the run is paused", ""},
-		{"blocked by the lead", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Blocked = &state.Block{Reason: "x"} }, "", "the run is blocked", ""},
+		{"blocked by the lead: the rest goes on", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.Blocked = &state.Block{Reason: "x"} }, "P1", "", ""},
 		{"a review due", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.ReviewDue = "P0" }, "", "the run waits on a review of its decisions", ""},
 		{"attached on a detached HEAD", Fleet{Max: 1}, room{}, pl, func(st *state.State) { st.RunBranch = "" }, "", "the plan was attached with no branch checked out", ""},
 		{"usage over the max", Fleet{Max: 1, UsageMax: 80}, room{}, pl, func(st *state.State) {
