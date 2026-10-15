@@ -22,7 +22,7 @@ func subRun(t *testing.T, q state.Relay, now time.Time) state.State {
 	state.Start(&st, now, state.Origin{})
 	switch q.Kind {
 	case state.RelayProposal:
-		if _, err := state.AddProposal(&st, state.Decision{What: q.What, Because: q.Because, Undo: "use the real clock", Untimed: q.Untimed, Relayed: true}, now); err != nil {
+		if _, err := state.AddProposal(&st, state.Decision{What: q.What, Because: q.Because, Undo: "use the real clock", Outward: q.Outward, Relayed: true}, now); err != nil {
 			t.Fatal(err)
 		}
 	case state.RelayBlocked:
@@ -42,6 +42,7 @@ func subRun(t *testing.T, q state.Relay, now time.Time) state.State {
 func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-time.Hour)
+	outward := state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "x", Outward: "'push' looks outward-facing"}
 	block := state.Relay{Phase: "P3", Kind: state.RelayBlocked, Since: since, Because: "need a key"}
 	review := state.Relay{Phase: "P3", Kind: state.RelayReview, Since: since, Count: 1}
 	for _, c := range []struct {
@@ -84,12 +85,20 @@ func TestAnAnswerIsAppliedToTheWorker(t *testing.T) {
 			}
 		}, "Its question went away unanswered"},
 		{"paused", relayed, "Pause baton", state.ByHuman, 0, "waits for the human", nil, "The human paused the run"},
-		{"untimed, nobody answered", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "x", Untimed: "outward"},
-			"Wait for me", state.ByTimeout, 0, "waits for the human", func(t *testing.T, st state.State) {
-				if d := st.Decisions[0]; d.Resolved != nil || d.WithoutHuman() {
-					t.Errorf("decision %+v", d)
-				}
-			}, "Nobody answered it: do not do what you proposed"},
+		{"outward, nobody answered: Not now", outward, state.NotNow, state.ByTimeout, 1, leftResult, func(t *testing.T, st state.State) {
+			if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.By != state.ByTimeout || d.Resolved.Answer != state.NotNow || d.WithoutHuman() || !d.LeftForHuman() {
+				t.Errorf("decision %+v", d.Resolved)
+			}
+			if _, _, held := st.Held(); held || st.ReviewDue != "" || len(st.Run.Notices) != 1 || st.Run.Notices[0].Kind != "not_now" {
+				t.Errorf("held %v, review %q, notices %+v", held, st.ReviewDue, st.Run.Notices)
+			}
+		}, "so baton answered Not now for the human"},
+		{"outward, the human's Not now", outward, state.NotNow, state.ByHuman, 0, leftResult, func(t *testing.T, st state.State) {
+			if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.By != state.ByHuman || !d.LeftForHuman() || len(st.Run.Notices) != 0 {
+				t.Errorf("decision %+v, notices %+v", d.Resolved, st.Run.Notices)
+			}
+		}, "The human chose Not now on your proposal P3.d1 (push the tag)"},
+		{"outward, the human's Go ahead", outward, "Go ahead", state.ByHuman, 0, "goes ahead", nil, "Do what you proposed now: push the tag"},
 		{"own words", relayed, "use the staging clock", state.ByHuman, 0, "the human's own words", func(t *testing.T, st state.State) {
 			if d := st.Decisions[0]; d.Resolved == nil || d.Resolved.Answer != "use the staging clock" {
 				t.Errorf("decision %+v", d)
@@ -431,6 +440,100 @@ func TestAnUnaskedProposalGoesAheadAtItsDeadline(t *testing.T) {
 			}
 			if !x.logged("relay_answered", map[string]any{"via": "lapsed"}) {
 				t.Errorf("events:\n%s", x.events())
+			}
+		})
+	}
+}
+
+// outwardCrew is relayCrew with an outward proposal: one answered Not now at its deadline.
+func outwardCrew(t *testing.T) *crew {
+	t.Helper()
+	x := newCrew(t, 1)
+	x.atWork("P1")
+	sub := x.sub("P1")
+	sub.Update(func(st *state.State) error {
+		state.Start(st, x.now, state.Origin{})
+		_, err := state.AddProposal(st, state.Decision{What: "push the tag", Because: "the release needs it", Undo: "delete the tag", Outward: "'push' looks outward-facing",
+			Wait: 5 * time.Minute, Relayed: true}, x.now)
+		st.Run.TurnOpen, st.Run.LastActivity, st.Run.LastStop = false, x.now, x.now
+		return err
+	})
+	if err := sub.Relay(state.Relay{Kind: state.RelayProposal, Decision: "P1.d1", What: "push the tag", Because: "the release needs it",
+		Outward: "'push' looks outward-facing", Wait: 5 * time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	return x
+}
+
+// An agent's outward proposal nobody answered is answered Not now at the time its question names: the mod
+// gives that default on screen, and baton gives it to one dismissed or never asked. Its phase is not held
+// for the human; the agent is told to do it only if it is the safe kind, and the human in the lead's
+// session that it may be left for them.
+func TestAnAgentsOutwardProposalIsAnsweredNotNowAtItsDeadline(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		how  func(x *crew)
+		via  string
+	}{
+		{"on screen", func(x *crew) {
+			x.tick(time.Second)
+			q := x.question()
+			x.lead.Update(func(st *state.State) error {
+				st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q), Since: x.now, Kind: "relay"})
+				return nil
+			})
+			x.advance(x.state().Relay[0].Deadline.Sub(x.clock()))
+			x.answers(state.NotNow, true, false)
+		}, "mod"},
+		{"dismissed", func(x *crew) {
+			x.tick(time.Second)
+			q := x.question()
+			x.lead.Update(func(st *state.State) error {
+				st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q), Since: x.now, Kind: "relay"})
+				return nil
+			})
+			x.answers("", false, true)
+			x.tick(time.Second)
+			x.advance(x.state().Relay[0].Deadline.Sub(x.clock()))
+		}, "lapsed"},
+		{"never asked", func(x *crew) {
+			x.lead.Update(func(st *state.State) error {
+				st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "quiet", Since: x.now}
+				return nil
+			})
+			x.tick(time.Second)
+			x.advance(x.state().Relay[0].Due(x.c.Lead.Timing.EscalationTimeout).Sub(x.clock()))
+		}, "lapsed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := outwardCrew(t)
+			c.how(x)
+			x.tick(time.Second)
+			x.tick(time.Second)
+			st := x.state()
+			r := st.Relay[0]
+			if r.Answered == nil || r.Answered.By != state.ByTimeout || r.Answered.Answer != state.NotNow || r.Applied.IsZero() {
+				t.Fatalf("relay %+v\n%s", r, x.events())
+			}
+			if !x.logged("relay_answered", map[string]any{"by": state.ByTimeout, "via": c.via, "answer": state.NotNow}) || !x.has("relay_applied", `"result":"`+leftResult+`"`) {
+				t.Errorf("events:\n%s", x.events())
+			}
+			sst, _ := x.sub("P1").Load()
+			if d := sst.Decisions[0]; d.Resolved == nil || d.Resolved.Answer != state.NotNow || !d.LeftForHuman() || sst.Run.Escalation != nil {
+				t.Fatalf("the worker's proposal %+v, escalation %+v", d.Resolved, sst.Run.Escalation)
+			}
+			if !slices.ContainsFunc(sst.Inbox, func(m state.Message) bool {
+				return m.Kind == state.MessageAnswer && strings.Contains(m.Text, "so baton answered Not now for the human") && strings.Contains(m.Text, "baton note")
+			}) {
+				t.Errorf("the agent is not told: %+v", sst.Inbox)
+			}
+			if !strings.Contains(x.announced(), "so baton answered Not now for you on the proposal P1.d1 of the agent on P1") {
+				t.Errorf("announced %q", x.announced())
+			}
+			// Not held: nothing lapses later, and /baton run has nothing to ask again.
+			x.wait(DefaultTiming.HoldLapse + time.Minute)
+			if x.count("hold_lapsed", nil) != 0 || !x.state().Relay[0].Lapsed.IsZero() {
+				t.Errorf("a hold lapsed:\n%s", x.events())
 			}
 		})
 	}

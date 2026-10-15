@@ -79,3 +79,66 @@ func TestListsKeepTheNewest(t *testing.T) {
 		}
 	}
 }
+
+// A proposal answered Not now, by baton or by the human, is left for the human unless the model did it as
+// the safe kind and noted it: baton status lists it, and the plan's end names it, to the human and to the
+// model that sums the run up.
+func TestProposalsAnsweredNotNowAreLeftForTheHuman(t *testing.T) {
+	deadline := time.Date(2026, 10, 15, 13, 40, 0, 0, time.Local)
+	ds := []state.Decision{
+		{ID: "d1", Kind: state.Note, What: "skipped the flaky test"},
+		{ID: "d2", Kind: state.Proposal, What: "push the tag v1.2.", Deadline: deadline, Resolved: &state.Resolution{By: state.ByTimeout, Answer: state.NotNow}},
+		{ID: "d3", Kind: state.Proposal, What: "commit unsigned", Resolved: &state.Resolution{By: state.ByTimeout, Answer: "Go ahead"}},
+		{ID: "P3.d1", Kind: state.Proposal, What: "email the vendor", Resolved: &state.Resolution{By: state.ByHuman, Answer: state.NotNow}},
+		{ID: "d4", Kind: state.Proposal, What: "deploy", Lapsed: deadline.Add(20 * time.Minute), Resolved: &state.Resolution{By: state.ByTimeout, Answer: state.NotNow}},
+		{ID: "d5", Kind: state.Proposal, What: "publish", Outward: "x"}, // still pending
+	}
+	var ids []string
+	for _, d := range LeftForYou(ds) {
+		ids = append(ids, d.ID)
+	}
+	if got := strings.Join(ids, " "); got != "d2 P3.d1 d4" {
+		t.Errorf("left for you: %s", got)
+	}
+	for _, c := range []struct {
+		d    state.Decision
+		want string
+	}{
+		{ds[1], "nobody answered by 13:40, so baton answered Not now: done only if it was safely reversible and stayed in the project (a note then says so), otherwise left for you — push the tag v1.2"},
+		{ds[3], "you answered Not now: done only if"},
+		{ds[4], "its hold for you lapsed at 14:00, so baton answered Not now"},
+	} {
+		if got := LeftHow(c.d); !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s: %q, want it to start %q", c.d.ID, got, c.want)
+		}
+	}
+
+	for _, c := range []struct {
+		decided, left int
+		want          string
+	}{
+		{0, 0, "all 4 phases done"},
+		{2, 0, "all 4 phases done · 2 decisions made without you — /baton status"},
+		{0, 1, "all 4 phases done · 1 proposal left for you — /baton status"},
+		{1, 2, "all 4 phases done · 1 decision made without you · 2 proposals left for you — /baton status"},
+	} {
+		if got := PlanDone(4, c.decided, c.left); got != c.want {
+			t.Errorf("plan done (%d, %d): %q, want %q", c.decided, c.left, got, c.want)
+		}
+	}
+
+	got := PlanComplete(ds)
+	for _, want := range []string{"including the 2 decisions this run made without them",
+		"Name the proposals answered Not now, which are left for them unless it was done as safely reversible and noted: d2 (push the tag v1.2); P3.d1 (email the vendor); d4 (deploy)",
+		"Then end your turn."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("plan complete lacks %q:\n%s", want, got)
+		}
+	}
+	if got := PlanComplete(ds[:1]); got != "Summarize the results for the human, including the 1 decision this run made without them (baton status lists them, each with its undo), and end your turn." {
+		t.Errorf("plan complete, none left: %q", got)
+	}
+	if got := VerifiedComplete(nil); !strings.HasSuffix(got, "the plan is complete. Summarize the results for the human, and end your turn.") {
+		t.Errorf("verified complete: %q", got)
+	}
+}

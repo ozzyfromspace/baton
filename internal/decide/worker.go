@@ -218,16 +218,17 @@ func WorkerPlanRefused(phase string) string {
 		"Carry on with %s as the plan describes it.", phase, phase)
 }
 
-// WorkerProposed acknowledges a worker's proposal id, which baton puts to the human. untimed
-// says why it has no deadline ("" for a timed one); a timed one goes ahead wait after it was made (why:
-// why that is not the wait the agent asked for, "" if it is).
-func WorkerProposed(id, untimed string, wait time.Duration, why string) string {
+// WorkerProposed acknowledges a worker's proposal id, which baton puts to the human. outward says why it
+// looks outward-facing or irreversible ("" for none): baton answers Not now for them, not Go ahead, wait
+// after it was made (why: why that is not the wait the agent asked for, "" if it is).
+func WorkerProposed(id, outward string, wait time.Duration, why string) string {
 	how := fmt.Sprintf("If nobody answers within %s, baton picks Go ahead for them, and you do it.", Spell(wait))
+	if outward != "" {
+		how = fmt.Sprintf("Since %s, if nobody answers within %s, baton answers Not now for them, and you do it only if it is safely reversible "+
+			"and stays inside the project; otherwise you leave it for them.", outward, Spell(wait))
+	}
 	if why != "" {
 		how += " " + WaitUsed(wait, why)
-	}
-	if untimed != "" {
-		how = "It has no deadline: " + untimed + ", so only the human can let it go ahead."
 	}
 	return fmt.Sprintf("proposal %s recorded. baton puts it to the human, and gives you their answer here. %s "+
 		"Until then, do not do what you proposed: keep working on what does not depend on it, or, with nothing else to do, commit your work and end your turn.", id, how)

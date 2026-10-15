@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -127,12 +128,11 @@ func TestResumingReviewsTheDecisions(t *testing.T) {
 }
 
 // A hold for the human that lapsed is settled by baton for them: Go ahead, a decision without the human
-// that may make a review due, or Not now for one only they could let through, which is none. A notice
-// says so either way.
+// that may make a review due, or Not now for an outward one, which is none. A notice says so either way.
 func TestAHoldLapses(t *testing.T) {
 	for _, c := range []struct {
 		name    string
-		untimed string
+		outward string
 		held    bool // the lead's: resolved held already; otherwise an agent's, pending in its sub-run
 		maxAuto int
 		answer  string
@@ -146,7 +146,7 @@ func TestAHoldLapses(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := running(t)
-			p, _ := AddProposal(&st, Decision{What: "use a fake clock", Untimed: c.untimed}, t0)
+			p, _ := AddProposal(&st, Decision{What: "use a fake clock", Outward: c.outward}, t0)
 			if c.held {
 				Resolve(&st, p.ID, ByHeld, "Wait for me", t0)
 				if h := st.HeldProposal(t0); h == nil || h.ID != p.ID {
@@ -178,6 +178,28 @@ func TestAHoldLapses(t *testing.T) {
 	}
 }
 
+// An outward proposal nobody answered by its deadline is answered Not now: not a decision without the
+// human, never one that makes a review due, but one left for them; a notice says so.
+func TestAnOutwardProposalIsLeftNotNow(t *testing.T) {
+	st := running(t)
+	p, _ := AddProposal(&st, Decision{What: "push the tag", Outward: "'push' looks outward-facing", Deadline: t0.Add(10 * time.Minute)}, t0)
+	if p.Default() != NotNow || (Decision{}).Default() != "Go ahead" {
+		t.Fatalf("defaults %q, %q", p.Default(), (Decision{}).Default())
+	}
+	at := t0.Add(10 * time.Minute)
+	LeftNotNow(&st, &st.Decisions[0], at)
+	d := st.Decisions[0]
+	if d.Resolved == nil || d.Resolved.By != ByTimeout || d.Resolved.Answer != NotNow || !d.Resolved.At.Equal(at) {
+		t.Fatalf("resolved %+v", d.Resolved)
+	}
+	if d.WithoutHuman() || !d.LeftForHuman() || st.Unattended("P0") != 0 || st.PendingProposal() != nil {
+		t.Errorf("without the human %v, left %v, %d unattended, pending %v", d.WithoutHuman(), d.LeftForHuman(), st.Unattended("P0"), st.PendingProposal())
+	}
+	if len(st.Run.Notices) != 1 || st.Run.Notices[0].Kind != "not_now" || st.Run.Notices[0].Text != "push the tag" {
+		t.Errorf("notices %+v", st.Run.Notices)
+	}
+}
+
 // A worker's proposal is put to the human by the lead: the worker owes no question of its own.
 func TestOwnProposalLeavesRelayedOnesToTheLead(t *testing.T) {
 	for _, c := range []struct {
@@ -190,5 +212,21 @@ func TestOwnProposalLeavesRelayedOnesToTheLead(t *testing.T) {
 		if p := st.OwnProposal(); (p != nil) != c.own || st.PendingProposal() == nil {
 			t.Errorf("%s: OwnProposal %+v", c.name, p)
 		}
+	}
+}
+
+// A proposal recorded by v0.8.3, when an outward one had no deadline, still reads as outward: baton
+// answers it Not now, never Go ahead.
+func TestAnOutwardProposalOfV083StaysOutward(t *testing.T) {
+	var d Decision
+	if err := json.Unmarshal([]byte(`{"id":"d1","kind":"proposal","what":"push the tag","untimed":"'push' looks outward-facing or irreversible"}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	var r Relay
+	if err := json.Unmarshal([]byte(`{"phase":"P3","kind":"proposal","decision":"P3.d1","untimed":"'push' looks outward-facing or irreversible"}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if d.Outward == "" || d.Default() != NotNow || r.Outward == "" {
+		t.Errorf("decision %+v, relay %+v", d, r)
 	}
 }

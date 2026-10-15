@@ -24,9 +24,10 @@ func TestRelayQuestions(t *testing.T) {
 		{"timed proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "Use a fake \"clock\"", Because: "the clock is flaky."},
 			"baton: the agent on P3: the clock is flaky. Unless you answer by 15:33, I will use a fake 'clock'.", "Wait for me|Pause baton|Go ahead", "Go ahead",
 			"Don't do it yet; /baton run asks me again"},
-		{"untimed proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "the release needs it", Untimed: "'push' looks outward-facing or irreversible"},
-			"baton: the agent on P3: the release needs it. I propose to push the tag, and will not do it without you ('push' looks outward-facing or irreversible).",
-			"Go ahead|Pause baton|Wait for me", "Wait for me", "Leave P3 waiting; /baton run asks me again"},
+		{"outward proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "the release needs it", Outward: "'push' looks outward-facing or irreversible"},
+			"baton: the agent on P3: the release needs it. I propose to push the tag, but 'push' looks outward-facing or irreversible: unless you answer by 15:33, " +
+				"I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise.",
+			"Wait for me|Pause baton|Not now|Go ahead", "Not now", "Don't do it yet; /baton run asks me again"},
 		{"block", state.Relay{Phase: "P4", Kind: state.RelayBlocked, Because: "the API key expired."},
 			"baton: the agent on P4 is blocked: the API key expired. Only P4 waits for you; the rest of the run goes on. Unless you answer by 15:33, it looks again for a safe way around it.",
 			"Continue|Pause baton|Look again", "Look again", "The agent looks for a safe way around it and proposes it first"},
@@ -104,7 +105,7 @@ func TestRelayOutcome(t *testing.T) {
 		answer string
 		want   string
 	}{
-		{p, "Go ahead", OutcomeGo}, {p, "Wait for me", OutcomeWait}, {p, "", OutcomeWait}, {p, "Pause baton", OutcomePause},
+		{p, "Go ahead", OutcomeGo}, {p, "Not now", OutcomeLeft}, {b, "Not now", OutcomeWords}, {p, "Wait for me", OutcomeWait}, {p, "", OutcomeWait}, {p, "Pause baton", OutcomePause},
 		{p, "Continue", OutcomeWords}, {p, "use the staging clock", OutcomeWords},
 		{b, "Continue", OutcomeOn}, {b, "Wait for me", OutcomeWait}, {b, "Pause baton", OutcomePause}, {b, "Go ahead", OutcomeWords},
 		{b, "try the spare key", OutcomeWords}, {b, "Look again", OutcomeLook}, {p, "Look again", OutcomeWords},

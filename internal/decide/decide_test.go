@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 func TestSanitize(t *testing.T) {
@@ -54,18 +56,71 @@ func TestProposalQuestions(t *testing.T) {
 	if want := "baton: gpg signing times out after the restart. Unless you answer by 15:33, I will commit P4 unsigned."; q.Text != want {
 		t.Errorf("timed:\n%s\nwant\n%s", q.Text, want)
 	}
-	q = UntimedQuestion("the release needs its tag", "PR the fix, then push the tag v1.2", UntimedReason("push"))
-	if want := "baton: the release needs its tag. I propose to PR the fix, then push the tag v1.2, and will not do it without you ('push' looks outward-facing or irreversible)."; q.Text != want {
-		t.Errorf("untimed:\n%s\nwant\n%s", q.Text, want)
-	}
 	// Go ahead is option 3: the key baton types when nobody answers, and "No" in a permission prompt.
 	if len(q.Options) != 3 || q.Options[0].Label != "Wait for me" || q.Options[1].Label != "Pause baton" || q.Options[2].Label != "Go ahead" {
 		t.Errorf("options %+v", q.Options)
 	}
+	// An outward one says what baton answers at its deadline, and Not now is option 3 in its stead: Go
+	// ahead, only the human's to give, comes last.
+	q = OutwardQuestion("the release needs its tag", "PR the fix, then push the tag v1.2", OutwardReason("push"), deadline)
+	if want := "baton: the release needs its tag. I propose to PR the fix, then push the tag v1.2, but 'push' looks outward-facing or irreversible: " +
+		"unless you answer by 15:33, I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise."; q.Text != want {
+		t.Errorf("outward:\n%s\nwant\n%s", q.Text, want)
+	}
+	if len(q.Options) != 4 || q.Options[0].Label != "Wait for me" || q.Options[1].Label != "Pause baton" || q.Options[2].Label != state.NotNow || q.Options[3].Label != "Go ahead" {
+		t.Errorf("options %+v", q.Options)
+	}
 	call := q.Call()
-	for _, want := range []string{`exactly one question, "baton: the release needs`, `(header "baton")`, `exactly 3 options, in this order: "Wait for me" (description:`, "not multi-select"} {
+	for _, want := range []string{`exactly one question, "baton: the release needs`, `(header "baton")`, `exactly 4 options, in this order: "Wait for me" (description:`, "not multi-select"} {
 		if !strings.Contains(call, want) {
 			t.Errorf("call lacks %q:\n%s", want, call)
+		}
+	}
+	p := state.Decision{ID: "d3", Question: q.Text, Outward: OutwardReason("push"), Deadline: deadline}
+	if got := AskFirst(p); !strings.Contains(got, "put your proposal d3 to the human first") || !strings.Contains(got, `"Not now" (description:`) {
+		t.Errorf("ask first: %s", got)
+	}
+	if got := ProposalDismissed(p); !strings.Contains(got, "baton answers Not now for you (Claude does it only if it is safely reversible and stays in the project) at 15:33") {
+		t.Errorf("dismissed: %s", got)
+	}
+	p.Outward = ""
+	if got := ProposalDismissed(p); !strings.Contains(got, "baton goes ahead with it at 15:33") {
+		t.Errorf("dismissed: %s", got)
+	}
+}
+
+// Not now, baton's at the deadline or the human's own, tells the model the safe kind only, and to note it.
+func TestNotNow(t *testing.T) {
+	deadline := time.Date(2026, 10, 5, 15, 33, 0, 0, time.Local)
+	for _, c := range []struct {
+		name      string
+		say, tell string
+		says      []string
+		tells     []string
+	}{
+		{"the lead's, at its deadline", "", "", []string{"nobody answered by 15:33, so baton answered Not now for you on d3", "Claude does it only if it is safely reversible", "push the tag"},
+			[]string{"Nobody answered your proposal d3 (push the tag) by 15:33, so baton answered Not now for the human", "baton note", "do not: leave it undone", "carry on with P2"}},
+		{"the lead's, the human's", "", "", []string{"you chose Not now on d3"}, []string{"The human chose Not now on your proposal d3 (push the tag)", "baton note", "carry on with P2"}},
+		{"an agent's, at its deadline", "", "", []string{"on the proposal P3.d1 of the agent on P3", "the agent does it only if"},
+			[]string{"Nobody answered your proposal P3.d1 (push the tag) by 15:33", "carry on with P3."}},
+	} {
+		switch c.name {
+		case "the lead's, at its deadline":
+			c.say, c.tell = AnsweredNotNow("d3", "push the tag", "P2", deadline)
+		case "the lead's, the human's":
+			c.say, c.tell = AnsweredNotNow("d3", "push the tag", "P2", time.Time{})
+		default:
+			c.say, c.tell = RelayNotNow("P3.d1", "push the tag", "P3", deadline)
+		}
+		for _, w := range c.says {
+			if !strings.Contains(c.say, w) {
+				t.Errorf("%s: say %q lacks %q", c.name, c.say, w)
+			}
+		}
+		for _, w := range c.tells {
+			if !strings.Contains(c.tell, w) {
+				t.Errorf("%s: tell %q lacks %q", c.name, c.tell, w)
+			}
 		}
 	}
 }

@@ -40,8 +40,8 @@ func relayOnScreen(st state.State, key string) *state.Relay {
 
 // relay looks over the run's phase agents' questions once: it applies the answers to their sub-runs,
 // withdraws the questions nobody needs answered any more (settled in the agent's sub-run, or whose agent
-// is gone), takes the default of one the mod lost past its deadline, and has the mod ask the front one
-// when it is due, or again when it lost it.
+// is gone), takes the default of one the mod lost past its deadline or of a proposal that reached its
+// deadline unasked, and has the mod ask the front one when it is due, or again when it lost it.
 func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 	st, err := s.Load()
 	if err != nil {
@@ -70,10 +70,10 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 // question Wait for me or Pause baton, or it went away unanswered or got that default, and the proposal
 // waits in the agent's sub-run) once nobody has written for Timing.HoldLapse, counted from that answer or
 // the human's last word in the lead's session, whichever is later: the run does not wait on them any
-// longer. It goes as the lead's does (Loop.lapseHold): a proposal baton could have let go ahead does, or a
-// more reversible way does; one only the human could let through is answered Not now. A block held so is
-// lifted after Timing.BlockLook, for the agent to look again (lookHold). While the run is paused nothing
-// lapses, and /baton run asks the human again (state.AskAgain), which starts it over.
+// longer. It goes as the lead's does (Loop.lapseHold): a proposal goes ahead, or a more reversible way
+// does; an outward one is answered Not now. A block held so is lifted after Timing.BlockLook, for the
+// agent to look again (lookHold). While the run is paused nothing lapses, and /baton run asks the human
+// again (state.AskAgain), which starts it over.
 func (c *Coordinator) lapseHolds(now time.Time, s *state.Store, st state.State) {
 	if st.Mode != state.ModeRunning {
 		return
@@ -149,19 +149,20 @@ func lapseRelayHold(st *state.State, r state.Relay, after time.Duration, maxAuto
 		st.Run.Escalation = nil
 	}
 	p := st.PendingProposal()
-	id, what, undo, untimed := p.ID, p.What, decide.UndoOf(*p), p.Untimed != ""
+	id, what, undo, outward := p.ID, p.What, decide.UndoOf(*p), p.Outward != ""
 	answer, n, last = state.LapseHold(st, p, maxAuto, now)
-	say, tell := decide.RelayHoldLapsed(id, what, undo, r.Phase, after, untimed, last)
+	say, tell := decide.RelayHoldLapsed(id, what, undo, r.Phase, after, outward, last)
 	state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: tell, About: r.Key()}, now)
 	return say, answer, n, last
 }
 
 // ask has the mod put the front question of the run's phase agents to the human (bridge.Ask): once it is
 // due (state.RelayDue), and again when the mod lost it: the host that had it asked is gone, and the claude
-// it ran with it, or it was never drawn although nothing has been in front of it for relayLost. A timed
-// proposal goes ahead at the time its question names, a block is lifted then for the agent to look again
-// (Timing.BlockLook after it was queued), and anything else gets its default (it waits for the human)
-// after the escalation timeout; asked again, it keeps its deadline.
+// it ran with it, or it was never drawn although nothing has been in front of it for relayLost. A
+// proposal gets its default at the time its question names (Go ahead, or Not now for an outward one), a
+// block is lifted then for the agent to look again (Timing.BlockLook after it was queued), and anything
+// else gets its default (it waits for the human) after the escalation timeout; asked again, it keeps its
+// deadline.
 func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	st, err := s.Load()
 	if err != nil {
@@ -225,9 +226,9 @@ func labels(options []decide.Option) []string {
 }
 
 // asked takes the mod's report r of the answer to a question it put to the human: theirs, the default it
-// gave the question at its deadline, or none: the dialog went away unanswered, which gives a timed
-// proposal or a block its default at its deadline all the same (dismissed), and holds anything else for
-// them like Wait for me.
+// gave the question at its deadline, or none: the dialog went away unanswered, which gives a proposal or a
+// block its default at its deadline all the same (dismissed), and holds anything else for them like Wait
+// for me.
 func (c *Coordinator) asked(now time.Time, s *state.Store, r bridge.Report) {
 	switch {
 	case r.Dismissed && c.dismissed(now, s, r.Question):
@@ -269,10 +270,10 @@ func (c *Coordinator) answered(now time.Time, s *state.Store, question, answer, 
 	s.Event("relay_answered", relayFields(r, fields))
 }
 
-// dismissed records that the dialog of the timed proposal, or the block, the mod was told to ask as
-// question went away unanswered: nobody chose anything, so it is not held for the human but gets its
-// default at its deadline (the proposal goes ahead, the block is lifted for the agent to look again),
-// unless they answer first (lapsed). It reports whether question was such a question.
+// dismissed records that the dialog of the proposal, or the block, the mod was told to ask as question
+// went away unanswered: nobody chose anything, so it is not held for the human but gets its default at
+// its deadline (Go ahead, or Not now for an outward proposal; the block is lifted for the agent to look
+// again), unless they answer first (lapsed). It reports whether question was such a question.
 func (c *Coordinator) dismissed(now time.Time, s *state.Store, question string) bool {
 	var r state.Relay
 	found := false
@@ -296,11 +297,11 @@ func (c *Coordinator) dismissed(now time.Time, s *state.Store, question string) 
 	return found
 }
 
-// lapsed settles r, a timed proposal or a block, which reached its deadline due with nobody's answer and
-// not on screen: the lead's own question went first, the run waited on something else, or its dialog was
+// lapsed settles r, a proposal or a block, which reached its deadline due with nobody's answer and not on
+// screen: the lead's own question went first, the run waited on something else, or its dialog was
 // dismissed. Nobody said no, so it gets its default, as one on screen would have (state.ByTimeout): the
-// proposal goes ahead, the block is lifted for the agent to look again. The mod's command to ask it, if
-// one is open, is voided.
+// proposal goes ahead, or an outward one is answered Not now; the block is lifted for the agent to look
+// again. The mod's command to ask it, if one is open, is voided.
 func (c *Coordinator) lapsed(now time.Time, s *state.Store, b *bridge.Bridge, r state.Relay, due time.Time) {
 	done := false
 	s.Update(func(st *state.State) error {
@@ -388,6 +389,10 @@ func (c *Coordinator) apply(now time.Time, s *state.Store, st state.State, r sta
 		if q := st.RelayOf(r); q != nil {
 			q.Applied = now
 		}
+		if result == leftResult && r.Answered.By == state.ByTimeout {
+			say, _ := decide.RelayNotNow(r.Decision, r.What, r.Phase, r.Deadline)
+			st.Run.Announce = append(st.Run.Announce, say) // the human hears it in the lead's session
+		}
 		if outcome == decide.OutcomePause && state.Pause(st) == nil {
 			paused = true
 			st.Run.Announce = append(st.Run.Announce, decide.RelayPaused(r.Phase))
@@ -406,6 +411,9 @@ func (c *Coordinator) apply(now time.Time, s *state.Store, st state.State, r sta
 		s.Event("block_lapsed", relayFields(r, map[string]any{"by": state.ByTimeout, "after": t.blockLook().String(), "via": "relay"}))
 	}
 }
+
+// leftResult is what applyRelay says of a proposal it answered Not now.
+const leftResult = "answered Not now: done only if safe, otherwise left for the human"
 
 // resultLook is what applying Look again to a phase agent's block did.
 const resultLook = "looks again"
@@ -455,6 +463,18 @@ func applyRelay(st *state.State, r state.Relay, maxAuto int, t Timing, now time.
 			}
 			tell(decide.RelayWentAhead(p.ID, p.What, p.Undo, phase, r.Deadline, last))
 			return "went ahead, as nobody answered"
+		case decide.OutcomeLeft:
+			settled()
+			deadline := r.Deadline
+			if a.By == state.ByTimeout {
+				state.LeftNotNow(st, p, now)
+			} else {
+				state.Resolve(st, p.ID, state.ByHuman, a.Answer, now)
+				deadline = time.Time{}
+			}
+			_, text := decide.RelayNotNow(p.ID, p.What, phase, deadline)
+			tell(text)
+			return leftResult
 		case decide.OutcomeWords:
 			settled()
 			state.Resolve(st, p.ID, state.ByHuman, a.Answer, now)

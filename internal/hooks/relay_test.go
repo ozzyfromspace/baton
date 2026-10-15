@@ -158,6 +158,9 @@ func TestBound(t *testing.T) {
 	timed := func(st *state.State) {
 		state.AddProposal(st, state.Decision{What: "commit P0 unsigned", Because: "gpg signing times out", Undo: "x", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
 	}
+	outward := func(st *state.State) {
+		state.AddProposal(st, state.Decision{What: "push the branch", Because: "b", Undo: "x", Outward: "push", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
+	}
 	front := func(st *state.State) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal", Front: t0})
 	}
@@ -207,8 +210,10 @@ func TestBound(t *testing.T) {
 		{"at its deadline", []func(*state.State){timed, front}, q.Text, 0, 5 * time.Minute, Wait{Answer: "Go ahead"}},
 		{"at its deadline, behind another dialog", []func(*state.State){timed, behind}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
 		{"not on record yet", []func(*state.State){timed}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
-		{"an untimed proposal", []func(*state.State){func(st *state.State) {
-			state.AddProposal(st, state.Decision{What: "push", Because: "b", Undo: "x", Untimed: "push", Question: q.Text}, t0)
+		{"an outward proposal before its deadline", []func(*state.State){outward, front}, q.Text, 0, time.Minute, Wait{For: 30 * time.Second, Answer: "Not now"}},
+		{"an outward proposal at its deadline", []func(*state.State){outward, front}, q.Text, 0, 5 * time.Minute, Wait{Answer: "Not now"}},
+		{"a proposal with no deadline on record", []func(*state.State){func(st *state.State) {
+			state.AddProposal(st, state.Decision{What: "push", Because: "b", Undo: "x", Question: q.Text}, t0)
 		}, front}, q.Text, 0, time.Hour, Wait{}},
 		{"the context question", []func(*state.State){func(st *state.State) { st.Run.WarnQuestion = "baton: the context holds a lot. Checkpoint now?" }, func(st *state.State) {
 			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: the context holds a lot. Checkpoint now?"), Since: t0, Front: t0})
@@ -373,5 +378,31 @@ func TestTheRelayHooksFailOpen(t *testing.T) {
 				t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 			}
 		})
+	}
+}
+
+// An outward proposal the mod answered at its deadline is answered Not now, by baton: the model is told to
+// do it only if it is the safe kind, and it is left for the human otherwise.
+func TestSettleAnOutwardProposal(t *testing.T) {
+	f := newFixture(t, true)
+	f.set(func(st *state.State) { st.Mode, st.Current = state.ModeRunning, "P0" })
+	in := f.propose(true)
+	f.fire("PermissionRequest", in)
+	q := in["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string)
+	if own, err := Settle(f.store, q, "Not now", f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("settled %v, %v", own, err)
+	}
+	st := f.state()
+	if p := st.Decisions[0]; p.Resolved == nil || p.Resolved.By != state.ByTimeout || p.Resolved.Answer != state.NotNow || !p.LeftForHuman() || p.WithoutHuman() {
+		t.Fatalf("resolved %+v", p.Resolved)
+	}
+	if n := len(st.Run.Announce); n == 0 || !strings.Contains(st.Run.Announce[n-1], "so baton answered Not now for you on d1") || !st.Run.HumanAt.IsZero() {
+		t.Errorf("announce %q, human at %s", st.Run.Announce, st.Run.HumanAt)
+	}
+	if !f.logged("proposal_resolved", map[string]any{"id": "d1", "by": state.ByTimeout, "answer": "Not now", "via": "mod"}) {
+		t.Errorf("events:\n%s", f.eventLog())
+	}
+	if out := f.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "baton answered Not now for the human") {
+		t.Errorf("told at the next call: %v", out)
 	}
 }

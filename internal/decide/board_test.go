@@ -36,7 +36,8 @@ func TestStandWords(t *testing.T) {
 		{Stand{Kind: StandReady}, "·", "P3 ready", "ready"},
 		{Stand{Kind: StandWaits, Waits: []string{"P1", "P2"}}, "·", "P3 waits on P1, P2", "waits on P1 and P2"},
 		{Stand{Kind: StandNeedsYou, Why: NeedsPrompt("Bash")}, "?", "P3 needs you", "needs you: a permission prompt (Bash)"},
-		{Stand{Kind: StandNeedsYou, Why: NeedsProposal(time.Time{})}, "?", "P3 needs you", "needs you: a proposal waits for your answer"},
+		{Stand{Kind: StandNeedsYou, Why: NeedsProposal(time.Time{}, false)}, "?", "P3 needs you", "needs you: a proposal waits for your answer"},
+		{Stand{Kind: StandNeedsYou, Why: NeedsProposal(time.Date(2026, 10, 15, 13, 40, 0, 0, time.Local), true)}, "?", "P3 needs you", "needs you: a proposal, answered Not now at 13:40"},
 	} {
 		if got := c.s.Mark(); got != c.mark {
 			t.Errorf("%+v: mark %q, want %q", c.s, got, c.mark)

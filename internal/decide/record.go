@@ -35,12 +35,32 @@ func Tally(n int) string {
 	return fmt.Sprintf("%d decisions made without you", n)
 }
 
-// PlanDone says a plan is complete: how many phases it had, and how many decisions the run (its workers
-// too) made without the human, which baton status lists.
-func PlanDone(phases, decided int) string {
+// LeftForYou lists the proposals in ds answered Not now (state.Decision.LeftForHuman), oldest first: each
+// was done only if it was safely reversible and stayed inside the project, and noted then; otherwise it is
+// left for the human.
+func LeftForYou(ds []state.Decision) []state.Decision {
+	var out []state.Decision
+	for _, d := range ds {
+		if d.LeftForHuman() {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// PlanDone says a plan is complete: how many phases it had, how many decisions the run (its workers too)
+// made without the human, and how many of its proposals were answered Not now (left for them), which
+// baton status lists.
+func PlanDone(phases, decided, left int) string {
 	s := fmt.Sprintf("all %d phases done", phases)
 	if decided > 0 {
-		s += " · " + Tally(decided) + " — /baton status"
+		s += " · " + Tally(decided)
+	}
+	if left > 0 {
+		s += fmt.Sprintf(" · %d %s left for you", left, plural(left, "proposal", "proposals"))
+	}
+	if decided > 0 || left > 0 {
+		s += " — /baton status"
 	}
 	return s
 }
@@ -55,6 +75,18 @@ func Happened(d state.Decision) string {
 		return fmt.Sprintf("went ahead, as nobody answered by %s: %s", d.Deadline.Local().Format("15:04"), clause(d.What))
 	}
 	return "noted: " + clause(d.What)
+}
+
+// LeftHow says what became of a proposal answered Not now (state.Decision.LeftForHuman), for the human.
+func LeftHow(d state.Decision) string {
+	who := "nobody answered by " + d.Deadline.Local().Format("15:04") + ", so baton answered Not now"
+	switch {
+	case d.Resolved.By == state.ByHuman:
+		who = "you answered Not now"
+	case !d.Lapsed.IsZero():
+		who = "its hold for you lapsed at " + d.Lapsed.Local().Format("15:04") + ", so baton answered Not now"
+	}
+	return fmt.Sprintf("%s: done only if it was safely reversible and stayed in the project (a note then says so), otherwise left for you — %s", who, clause(d.What))
 }
 
 // When is when a decision took effect: a note when it was made, a proposal when baton went ahead.

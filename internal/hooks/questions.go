@@ -32,7 +32,7 @@ func issuedQuestions(st *state.State) []issued {
 		}
 	}
 	if p := st.PendingProposal(); p != nil && p.Question != "" {
-		out = append(out, issued{"proposal", decide.Question{Text: p.Question, Options: decide.ProposalOptions}})
+		out = append(out, issued{"proposal", decide.Question{Text: p.Question, Options: decide.OptionsOf(*p)}})
 	}
 	if q := st.Run.WarnQuestion; q != "" {
 		out = append(out, issued{"context_warning", decide.Question{Text: q, Options: decide.WarnOptions}})

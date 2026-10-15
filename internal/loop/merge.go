@@ -495,7 +495,8 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		if complete = st.Mode == state.ModeComplete && !st.Run.CompleteNotified; complete {
 			// The lead holds no phase, so no stop of its own reports the plan complete.
 			st.Run.CompleteNotified = true
-			done = decide.PlanDone(len(pl.Phases), len(decide.WithoutHuman(st.Decisions))+len(decide.WithoutHuman(workers)))
+			done = decide.PlanDone(len(pl.Phases), len(decide.WithoutHuman(st.Decisions))+len(decide.WithoutHuman(workers)),
+				len(decide.LeftForYou(st.Decisions))+len(decide.LeftForYou(workers)))
 			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "plan_complete", Text: pl.Title + ": " + done, At: now})
 		}
 		return nil

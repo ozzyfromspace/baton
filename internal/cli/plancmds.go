@@ -404,7 +404,9 @@ func cmdStatus(args []string, io IO) int {
 	if cu := st.Run.Context; cu != nil {
 		fmt.Fprintln(io.Out, "context: "+contextLine(*cu, io))
 	}
-	printDecisions(io, s.Decisions(st))
+	all := s.Decisions(st)
+	printDecisions(io, all)
+	printLeft(io, all)
 	printSnapshots(io, snaps)
 	printEarlier(io, s)
 	printOthers(io, s)
@@ -583,8 +585,9 @@ func printWaitingOnYou(io IO, st *state.State) {
 		switch {
 		case p.Relayed:
 			fmt.Fprintln(io.Out, "  baton puts it to you in the lead's terminal, and gives this agent your answer")
-		case p.Untimed != "":
-			fmt.Fprintf(io.Out, "  waits for you: baton will not let it go ahead without you (%s)\n", p.Untimed)
+		case p.Outward != "":
+			fmt.Fprintf(io.Out, "  %s, so at %s baton answers Not now for you: Claude does it only if it is safely reversible and stays in the project, "+
+				"and leaves it for you otherwise\n", p.Outward, p.Deadline.Local().Format("15:04"))
 		case p.Asked:
 			fmt.Fprintf(io.Out, "  goes ahead at %s unless you answer baton's question in the session\n", p.Deadline.Local().Format("15:04"))
 		default:
@@ -610,6 +613,8 @@ func printRelay(io IO, s *state.Store, st state.State) {
 		case r.Answered == nil:
 			where := "waits its turn"
 			switch {
+			case r.Asked && r.Outward != "":
+				where = "asked; baton answers Not now for you at " + r.Deadline.Local().Format("15:04") + " unless you answer"
 			case r.Asked && r.Timed():
 				where = "asked; it goes ahead at " + r.Deadline.Local().Format("15:04") + " unless you answer"
 			case r.Asked:
@@ -676,6 +681,20 @@ func printDecisions(io IO, all []state.Decision) {
 	fmt.Fprintln(io.Out, "decisions made without you (this run, oldest first):")
 	for _, d := range ds {
 		fmt.Fprintf(io.Out, "  %-4s %-8s %s  %s\n       undo: %s\n", d.ID, d.Phase, decide.Stamp(decide.When(d)), decide.Happened(d), decide.UndoOf(d))
+	}
+}
+
+// printLeft lists the run's proposals (its workers' too) answered Not now: each was done only if it was
+// safely reversible and stayed in the project, and a note then says so; otherwise it is left for the
+// human.
+func printLeft(io IO, all []state.Decision) {
+	ds := decide.LeftForYou(all)
+	if len(ds) == 0 {
+		return
+	}
+	fmt.Fprintln(io.Out, "left for you (proposals answered Not now, oldest first):")
+	for _, d := range ds {
+		fmt.Fprintf(io.Out, "  %-4s %-8s %s  %s\n       undo: %s\n", d.ID, d.Phase, decide.Stamp(decide.When(d)), decide.LeftHow(d), decide.UndoOf(d))
 	}
 }
 
@@ -878,7 +897,7 @@ func cmdDone(args []string, io IO) int {
 		return 0
 	}
 	if st.Mode == state.ModeComplete {
-		fmt.Fprintf(io.Out, "%s That was the last phase — the plan is complete. %s\n", finished, decide.PlanComplete(len(decide.WithoutHuman(st.Decisions))))
+		fmt.Fprintf(io.Out, "%s That was the last phase — the plan is complete. %s\n", finished, decide.PlanComplete(s.Decisions(st)))
 		return 0
 	}
 	if next == "" && st.HereGate() != nil {

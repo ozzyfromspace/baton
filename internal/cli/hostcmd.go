@@ -141,7 +141,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle, "BATON_BACKGROUND_IDLE": &timing.BackgroundIdle,
-		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_HOLD_LAPSE": &timing.HoldLapse,
+		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_HOLD_LAPSE": &timing.HoldLapse, "BATON_RECOVER_AFTER": &timing.RecoverAfter, "BATON_RECOVER_EVERY": &timing.RecoverEvery,
 		"BATON_BLOCK_LOOK": &timing.BlockLook} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
 			*field = d
@@ -178,7 +178,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	runners := newHostRunners(io, exe, proj, instance)
 	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto,
-		Runners: runners, Lapse: lapser(escalation.Env())}
+		Runners: runners, Lapse: lapser(escalation.Env()), StartsAfresh: upgrade.CanRestart}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
@@ -208,11 +208,13 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		controller.Flush()
 		return restartOn(io, to, resumed, args, logf)
 	}
-	stop := "" // set when baton stops bringing the lead back: the escalation
+	stop := "" // set when the human stopped baton bringing the lead back: the escalation
 	if err == nil {
-		// claude exited by itself mid-plan: the lead comes back, unless baton has brought it back often enough.
+		// claude exited by itself mid-plan, or the loop ended it for a fresh session: the lead comes back,
+		// after a wait once it keeps exiting.
 		x := leadExit{Exit: exit, Restart: restarting, Recovering: io.Env("BATON_RECOVER"), CanExec: upgrade.CanRestart}
-		rc, handled, why := recoverLead(io, proj, instance, exe, args, x, started, coordinator, controller, logf)
+		x.Afresh, x.Waited, _ = controller.Afresh()
+		rc, handled, why := recoverLead(io, proj, instance, exe, args, x, started, timing, coordinator, controller, logf)
 		if handled {
 			return rc
 		}
@@ -232,20 +234,24 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		return fail(io, "%v", err)
 	}
 	if st, ok := proj.Lookup("", instance); ok && code != 0 && code != 130 && code != 143 { // not a deliberate Ctrl-C or termination
+		crashed := false
 		st.Update(func(s *state.State) error {
 			now := io.Now()
 			switch {
 			case stop != "":
-				// It has been brought back as often as it may be: the human resumes it.
+				// The human stopped baton bringing it back, at its terminal: they resume it. A refused turn's
+				// escalation stays, since it says what only they decide.
 				s.Run.Notices = slices.DeleteFunc(s.Run.Notices, func(n state.Notice) bool { return n.Kind == "session_ended" })
-				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: stop, At: now})
-				s.Run.Escalation = &state.Escalation{Kind: "crashed", Reason: stop, Since: now, Watchdog: true, Pushed: true, LastPush: now}
+				if e := s.Run.Escalation; e == nil || e.Kind != "refused" {
+					s.Run.Escalation = &state.Escalation{Kind: "crashed", Reason: stop, Since: now, Watchdog: true, Pushed: true, LastPush: now}
+					crashed = true
+				}
 			case s.Mode == state.ModeRunning && s.Run.Ended == nil:
 				s.Run.Notices = append(s.Run.Notices, state.Notice{Kind: "session_ended", Text: fmt.Sprintf("claude exited with code %d mid-plan", code), At: now})
 			}
 			return nil
 		})
-		if stop != "" {
+		if crashed {
 			st.Event("escalated", map[string]any{"type": "crashed", "reason": stop})
 		}
 	}

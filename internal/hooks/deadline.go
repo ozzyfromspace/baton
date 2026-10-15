@@ -23,10 +23,11 @@ type Wait struct {
 }
 
 // Bound is how long question may wait, put to the human in the lead's session of s at asked (when the
-// mod's hook first saw the call), as the lead's state stands at now: a timed proposal of the lead's own
-// goes ahead at its deadline, the context question is answered Keep going after warnTimeout, a block is
-// answered Look again once the host's loop found nobody answered it in time, and a phase agent's question
-// gets its default at its deadline (decide.RelayDefault). None is answered sooner than
+// mod's hook first saw the call), as the lead's state stands at now: a proposal of the lead's own goes
+// ahead at its deadline, or is answered Not now then if it is outward, the context question is answered
+// Keep going after warnTimeout, a block is answered Look again once the host's loop found nobody answered
+// it in time, and a phase agent's question gets its default at its deadline (decide.RelayDefault). None
+// is answered sooner than
 // decide.MinWait after it was on screen: a question of the lead's model may be queued behind another
 // dialog, so its clock runs from when it was first seen in front (Dialog.Front, recorded here); one of
 // the mod's is asked only while no other dialog is open (the band it is asked from is not drawn then).
@@ -62,11 +63,11 @@ func bound(st *state.State, question string, asked, now time.Time, warnTimeout, 
 	switch iq.kind {
 	case "proposal":
 		p := st.OwnProposal()
-		if p == nil || p.Untimed != "" || p.Deadline.IsZero() {
+		if p == nil || p.Deadline.IsZero() {
 			return Wait{}
 		}
 		shown, front := shownSince(st, question, now)
-		due, answer = latest(p.Deadline, shown.Add(decide.MinWait)), decide.ProposalOptions[2].Label
+		due, answer = latest(p.Deadline, shown.Add(decide.MinWait)), p.Default()
 		if !front {
 			return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: answer}
 		}
@@ -136,7 +137,7 @@ func shownSince(st *state.State, question string, now time.Time) (time.Time, boo
 
 // Settle records that baton's mod answered question with answer at its deadline, in the lead's session
 // of s, as the call's result would have: its dialog is closed, and a question of the lead's own is
-// answered by baton (a proposal goes ahead, the context question keeps going, the run goes on, a plan
+// answered by baton (a proposal goes ahead or, outward, is answered Not now, the context question keeps going, the run goes on, a plan
 // approved mid-run gets its default), which the model is told at its next tool call or stop. A phase
 // agent's question is the coordinator's to settle, from the mod's report of its answer. It reports
 // whether the question was baton's.

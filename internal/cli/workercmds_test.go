@@ -98,7 +98,7 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 	if got := relays(lead); got != "P1/proposal/P1.d1" || !lead.logged("relay_queued", map[string]any{"phase": "P1", "type": "proposal", "decision": "P1.d1"}) {
 		t.Errorf("the run's relay queue %q; events:\n%s", got, lead.events())
 	}
-	if r := lead.state().Relay[0]; r.What != "use a fake clock" || r.Because != "the real one drifts" || r.Untimed != "" {
+	if r := lead.state().Relay[0]; r.What != "use a fake clock" || r.Because != "the real one drifts" || r.Outward != "" {
 		t.Errorf("queued %+v: the lead words its question from it", r)
 	}
 	if !w.logged("proposed", map[string]any{"id": "P1.d1", "relayed": true}) || strings.Contains(w.events(), `"deadline"`) {
@@ -111,16 +111,17 @@ func TestAWorkersProposalGoesThroughTheLead(t *testing.T) {
 		t.Errorf("queued again: %q", got)
 	}
 
-	// One that looks outward-facing has no deadline.
+	// One that looks outward-facing waits as long, and is answered Not now at its deadline.
 	w, lead2 := asWorker(t)
-	if out := w.must("", "propose", "push the branch", "--because", "CI needs it", "--undo", "delete it"); !strings.Contains(out, "It has no deadline: 'push' looks outward-facing or irreversible") {
-		t.Errorf("untimed: %s", out)
+	if out := w.must("", "propose", "push the branch", "--because", "CI needs it", "--undo", "delete it"); !strings.Contains(out,
+		"Since 'push' looks outward-facing or irreversible, if nobody answers within 10 minutes, baton answers Not now for them, and you do it only if it is safely reversible") {
+		t.Errorf("outward: %s", out)
 	}
-	if ws := w.state(); ws.PendingProposal().Question != "" || ws.PendingProposal().Untimed == "" {
+	if ws := w.state(); ws.PendingProposal().Question != "" || ws.PendingProposal().Outward == "" || ws.PendingProposal().Wait != 10*time.Minute {
 		t.Errorf("the lead words the question, as it asks it: %+v", ws.PendingProposal())
 	}
-	if ws, r := w.state(), lead2.state().Relay[0]; r.Untimed == "" || r.Untimed != ws.PendingProposal().Untimed {
-		t.Errorf("queued %+v without why it has no deadline", r)
+	if ws, r := w.state(), lead2.state().Relay[0]; r.Outward == "" || r.Outward != ws.PendingProposal().Outward || r.Wait != 10*time.Minute {
+		t.Errorf("queued %+v without why it is outward, or its wait", r)
 	}
 }
 
