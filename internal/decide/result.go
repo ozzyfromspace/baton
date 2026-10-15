@@ -88,6 +88,9 @@ func JobResult(j state.Job, log, tail string, others []state.Job) string {
 	case j.Status == state.JobLaneError:
 		fmt.Fprintf(&b, "This is not a test result: the gate never ran on its own terms, so do not look for a bug in %s's code because of it. "+
 			"Run the gate in place instead, and `baton note` that you did. (baton status says how to set lanes up with a %s script.)", j.Phase, ".baton-lane")
+	case Hung(j):
+		b.WriteString("baton stopped it as hung, so nothing was checked: find what it waits on (a server that never answers, input, a lock) before you hand it to baton again, " +
+			"or run it in place with a timeout of its own.")
 	case j.Status == state.JobInterrupted:
 		b.WriteString("Nothing was checked. Hand it to baton again, or run it in place.")
 	case j.Kind == state.JobAwait:
@@ -123,6 +126,26 @@ func RedPhases(red []state.Job, phase string) string {
 	}
 	return "Red now: " + strings.Join(names, "; ") + ". Failures in their area are theirs, " + whose + ": leave them to " +
 		plural(len(names), "it", "them") + "."
+}
+
+// hungMark begins the reason of a job baton stopped as hung (HungReason).
+const hungMark = "hung — "
+
+// HungReason is why baton stopped a gate as hung (Job.Reason): its log had not grown, and its processes
+// had used no CPU, for quiet. Such a job has no verdict: its phase counts as unverified.
+func HungReason(quiet time.Duration) string {
+	return hungMark + "its log had not grown, and its processes had used no CPU, for " + Span(quiet)
+}
+
+// Hung reports a job baton stopped as hung (HungReason).
+func Hung(j state.Job) bool {
+	return j.Status == state.JobInterrupted && strings.HasPrefix(j.Reason, hungMark)
+}
+
+// JobHung tells the human that baton stops job j as hung, its log and its processes still for quiet.
+func JobHung(j state.Job, quiet time.Duration) string {
+	return fmt.Sprintf("baton: job %s (`%s`, %s) looks hung — its log has not grown, and its processes have used no CPU, for %s → baton stops it, and it counts as unverified",
+		j.ID, j.Command, j.Phase, Span(quiet))
 }
 
 // FinishedAside tells the human that job j, as it ended, was the job of a phase set aside while it ran:

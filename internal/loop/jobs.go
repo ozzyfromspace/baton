@@ -2,11 +2,14 @@ package loop
 
 import (
 	"fmt"
+	"maps"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -21,6 +24,8 @@ type Runners interface {
 	Alive(pid int) bool
 	// Kill kills process group pgid: whatever a runner that died left running.
 	Kill(pgid int)
+	// Usage reads the CPU time used so far by the process tree of process group pgid (procs.TreeUsage).
+	Usage(pgid int) (procs.Usage, error)
 }
 
 // jobs runs the session's jobs: it starts a runner for each job queued, and ends a job whose runner died
@@ -47,6 +52,102 @@ func (l *Loop) jobs(v host.View, st state.State) {
 			}
 		}
 	}
+	l.hung(v, st)
+}
+
+// A gate can hang without a word: a test waiting on a server that never answers, on input nobody gives, on
+// a lock. Left alone, it would hold its phase until verify_timeout (3 hours by default). So the host looks
+// at each running gate about once a minute (hungEvery), and one whose log has not grown, and whose process
+// tree has used no CPU, for Timing.HungAfter is stopped as hung: it ends interrupted, with why
+// (decide.HungReason), so its phase counts as unverified, and the model is given the result. Its runner
+// stops its command and brings its lane down at its next beat, as for a job cancelled. Never on the log's
+// silence alone: a gate whose processes cannot be read (no reading on this system, or a process of
+// another user's) is never taken for hung, nor is one waiting for a lane, nor an await, whose wait on
+// something outside the project may well be silent and idle.
+
+// hungEvery is how often the host looks at its running gates for signs of life.
+const hungEvery = time.Minute
+
+// life is what the host saw of a running gate when it last looked (at): the process group it runs, its
+// log, the CPU its process tree had used (nil: no reading), and since when none of them has moved (zero:
+// not known to be still).
+type life struct {
+	pgid  int
+	log   logMark
+	cpu   procs.Usage
+	still time.Time
+	at    time.Time
+}
+
+// logMark is a log's size and when it was last written; a size of -1 for a log that cannot be read.
+type logMark struct {
+	size int64
+	mod  time.Time
+}
+
+func markOf(path string) logMark {
+	fi, err := os.Stat(path)
+	if path == "" || err != nil {
+		return logMark{size: -1}
+	}
+	return logMark{size: fi.Size(), mod: fi.ModTime()}
+}
+
+// hung looks at the running gates of the loop's run st, about once a minute, and stops one that hangs
+// (see above). A look that comes long after the last (the machine slept) starts each count afresh.
+func (l *Loop) hung(v host.View, st state.State) {
+	after := l.Timing.HungAfter
+	if after <= 0 || !l.hungAt.IsZero() && v.Now.Sub(l.hungAt) < hungEvery {
+		return
+	}
+	l.hungAt = v.Now
+	seen := map[string]life{}
+	for _, j := range st.Jobs {
+		if j.Status != state.JobRunning || j.Kind == state.JobAwait || j.PGID == 0 || !j.LaneWait.IsZero() {
+			continue
+		}
+		now := life{pgid: j.PGID, log: markOf(j.Log), at: v.Now}
+		if u, err := l.Runners.Usage(j.PGID); err == nil && len(u) > 0 {
+			now.cpu = u
+		}
+		was, ok := l.lives[j.ID]
+		switch {
+		case now.cpu == nil || now.log.size < 0:
+			// No reading: never still.
+		case ok && !was.still.IsZero() && was.pgid == now.pgid && was.log == now.log && maps.Equal(was.cpu, now.cpu) &&
+			v.Now.Sub(was.at) <= hungEvery+l.Timing.ClockJump:
+			now.still = was.still
+		default:
+			now.still = v.Now
+		}
+		seen[j.ID] = now
+		if quiet := v.Now.Sub(now.still); !now.still.IsZero() && quiet >= after {
+			l.stopHung(v, j, quiet)
+			delete(seen, j.ID)
+		}
+	}
+	l.lives = seen // a job that ended is forgotten
+}
+
+// stopHung stops gate j, whose log and processes have been still for quiet: it ends interrupted, with
+// why, unless it ended meanwhile, and its runner stops its command at its next beat.
+func (l *Loop) stopHung(v host.View, j state.Job, quiet time.Duration) {
+	stopped := false
+	l.update(func(st *state.State) {
+		x := st.Job(j.ID)
+		if x == nil || x.Status != state.JobRunning || x.PID != j.PID || !x.Started.Equal(j.Started) {
+			return
+		}
+		x.Status, x.Exit, x.Reason, x.Ended = state.JobInterrupted, -1, decide.HungReason(quiet), v.Now
+		st.Run.Announce = append(st.Run.Announce, decide.JobHung(*x, quiet))
+		stopped = true
+	})
+	if !stopped {
+		return
+	}
+	l.logf("loop: job %s hung: its log and its processes (group %d) still for %s; stopped", j.ID, j.PGID, quiet.Round(time.Second))
+	l.Store.Event("job_hung", map[string]any{"job": j.ID, "phase": j.Phase, "command": j.Command, "pgid": j.PGID, "log": j.Log,
+		"quiet": quiet.Round(time.Second).String(), "by": "host"})
 }
 
 // spawn starts a queued job's runner, which takes the job from there.

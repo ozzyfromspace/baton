@@ -59,6 +59,7 @@ type Timing struct {
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
+	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -75,6 +76,7 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 30 * time.Minute,
+	HungAfter: 20 * time.Minute,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
@@ -153,6 +155,10 @@ type Loop struct {
 	halted     bool           // the run is halted, and this halt's snapshot was started
 	snapping   atomic.Bool    // a snapshot is running
 	saving     sync.WaitGroup // and Ended waits for it
+
+	// When the running gates were last looked at for signs of life (hung), and what was seen of each, by job.
+	hungAt time.Time
+	lives  map[string]life
 
 	// How the loop reaches the lead's claude (mod.go): whether its mod has said hello, which carries what
 	// baton gives the lead from then on, and how this tick does (modMode), last looked at modAt, with the

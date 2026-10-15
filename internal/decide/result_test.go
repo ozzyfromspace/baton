@@ -38,7 +38,10 @@ func TestJobResult(t *testing.T) {
 			[]string{"could not run: the command did not run (exit 127)", "This is not a test result", "do not look for a bug in P3's code", "Run the gate in place instead, and `baton note`", ".baton-lane"},
 			[]string{"Fix what failed"}},
 		{"interrupted", job(state.JobVerify, state.JobInterrupted, -1, "its runner (pid 7) is gone"),
-			[]string{"was interrupted after 12m: its runner (pid 7) is gone", "Nothing was checked"}, nil},
+			[]string{"was interrupted after 12m: its runner (pid 7) is gone", "Nothing was checked"}, []string{"hung"}},
+		{"hung", job(state.JobVerify, state.JobInterrupted, -1, HungReason(20*time.Minute)),
+			[]string{"was interrupted after 12m: hung — its log had not grown, and its processes had used no CPU, for 20m: `make test`",
+				"baton stopped it as hung, so nothing was checked: find what it waits on"}, []string{"Hand it to baton again, or run it in place."}},
 		{"await failed", job(state.JobAwait, state.JobFailed, 1, ""), []string{"What it waited on did not succeed"}, []string{"verify again"}},
 	} {
 		got := JobResult(c.job, "/x/j4.log", "line 1\nFAIL thing\n", red)
