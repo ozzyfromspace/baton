@@ -310,12 +310,17 @@ func (s *Session) Trust() {
 
 // Type types text like a person, then presses Enter.
 func (s *Session) Type(text string) {
+	s.Draft(text)
+	time.Sleep(400 * time.Millisecond)
+	s.pty.Write([]byte("\r"))
+}
+
+// Draft types text like a person, and leaves it in the input box, unsent.
+func (s *Session) Draft(text string) {
 	for _, r := range text {
 		s.pty.Write([]byte(string(r)))
 		time.Sleep(30 * time.Millisecond)
 	}
-	time.Sleep(400 * time.Millisecond)
-	s.pty.Write([]byte("\r"))
 }
 
 // Key sends raw keys, such as "\x1b[Z" (shift+tab), with no Enter.

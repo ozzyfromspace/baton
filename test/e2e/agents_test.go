@@ -1046,17 +1046,18 @@ Run echo three, then report P3 done: baton done P3 --notes 'said three'
 `
 
 // With workers: auto, the plan decides how many phase agents work at once: P1 and P2 can go ahead beside
-// the lead's P0, so two start, one after the other, on a machine with room for them. baton's board shows
-// them both at work in the plan's first step. Both land, and P3, which needs every phase, starts after.
-// No agent starts for P3: by then nothing else can go ahead.
+// the lead's P0, so two start on a machine with room for them, a ramp apart (a minute here): the second
+// waits until the first has been at work that long, and baton says why. baton's board shows them both at
+// work in the plan's first step. Both land, and P3, which needs every phase, starts after. No agent starts
+// for P3: by then nothing else can go ahead.
 func TestTwoPhaseAgentsWorkBesideTheLead(t *testing.T) {
 	dir := projectWith(t, map[string]string{"hold.sh": holdScript, "wait.sh": signalScript})
 	Attach(t, dir, autoPlan)
-	s := StartAgents(t, dir, []string{"BATON_WORKERS=auto", "BATON_SWITCH_AFTER=10m"},
+	s := StartAgents(t, dir, []string{"BATON_WORKERS=auto", "BATON_SWITCH_AFTER=10m", "BATON_AGENT_RAMP=1m"},
 		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Bash(sh wait.sh both)", "Write")
 	s.AutoApprove()
 
-	if !s.Until("two phase agents at work", 4*time.Minute, func() bool { return count(s.Events(), is("worker_started")) >= 2 }) {
+	if !s.Until("two phase agents at work", 5*time.Minute, func() bool { return count(s.Events(), is("worker_started")) >= 2 }) {
 		t.Fatalf("fewer than two phase agents started:\n%s", eventLog(s))
 	}
 	time.Sleep(10 * time.Second) // both are at work, waiting on wait.sh
@@ -1081,6 +1082,12 @@ func TestTwoPhaseAgentsWorkBesideTheLead(t *testing.T) {
 	if len(spawns) != 2 || spawns[0]["phase"] != "P1" || spawns[1]["phase"] != "P2" {
 		t.Fatalf("phase agents started: %v", spawns)
 	}
+	if held := filter(ev, is("worker_deferred")); len(held) != 1 || held[0]["phase"] != "P2" || held[0]["held"] != "ramp" {
+		t.Errorf("held back: %v", held)
+	}
+	if d := eventTime(spawns[1]).Sub(eventTime(ev[first(ev, is("worker_started", "phase", "P1"))])); d < time.Minute {
+		t.Errorf("P2's agent started %s after P1's, under the ramp", d)
+	}
 	p3 := first(ev, is("phase_started", "phase", "P3"))
 	for _, phase := range []string{"P1", "P2"} {
 		if l := first(ev, is("landed", "phase", phase)); l < 0 || p3 < l {
@@ -1100,5 +1107,5 @@ func TestTwoPhaseAgentsWorkBesideTheLead(t *testing.T) {
 	if !strings.Contains(log, "feat: one") || !strings.Contains(log, "feat: two") {
 		t.Errorf("the run's branch: %s", log)
 	}
-	none(t, s, "controller_panic", "land_returned", "serial", "worker_deferred")
+	none(t, s, "controller_panic", "land_returned", "serial")
 }
