@@ -12,12 +12,13 @@ import (
 // Whether there is room for another phase agent. With workers: auto, how many may run at once is the
 // plan's to say (the phases that can go ahead) and the machine's (a ceiling the host works out from its
 // CPUs and memory, config.AutoWorkers); whatever the setting, an agent starts only while the machine has
-// room for one, as it reads at the step (busy), and one at a time (mayLaunch). Nor does a new agent start
-// while the project's lanes fall behind, a gate of the run's waiting for one (lanes), or while the
-// workers' landings keep conflicting with the run's branch (conflicted): another agent would only add to
-// either. What holds back a phase that could go ahead is told once (hold). The agents at work are never
-// stopped. The machine's readings and limits come from spike 27 (docs/research/workers.md, "Machine
-// readings and leftovers").
+// room for one, as it reads at the step (busy), one at a time (mayLaunch), and a ramp after the one before
+// (Fleet.Ramp), since a reading lags the load an agent brings. Nor does a new agent start while the
+// project's lanes fall behind, a gate of the run's waiting for one (lanes), or while the workers'
+// landings keep conflicting with the run's branch (conflicted): another agent would only add to either.
+// What holds back a phase that could go ahead is told once (hold). The agents at work are never stopped.
+// The machine's readings and limits come from spike 27 (docs/research/workers.md, "Machine readings and
+// leftovers").
 
 const (
 	// memFloor is the least share of memory, in percent, Linux must have available for another session.

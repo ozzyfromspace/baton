@@ -49,12 +49,21 @@ const launchRetry = 5 * time.Minute
 // its worker all the same.
 const stopWait = 30 * time.Second
 
+// AgentRamp is how long after the newest phase agent of a run started the host lets another start
+// (Fleet.Ramp).
+const AgentRamp = 2 * time.Minute
+
 // Fleet is what the coordinator needs to run phase agents. A coordinator without one runs none
 // (workers: 0, or a machine with no room for one), and retires those its run has on record.
 type Fleet struct {
 	Max      int     // agents at once: workers' number, or with auto what the machine allows (config.AutoWorkers)
 	UsageMax float64 // no new agent above this percent of the five-hour allowance (worker_usage_max; 0: no check)
 	MaxAuto  int     // the decisions a phase may make without the human before they review them (max_auto_decisions; 0: no cap)
+	// Ramp is how long after the newest agent of the run started a new one may start, whatever Max says
+	// (AgentRamp; 0: no wait). The machine's readings lag the load an agent brings (busy reads a
+	// one-minute load average), so agents started together overload a machine that read as roomy. An
+	// agent started again for a worker it had before (a resume, a respawn) does not wait for it.
+	Ramp time.Duration
 	// Machine reads the machine (nil: machine.Read): no agent starts while it has no room for another
 	// (room.go).
 	Machine func() machine.Reading
@@ -104,8 +113,8 @@ func launchable(st state.State, now time.Time) string {
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
 // one does): the run must be running, under Max workers of its plan, with a phase that can go ahead.
 // held names what holds a phase that waits back: no room on the machine (r.busy), gates waiting for lanes
-// (r.lanes), landings that keep conflicting, or no room under worker_usage_max (state.HoldBusy,
-// HoldLanes, HoldConflicts, HoldUsage); "" for none.
+// (r.lanes), landings that keep conflicting, no room under worker_usage_max, or an agent that started
+// less than Ramp ago (state.HoldBusy, HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
 func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
 		return "", why, ""
@@ -130,7 +139,22 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 	case u != nil && f.UsageMax > 0 && u.UsedPct >= f.UsageMax && (u.Resets.IsZero() || now.Before(u.Resets)):
 		return phase, fmt.Sprintf("%.0f%% of the five-hour usage is used (worker_usage_max %.0f%%)", u.UsedPct, f.UsageMax), state.HoldUsage
 	}
+	if on, at := newestAgent(st); f.Ramp > 0 && !at.IsZero() && now.Sub(at) < f.Ramp {
+		return phase, decide.AgentRamp(on, f.Ramp), state.HoldRamp
+	}
 	return phase, "", ""
+}
+
+// newestAgent is the phase of the live worker of run st whose first agent started last, and when it
+// started (Worker.Started; zero for none), whatever plan of the run's it works for. A worker that landed
+// or failed has no agent left to load the machine.
+func newestAgent(st state.State) (phase string, at time.Time) {
+	for _, w := range st.LiveWorkers() {
+		if w.Started.After(at) {
+			phase, at = w.Phase, w.Started
+		}
+	}
+	return phase, at
 }
 
 // planWorkers counts the live workers of the plan attached now: a worker of a replaced plan is on its

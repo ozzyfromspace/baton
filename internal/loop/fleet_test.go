@@ -22,7 +22,7 @@ import (
 // A phase agent starts on a phase that can go ahead beside the lead's, while a slot is free: its worker
 // on the roster and its sub-run first, then the mod is asked to start it. The worktree hook makes its
 // worktree outside the checkout, on a branch made from the run's, and links it; once the mod acks the
-// spawn, it is at work. One starts at a time.
+// spawn, it is at work. One starts at a time, a ramp after the one before.
 func TestAPhaseAgentTakesUpAPhaseThatCanStart(t *testing.T) {
 	x := newCrew(t, 2)
 	x.modOff = true
@@ -78,6 +78,9 @@ func TestAPhaseAgentTakesUpAPhaseThatCanStart(t *testing.T) {
 	if ev := x.events(); !strings.Contains(ev, `"kind":"worker_started"`) || !strings.Contains(strings.Join(x.state().Run.Announce, "\n"), "the phase agent on P1 is at work") {
 		t.Errorf("not announced: %s", ev)
 	}
+
+	// The next starts a ramp after it.
+	x.tick(AgentRamp)
 	if got := x.spawns(); !slices.Equal(got, []string{"P1", "P2"}) {
 		t.Errorf("spawned %v", got)
 	}
@@ -91,7 +94,16 @@ func TestWhenAWorkerStarts(t *testing.T) {
 		st.Phases[phase] = &state.PhaseState{Status: state.PhaseWorking, Worker: "r/" + phase}
 		st.Workers = append(st.Workers, state.Worker{Phase: phase, Ref: "r/" + phase, Status: status, Generation: st.Generation})
 	}
+	// started is when the worker on phase started its first agent, ago before now.
+	started := func(st *state.State, phase string, ago time.Duration) {
+		for i := range st.Workers {
+			if st.Workers[i].Phase == phase {
+				st.Workers[i].Started = now.Add(-ago)
+			}
+		}
+	}
 	const busyWhy, laneWhy = "the machine is busy (load 15.0 on 14 CPUs)", "a gate waits for a lane"
+	rampWhy := decide.AgentRamp("P1", AgentRamp)
 	for _, c := range []struct {
 		name  string
 		f     Fleet
@@ -185,6 +197,49 @@ func TestWhenAWorkerStarts(t *testing.T) {
 			on(st, "P1", state.WorkerWorking)
 			st.Conflicts, st.Usage = 2, &state.Usage{UsedPct: 85}
 		}, "P2", "2 landings in a row conflicted", state.HoldConflicts},
+
+		// A new agent starts a ramp after the newest of the run's, whatever the slots: the machine's
+		// readings lag the load an agent brings.
+		{"an agent started a minute ago", Fleet{Max: 6, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", time.Minute)
+		}, "P2", rampWhy, state.HoldRamp},
+		{"an agent started a minute ago, with a number", Fleet{Max: 2, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", time.Minute)
+		}, "P2", rampWhy, state.HoldRamp},
+		{"its ramp is over", Fleet{Max: 6, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", AgentRamp)
+		}, "P2", "", ""},
+		{"the newest agent counts", Fleet{Max: 6, Ramp: AgentRamp}, room{}, wide, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			on(st, "P2", state.WorkerSuspended)
+			started(st, "P1", time.Hour)
+			started(st, "P2", 30*time.Second)
+		}, "P3", decide.AgentRamp("P2", AgentRamp), state.HoldRamp},
+		{"a worker still starting has started no agent", Fleet{Max: 6, Ramp: AgentRamp}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerStarting) }, "P2", "", ""},
+		{"a failed worker's agent is gone", Fleet{Max: 6, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "r/P1", Status: state.WorkerFailed, Started: now.Add(-time.Second)})
+		}, "P1", "", ""},
+		{"a replaced plan's agent counts", Fleet{Max: 6, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", time.Minute)
+			st.Generation++
+		}, "P2", rampWhy, state.HoldRamp},
+		{"no ramp", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", 0)
+		}, "P2", "", ""},
+		{"the machine before the ramp", Fleet{Max: 6, Ramp: AgentRamp}, room{busy: busyWhy}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", time.Minute)
+		}, "P2", busyWhy, state.HoldBusy},
+		{"the usage before the ramp", Fleet{Max: 6, UsageMax: 80, Ramp: AgentRamp}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			started(st, "P1", time.Minute)
+			st.Usage = &state.Usage{UsedPct: 85}
+		}, "P2", "85% of the five-hour usage is used (worker_usage_max 80%)", state.HoldUsage},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := state.Attach(c.pl, now, state.Origin{})
@@ -375,7 +430,7 @@ func TestDroppingTheRunEndsItsWorkers(t *testing.T) {
 	// The run was dropped: P1's branch, with a commit that never landed, is kept under kept/, so that no
 	// worker of a later plan carries on from it.
 	kept := x.worker("P1").Branch
-	if x.worker("P1").Unlanded != 1 || kept != "baton/sess-1/kept/P1-20261011-1200" || gitx.RevParse(x.repo, "refs/heads/"+kept) == "" ||
+	if x.worker("P1").Unlanded != 1 || kept != "baton/sess-1/kept/P1-20261011-1202" || gitx.RevParse(x.repo, "refs/heads/"+kept) == "" ||
 		gitx.RevParse(x.repo, "refs/heads/"+p1.Branch) != "" {
 		t.Errorf("P1's branch, with a commit that never landed: %q", kept)
 	}
@@ -532,6 +587,7 @@ func TestTheNextHostResumesSuspendedWorkers(t *testing.T) {
 func TestTheWorkersAreLookedAfterOffTheLeadsTick(t *testing.T) {
 	x := newCrew(t, 2)
 	x.c.Fleet.Go = nil
+	x.c.Fleet.Ramp = 0 // agents start back to back here: the ramp has a test of its own
 	for i := 0; i < 100 && (x.status("P1") != state.WorkerWorking || x.status("P2") != state.WorkerWorking); i++ {
 		x.advance(time.Second)
 		x.lead.Update(func(st *state.State) error { st.Run.LastActivity = x.clock(); return nil })

@@ -14,6 +14,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -348,6 +349,25 @@ func TestATestGivesTheHostItsLoad(t *testing.T) {
 		got := machineFor(io)()
 		if got.Load1 != c.want || got.MemAvailablePct != roomy.MemAvailablePct || !got.Known {
 			t.Errorf("BATON_TEST_LOAD=%q: %+v", c.env, got)
+		}
+	}
+}
+
+// The host starts each phase agent a ramp after the one before (loop.AgentRamp), unless a test shortens
+// it (BATON_AGENT_RAMP).
+func TestATestShortensTheRampBetweenAgents(t *testing.T) {
+	for _, c := range []struct {
+		env  string
+		want time.Duration
+	}{{"", loop.AgentRamp}, {"5s", 5 * time.Second}, {"soon", loop.AgentRamp}, {"0s", loop.AgentRamp}, {"-1m", loop.AgentRamp}} {
+		io := IO{Env: func(k string) string {
+			if k == "BATON_AGENT_RAMP" {
+				return c.env
+			}
+			return ""
+		}}
+		if got := agentRamp(io); got != c.want {
+			t.Errorf("BATON_AGENT_RAMP=%q: %s, want %s", c.env, got, c.want)
 		}
 	}
 }

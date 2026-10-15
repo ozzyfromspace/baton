@@ -185,9 +185,16 @@ func WorkersAttached(n int, auto bool, width int, mode string) string {
 }
 
 // WorkerHeld tells the human that phase, which could go ahead, gets no worker for now, and why: no room
-// for another session on the machine, or in the account's usage.
+// for another session on the machine or in the account's usage, gates waiting for lanes, landings that
+// keep conflicting, or an agent that started a moment ago.
 func WorkerHeld(phase, why string) string {
 	return fmt.Sprintf("baton: no worker on %s for now: %s. One starts once there is room; the workers at work carry on", phase, why)
+}
+
+// AgentRamp is why no phase agent starts for now: the one on phase started less than ramp ago.
+func AgentRamp(phase string, ramp time.Duration) string {
+	return fmt.Sprintf("the agent on %s started under %s ago, and phase agents start %s apart, so that the machine shows the load of each before the next",
+		phase, Spell(ramp), Spell(ramp))
 }
 
 // WorkerRefused is why command, which belongs to the lead session, is refused in a worker on phase.

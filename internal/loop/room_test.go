@@ -50,6 +50,9 @@ func TestAutoWorkersFollowThePlanAndTheMachine(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			x := autoCrew(t, wide, c.m)
+			if x.c.Fleet != nil {
+				x.c.Fleet.Ramp = 0 // agents start back to back here: the ramp has a test of its own
+			}
 			for second, want := range c.want {
 				x.tick(time.Second)
 				if got := x.spawned(); len(got) != len(want) || strings.Join(got, " ") != strings.Join(want, " ") {
@@ -147,6 +150,7 @@ func TestSwapGrowingFastHoldsWorkersBack(t *testing.T) {
 	m := roomy
 	m.Pressure, m.SwapUsed = machine.PressureWarn, 1<<30
 	x := autoCrew(t, wide, m)
+	x.c.Fleet.Ramp = 0  // agents start back to back here: the ramp has a test of its own
 	x.tick(time.Second) // no growth yet: P1 starts
 	x.machine.SwapUsed = 1<<30 + 512<<20
 	x.tick(30 * time.Second) // P1 is at work; swap grew 512 MiB since the reading a minute ago
@@ -195,10 +199,89 @@ func TestAResumeWaitsOnlyForRoom(t *testing.T) {
 	}
 }
 
+// A new phase agent starts a ramp after the newest of the run's, with workers: auto as with a number: the
+// machine's readings lag the load an agent brings (busy reads a one-minute load average). The hold is told
+// once, and is over as the next agent starts.
+func TestAgentsStartARampApart(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		max  int
+		want []string // the phases taken up, once the ramp after P2's agent is over
+	}{
+		{"auto", config.AutoWorkers(roomy), []string{"P1", "P2", "P3"}},
+		{"a number", 2, []string{"P1", "P2"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newCrewOn(t, c.max, wide)
+			x.tick(time.Second) // P1's agent is asked for
+			x.tick(time.Second) // and is at work
+			why := decide.AgentRamp("P1", AgentRamp)
+			if h := x.state().Hold; len(x.spawned()) != 1 || h == nil || *h != (state.Hold{Phase: "P2", Kind: state.HoldRamp, Why: why, Since: x.now}) {
+				t.Fatalf("workers on %v; hold %+v", x.spawned(), h)
+			}
+			x.tick(AgentRamp - time.Second)
+			if got := x.spawned(); len(got) != 1 {
+				t.Fatalf("workers on %v before the ramp was over", got)
+			}
+			x.tick(time.Second)
+			if got := x.spawned(); !slices.Equal(got, []string{"P1", "P2"}) || x.state().Hold != nil {
+				t.Fatalf("workers on %v; hold %+v", got, x.state().Hold)
+			}
+			x.tick(time.Second) // P2's agent is at work
+			x.tick(AgentRamp)
+			x.tick(time.Second)
+			if got := x.spawned(); !slices.Equal(got, c.want) {
+				t.Errorf("workers on %v, want %v", got, c.want)
+			}
+			if ev := x.events(); strings.Count(ev, `"held":"ramp"`) != len(c.want)-1 {
+				t.Errorf("events:\n%s", ev)
+			}
+			if ann := x.announced(); strings.Count(ann, decide.WorkerHeld("P2", why)) != 1 {
+				t.Errorf("announced %q", ann)
+			}
+		})
+	}
+	if want := "the agent on P1 started under 2 minutes ago, and phase agents start 2 minutes apart"; !strings.HasPrefix(decide.AgentRamp("P1", AgentRamp), want) {
+		t.Errorf("the line: %q", decide.AgentRamp("P1", AgentRamp))
+	}
+}
+
+// An agent started again for a worker it had before waits for no ramp: a fresh agent for one whose agent
+// is gone, and the agents a new host resumes by a message.
+func TestAResumeOrARespawnWaitsForNoRamp(t *testing.T) {
+	x := newCrewOn(t, 2, wide)
+	x.atWork("P1", "P2") // P2's agent has just started
+	x.lead.Update(func(st *state.State) error {
+		e := st.WorkerOn("P1")
+		e.Status, e.Since, e.Why = state.WorkerSuspended, x.now, decide.AgentCheckpointed
+		return nil
+	})
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if got := x.spawned(); !slices.Equal(got, []string{"P1", "P2", "P1"}) || x.status("P1") != state.WorkerWorking {
+		t.Fatalf("a fresh agent on P1 waited: workers on %v, P1's %+v", got, x.worker("P1"))
+	}
+
+	// The host ends: the next resumes both by a message, one after the other.
+	x.c.Ended("the baton session ended", nil)
+	x.proj.Unbind("inst")
+	x.c = x.coordinator("next", 2)
+	for range 4 {
+		x.tick(time.Second)
+	}
+	if got := x.spawned(); len(got) != 5 || x.status("P1") != state.WorkerWorking || x.status("P2") != state.WorkerWorking {
+		t.Errorf("workers on %v; roster %+v", got, x.state().Workers)
+	}
+	if ev := x.events(); strings.Count(ev, `"held":"ramp"`) != 1 { // P2's, as it first started
+		t.Errorf("events:\n%s", ev)
+	}
+}
+
 // A gate that has waited for a lane for over a minute, the lead's or a worker's, holds new workers back:
 // another worker's gates would only queue behind it. A shorter wait does not, nor one that is over.
 func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 	x := newCrewOn(t, 6, wide)
+	x.c.Fleet.Ramp = 0 // agents start back to back here: the ramp has a test of its own
 	waits := func(s *state.Store, id string, since time.Time, status string) {
 		s.Update(func(st *state.State) error {
 			if j := st.Job(id); j != nil {
@@ -251,6 +334,7 @@ func TestGatesWaitingForALaneHoldWorkersBack(t *testing.T) {
 // verification that turns red on the rebased branch is no conflict.
 func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 	x := newCrewOn(t, 1, wide) // until the landings conflict
+	x.c.Fleet.Ramp = 0         // agents start back to back here: the ramp has a test of its own
 	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
 		t.Setenv(k, v)
 	}

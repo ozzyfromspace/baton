@@ -128,6 +128,15 @@ func abandonAfter(io IO) time.Duration {
 	return state.AbandonAfter
 }
 
+// agentRamp is how long after one phase agent of a run started the host lets another start
+// (loop.AgentRamp), unless a test shortens it (BATON_AGENT_RAMP).
+func agentRamp(io IO) time.Duration {
+	if d, err := time.ParseDuration(io.Env("BATON_AGENT_RAMP")); err == nil && d > 0 {
+		return d
+	}
+	return loop.AgentRamp
+}
+
 // cleanAction is one thing baton clean ends.
 type cleanAction struct {
 	what  string        // its subject, the same in a dry run

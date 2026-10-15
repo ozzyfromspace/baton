@@ -40,7 +40,7 @@ make e2e        # real-claude scenarios (needs BATON_E2E=1, costs a few cents)
 make release-prep VERSION=v0.1.0   # pin checksums + plugin version, then commit and tag
 ```
 
-End-to-end tests run real `claude --model haiku` and assert on `events.jsonl` and hook logs, never the screen. Each session has its own `BATON_HOME` and `GNUPGHOME` and loads this repository's plugin with `--plugin-dir` (`noModPlugin` for serial mode). The harness sets `BATON_WORKERS=0` unless a scenario calls `StartAgents`, and `BATON_TEST_LOAD=0`; `BATON_ABANDON_AFTER` shortens the wait before a run counts as abandoned. Allow rules name the exact command, since auto mode drops a broad one like `Bash(sh:*)`. `BATON_E2E_SONNET=1` adds the Sonnet scenarios. Run one `go test` process at a time: the mod's store file in `~/.claude` is shared.
+End-to-end tests run real `claude --model haiku` and assert on `events.jsonl` and hook logs, never the screen. Each session has its own `BATON_HOME` and `GNUPGHOME` and loads this repository's plugin with `--plugin-dir` (`noModPlugin` for serial mode). The harness sets `BATON_WORKERS=0` unless a scenario calls `StartAgents`, `BATON_TEST_LOAD=0`, and `BATON_AGENT_RAMP=5s` (phase agents start 2 minutes apart otherwise); `BATON_ABANDON_AFTER` shortens the wait before a run counts as abandoned. Allow rules name the exact command, since auto mode drops a broad one like `Bash(sh:*)`. `BATON_E2E_SONNET=1` adds the Sonnet scenarios. Run one `go test` process at a time: the mod's store file in `~/.claude` is shared.
 
 ## Conventions
 

@@ -112,7 +112,7 @@ func (x *crew) coordinator(instance string, max int) *Coordinator {
 	helloFrom(t, lead) // baton's mod is loaded in the lead's claude: workers may start
 	c := &Coordinator{Lead: &Loop{Notify: &bomb{}, Project: "demo", Timing: DefaultTiming}, Project: x.proj, Home: x.home}
 	t.Cleanup(c.snapshotsTaken) // before the test's directories are removed (cleanups run last first)
-	c.Fleet = &Fleet{Max: max, UsageMax: 80, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return x.machine }}
+	c.Fleet = &Fleet{Max: max, UsageMax: 80, Ramp: AgentRamp, Go: func(fn func()) { fn() }, Machine: func() machine.Reading { return x.machine }}
 	return c
 }
 
@@ -423,14 +423,19 @@ func (x *crew) held(phase string) string {
 	return ""
 }
 
-// atWork ticks until the agents on phases are at work, a second at a time (one spawn at a time).
+// atWork ticks until the agents on phases are at work, a second at a time (one spawn at a time), or past
+// the ramp while a new agent waits for it.
 func (x *crew) atWork(phases ...string) {
 	x.t.Helper()
-	for range 2*len(phases) + 2 {
+	for range 3*len(phases) + 2 {
 		if !slices.ContainsFunc(phases, func(p string) bool { return x.status(p) != state.WorkerWorking }) {
 			return
 		}
-		x.tick(time.Second)
+		d := time.Second
+		if h := x.state().Hold; h != nil && h.Kind == state.HoldRamp {
+			d = x.c.Fleet.Ramp
+		}
+		x.tick(d)
 	}
 	x.t.Fatalf("not at work: %+v", x.state().Workers)
 }
