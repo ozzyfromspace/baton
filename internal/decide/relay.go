@@ -16,6 +16,9 @@ import (
 
 // RelayOptions are the answers to phase agent question r.
 func RelayOptions(r state.Relay) []Option {
+	if r.AboutAgent() {
+		return agentOptions(r)
+	}
 	pause := Option{"Pause baton", "I'm taking over; baton stops driving the plan"}
 	wait := Option{"Wait for me", "Leave " + r.Phase + " waiting; /baton run asks me again"}
 	goAhead := Option{"Go ahead", "Do what it proposed"}
@@ -56,11 +59,19 @@ func RelayOutcome(r state.Relay, answer string) string {
 }
 
 // RelayDefault is the answer baton picks for phase agent question r when nobody answers.
-func RelayDefault(r state.Relay) string { return RelayOptions(r)[2].Label }
+func RelayDefault(r state.Relay) string {
+	if r.AboutAgent() {
+		return agentDefault(r)
+	}
+	return RelayOptions(r)[2].Label
+}
 
 // RelayQuestion is the question that puts phase agent question r to the human. A timed proposal goes
 // ahead at deadline.
 func RelayQuestion(r state.Relay, deadline time.Time) Question {
+	if r.AboutAgent() {
+		return Question{Text: Sanitize(agentQuestion(r, deadline)), Options: RelayOptions(r)}
+	}
 	who := "baton: the agent on " + r.Phase
 	var text string
 	switch {

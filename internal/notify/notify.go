@@ -48,6 +48,7 @@ var headline = map[string]string{
 	"review":            "baton needs you: review the decisions made without you",
 	"workers":           "baton needs you: its workers could not start",
 	"worker_held":       "baton needs you: a phase waits for you",
+	"agent_stopped":     "baton answered for you about a phase agent you stopped",
 	"run_stalled":       "baton needs you: the run stopped moving",
 }
 

@@ -24,7 +24,10 @@ type Relay struct {
 	Since time.Time `json:"since,omitzero"`
 	// What the question is about, as the worker's sub-run had it when it was queued: a proposal's action
 	// (What), what went wrong (Because) and why it has no deadline (Untimed); a block's reason (Because);
-	// how many decisions a review covers (Count).
+	// how many decisions a review covers (Count). About a stopped agent: its phase's title (What), how many
+	// stops it asks about (Count), and, for the question with no deadline once baton took the agent down,
+	// why it has none (Untimed); Since is the stop (Worker.StoppedAt), the take-down (Worker.TakenDown) or
+	// the restart (Worker.Restarted) it asks about.
 	What    string `json:"what,omitempty"`
 	Because string `json:"because,omitempty"`
 	Untimed string `json:"untimed,omitempty"`
@@ -57,15 +60,19 @@ type Relay struct {
 	Lapsed time.Time `json:"lapsed,omitzero"`
 }
 
-// Relay kinds.
+// Relay kinds. A stopped or a restarted one is about the run's roster, not the agent's sub-run: the human
+// stopped the phase's agent (Restart it?), or baton restarted it as nobody answered that (stopped.go).
 const (
-	RelayProposal = "proposal"
-	RelayBlocked  = "blocked"
-	RelayReview   = "review"
+	RelayProposal  = "proposal"
+	RelayBlocked   = "blocked"
+	RelayReview    = "review"
+	RelayStopped   = "stopped"
+	RelayRestarted = "restarted"
 )
 
 // relayWhat names each kind of question for the human.
-var relayWhat = map[string]string{RelayProposal: "a proposal", RelayBlocked: "it is blocked", RelayReview: "a review of its decisions"}
+var relayWhat = map[string]string{RelayProposal: "a proposal", RelayBlocked: "it is blocked", RelayReview: "a review of its decisions",
+	RelayStopped: "its agent was stopped", RelayRestarted: "its agent was restarted"}
 
 // ByWithdrawn settles a phase agent's question that no longer needs the human's answer: it was settled
 // in its sub-run meanwhile, or the agent is gone.

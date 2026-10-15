@@ -113,16 +113,6 @@ func AgentGoOn(phase string) string {
 		"Carry on from where you were, and report as usual when it is done.", phase)
 }
 
-// AgentHeld tells the human that they stopped the phase agent on phase (x on its row in the agent panel):
-// the phase is theirs now, and waits for them, its work kept in its worktree.
-func AgentHeld(phase string) string {
-	return fmt.Sprintf("baton: the phase agent on %s was stopped from the agent panel, so %s waits for you, its work kept in its worktree; "+
-		"/baton run starts a fresh agent on it", phase, phase)
-}
-
-// PhaseHeld is the notice pushed to the human as phase waits for them: they stopped its agent (AgentHeld).
-func PhaseHeld(phase string) string { return phase + " waits for you: " + NeedsAgentStopped }
-
 // AgentAfresh tells the human that a fresh phase agent takes phase up, as they asked (why: what became of
 // the one before it).
 func AgentAfresh(phase, why string) string {

@@ -612,6 +612,10 @@ func printRelay(io IO, s *state.Store, st state.State) {
 			switch {
 			case r.Asked && r.Timed():
 				where = "asked; it goes ahead at " + r.Deadline.Local().Format("15:04") + " unless you answer"
+			case r.Asked && r.Persistent():
+				where = "asked; baton never answers it for you"
+			case r.Asked && r.Lapses():
+				where = "asked; unless you answer by " + r.Deadline.Local().Format("15:04") + ", baton decides from what " + r.Phase + " has done"
 			case r.Asked:
 				where = "asked; if you do not answer, it waits for you"
 			case !r.Issued.IsZero():
@@ -620,6 +624,10 @@ func printRelay(io IO, s *state.Store, st state.State) {
 				where = "next"
 			}
 			open = append(open, fmt.Sprintf("  ? %-6s %s — %s", r.Phase, relayWhat(r), where))
+		case r.Persistent() && r.Answered.By != state.ByHuman && r.Answered.By != state.ByWithdrawn && st.AgentWaits(r):
+			// It stepped aside unanswered, and comes back (loop's stoppedAgain).
+			open = append(open, fmt.Sprintf("  ? %-6s %s — asked again when you next write in the session; /baton run starts a fresh agent on it instead",
+				r.Phase, relayWhat(r)))
 		case r.Answered.By != state.ByWithdrawn && leftHere(s, st, r):
 			here = append(here, fmt.Sprintf("  ! %-6s %s", r.Phase, relayWhat(r)))
 		}
@@ -641,6 +649,13 @@ func relayWhat(r state.Relay) string {
 		return "proposal " + r.Decision + ": " + r.What
 	case state.RelayReview:
 		return fmt.Sprintf("a review of the %d decisions it made without you", r.Count)
+	case state.RelayStopped:
+		if r.Persistent() {
+			return "you stopped its agent twice, and baton took it down: what should become of " + r.Phase + "?"
+		}
+		return "you stopped its agent: restart it?"
+	case state.RelayRestarted:
+		return "baton restarted its agent, as nobody answered: keep it going?"
 	}
 	return "blocked: " + r.Because
 }
@@ -648,6 +663,9 @@ func relayWhat(r state.Relay) string {
 // leftHere reports phase agent question r, answered, that still waits for the human in the agent's
 // sub-run (/baton run asks them again).
 func leftHere(s *state.Store, st state.State, r state.Relay) bool {
+	if r.AboutAgent() {
+		return false // /baton run starts a fresh agent on a phase whose agent was stopped (takeUp)
+	}
 	if o := decide.RelayOutcome(r, r.Answered.Answer); o != decide.OutcomeWait && o != decide.OutcomePause {
 		return false
 	}
@@ -1291,6 +1309,10 @@ func takeUp(io IO, s *state.Store) []string {
 		s.Update(func(st *state.State) error {
 			if e := st.Entry(w); e != nil && e.Live() {
 				e.Status, e.Since, e.Why, e.Resume, taken = state.WorkerSuspended, now, "the human asked for a fresh agent: "+why, "", true
+				if e.Stops >= 2 {
+					e.Stops = 0 // the human asked for it after a second stop, as Restart it does then (loop/stopped.go)
+				}
+				e.TakenDown, e.Released = time.Time{}, time.Time{}
 			}
 			return nil
 		})

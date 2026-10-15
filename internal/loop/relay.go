@@ -55,7 +55,7 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 				c.withdraw(now, s, r, why)
 			} else if r.Asked && now.After(latest(r.Deadline, r.AskedAt.Add(decide.MinWait)).Add(relayLate)) {
 				c.answered(now, s, r.Question, decide.RelayDefault(r), state.ByTimeout, "late")
-			} else if r.Timed() && !r.Asked && st.Mode == state.ModeRunning && !now.Before(r.Due(c.Lead.Timing.EscalationTimeout)) {
+			} else if r.Lapses() && !r.Asked && st.Mode == state.ModeRunning && !now.Before(r.Due(c.Lead.Timing.EscalationTimeout)) {
 				c.lapsed(now, s, b, r)
 			}
 		default:
@@ -63,6 +63,7 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 		}
 	}
 	c.lapseHolds(now, s, st)
+	c.stoppedAgain(now, s, st)
 	c.ask(now, s, b)
 }
 
@@ -173,7 +174,7 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	deadline, again := r.Deadline, !r.Issued.IsZero()
 	if !again {
 		deadline = now.Add(c.Lead.Timing.EscalationTimeout)
-		if r.Timed() {
+		if r.Lapses() {
 			deadline = r.Due(c.Lead.Timing.EscalationTimeout) // the time its question names, from when it was made
 		}
 	}
@@ -267,7 +268,7 @@ func (c *Coordinator) dismissed(now time.Time, s *state.Store, question string) 
 	found := false
 	s.Update(func(st *state.State) error {
 		q := st.RelayIssued()
-		if q == nil || !q.Timed() || decide.Normalize(q.Question) != decide.Normalize(question) {
+		if q == nil || !q.Lapses() || decide.Normalize(q.Question) != decide.Normalize(question) {
 			return nil
 		}
 		q.Asked, q.Dismissed = false, now
@@ -326,6 +327,15 @@ func (c *Coordinator) subStore(st state.State, phase string) *state.Store {
 
 // unneeded says why phase agent question r needs no answer any more, or "" while it does.
 func (c *Coordinator) unneeded(st state.State, r state.Relay) string {
+	if r.AboutAgent() { // a question of the run's roster, not of the agent's sub-run
+		switch {
+		case st.WorkerOn(r.Phase) == nil:
+			return "its agent is gone"
+		case !st.AgentWaits(r):
+			return "it was settled meanwhile"
+		}
+		return ""
+	}
 	sub := c.subStore(st, r.Phase)
 	if sub == nil {
 		return "its agent is gone"
@@ -359,6 +369,10 @@ func (c *Coordinator) withdraw(now time.Time, s *state.Store, r state.Relay, why
 // apply applies the answer to phase agent question r to the agent's sub-run, and records that it did.
 // With the agent gone, there is nothing to apply it to. Pause baton pauses the run as well.
 func (c *Coordinator) apply(now time.Time, s *state.Store, st state.State, r state.Relay) {
+	if r.AboutAgent() {
+		c.applyStop(now, s, st, r)
+		return
+	}
 	result := "its agent is gone"
 	if sub := c.subStore(st, r.Phase); sub != nil {
 		if _, err := sub.Update(func(sst *state.State) error { result = applyRelay(sst, r, c.Fleet.MaxAuto, now); return nil }); err != nil {
