@@ -412,6 +412,16 @@ func (st State) InHand() bool {
 	return st.Mode == ModeRunning && !st.BoundaryOwed && ps != nil && ps.Status == PhaseActive
 }
 
+// BoundaryWaits reports a boundary that waits for the lead's turn under way to end, holding none of its
+// calls: baton queued it itself (a compaction in flight that takes up a phase: settle and takeUp's
+// boundary, with no phase in hand, or a switch), and the turn started before it was queued, or the human
+// started it. A boundary the model's own `baton done` owes has no compaction queued until its stop, so
+// that turn's calls are held; so are those of a turn baton or Claude Code started after the queueing.
+func (st State) BoundaryWaits() bool {
+	r, c := st.Run, st.Run.Compaction
+	return st.BoundaryOwed && c.InFlight() && c.StartsPhase() && r.TurnOpen && (r.TurnStarted.Before(c.Queued) || r.TurnBy == "human")
+}
+
 // SetBlocked records that the model cannot continue without a human.
 func SetBlocked(st *State, reason string, now time.Time) error {
 	if st.Mode == ModeIdle {

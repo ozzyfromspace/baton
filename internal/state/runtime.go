@@ -366,6 +366,9 @@ type Compaction struct {
 	Declined *Decline `json:"declined,omitempty"`
 	// Nudged is when baton typed a reminder because the model did not resume after this compaction.
 	Nudged time.Time `json:"nudged,omitzero"`
+	// WaitTold says the model was told, in the turn this compaction waits for (State.BoundaryWaits), that
+	// the phase it takes up comes after that turn.
+	WaitTold bool `json:"wait_told,omitempty"`
 	// FailedAt and Rounds: when baton last gave up on this compaction, and how many times it started
 	// over. A failed compaction is retried with backoff, never abandoned while one is owed.
 	FailedAt time.Time `json:"failed_at,omitzero"`

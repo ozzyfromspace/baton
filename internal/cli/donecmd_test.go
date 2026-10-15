@@ -161,10 +161,12 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		merged, dirty bool
+		none          bool // the lead holds no phase: it takes up the next, after a boundary its stop queues
 	}{
-		{"its branch not on the run's branch", false, false},
-		{"its branch merged into the run's branch", true, false},
-		{"merged, with uncommitted work in its worktree", true, true},
+		{"its branch not on the run's branch", false, false, false},
+		{"its branch merged into the run's branch", true, false, false},
+		{"merged, with uncommitted work in its worktree", true, true, false},
+		{"merged, with the lead holding no phase", true, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := afterSession(t)
@@ -180,6 +182,9 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 				x.Workers = []state.Worker{{Phase: "P1", Ref: "sess-1/P1", Worktree: tree, Branch: branch, Base: base, Status: state.WorkerWorking,
 					Assigned: s.now.Add(-time.Hour), Since: s.now.Add(-time.Hour), Generation: x.Generation}}
 				x.Phases["P1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "sess-1/P1"}
+				if c.none {
+					x.Phases["P0"], x.Current = &state.PhaseState{Status: state.PhaseDone, DoneAt: s.now}, ""
+				}
 			})
 			if c.merged {
 				gittest.Git(t, root, "merge", "-q", "--ff-only", branch)
@@ -201,13 +206,22 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 				return
 			}
 			out := s.must("", "done", "P1", "--notes", "the human merged it")
-			if want := decide.DoneLanded("d1", "P1", branch, into) + " Carry on with P0."; !strings.Contains(out, want) {
+			want, current := decide.DoneLanded("d1", "P1", branch, into)+" Carry on with P0.", "P0"
+			if c.none {
+				want, current = decide.DoneLanded("d1", "P1", branch, into)+" Next phase: P2 (The API). End your turn now: baton compacts the context, then starts P2 with a fresh brief.", "P2"
+			}
+			if !strings.Contains(out, want) {
 				t.Fatalf("done says:\n%s\nwant %q", out, want)
 			}
 			st := s.state()
 			what, undo := decide.DoneByLead("P1", branch, into, 1)
-			if st.Phases["P1"].Status != state.PhaseDone || st.Workers[0].Status != state.WorkerLanded || st.Current != "P0" {
+			if st.Phases["P1"].Status != state.PhaseDone || st.Workers[0].Status != state.WorkerLanded || st.Current != current {
 				t.Fatalf("after done: P1 %+v, worker %+v, in hand %q", st.Phases["P1"], st.Workers[0], st.Current)
+			}
+			// Its boundary is owed as after any done: the lead's stop queues the compaction, and the rest of
+			// the turn is held for it (State.BoundaryWaits).
+			if st.BoundaryOwed != c.none || st.Run.Compaction.InFlight() || s.logged("compact_queued", nil) {
+				t.Errorf("after done: owed %v, compaction %+v, events:\n%s", st.BoundaryOwed, st.Run.Compaction, s.events())
 			}
 			if len(st.Landed) != 1 || st.Landed[0].By != state.LandedByLead || !st.Landed[0].Told || len(st.Landed[0].Commits) != 1 || st.Landed[0].Commits[0] != tip ||
 				strings.Join(st.Landed[0].Files, ",") != "schema.sql" {

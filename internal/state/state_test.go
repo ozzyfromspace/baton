@@ -79,6 +79,43 @@ func TestInHand(t *testing.T) {
 	}
 }
 
+// A boundary waits for the lead's turn under way, holding none of its calls, only when baton queued it
+// itself and the turn would otherwise be cut short: one under way when it was queued, or the human's.
+func TestABoundaryWaitsForATurnItWouldCutShort(t *testing.T) {
+	p := threePhases()
+	queued := t0.Add(time.Minute)
+	for _, c := range []struct {
+		name   string
+		reason string // the compaction baton queued at queued; "" for none
+		by     string // who started the turn under way; "" for none open
+		at     time.Time
+		want   bool
+	}{
+		{"an idle lead", "boundary", "", time.Time{}, false},
+		{"a turn under way when it was queued", "boundary", "baton", t0, true},
+		{"a turn Claude Code started before it", "boundary", "system", t0, true},
+		{"the human's turn, started after it", "boundary", "human", queued.Add(time.Second), true},
+		{"a turn baton started after it", "boundary", "baton", queued.Add(time.Second), false},
+		{"a turn Claude Code started after it", "boundary", "system", queued.Add(time.Second), false},
+		{"a turn started as it was queued", "boundary", "baton", queued, false},
+		{"a switch, in the human's turn", "switch", "human", queued.Add(time.Second), true},
+		{"a checkpoint, in the human's turn", "checkpoint", "human", queued.Add(time.Second), false},
+		{"the model's own done: nothing queued yet", "", "human", t0, false},
+	} {
+		st := Attach(p, t0, Origin{})
+		Done(&st, p, "P0", t0, DoneOpts{})
+		if c.reason != "" {
+			st.Run.Compaction.Queue(c.reason, queued)
+		}
+		if c.by != "" {
+			st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, c.by, c.at
+		}
+		if got := st.BoundaryWaits(); got != c.want {
+			t.Errorf("%s: BoundaryWaits() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestBlockCheckpointPauseResume(t *testing.T) {
 	idle := New()
 	for name, err := range map[string]error{

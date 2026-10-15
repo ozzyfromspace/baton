@@ -17,8 +17,9 @@ import (
 // lead merged it there, or the phase's work was done there), baton records its work landed (state.Landed,
 // by the lead), as a decision without the human with its undo; the run's host then ends the worker's agent
 // and retires it as its work landed (loop's watch and retireLanded): what it had not committed is saved
-// as a snapshot first, and its branch is removed, with nothing on it left to land. Otherwise done is
-// refused, saying how to finish the phase. git is only read here: nothing is merged or moved.
+// as a snapshot first, and its branch is removed, with nothing on it left to land. A phase the lead takes
+// up so starts after a boundary its stop queues, as after any done. Otherwise done is refused, saying how
+// to finish the phase. git is only read here: nothing is merged or moved.
 func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes string, followed bool) int {
 	e := cur.WorkerOn(id)
 	if e == nil {
@@ -101,7 +102,6 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 	case st.Mode == state.ModeComplete:
 		line += " That was the last phase — the plan is complete. " + decide.PlanComplete(len(decide.WithoutHuman(st.Decisions)))
 	case next != "":
-		s.Event("compact_queued", map[string]any{"reason": "boundary", "next": next, "by": "done"})
 		np := pl.Phases[pl.Index(next)]
 		line += fmt.Sprintf(" Next phase: %s (%s). End your turn now: baton compacts the context, then starts %s with a fresh brief.", np.ID, np.Title, np.ID)
 	case st.Current != "":

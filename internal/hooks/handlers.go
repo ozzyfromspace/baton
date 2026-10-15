@@ -378,14 +378,16 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 
 // holdCall is why the main agent's call may not run while a plan runs, because something else must
 // happen first (the turn must end, the human must be asked), or "" if it may. own says the call asks the
-// human baton's own question.
+// human baton's own question. A boundary baton queued itself holds nothing in a turn it would cut short,
+// one under way when it was queued or one the human started (State.BoundaryWaits): the model is told once
+// that the phase comes after this turn (toolDone), and the compaction waits for the turn's stop.
 func holdCall(st *state.State, own bool, w decide.Words) string {
 	p := st.OwnProposal()
 	switch {
 	case st.BoundaryOwed && !started(st):
 		return endTurn("baton attached the plan, and compacts the conversation so far before " + st.Current + " begins")
-	case st.BoundaryOwed:
-		return endTurn("the phase is done and baton must compact the context before " + st.Current + " begins")
+	case st.BoundaryOwed && !st.BoundaryWaits():
+		return endTurn(decide.BoundaryHold(*st))
 	case st.CheckpointOwed:
 		return endTurn(w.CheckpointHold())
 	case st.CheckpointDue:
@@ -1128,7 +1130,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	tool := str(c.Input, "tool_name")
 	var v valveAction
 	var dropped []event
-	var notes, ann string
+	var notes, ann, waits string
 	var dl delivery
 	var news news
 	var owed *state.Briefing
@@ -1176,6 +1178,12 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				news = takeNews(st, s)
 				v = contextValves(st, valve.FromEnv(c.Env), w)
 			}
+			if st.Mode == state.ModeRunning && s.Worker() == "" && st.BoundaryWaits() && !st.Run.Compaction.WaitTold {
+				// The turn runs on past a boundary baton queued itself (holdCall): the model is told once
+				// not to start the phase in it.
+				st.Run.Compaction.WaitTold = true
+				waits = decide.BoundaryWaits(*st)
+			}
 			notes, ann = announceNotes(st), announced(st)
 		}
 		dropped, _ = vanished(st, c.Now, false) // a proposal's question that failed or was denied went unanswered
@@ -1188,10 +1196,16 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil {
+	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil && waits == "" {
 		return Result{}, nil
 	}
 	tell := v.tell
+	var waitsSay string
+	if waits != "" {
+		tell = strings.TrimSpace(tell + "\n\n" + waits)
+		waitsSay = decide.BoundaryWaitsSay(st)
+		s.Event("boundary_waits", map[string]any{"phase": st.Current, "reason": st.Run.Compaction.Reason, "turn_by": st.Run.TurnBy})
+	}
 	if dl.any() {
 		tell = strings.TrimSpace(dl.text(s) + "\n\n" + tell)
 		dl.event(s, "tool")
@@ -1204,7 +1218,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		tell = strings.TrimSpace(h.briefed(c, s, st, *owed, "tool") + "\n\n" + tell)
 	}
 	out := map[string]any{}
-	if msg := lines(ann, notes, dl.says(), v.say); msg != "" {
+	if msg := lines(ann, notes, dl.says(), v.say, waitsSay); msg != "" {
 		out["systemMessage"] = msg
 	}
 	if v.event != "" {

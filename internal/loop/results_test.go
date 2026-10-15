@@ -111,6 +111,33 @@ func TestAVerdictTakesUpTheNextPhase(t *testing.T) {
 	}
 }
 
+// A verdict that takes up a phase while a turn runs (one the human started, say) queues the boundary at
+// once, but types nothing into that turn: the compaction waits for its stop, and comes then. An idle lead
+// compacts at once (TestAVerdictTakesUpTheNextPhase).
+func TestAVerdictWaitsForTheTurnUnderWay(t *testing.T) {
+	r := resultRig(t)
+	r.set(func(st *state.State) { st.Phases["P1"].Status = state.PhasePending })
+	r.verifying("P0")
+	r.set(func(st *state.State) {
+		st.Current = ""
+		st.Run.TurnOpen, st.Run.TurnBy, st.Run.TurnStarted = true, "human", r.now
+	})
+	r.finish("j1", state.JobPassed)
+	for range 30 { // the turn goes on, busy, for five minutes
+		r.set(func(st *state.State) { st.Run.LastActivity = r.now })
+		r.tick(10 * time.Second)
+	}
+	st := r.state()
+	if st.Current != "P1" || !st.BoundaryOwed || st.Run.Compaction.Status != state.CompactQueued || !st.BoundaryWaits() || len(r.in.text) != 0 {
+		t.Fatalf("while the turn runs: in hand %q owed %v compaction %+v waits %v, typed %q", st.Current, st.BoundaryOwed, st.Run.Compaction, st.BoundaryWaits(), r.in.text)
+	}
+	r.set(func(st *state.State) { st.Run.TurnOpen, st.Run.LastStop = false, r.now }) // its stop
+	r.tick(time.Second)
+	if st := r.state(); st.Run.Compaction.Status != state.CompactTyped || len(r.in.text) != 1 || r.in.text[0] != "/compact" {
+		t.Errorf("after the stop: compaction %+v, typed %q", st.Run.Compaction, r.in.text)
+	}
+}
+
 // The verification of the last phase completes the run; the idle session is told, once, so the model
 // sums the run up for the human.
 func TestAVerificationCompletesTheRun(t *testing.T) {

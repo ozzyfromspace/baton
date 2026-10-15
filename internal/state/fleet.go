@@ -371,9 +371,10 @@ func Abandoned(r RunInfo, e *Worker, baton func(pid int) bool, now time.Time, qu
 
 // Landed records that l.Phase's work landed on the run's branch: the phase is done, its worker has
 // landed, the phases that need it may start, and the landings that conflicted before it no longer count
-// (State.Conflicts). With the lead holding no phase, the lead takes up the
-// next one after a boundary compaction this queues (as Settle does), or the run is complete; Landed
-// returns the phase taken up ("" for none). Recording the same landing again changes nothing.
+// (State.Conflicts). With the lead holding no phase, the lead takes up the next one after a boundary
+// compaction, which this queues (as Settle does) unless the lead's own `baton done` recorded it (By), or
+// the run is complete; Landed returns the phase taken up ("" for none). Recording the same landing again
+// changes nothing.
 func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 	ps := st.Phases[l.Phase]
 	switch {
@@ -393,8 +394,16 @@ func Landed(st *State, p plan.Plan, l Landing, now time.Time) (string, error) {
 	st.Landed = append(st.Landed, l)
 	// The landing is the lead's progress only when it hands the lead a phase. A lead that holds one keeps
 	// its escalation: a worker's work landing does not answer a turn that failed or a lead gone quiet, and
-	// clearing it would only have the watchdog raise it again, and push it to the human again.
-	next := takeUp(st, p, now)
+	// clearing it would only have the watchdog raise it again, and push it to the human again. A landing
+	// the lead's own `baton done` records owes the boundary as Done does: its stop queues the compaction.
+	var next string
+	if l.By == LandedByLead {
+		if st.Mode == ModeRunning && st.Current == "" {
+			next = advance(st, p, now)
+		}
+	} else {
+		next = takeUp(st, p, now)
+	}
 	if next != "" {
 		st.Run.Progress()
 	}

@@ -159,6 +159,14 @@ func TestLanded(t *testing.T) {
 	if next, err := Landed(&st, p, l, t1.Add(time.Minute)); err != nil || next != "" || len(st.Landed) != 1 || st.Run.Compaction.Epoch != epoch {
 		t.Errorf("landed again: next %q err %v, %d landings, epoch %d", next, err, len(st.Landed), st.Run.Compaction.Epoch)
 	}
+	// The lead's own `baton done` recorded the landing: the boundary is owed as after Done, and the lead's
+	// stop queues its compaction, so the rest of that turn is held for it.
+	st = assigned(t, p, "P0", nil, "P1")
+	Done(&st, p, "P0", t0, DoneOpts{})
+	l.By = LandedByLead
+	if next, err := Landed(&st, p, l, t1); err != nil || next != "P2" || st.Current != "P2" || !st.BoundaryOwed || st.Run.Compaction.InFlight() {
+		t.Errorf("landed by the lead: next %q err %v, owed %v, compaction %+v", next, err, st.BoundaryOwed, st.Run.Compaction)
+	}
 
 	for _, c := range []struct {
 		name     string
