@@ -8,8 +8,10 @@ import (
 )
 
 // Outward reports an action that looks outward-facing or irreversible, and the words that make it look
-// so. Such a proposal gets no timer: it waits for the human like a hard block. The model chose the action,
-// and baton only withholds the timer. A false match costs a wait, never an act nobody approved.
+// so. Such a proposal waits for the human like any other, but at its deadline baton answers Not now for
+// them, not Go ahead: the model does it only if it is the safe kind (NotNowRule), which baton's word list
+// cannot tell, and leaves it for them otherwise. A false match costs the model that judgment, never an
+// act nobody approved.
 func Outward(action string) (term string, outward bool) {
 	if m := outwardWords.FindString(strings.ToLower(action)); m != "" {
 		return m, true
@@ -27,8 +29,8 @@ var outwardWords = regexp.MustCompile(`\b(` + strings.Join([]string{
 	`terraform\s+apply`, `kubectl`, `prod(uction)?`,
 }, "|") + `)\b|--force\b`)
 
-// UntimedReason says why a proposal has no timer, for its question.
-func UntimedReason(term string) string {
+// OutwardReason says why a proposal is answered Not now at its deadline, for its question.
+func OutwardReason(term string) string {
 	return fmt.Sprintf("'%s' looks outward-facing or irreversible", term)
 }
 

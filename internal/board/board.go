@@ -259,7 +259,7 @@ func needs(st state.State, w *state.Worker, sub state.State, ok bool) string {
 		case state.RelayReview:
 			return decide.NeedsReview(r.Phase)
 		}
-		return decide.NeedsProposal(r.Deadline)
+		return decide.NeedsProposal(r.Deadline, r.Outward != "")
 	}
 	if !ok {
 		return ""
@@ -270,10 +270,7 @@ func needs(st state.State, w *state.Worker, sub state.State, ok bool) string {
 	case sub.ReviewDue != "":
 		return decide.NeedsReview(sub.ReviewDue)
 	case p != nil:
-		if p.Untimed != "" {
-			return decide.NeedsProposal(time.Time{})
-		}
-		return decide.NeedsProposal(p.Deadline)
+		return decide.NeedsProposal(p.Deadline, p.Outward != "")
 	case sub.Run.Escalation != nil:
 		return decide.NeedsEscalation(sub.Run.Escalation.Kind, sub.Run.Escalation.Reason)
 	}
@@ -341,10 +338,10 @@ func leadNeeds(st state.State) string {
 	switch e := st.Run.Escalation; {
 	case st.ReviewDue != "":
 		return decide.NeedsReview(st.ReviewDue)
-	case p != nil && p.Untimed == "" && !p.Deadline.IsZero():
-		return decide.NeedsProposal(p.Deadline)
+	case p != nil && !p.Deadline.IsZero():
+		return decide.NeedsProposal(p.Deadline, p.Outward != "")
 	case p != nil || e != nil && e.Kind == "decision":
-		return decide.NeedsProposal(time.Time{})
+		return decide.NeedsProposal(time.Time{}, false)
 	case e != nil:
 		return decide.NeedsEscalation(e.Kind, e.Reason)
 	case st.Blocked != nil:

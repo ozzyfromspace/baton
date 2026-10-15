@@ -24,10 +24,10 @@ const (
 	ByPaused   = "paused"   // the human chose Pause baton
 )
 
-// NotNow is the answer baton gives for the human to a proposal only they could let through (Untimed)
-// that it will not let wait on them any longer: it is not done on baton's word. The model does it only if
-// it is safely reversible and stays inside the project, and notes it; anything else is left for the human
-// (decide.NotNowRule).
+// NotNow is the answer baton gives for the human to an outward proposal (Outward) nobody answered, at its
+// deadline or once its hold for them lapsed: it is not done on baton's word. The model does it only if it
+// is safely reversible and stays inside the project, and notes it; anything else is left for the human
+// (decide.NotNowRule). The human may answer it so too.
 const NotNow = "Not now"
 
 // Decision is one note or proposal.
@@ -42,14 +42,16 @@ type Decision struct {
 	// Question is a proposal's question, exactly as baton issued it.
 	Question string    `json:"question,omitempty"`
 	At       time.Time `json:"at"`
-	// Deadline is when baton goes ahead with a proposal nobody answered. Untimed says why a proposal has
-	// none: its action looks outward-facing or irreversible, so only the human can let it through.
+	// Deadline is when baton answers a proposal nobody answered (Default): Go ahead, or Not now for one
+	// whose action looks outward-facing or irreversible, which Outward says why. Only the human can let
+	// such an action go ahead. Outward keeps the key it had when such a proposal had no deadline
+	// (v0.8.3), so that one recorded then still reads as outward.
 	Deadline time.Time `json:"deadline,omitzero"`
-	Untimed  string    `json:"untimed,omitempty"`
-	// Wait is how long a timed proposal waits for the human: the model's own --wait, or baton's default.
+	Outward  string    `json:"untimed,omitempty"`
+	// Wait is how long a proposal waits for the human: the model's own --wait, or baton's default.
 	Wait time.Duration `json:"wait,omitempty"`
 	// Asked: the question reached the human's screen. Dismissed: it went away again unanswered (Esc, a
-	// restart); the proposal still goes ahead at its deadline unless the human writes first.
+	// restart); baton still answers it at its deadline unless the human writes first.
 	Asked     bool      `json:"asked,omitempty"`
 	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Relayed: a phase agent's proposal, which baton's mod puts to the human (Relay). The agent never
@@ -79,6 +81,21 @@ type Resolution struct {
 // then did of it, it noted.
 func (d Decision) WithoutHuman() bool {
 	return d.Kind == Note || d.Kind == Proposal && d.Resolved != nil && d.Resolved.By == ByTimeout && d.Resolved.Answer != NotNow
+}
+
+// Default is what baton answers for the human to proposal d when nobody does: Go ahead, or Not now for an
+// outward one.
+func (d Decision) Default() string {
+	if d.Outward != "" {
+		return NotNow
+	}
+	return "Go ahead"
+}
+
+// LeftForHuman reports a proposal answered Not now, by baton or by the human: the model did it only if it
+// was safely reversible and stayed inside the project, and noted it if so; otherwise it is left for them.
+func (d Decision) LeftForHuman() bool {
+	return d.Kind == Proposal && d.Resolved != nil && d.Resolved.Answer == NotNow
 }
 
 // HeldProposal is the proposal of the session's own that the hold raised at since holds for the human:
@@ -184,18 +201,23 @@ func WentAhead(st *State, p *Decision, maxAuto int, now time.Time) (n int, last 
 	return n, false
 }
 
+// LeftNotNow resolves outward proposal p as nobody answered it by its deadline: baton answered Not now for
+// the human, and a notice says so. It is not a decision without them (WithoutHuman): what the model then
+// did of it, it noted.
+func LeftNotNow(st *State, p *Decision, now time.Time) {
+	Resolve(st, p.ID, ByTimeout, NotNow, now)
+	st.Run.Notices = append(st.Run.Notices, Notice{Kind: "not_now", Text: p.What, At: now})
+}
+
 // LapseHold settles proposal p, held for the human (they chose Wait for me, or its question went away
 // unanswered), whose hold lapsed with no word from them: baton answers for them, Go ahead, or Not now for
-// one only they could let through (Untimed), and a notice says so. Gone ahead, it is a decision without
+// an outward one (Outward), and a notice says so. Gone ahead, it is a decision without
 // the human, as in WentAhead, and when it was the last its phase may make (maxAuto) a review becomes due.
 // It reports the answer, how many decisions the phase has made without the human, and whether it was the
 // last.
 func LapseHold(st *State, p *Decision, maxAuto int, now time.Time) (answer string, n int, last bool) {
 	id, what, phase := p.ID, p.What, p.Phase
-	answer = "Go ahead"
-	if p.Untimed != "" {
-		answer = NotNow
-	}
+	answer = p.Default()
 	Resolve(st, id, ByTimeout, answer, now)
 	for i := range st.Decisions {
 		if d := &st.Decisions[i]; d.ID == id {

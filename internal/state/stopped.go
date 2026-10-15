@@ -14,12 +14,7 @@ func (r Relay) AboutAgent() bool { return r.Kind == RelayStopped || r.Kind == Re
 
 // Persistent reports the question baton never answers for the human: what becomes of a phase whose agent
 // they stopped twice, which baton took down with the phase not done.
-func (r Relay) Persistent() bool { return r.Kind == RelayStopped && r.Untimed != "" }
-
-// Lapses reports a question baton answers for the human at its deadline, counted from when it was queued,
-// whether or not it was ever on screen: a timed proposal, and a question about a stopped agent or its
-// restart, other than the persistent one.
-func (r Relay) Lapses() bool { return r.Timed() || r.AboutAgent() && !r.Persistent() }
+func (r Relay) Persistent() bool { return r.Kind == RelayStopped && r.Persist != "" }
 
 // AgentWaits reports question r, about the agent on its phase (AboutAgent), still waiting for its answer
 // in the run st: the phase's worker is still held for the stop it asks about (the take-down, for the

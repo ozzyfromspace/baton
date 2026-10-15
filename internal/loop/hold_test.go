@@ -11,15 +11,14 @@ import (
 
 // heldRig is an idle run whose proposal d1 the human holds, as the hooks leave it (holdProposal): resolved
 // by (held: they chose Wait for me; declined: its question went away), behind an escalation of kind
-// decision. untimed makes it one only the human could let through.
-func heldRig(t *testing.T, by string, untimed bool) *rig {
+// decision. outward makes it one answered Not now.
+func heldRig(t *testing.T, by string, outward bool) *rig {
 	r := newIdleRig(t)
 	r.set(func(st *state.State) {
 		d := state.Decision{What: "commit P1 unsigned", Because: "gpg times out", Undo: "re-sign it", Asked: true}
-		if untimed {
-			d.What, d.Untimed = "push the release tag", decide.UntimedReason("push")
-		} else {
-			d.Deadline = decide.Deadline(r.now, DefaultTiming.EscalationTimeout)
+		d.Deadline = decide.Deadline(r.now, DefaultTiming.EscalationTimeout)
+		if outward {
+			d.What, d.Outward = "push the release tag", decide.OutwardReason("push")
 		}
 		p, err := state.AddProposal(st, d, r.now)
 		if err != nil {
@@ -36,16 +35,15 @@ func heldRig(t *testing.T, by string, untimed bool) *rig {
 }
 
 // A hold the human chose (Wait for me), or that a question gone unanswered left, lapses once nobody has
-// written for HoldLapse, counted from the hold or the human's last word: a proposal baton could have let
-// go ahead goes ahead (or a more reversible way does), and one only the human could let through is
-// answered Not now. It is announced, logged by timeout, pushed, and told to the model, which is woken.
+// written for HoldLapse, counted from the hold or the human's last word: a proposal goes ahead (or a more
+// reversible way does), and an outward one is answered Not now. It is announced, logged by timeout, pushed, and told to the model, which is woken.
 // While the run is paused, nothing lapses.
 func TestTheLeadsHoldLapses(t *testing.T) {
 	lapse := DefaultTiming.HoldLapse
 	for _, c := range []struct {
 		name    string
 		by      string
-		untimed bool
+		outward bool
 		maxAuto int
 		setup   func(r *rig) // runs once the hold is in place
 		at      func(r *rig, held time.Time) time.Time
@@ -59,7 +57,7 @@ func TestTheLeadsHoldLapses(t *testing.T) {
 			[]string{"lifted the hold for them"}},
 		{"the last decision P1 may make without the human", state.ByHeld, false, 1, nil, func(r *rig, held time.Time) time.Time { return held.Add(lapse) }, "Go ahead",
 			[]string{"That was the last decision baton lets P1 make without the human"}},
-		{"an outward one: Not now", state.ByDeclined, true, 0, nil, func(r *rig, held time.Time) time.Time { return held.Add(lapse) }, state.NotNow,
+		{"an outward one: Not now", state.ByHeld, true, 0, nil, func(r *rig, held time.Time) time.Time { return held.Add(lapse) }, state.NotNow,
 			[]string{"baton answered Not now for them", decide.NotNowRule(), "Then carry on with P1."}},
 		{"the human wrote first", state.ByHeld, false, 0, func(r *rig) {
 			r.run(5 * time.Minute)
@@ -73,7 +71,7 @@ func TestTheLeadsHoldLapses(t *testing.T) {
 		}, func(r *rig, held time.Time) time.Time { return held.Add(3 * lapse) }, "", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := heldRig(t, c.by, c.untimed)
+			r := heldRig(t, c.by, c.outward)
 			r.loop.MaxAuto = c.maxAuto
 			held := r.now
 			if c.setup != nil {
@@ -175,16 +173,16 @@ func TestAHoldIsNotRemindedAsItLapses(t *testing.T) {
 }
 
 // holdCrew is a crew whose phase agent on P1 put a proposal to the human, which they held: they chose
-// Wait for me on its question (by human), or nobody answered one only they could let through (untimed),
-// and its default held it. The answer is applied: the agent waits.
-func holdCrew(t *testing.T, untimed bool) *crew {
+// Wait for me on its question. outward makes it one answered Not now. The answer is applied: the agent
+// waits.
+func holdCrew(t *testing.T, outward bool) *crew {
 	t.Helper()
 	x := newCrew(t, 1)
 	x.atWork("P1")
 	d := state.Decision{What: "use a fake clock", Because: "drift", Undo: "revert", Relayed: true}
 	q := state.Relay{Kind: state.RelayProposal, Decision: "P1.d1", What: d.What, Because: d.Because}
-	if untimed {
-		d.Untimed, q.Untimed = "outward", "outward"
+	if outward {
+		d.Outward, q.Outward = "outward", "outward"
 	}
 	x.sub("P1").Update(func(st *state.State) error {
 		state.Start(st, x.now, state.Origin{})
@@ -198,11 +196,7 @@ func holdCrew(t *testing.T, untimed bool) *crew {
 	x.lead.Update(func(st *state.State) error {
 		r := st.FrontRelay()
 		state.IssueRelay(r, "baton: the agent on P1: q", 1, "inst", x.now.Add(10*time.Minute), x.now)
-		if untimed {
-			state.AnswerRelay(r, state.ByTimeout, decide.RelayDefault(*r), x.now)
-		} else {
-			state.AnswerRelay(r, state.ByHuman, "Wait for me", x.now)
-		}
+		state.AnswerRelay(r, state.ByHuman, "Wait for me", x.now)
 		return nil
 	})
 	x.tick(time.Second)
@@ -219,14 +213,14 @@ func TestAnAgentsHoldLapses(t *testing.T) {
 	lapse := DefaultTiming.HoldLapse
 	for _, c := range []struct {
 		name    string
-		untimed bool
+		outward bool
 		setup   func(x *crew)
 		wait    time.Duration // from the hold, before it lapses
 		answer  string        // "": it never lapses
 		tell    string
 	}{
 		{"Wait for me", false, nil, lapse, "Go ahead", "Do what you proposed now, or a more reversible way"},
-		{"an outward one, nobody answered: Not now", true, nil, lapse, state.NotNow, decide.NotNowRule()},
+		{"an outward one, held: Not now", true, nil, lapse, state.NotNow, decide.NotNowRule()},
 		{"the human wrote in the lead's session", false, func(x *crew) {
 			x.wait(5 * time.Minute)
 			x.lead.Update(func(st *state.State) error { st.Run.HumanAt = x.now; return nil })
@@ -236,7 +230,7 @@ func TestAnAgentsHoldLapses(t *testing.T) {
 		}, 3 * lapse, "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			x := holdCrew(t, c.untimed)
+			x := holdCrew(t, c.outward)
 			held := x.state().Relay[0].Answered.At
 			if c.setup != nil {
 				c.setup(x)

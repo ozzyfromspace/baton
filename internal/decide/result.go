@@ -206,21 +206,32 @@ func jobsNamed(jobs []state.Job) string {
 	return fmt.Sprintf("%s %s (%s)", plural(len(jobs), "Job", "Jobs"), strings.Join(ids, ", "), strings.Join(ph, ", "))
 }
 
-// PlanComplete is what the model does once the plan is complete; decisions counts those the run made
-// without the human.
-func PlanComplete(decisions int) string {
+// PlanComplete is what the model does once the plan is complete; ds are the run's decisions (its phase
+// agents' too): it names those made without the human, and the proposals answered Not now, which are
+// left for them unless the model did them (and noted it).
+func PlanComplete(ds []state.Decision) string {
 	summary := "Summarize the results for the human"
-	if decisions > 0 {
-		summary += fmt.Sprintf(", including the %d %s this run made without them (baton status lists them, each with its undo),",
-			decisions, plural(decisions, "decision", "decisions"))
+	if n := len(WithoutHuman(ds)); n > 0 {
+		summary += fmt.Sprintf(", including the %d %s this run made without them (baton status lists them, each with its undo)",
+			n, plural(n, "decision", "decisions"))
 	}
-	return summary + " and end your turn."
+	left := LeftForYou(ds)
+	if len(left) == 0 {
+		return summary + ", and end your turn."
+	}
+	var names []string
+	for _, d := range left {
+		names = append(names, fmt.Sprintf("%s (%s)", d.ID, clause(d.What)))
+	}
+	return summary + fmt.Sprintf(". Name the %s answered Not now, which %s left for them unless it was done as safely reversible and noted: %s; "+
+		"say which of them were done, and which wait for them. Then end your turn.",
+		plural(len(left), "proposal", "proposals"), plural(len(left), "is", "are"), strings.Join(names, "; "))
 }
 
 // VerifiedComplete tells the model that the verification of the last phase passed, so the plan is
-// complete.
-func VerifiedComplete(decisions int) string {
-	return "[baton] That verification was the last thing the plan waited for: the plan is complete. " + PlanComplete(decisions)
+// complete; ds are the run's decisions (PlanComplete).
+func VerifiedComplete(ds []state.Decision) string {
+	return "[baton] That verification was the last thing the plan waited for: the plan is complete. " + PlanComplete(ds)
 }
 
 // RedRefusal turns down done for a phase whose latest verification is red, and gives the ways forward.

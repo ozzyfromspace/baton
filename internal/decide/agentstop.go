@@ -206,7 +206,7 @@ func AgentTakenDownNotice(phase string) string { return phase + ": " + NeedsAgen
 const AgentTakenDownWhy = "the human stopped its agent twice, and nobody answered whether to restart it"
 
 // AgentPersistent is why the question about a phase agent baton took down has no deadline
-// (state.Relay.Untimed).
+// (state.Relay.Persist).
 const AgentPersistent = "the human stopped its agent twice, and only they can say what they want of its phase"
 
 // AgentLeft tells the human that the agent on phase stays stopped, as they chose: phase waits for them.

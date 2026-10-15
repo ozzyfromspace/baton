@@ -118,7 +118,7 @@ func (c *Coordinator) applyStop(now time.Time, s *state.Store, st state.State, r
 		case decide.StopTakeDown:
 			x.Why, x.TakenDown = decide.AgentTakenDownWhy, now
 			state.QueueRelay(st, state.Relay{Phase: r.Phase, Kind: state.RelayStopped, Since: now, Count: x.Stops, What: r.What,
-				Untimed: decide.AgentPersistent}, now)
+				Persist: decide.AgentPersistent}, now)
 			notice("worker_held", decide.AgentTakenDownNotice(r.Phase))
 		}
 		e = *x

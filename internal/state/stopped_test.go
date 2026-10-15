@@ -71,8 +71,8 @@ func TestStopAgent(t *testing.T) {
 		t.Fatalf("relay %+v", st.Relay)
 	}
 	r := st.Relay[0]
-	if !st.AgentWaits(r) || !st.StopAsked("P3") || !r.Lapses() || r.Persistent() {
-		t.Errorf("waits %v, asked %v, lapses %v", st.AgentWaits(r), st.StopAsked("P3"), r.Lapses())
+	if !st.AgentWaits(r) || !st.StopAsked("P3") || r.Persistent() {
+		t.Errorf("waits %v, asked %v", st.AgentWaits(r), st.StopAsked("P3"))
 	}
 	if _, fresh := StopAgent(&st, e, "a1", "three", t0.Add(time.Second)); fresh || st.WorkerOn("P3").Stops != 1 || len(st.Relay) != 1 {
 		t.Errorf("the same agent's stop again counted: %+v", st.WorkerOn("P3"))
@@ -92,9 +92,9 @@ func TestStopAgent(t *testing.T) {
 	w = st.WorkerOn("P3")
 	t2 := t1.Add(11 * time.Minute)
 	w.TakenDown = t2
-	p := Relay{Phase: "P3", Kind: RelayStopped, Since: t2, Count: 2, Untimed: "only they can say"}
-	if !p.Persistent() || p.Lapses() || !st.AgentWaits(p) || st.AgentWaits(st.Relay[1]) {
-		t.Errorf("persistent %v, lapses %v, waits %v, the second's waits %v", p.Persistent(), p.Lapses(), st.AgentWaits(p), st.AgentWaits(st.Relay[1]))
+	p := Relay{Phase: "P3", Kind: RelayStopped, Since: t2, Count: 2, Persist: "only they can say"}
+	if !p.Persistent() || !st.AgentWaits(p) || st.AgentWaits(st.Relay[1]) {
+		t.Errorf("persistent %v, waits %v, the second's waits %v", p.Persistent(), st.AgentWaits(p), st.AgentWaits(st.Relay[1]))
 	}
 	st.Relay = append(st.Relay, p)
 	if st.StopAsked("P3") {
@@ -103,8 +103,8 @@ func TestStopAgent(t *testing.T) {
 	// Restarted: its question waits while the fresh agent works, and not once it is held again.
 	w.Status, w.Restarted, w.TakenDown = WorkerSuspended, t2, time.Time{}
 	q := Relay{Phase: "P3", Kind: RelayRestarted, Since: t2}
-	if !st.AgentWaits(q) || !q.Lapses() || st.AgentWaits(p) {
-		t.Errorf("restarted waits %v, lapses %v; the persistent one waits %v", st.AgentWaits(q), q.Lapses(), st.AgentWaits(p))
+	if !st.AgentWaits(q) || q.Persistent() || st.AgentWaits(p) {
+		t.Errorf("restarted waits %v; the persistent one waits %v", st.AgentWaits(q), st.AgentWaits(p))
 	}
 	w.Status = WorkerHeld
 	if st.AgentWaits(q) {

@@ -54,11 +54,11 @@ func TestSegment(t *testing.T) {
 			state.AddProposal(&s, state.Decision{What: "commit unsigned", Deadline: deadline}, now)
 			return s
 		}, true, "◆ baton · ? proposal · goes ahead " + deadline.Local().Format("15:04")},
-		{"untimed proposal", func() state.State {
+		{"outward proposal", func() state.State {
 			s := run
-			state.AddProposal(&s, state.Decision{What: "push the branch", Untimed: "'push' looks outward-facing"}, now)
+			state.AddProposal(&s, state.Decision{What: "push the branch", Outward: "'push' looks outward-facing", Deadline: deadline}, now)
 			return s
-		}, true, "◆ baton · ? proposal · waiting on you"},
+		}, true, "◆ baton · ? proposal · Not now at " + deadline.Local().Format("15:04")},
 		{"held proposal", func() state.State {
 			s := run
 			s.Decisions = nil

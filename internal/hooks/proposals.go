@@ -13,9 +13,10 @@ import (
 )
 
 // A proposal's life after `baton propose` (docs/design.md): the model puts baton's question to the
-// human; the human answers, or nobody does and baton picks Go ahead at the deadline; or the question goes
-// away unanswered, and the proposal is held for the human like Wait for me. What happens next is decided
-// here, from the answer, not left to the model.
+// human; the human answers, or nobody does and baton picks Go ahead at the deadline (Not now for an
+// outward one); or the question goes away unanswered, and baton still answers it so at its deadline
+// unless the human writes first. What happens next is decided here, from the answer, not left to the
+// model.
 
 // asked records that the pending proposal's question reached Claude Code's dialog queue, and tells the
 // human out of band (the question names the deadline, so the push only says one is waiting).
@@ -26,11 +27,9 @@ func asked(st *state.State, now time.Time) (event, bool) {
 	}
 	p.Asked = true
 	notice(st, "proposal", strings.TrimPrefix(p.Question, "baton: "), now)
-	fields := map[string]any{"id": p.ID}
-	if p.Untimed != "" {
-		fields["untimed"] = p.Untimed
-	} else {
-		fields["deadline"] = p.Deadline.UTC().Format(time.RFC3339)
+	fields := map[string]any{"id": p.ID, "deadline": p.Deadline.UTC().Format(time.RFC3339)}
+	if p.Outward != "" {
+		fields["outward"] = p.Outward
 	}
 	return event{"proposal_asked", fields}, true
 }
@@ -61,7 +60,7 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		return valveAction{}
 	}
 	by := state.ByHuman
-	if auto && answer == "Go ahead" { // baton only ever types Go ahead's key
+	if auto && answer == p.Default() { // baton only ever gives the default: Go ahead, or Not now
 		by = state.ByTimeout
 	} else {
 		st.Run.HumanAt = c.Now
@@ -81,9 +80,18 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		} else {
 			v.say, v.tell = decide.WentAhead(p.ID, p.What, p.Undo, st.Current, p.Deadline, false)
 		}
+	case state.NotNow:
+		deadline := p.Deadline
+		if by == state.ByHuman {
+			state.Resolve(st, p.ID, by, answer, c.Now)
+			deadline = time.Time{}
+		} else {
+			state.LeftNotNow(st, p, c.Now)
+		}
+		v.say, v.tell = decide.AnsweredNotNow(p.ID, p.What, st.Current, deadline)
 	case "Wait for me":
 		v.also = holdProposal(st, p, state.ByHeld, answer, c.Now)
-		v.say = decide.Holding(p.ID, decide.HoldLapse, p.Untimed != "")
+		v.say = decide.Holding(p.ID, decide.HoldLapse, p.Outward != "")
 		v.tell = NudgePrefix + " The human chose Wait for me: do not do what you proposed (" + p.What + "). " +
 			"End your turn now; the run waits for them, and their answer will reach you here."
 	case "Pause baton":
@@ -120,9 +128,9 @@ func holdProposal(st *state.State, p *state.Decision, by, answer string, now tim
 // vanished settles a proposal whose question went away without an answer: the turn was interrupted
 // (Esc), the session restarted, or Claude Code went idle with it gone. If the human is the one who just
 // typed, they are here: it is declined, and their message is the answer (tell says so to the model).
-// Otherwise nobody chose anything: a timed proposal stays pending, dismissed, and goes ahead at its
-// deadline (the lead's loop, Loop.lapse); an untimed one is declined, which holds it for the human like
-// Wait for me.
+// Otherwise nobody chose anything: the proposal stays pending, dismissed, and baton answers it at its
+// deadline (the lead's loop, Loop.lapse): Go ahead, or Not now for an outward one. One with no deadline on
+// record is declined, which holds it for the human like Wait for me, until the hold lapses.
 func vanished(st *state.State, now time.Time, human bool) (events []event, tell string) {
 	p := st.PendingProposal()
 	if p == nil || !p.Asked || st.Run.Dialogs.Has("proposal") {
@@ -133,12 +141,12 @@ func vanished(st *state.State, now time.Time, human bool) (events []event, tell 
 	case human:
 		state.Resolve(st, p.ID, state.ByDeclined, "", now)
 		return declined, heldTell(*p)
-	case p.Untimed == "" && !p.Deadline.IsZero():
+	case !p.Deadline.IsZero():
 		if !p.Dismissed.IsZero() {
-			return nil, "" // dismissed already: it goes ahead at its deadline
+			return nil, "" // dismissed already: baton answers it at its deadline
 		}
 		p.Dismissed = now
-		st.Run.Announce = append(st.Run.Announce, decide.ProposalDismissed(p.ID, p.Deadline))
+		st.Run.Announce = append(st.Run.Announce, decide.ProposalDismissed(*p))
 		return []event{{"proposal_dismissed", map[string]any{"id": p.ID, "deadline": p.Deadline.UTC().Format(time.RFC3339)}}}, ""
 	}
 	return append(declined, holdProposal(st, p, state.ByDeclined, "", now)...), ""

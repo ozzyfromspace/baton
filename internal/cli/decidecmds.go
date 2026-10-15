@@ -117,20 +117,19 @@ func cmdPropose(args []string, io IO) int {
 	wait, waitWhy := decide.ProposalWait(p.vals["wait"], timeout)
 	// A worker's proposal is put to the human by the lead session, which words the question and starts its
 	// deadline when it asks it (Relayed).
+	// An outward one is answered Not now at its deadline, not Go ahead (decide.Outward).
 	relayed := s.Worker() != ""
-	d := state.Decision{What: action, Because: because, Undo: undo, Tried: decide.Sanitize(p.vals["tried"]), Relayed: relayed}
-	var q decide.Question
-	switch term, outward := decide.Outward(action); {
-	case outward:
-		d.Untimed = decide.UntimedReason(term)
-		q = decide.UntimedQuestion(because, action, d.Untimed)
-	case !relayed:
-		d.Wait, d.Deadline = wait, decide.Deadline(io.Now(), wait)
-		q = decide.ProposalQuestion(because, action, d.Deadline)
-	default:
-		d.Wait = wait // its deadline counts from when it joins the relay queue (state.Relay.Due)
+	d := state.Decision{What: action, Because: because, Undo: undo, Tried: decide.Sanitize(p.vals["tried"]), Relayed: relayed, Wait: wait}
+	if term, outward := decide.Outward(action); outward {
+		d.Outward = decide.OutwardReason(term)
 	}
-	if !relayed {
+	var q decide.Question
+	if !relayed { // a worker's deadline counts from when it joins the relay queue (state.Relay.Due)
+		d.Deadline = decide.Deadline(io.Now(), wait)
+		q = decide.ProposalQuestion(because, action, d.Deadline)
+		if d.Outward != "" {
+			q = decide.OutwardQuestion(because, action, d.Outward, d.Deadline)
+		}
 		d.Question = q.Text
 	}
 	_, err = s.Update(func(st *state.State) error {
@@ -163,32 +162,31 @@ func cmdPropose(args []string, io IO) int {
 	if d.Tried != "" {
 		fields["tried"] = d.Tried
 	}
-	switch {
-	case d.Untimed != "":
-		fields["untimed"] = d.Untimed
-	case !d.Deadline.IsZero():
+	if d.Outward != "" {
+		fields["outward"] = d.Outward
+	}
+	if !d.Deadline.IsZero() {
 		fields["deadline"] = d.Deadline.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}
-	if d.Untimed == "" {
-		fields["wait"], fields["chosen"] = d.Wait.String(), p.vals["wait"] != "" && waitWhy == ""
-		if waitWhy != "" {
-			fields["wait_refused"] = waitWhy
-		}
+	fields["wait"], fields["chosen"] = d.Wait.String(), p.vals["wait"] != "" && waitWhy == ""
+	if waitWhy != "" {
+		fields["wait_refused"] = waitWhy
 	}
 	if relayed {
 		fields["relayed"] = true
 	}
 	s.Event("proposed", fields)
 	if relayed {
-		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID, What: d.What, Because: d.Because, Untimed: d.Untimed, Wait: d.Wait}); err != nil {
+		if err := s.Relay(state.Relay{Kind: state.RelayProposal, Decision: d.ID, What: d.What, Because: d.Because, Outward: d.Outward, Wait: d.Wait}); err != nil {
 			fmt.Fprintf(io.Err, "baton: warning — could not queue it for the lead session yet (%v); baton queues it again when you end your turn.\n", err)
 		}
-		fmt.Fprintln(io.Out, "baton: "+decide.WorkerProposed(d.ID, d.Untimed, wait, waitWhy))
+		fmt.Fprintln(io.Out, "baton: "+decide.WorkerProposed(d.ID, d.Outward, wait, waitWhy))
 		return 0
 	}
-	if d.Untimed != "" {
-		fmt.Fprintf(io.Out, "baton: proposal %s recorded, with no deadline: %s, so only the human can let it go ahead. Now put it to them: %s. "+
-			"Do nothing else until it is answered; then follow what baton tells you.\n", d.ID, d.Untimed, q.Call())
+	if d.Outward != "" {
+		fmt.Fprintf(io.Out, "baton: proposal %s recorded. Now put it to the human: %s. Since %s, if nobody answers by %s, baton answers Not now for them: "+
+			"%s %sDo nothing else until it is answered; then follow what baton tells you.\n",
+			d.ID, q.Call(), d.Outward, d.Deadline.Local().Format("15:04"), decide.NotNowRule(), waitNote(wait, waitWhy))
 		return 0
 	}
 	fmt.Fprintf(io.Out, "baton: proposal %s recorded. Now put it to the human: %s. If nobody answers by %s, baton picks Go ahead for them, and you do it. %s"+
@@ -221,7 +219,7 @@ func guard(io IO, st *state.State, verb string, proposalToo bool) error {
 	case p.Relayed:
 		return refusal{"proposal pending", verb + " — " + decide.WorkerAwaits(p.ID, p.What)}
 	case !p.Asked:
-		return refusal{"proposal not asked", verb + " — " + decide.AskFirst(p.ID, p.Question) + "."}
+		return refusal{"proposal not asked", verb + " — " + decide.AskFirst(*p) + "."}
 	}
 	return nil
 }
@@ -232,7 +230,7 @@ func pendingRefusal(p state.Decision) string {
 	case p.Relayed:
 		return "not recorded — one proposal at a time: " + decide.WorkerAwaits(p.ID, p.What)
 	case !p.Asked:
-		return "not recorded — " + decide.AskFirst(p.ID, p.Question) + "."
+		return "not recorded — " + decide.AskFirst(p) + "."
 	}
 	return fmt.Sprintf("not recorded — your proposal %s (%s) is still waiting for the human's answer. One proposal at a time: wait for it, then follow what baton tells you.", p.ID, p.What)
 }

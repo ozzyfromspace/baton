@@ -245,10 +245,14 @@ func (l LeadStand) Board(now time.Time) string {
 // NeedsReview: a review of a phase's decisions is due.
 func NeedsReview(phase string) string { return "a review of " + phase + "'s decisions is due" }
 
-// NeedsProposal: a proposal waits for the human; a timed one goes ahead at its deadline.
-func NeedsProposal(deadline time.Time) string {
-	if deadline.IsZero() {
+// NeedsProposal: a proposal waits for the human until its deadline (zero: one held for them), when it goes
+// ahead, or is answered Not now if it is outward.
+func NeedsProposal(deadline time.Time, outward bool) string {
+	switch {
+	case deadline.IsZero():
 		return "a proposal waits for your answer"
+	case outward:
+		return "a proposal, answered Not now at " + deadline.Local().Format("15:04")
 	}
 	return "a proposal, which goes ahead at " + deadline.Local().Format("15:04")
 }

@@ -560,6 +560,8 @@ func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		})
 		s.Event("agent_restarted", map[string]any{"phase": w.phase, "by": "baton", "why": decide.AgentNeededAgain})
 		c.announce(s, decide.AgentWorkReopened(w.phase))
+	case c.erred(now, w):
+		c.takeAfresh(now, s, w) // its conversation is what the API refused: a fresh agent goes on
 	case w.spawn != 0 && now.Sub(w.launched) > c.Lead.Timing.AgentStart:
 		// Taken back, the spawn cannot start an agent any more: its worktree would be refused.
 		b.Void(s.Instance, w.spawn)

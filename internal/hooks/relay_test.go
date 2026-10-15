@@ -149,13 +149,17 @@ func TestTheModsQuestionAnsweredReachesNoModel(t *testing.T) {
 }
 
 // How long a question of baton's may wait before the mod answers it, and with what: the deadline of a
-// timed proposal, a minute on screen at least, the context question's timeout; nothing for a question
-// only the human answers, or for none of baton's.
+// timed proposal, a minute on screen at least, the context question's timeout, a block once the host's
+// loop found nobody answered it in time (asked again until then); nothing for a question only the human
+// answers, or for none of baton's.
 func TestBound(t *testing.T) {
 	t0 := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	q := decide.ProposalQuestion("gpg signing times out", "commit P0 unsigned", t0.Add(5*time.Minute))
 	timed := func(st *state.State) {
 		state.AddProposal(st, state.Decision{What: "commit P0 unsigned", Because: "gpg signing times out", Undo: "x", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
+	}
+	outward := func(st *state.State) {
+		state.AddProposal(st, state.Decision{What: "push the branch", Because: "b", Undo: "x", Outward: "push", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
 	}
 	front := func(st *state.State) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal", Front: t0})
@@ -174,6 +178,16 @@ func TestBound(t *testing.T) {
 		return func(st *state.State) {
 			st.Run.Escalation = &state.Escalation{Kind: kind, Reason: "r", Since: t0, Question: eq, Asked: true}
 			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(eq), Since: t0, Kind: "escalation", Front: t0})
+		}
+	}
+	// blocked is the block the escalation asks about, which the host's loop found lapsed after lapsed (0:
+	// not yet).
+	blocked := func(lapsed time.Duration) func(*state.State) {
+		return func(st *state.State) {
+			st.Blocked = &state.Block{Reason: "need a key", Since: t0}
+			if lapsed > 0 {
+				st.Blocked.Lapsed = t0.Add(lapsed)
+			}
 		}
 	}
 	pq := "baton: you approved a plan. Which?"
@@ -196,20 +210,34 @@ func TestBound(t *testing.T) {
 		{"at its deadline", []func(*state.State){timed, front}, q.Text, 0, 5 * time.Minute, Wait{Answer: "Go ahead"}},
 		{"at its deadline, behind another dialog", []func(*state.State){timed, behind}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
 		{"not on record yet", []func(*state.State){timed}, q.Text, 0, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Go ahead"}},
-		{"an untimed proposal", []func(*state.State){func(st *state.State) {
-			state.AddProposal(st, state.Decision{What: "push", Because: "b", Undo: "x", Untimed: "push", Question: q.Text}, t0)
+		{"an outward proposal before its deadline", []func(*state.State){outward, front}, q.Text, 0, time.Minute, Wait{For: 30 * time.Second, Answer: "Not now"}},
+		{"an outward proposal at its deadline", []func(*state.State){outward, front}, q.Text, 0, 5 * time.Minute, Wait{Answer: "Not now"}},
+		{"a proposal with no deadline on record", []func(*state.State){func(st *state.State) {
+			state.AddProposal(st, state.Decision{What: "push", Because: "b", Undo: "x", Question: q.Text}, t0)
 		}, front}, q.Text, 0, time.Hour, Wait{}},
 		{"the context question", []func(*state.State){func(st *state.State) { st.Run.WarnQuestion = "baton: the context holds a lot. Checkpoint now?" }, func(st *state.State) {
 			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: the context holds a lot. Checkpoint now?"), Since: t0, Front: t0})
 		}}, "baton: the context holds a lot. Checkpoint now?", 0, 20 * time.Minute, Wait{Answer: "Keep going"}},
-		{"an agent's question at its deadline", []func(*state.State){relay}, rq, time.Minute, 5 * time.Minute, Wait{Answer: "Wait for me"}},
-		{"an agent's question asked late", []func(*state.State){relay}, rq, 4*time.Minute + 30*time.Second, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Wait for me"}},
+		{"an agent's question at its deadline", []func(*state.State){relay}, rq, time.Minute, 5 * time.Minute, Wait{Answer: "Look again"}},
+		{"an agent's question asked late", []func(*state.State){relay}, rq, 4*time.Minute + 30*time.Second, 5 * time.Minute, Wait{For: 30 * time.Second, Answer: "Look again"}},
 		{"an agent's question settled meanwhile", []func(*state.State){relay, func(st *state.State) {
 			state.AnswerRelay(st.FrontRelay(), state.ByWithdrawn, "", t0)
-		}}, rq, 0, time.Minute, Wait{Answer: "Wait for me"}},
+		}}, rq, 0, time.Minute, Wait{Answer: "Look again"}},
 		{"a stall's question before its deadline", []func(*state.State){escalation("stalled")}, eq, 0, 9*time.Minute + 50*time.Second, Wait{For: 10 * time.Second, Answer: "Continue"}},
 		{"a stall's question at its deadline", []func(*state.State){escalation("stalled")}, eq, 0, 10 * time.Minute, Wait{Answer: "Continue"}},
-		{"a block's question", []func(*state.State){escalation("blocked")}, eq, 0, time.Hour, Wait{}},
+		{"a block's question, not lapsed: asked again", []func(*state.State){escalation("blocked"), blocked(0)}, eq, 0, time.Hour, Wait{For: 30 * time.Second, Answer: "Look again"}},
+		{"a block's question the loop found lapsed", []func(*state.State){escalation("blocked"), blocked(30 * time.Minute)}, eq, 0, 30*time.Minute + time.Second, Wait{Answer: "Look again"}},
+		{"lapsed, but only just on screen", []func(*state.State){escalation("blocked"), blocked(30 * time.Minute), func(st *state.State) {
+			st.Run.Dialogs[0].Front = t0.Add(30 * time.Minute)
+		}}, eq, 0, 30*time.Minute + 20*time.Second, Wait{For: 30 * time.Second, Answer: "Look again"}},
+		{"lapsed, behind another dialog", []func(*state.State){func(st *state.State) {
+			st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
+		}, escalation("blocked"), blocked(30 * time.Minute)}, eq, 0, time.Hour, Wait{For: 30 * time.Second, Answer: "Look again"}},
+		{"lapsed before the human wrote", []func(*state.State){escalation("blocked"), blocked(30 * time.Minute), func(st *state.State) {
+			st.Run.HumanAt = t0.Add(40 * time.Minute)
+		}}, eq, 0, time.Hour, Wait{For: 30 * time.Second, Answer: "Look again"}},
+		{"lapsed, the plan paused", []func(*state.State){escalation("blocked"), blocked(30 * time.Minute), func(st *state.State) { st.Mode = state.ModePaused }},
+			eq, 0, time.Hour, Wait{}},
 		{"a revised plan", []func(*state.State){replan(true)}, pq, 0, 10 * time.Minute, Wait{Answer: "Continue with the revised plan"}},
 		{"another plan", []func(*state.State){replan(false)}, pq, 0, 10 * time.Minute, Wait{Answer: "Keep the current run"}},
 		{"none of baton's", []func(*state.State){timed, front}, "baton: lunch?", 0, time.Hour, Wait{}},
@@ -350,5 +378,31 @@ func TestTheRelayHooksFailOpen(t *testing.T) {
 				t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 			}
 		})
+	}
+}
+
+// An outward proposal the mod answered at its deadline is answered Not now, by baton: the model is told to
+// do it only if it is the safe kind, and it is left for the human otherwise.
+func TestSettleAnOutwardProposal(t *testing.T) {
+	f := newFixture(t, true)
+	f.set(func(st *state.State) { st.Mode, st.Current = state.ModeRunning, "P0" })
+	in := f.propose(true)
+	f.fire("PermissionRequest", in)
+	q := in["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string)
+	if own, err := Settle(f.store, q, "Not now", f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("settled %v, %v", own, err)
+	}
+	st := f.state()
+	if p := st.Decisions[0]; p.Resolved == nil || p.Resolved.By != state.ByTimeout || p.Resolved.Answer != state.NotNow || !p.LeftForHuman() || p.WithoutHuman() {
+		t.Fatalf("resolved %+v", p.Resolved)
+	}
+	if n := len(st.Run.Announce); n == 0 || !strings.Contains(st.Run.Announce[n-1], "so baton answered Not now for you on d1") || !st.Run.HumanAt.IsZero() {
+		t.Errorf("announce %q, human at %s", st.Run.Announce, st.Run.HumanAt)
+	}
+	if !f.logged("proposal_resolved", map[string]any{"id": "d1", "by": state.ByTimeout, "answer": "Not now", "via": "mod"}) {
+		t.Errorf("events:\n%s", f.eventLog())
+	}
+	if out := f.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "baton answered Not now for the human") {
+		t.Errorf("told at the next call: %v", out)
 	}
 }

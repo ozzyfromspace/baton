@@ -14,7 +14,7 @@ func TestAgentStopAction(t *testing.T) {
 	first := state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 1}
 	second := state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2}
 	third := state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 3}
-	down := state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2, Untimed: AgentPersistent}
+	down := state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2, Persist: AgentPersistent}
 	restarted := state.Relay{Phase: "P3", Kind: state.RelayRestarted}
 	human := func(a string) state.Resolution { return state.Resolution{By: state.ByHuman, Answer: a} }
 	timeout := state.Resolution{By: state.ByTimeout, Answer: RelayDefault(first)}
@@ -73,7 +73,7 @@ func TestAgentQuestions(t *testing.T) {
 		{"second", state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2},
 			[]string{"baton: you stopped the agent on P3 again. Restart it? Unless you answer by 12:10, baton takes it down", "with no deadline"},
 			[]string{RestartIt, LeaveStopped, "Pause baton"}, "Let baton decide"},
-		{"taken down", state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2, Untimed: AgentPersistent},
+		{"taken down", state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2, Persist: AgentPersistent},
 			[]string{"What should become of P3?", "baton will not choose for you", "P3 and the phases that need it wait for your answer"},
 			[]string{RestartIt, LeaveStopped, "Pause baton"}, "Ask me later"},
 		{"restarted", state.Relay{Phase: "P3", Kind: state.RelayRestarted},

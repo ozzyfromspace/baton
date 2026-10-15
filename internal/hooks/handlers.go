@@ -401,7 +401,7 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 	case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
 		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 	case p != nil && !p.Asked:
-		return NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
+		return NudgePrefix + " Not yet: " + decide.AskFirst(*p) + ". Until the human has it, nothing else runs."
 	case st.Replan != nil:
 		return replanHold(st.Replan)
 	}
@@ -758,14 +758,15 @@ func (h *handlers) sessionStartRewake(c Context) (Result, error) {
 // recovered wakes the model of a conversation its host resumed after claude exited by itself mid-plan,
 // once: the turn under way was lost, and the phase in hand goes on (decide.Words.Recovered). With no
 // phase in hand nothing is to go on, and the host drives the run as before (a boundary's compaction, …).
-// done says the resume was handled.
+// A conversation whose last turn stands refused (Recovery.Quiet) is left asleep: nothing is typed into a
+// refused conversation, and how it goes on is the human's. done says the resume was handled.
 func (h *handlers) recovered(c Context) (res Result, done bool, err error) {
 	var r state.Recovery
 	phase := ""
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		if rec := st.Run.Recovering(false); rec != nil && s.Worker() == "" {
 			rec.Told, r = true, *rec
-			if st.InHand() {
+			if st.InHand() && !rec.Quiet {
 				phase = st.Current
 			}
 		}
@@ -774,7 +775,11 @@ func (h *handlers) recovered(c Context) (res Result, done bool, err error) {
 	if err != nil || r.At.IsZero() {
 		return Result{}, false, ok(err)
 	}
-	s.Event("lead_resumed", map[string]any{"why": r.Why, "phase": phase, "woken": phase != ""})
+	fields := map[string]any{"why": r.Why, "phase": phase, "woken": phase != ""}
+	if r.Quiet {
+		fields["refused"] = true
+	}
+	s.Event("lead_resumed", fields)
 	if phase == "" {
 		return Result{}, true, nil
 	}
@@ -1295,6 +1300,7 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 		}
 		// Events are named as if the CLI had done it (resumed, paused), so the record reads the same.
 		var event, say, tell string
+		var more map[string]any
 		switch strings.TrimSpace(answer) {
 		case "Continue":
 			reason := ""
@@ -1321,6 +1327,19 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 			event, say = "checkpoint_asked", "baton: checkpoint at the end of this step"
 			tell = NudgePrefix + " The human chose Checkpoint now. " + w.FinishStep() + ", then run " +
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn. (The next stop is a checkpoint either way.)"
+		case decide.LookAgain:
+			// The block is lifted for the model to look again for a safe way on, which it proposes: nobody
+			// answered it for the loop's BlockLook (baton's answer, State.LookDue), or the human chose it.
+			if e := st.Run.Escalation; iq.kind != "escalation" || e == nil || e.Kind != "blocked" || st.Blocked == nil {
+				continue
+			}
+			reason, _ := state.LiftBlock(st)
+			say, tell = decide.LookingAgain("", reason, st.Current, decide.BlockLook, w.Timeout, auto)
+			event, more = "look_again", map[string]any{"phase": st.Current, "reason": reason}
+			if auto {
+				event = "block_lapsed"
+				notice(st, "block_lapsed", reason, c.Now)
+			}
 		case "Keep going":
 			if iq.kind != "context_warning" {
 				continue
@@ -1339,7 +1358,11 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 		} else {
 			st.Run.HumanAt = c.Now
 		}
-		return valveAction{event: event, fields: map[string]any{"answer": answer, "by": by}, say: say, tell: tell}
+		fields := map[string]any{"answer": answer, "by": by}
+		for k, v := range more {
+			fields[k] = v
+		}
+		return valveAction{event: event, fields: fields, say: say, tell: tell}
 	}
 	return valveAction{}
 }
@@ -1548,7 +1571,7 @@ func refusalIn(path string, agent bool) (r *transcript.Refusal) {
 // its sub-run), or a subagent's of its model, which ends that subagent (no SubagentStop follows) and not
 // the turn.
 func (h *handlers) stopFailure(c Context) (Result, error) {
-	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), At: c.Now}
+	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), Message: str(c.Input, "last_assistant_message"), At: c.Now}
 	if e.Error == "invalid_request" && c.Agent == "" {
 		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
 		// the loop's own transcript says which it was (docs/research/recovery.md): the lead's, or a phase
@@ -1585,6 +1608,9 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		fields := map[string]any{"error": e.Error}
 		if e.Error == state.ErrRefusal {
 			fields["category"] = e.Category
+		}
+		if c.Agent == "" && e.Afresh() {
+			fields["afresh"] = true // the API refused the conversation itself: a fresh session avoids it
 		}
 		if c.Agent != "" {
 			fields["agent"] = c.Agent

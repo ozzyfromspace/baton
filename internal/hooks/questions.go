@@ -25,12 +25,14 @@ func issuedQuestions(st *state.State) []issued {
 	if e := st.Run.Escalation; e != nil && e.Question != "" {
 		if e.Kind == "review" {
 			out = append(out, issued{"review", decide.Question{Text: e.Question, Options: decide.ReviewOptions}})
+		} else if e.Kind == "blocked" {
+			out = append(out, issued{"escalation", decide.Question{Text: e.Question, Options: decide.BlockedOptions}})
 		} else {
 			out = append(out, issued{"escalation", decide.Question{Text: e.Question, Options: decide.EscalationOptions}})
 		}
 	}
 	if p := st.PendingProposal(); p != nil && p.Question != "" {
-		out = append(out, issued{"proposal", decide.Question{Text: p.Question, Options: decide.ProposalOptions}})
+		out = append(out, issued{"proposal", decide.Question{Text: p.Question, Options: decide.OptionsOf(*p)}})
 	}
 	if q := st.Run.WarnQuestion; q != "" {
 		out = append(out, issued{"context_warning", decide.Question{Text: q, Options: decide.WarnOptions}})
