@@ -114,10 +114,16 @@ type Runtime struct {
 	// WarnQuestion is the context question baton last issued, exactly as issued, until it is answered.
 	// WarnOwed is set while it has not been put on screen: a stop is refused once over it, and a
 	// compaction makes it moot.
-	WarnQuestion string      `json:"warn_question,omitempty"`
-	WarnOwed     bool        `json:"warn_owed,omitempty"`
-	Escalation   *Escalation `json:"escalation,omitempty"`
-	LastError    *StopError  `json:"last_error,omitempty"`
+	// DirectivesAsked lists the plan files whose first ExitPlanMode baton answered with its request to flag
+	// the instructions that compete with the plan (once each).
+	DirectivesAsked []string `json:"directives_asked,omitempty"`
+	// DirectivesPending is the plan file asked about whose ExitPlanMode has not come again yet: a stop in
+	// plan mode before it is turned back once, so the plan still reaches the human.
+	DirectivesPending string      `json:"directives_pending,omitempty"`
+	WarnQuestion      string      `json:"warn_question,omitempty"`
+	WarnOwed          bool        `json:"warn_owed,omitempty"`
+	Escalation        *Escalation `json:"escalation,omitempty"`
+	LastError         *StopError  `json:"last_error,omitempty"`
 	// PendingDone is the pending command (after elevation) already handed to the model.
 	PendingDone string `json:"pending_done,omitempty"`
 	// PlanFile is the plan file of the plan approval last asked for, and ClearedPlan a plan the human

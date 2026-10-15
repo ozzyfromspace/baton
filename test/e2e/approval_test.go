@@ -10,8 +10,10 @@ import (
 )
 
 // Approving a plan in plan mode runs it, with no command from anyone: baton attaches the plan, compacts
-// the planning conversation away, and P0 starts from a brief. The test plays the human: it switches to
-// plan mode, asks for a plan, and approves it.
+// the planning conversation away, and P0 starts from a brief. Before the plan reaches the human, baton
+// turns back the model's first ExitPlanMode once with its request to flag competing instructions, and
+// the model puts the plan to them after. The test plays the human: it switches to plan mode, asks for a
+// plan, and approves it.
 func TestAnApprovedPlanRunsByItself(t *testing.T) {
 	dir := NewProject(t)
 	s := Start(t, dir, "--model", "haiku")
@@ -26,6 +28,7 @@ func TestAnApprovedPlanRunsByItself(t *testing.T) {
 		`"## P0 — Say hello" (step: run echo hello) and "## P1 — Say goodbye" (step: run echo goodbye). ` +
 		`Do not explore the repository. Then call ExitPlanMode.`)
 	waitSequence(t, s, 8*time.Minute,
+		kind("directives_asked"),
 		func(e map[string]any) bool {
 			return e["kind"] == "attached" && e["by"] == "approval" && e["phases"] == 2.0
 		},

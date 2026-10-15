@@ -33,10 +33,11 @@ func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAw
 func queueJob(args []string, io IO, kind string) int {
 	var bools []string
 	usage := ""
+	vals := []string{"notes"}
 	if kind == state.JobVerify {
-		bools, usage = []string{"here"}, " [--here]"
+		bools, usage, vals = []string{"here"}, " [--here] [--qa \"<why a full check now>\"]", []string{"notes", "qa"}
 	}
-	p, err := parseArgs(args, []string{"notes"}, bools)
+	p, err := parseArgs(args, vals, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
 	if p.dash >= 0 {
 		// The command as words, as a phase agent gives it: Claude Code refuses an isolated agent's
@@ -50,11 +51,11 @@ func queueJob(args []string, io IO, kind string) int {
 	if !hosted(io) {
 		return fail(io, "not queued — the baton host runs jobs, and this session is not hosted by baton. Run the command yourself.")
 	}
-	s, _, ok := storeAndPlan(io)
+	s, pl, ok := storeAndPlan(io)
 	if !ok {
 		return 1
 	}
-	notes := strings.TrimSpace(p.vals["notes"])
+	notes, qa := strings.TrimSpace(p.vals["notes"]), decide.Sanitize(p.vals["qa"])
 	st, err := s.Load()
 	if err != nil {
 		return fail(io, "%v", err)
@@ -98,7 +99,7 @@ func queueJob(args []string, io IO, kind string) int {
 		if st.Current != phase {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
-		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes}, io.Now())
+		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa}, io.Now())
 		line := fmt.Sprintf("baton: job %s queued for %s — `%s`, from the working tree", queued.ID, phase, command)
 		switch {
 		case here:
@@ -110,6 +111,9 @@ func queueJob(args []string, io IO, kind string) int {
 			line += fmt.Sprintf("; it replaces %s, which baton stops", replaced.ID)
 		}
 		st.Run.Announce = append(st.Run.Announce, line)
+		if qa != "" {
+			st.Run.Announce = append(st.Run.Announce, decide.QAEarly(phase, queued.ID, qa))
+		}
 		return nil
 	})
 	if err != nil {
@@ -124,6 +128,14 @@ func queueJob(args []string, io IO, kind string) int {
 		queuedEvent["replaced"] = replaced.ID
 	}
 	s.Event("job_queued", queuedEvent)
+	if qa != "" {
+		s.Event("qa_early", map[string]any{"job": queued.ID, "phase": phase, "why": qa, "command": command})
+	}
+	// baton cannot tell a focused check from a full one: it asks, once per gate, and the model decides.
+	ask := ""
+	if next := pl.NextQA(phase); kind == state.JobVerify && qa == "" && next != nil && config.AggregatesFromEnv(io.Env) {
+		ask = "baton: " + decide.QAAsk(phase, next.ID+" ("+next.Title+")")
+	}
 
 	where := "run from the working tree"
 	switch {
@@ -139,6 +151,9 @@ func queueJob(args []string, io IO, kind string) int {
 	cfg := config.Load(batonRoot(io), io.Env)
 	timeout, _ := cfg.JobTimeout()
 	after, _ := cfg.SwitchWait()
+	if ask != "" {
+		fmt.Fprintln(io.Out, ask)
+	}
 	if here {
 		fmt.Fprintln(io.Out, "baton: "+decide.HereQueued(s.Worker() != "", decide.Span(timeout)))
 		if work.warn != "" {
@@ -407,6 +422,9 @@ func printJobs(io IO, s *state.Store, st state.State) {
 		}
 		if j.Here {
 			what += " in the working tree"
+		}
+		if j.QA != "" {
+			what += " (a full check ahead of QA: " + j.QA + ")"
 		}
 		log := j.Log
 		if log == "" {

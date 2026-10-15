@@ -64,6 +64,16 @@ func (h *handlers) stop(c Context) (Result, error) {
 			pl, _ = s.LoadPlan()
 		}
 		d = decideStop(st, pl, c.Now, words(c, s), s.WorkerDecisions(*st))
+		if p := st.Run.DirectivesPending; p != "" && !worker {
+			// Asked to flag the instructions that compete with its plan, the model stopped before putting the
+			// plan to the human: once, it is sent back to do so, so the approval never silently waits.
+			st.Run.DirectivesPending = ""
+			if st.Run.PermissionMode == "plan" {
+				d = decision{}
+				d.refuse(decide.ExitPlanAgain())
+				d.emit("stop_refused", map[string]any{"why": "plan not put to the human", "plan": p})
+			}
+		}
 		d.events = append(dropped, d.events...)
 		if drift != "" {
 			msg, _ := d.out()["systemMessage"].(string)

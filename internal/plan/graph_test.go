@@ -52,6 +52,62 @@ func TestParseAfter(t *testing.T) {
 	}
 }
 
+// A phase's Type: line sits beside its After: line, in either order; `Type: qa` marks a QA phase.
+func TestParseHead(t *testing.T) {
+	for _, c := range []struct {
+		name, section string
+		after         after
+		typ, err      string
+	}{
+		{"after, then type", "## P5 — QA\n\nAfter: P2, P4\nType: qa\n\nGoal.", after{found: true, ids: []string{"P2", "P4"}}, TypeQA, ""},
+		{"type, then after", "## P5 — QA\nType: QA\nAfter: all", after{found: true, all: true}, TypeQA, ""},
+		{"bold, and a phrase", "## P5 — QA\n**Type:** QA phase.\n**After:** P4", after{found: true, ids: []string{"P4"}}, TypeQA, ""},
+		{"no type", "## P3 — X\nAfter: P0\nType of work: refactor", after{found: true, ids: []string{"P0"}}, "", ""},
+		{"type alone", "## P3 — X\nType: qa\n\nGoal.", after{}, TypeQA, ""},
+		{"too far down", "## P3 — X\nGoal.\nType: qa", after{}, "", ""},
+		{"unknown type", "## P3 — X\nType: release", after{}, "", `Type: "release" is not a kind of phase baton knows`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a, typ, err := parseHead(c.section)
+			if c.err != "" {
+				if err == nil || !strings.Contains(err.Error(), c.err) {
+					t.Fatalf("err = %v, want %q", err, c.err)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(a, c.after) || typ != c.typ {
+				t.Fatalf("got %+v %q, %v; want %+v %q", a, typ, err, c.after, c.typ)
+			}
+		})
+	}
+
+	doc := "# Demo\n\n## P0 — A\n\nAfter: none\n\n## P1 — B\n\n## P2 — Check\n\nAfter: all\nType: qa\n\n## P3 — C\n\n## Verification\n"
+	p, err := Build("demo.md", []byte(doc), Suggest([]byte(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Phases[2].QA() || p.Phases[0].QA() {
+		t.Fatalf("phases %+v", p.Phases)
+	}
+	if q := p.NextQA("P0"); q == nil || q.ID != "P2" {
+		t.Errorf("next QA of P0: %+v", q)
+	}
+	if q := p.NextQA("P2"); q != nil {
+		t.Errorf("next QA of the QA phase itself: %+v", q)
+	}
+	if got := p.SinceQA("P2"); !reflect.DeepEqual(got, []string{"P0", "P1"}) {
+		t.Errorf("since QA: %v", got)
+	}
+	if spec := Suggest([]byte(doc)); spec.Phases[2].Type != TypeQA {
+		t.Errorf("the suggested spec lacks the type: %+v", spec.Phases[2])
+	}
+	spec := Suggest([]byte(doc))
+	spec.Phases[1].Type = TypeQA
+	if _, err := Build("demo.md", []byte(doc), spec); err == nil || !strings.Contains(err.Error(), "a `Type: qa` line under its heading") {
+		t.Errorf("a spec that disagrees with the text: %v", err)
+	}
+}
+
 func TestBuildDerivesTheGraphFromTheText(t *testing.T) {
 	doc := fixture(t, "after.md")
 	spec := Suggest(doc)

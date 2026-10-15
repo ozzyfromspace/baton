@@ -376,3 +376,42 @@ func TestAnApprovalSaysHowManyWorkersRun(t *testing.T) {
 		t.Errorf("said %q", say(out))
 	}
 }
+
+// Before the human sees a baton plan for approval, the model is asked once to flag the instructions
+// baton does not control that compete with it: the first ExitPlanMode of a plan file is turned back with
+// the request, and the next goes through. A plan with no phase headings, another plan file, or a phase
+// agent: as the rules say.
+func TestCompetingDirectivesAreAskedForOnce(t *testing.T) {
+	f := newFixture(t, false)
+	exit := func(file, doc string) (string, string) {
+		out := f.fire("PreToolUse", map[string]any{"tool_name": "ExitPlanMode", "tool_input": map[string]any{"plan": doc, "planFilePath": file}})
+		hso, _ := out["hookSpecificOutput"].(map[string]any)
+		d, _ := hso["permissionDecision"].(string)
+		why, _ := hso["permissionDecisionReason"].(string)
+		return d, why
+	}
+	d, why := exit("/plans/a.md", approvedDoc)
+	if d != "deny" || !strings.Contains(why, "List every directive that competes with the plan") || !strings.Contains(why, "MEMORY.md") || !strings.Contains(why, "baton asks this once per plan") {
+		t.Fatalf("first call: %q %q", d, why)
+	}
+	if !f.logged("directives_asked", map[string]any{"plan": "/plans/a.md"}) {
+		t.Errorf("events:\n%s", f.eventLog())
+	}
+	// Stopping in plan mode before putting the plan to the human is turned back, once.
+	stop := f.fire("Stop", map[string]any{"permission_mode": "plan"})
+	if stop["decision"] != "block" || !strings.Contains(stop["reason"].(string), "call ExitPlanMode now") {
+		t.Fatalf("stop: %v", stop)
+	}
+	if stop := f.fire("Stop", map[string]any{"permission_mode": "plan"}); stop["decision"] == "block" {
+		t.Fatalf("stop turned back twice: %v", stop)
+	}
+	if d, _ := exit("/plans/a.md", approvedDoc+"\nRevised.\n"); d == "deny" {
+		t.Fatal("asked twice for one plan")
+	}
+	if d, _ := exit("/plans/b.md", approvedDoc); d != "deny" {
+		t.Error("another plan file was not asked")
+	}
+	if d, _ := exit("/plans/c.md", "# Lunch\n\nSandwiches.\n"); d == "deny" {
+		t.Error("a plan with no phase headings was held back")
+	}
+}

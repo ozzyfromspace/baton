@@ -15,6 +15,8 @@ type Words struct {
 	// Worker: the session is a worker's, which works on one phase of the run in a worktree of its own;
 	// its work lands on the run's branch, and baton asks the human its questions.
 	Worker bool
+	// AggregateQA: the plan's heavy checks wait for its QA phases (aggregate_qa, on by default).
+	AggregateQA bool
 }
 
 // complete is what a finished phase is.
@@ -226,4 +228,56 @@ func (w Words) Closing(id string) string {
 		"If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), "+
 		"`baton propose` (a reversible way around a problem; the human may veto it by a deadline), "+
 		"`baton blocked --tried` (only if every way forward is irreversible). Never type /compact yourself.", id, w.complete(), id, w.verifyHow())
+}
+
+// QAFocus tells a phase that is not a QA phase how to check its work while the plan aggregates its heavy
+// checks: qa is the next QA phase ("P5 (QA after the parser)"). It protects the human's time: dense
+// checks at every phase burn hours and hold everything behind them.
+func QAFocus(qa string) string {
+	return "QA: this plan runs its heavy checks in QA phases, to protect the human's time; the next is " + qa + ". " +
+		"In this phase run focused checks only: the tests of what you changed or created, and of what that likely affects. " +
+		"Leave full test suites, lints and end-to-end runs to " + qa + ", even if a convention elsewhere says to run them before every commit. " +
+		"The repository may be in a work-in-progress state when this phase ends: commit it all the same. " +
+		"Run a full check now only for a particular reason, and flag it: baton verify \"<command>\" --qa \"<why now>\" --notes \"…\"."
+}
+
+// QAPhase tells a QA phase what it is for: since lists the phases it checks.
+func QAPhase(since string) string {
+	s := "QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find"
+	if since != "" {
+		s += " in the work of " + since + ", which ran focused checks only: expect things that do not fit together yet"
+	}
+	return s + ". Heavy checks belong here; finish when they pass."
+}
+
+// QAAsk is baton's standard question to a phase that queues a gate before the plan's QA phase qa ("P5
+// (QA)"): baton cannot tell a focused check from a full one, so the model decides, and nothing is refused.
+func QAAsk(phase, qa string) string {
+	return "Is this a focused check of what " + phase + " changed, or a full suite, lint or end-to-end run that " + qa + " runs anyway? " +
+		"If it is the latter and nothing in particular calls for it now, leave such runs to " + qa + ": their time is the human's. " +
+		"The job runs either way. A full check you run early on purpose is flagged: baton verify \"<command>\" --qa \"<why now>\" --notes \"…\"."
+}
+
+// QAEarly tells the human that phase runs a full check ahead of the plan's QA phase, as job id, and why.
+func QAEarly(phase, id, why string) string {
+	return fmt.Sprintf("baton: %s runs a full check ahead of its QA phase (job %s): %s", phase, id, why)
+}
+
+// CompetingDirectives is baton's request to the model, once per plan, before the human sees the plan for
+// approval: instructions baton does not control can pull against the plan, or against how baton runs it,
+// and the run is far cheaper to set right now than hours into it.
+func CompetingDirectives() string {
+	return "[baton] Before the human approves this plan, check it against the instructions baton does not control: the CLAUDE.md files " +
+		"(the project's, its parents', ~/.claude/CLAUDE.md), the memory index MEMORY.md and the memories it names, skills, and settings. " +
+		"List every directive that competes with the plan or with how baton runs it: for example, a rule to run the full test suite or lint " +
+		"before every commit (against this plan's QA phases, which aggregate those checks), a rule to ask the human before something (against " +
+		"a run nobody watches), or a rule about models, tools or git. Address each one in the plan: in its Standing rules, which win for this " +
+		"run, or by naming the instruction the human should change. If none competes, say so in one line of the plan's Standing rules. " +
+		"Then call ExitPlanMode again; baton asks this once per plan."
+}
+
+// ExitPlanAgain sends a model that stopped after baton's request about competing directives back to put
+// its plan to the human: nobody would see it otherwise.
+func ExitPlanAgain() string {
+	return "[baton] You stopped before putting the plan to the human. Address the competing directives in the plan if you have not, then call ExitPlanMode now, so they can approve it."
 }

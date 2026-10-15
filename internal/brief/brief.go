@@ -162,6 +162,9 @@ func Write(in Input) string {
 			fmt.Fprintf(&b, "(baton could not quote phase %s from the plan document: %v. Read %s directly.)\n\n", st.Current, err, pl.File)
 		}
 	}
+	if q := qaGuide(pl, st.Current, in.Words.AggregateQA); q != "" {
+		b.WriteString(q + "\n\n")
+	}
 	if park != nil && strings.TrimSpace(park.Notes) != "" {
 		fmt.Fprintf(&b, "This phase's park notes (where %s stood when it was set aside):\n\n%s\n\n", st.Current, clip(strings.TrimSpace(park.Notes), maxNotes))
 	}
@@ -274,4 +277,29 @@ func tail(s string, n int) string {
 		cut = cut[i+1:]
 	}
 	return "…(earlier notes omitted)\n" + cut
+}
+
+// qaGuide says how phase id checks its work while the plan aggregates its heavy checks in QA phases (on):
+// a QA phase runs them, and a phase before one runs focused checks only. A plan with no QA phase after id
+// gets nothing: id checks itself as it ends, as it always has.
+func qaGuide(pl plan.Plan, id string, on bool) string {
+	i := pl.Index(id)
+	if !on || i < 0 {
+		return ""
+	}
+	if pl.Phases[i].QA() {
+		since := pl.SinceQA(id)
+		names := ""
+		switch n := len(since); {
+		case n == 1:
+			names = since[0]
+		case n > 1:
+			names = strings.Join(since[:n-1], ", ") + " and " + since[n-1]
+		}
+		return decide.QAPhase(names)
+	}
+	if qa := pl.NextQA(id); qa != nil {
+		return decide.QAFocus(qa.ID + " (" + qa.Title + ")")
+	}
+	return ""
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,6 +236,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 		return permission("deny", decide.PhaseTypeIsBatons), nil
 	}
+	if res, asked := h.directives(c); asked {
+		return res, nil
+	}
 	h.agentCall(c, false)
 	if s, phase := h.steersAgent(c); phase != "" {
 		tool := str(c.Input, "tool_name")
@@ -439,6 +443,44 @@ func (h *handlers) guardLanded(c Context, rw *rewrite) (Result, bool, error) {
 	res := permission("deny", why)
 	res.Output["systemMessage"] = "baton: refused `" + rw.shown + "` — it would rewrite work a worker landed"
 	return res, true, nil
+}
+
+// directives answers the lead's first ExitPlanMode for a plan with phase headings, in a hosted session,
+// with baton's request to flag the instructions that compete with it (decide.CompetingDirectives): once
+// per plan file, so the next call goes through. It never holds the plan back a second time.
+func (h *handlers) directives(c Context) (Result, bool) {
+	if str(c.Input, "tool_name") != "ExitPlanMode" || str(c.Input, "agent_id") != "" {
+		return Result{}, false
+	}
+	ti, _ := c.Input["tool_input"].(map[string]any)
+	text := str(ti, "plan")
+	if text == "" || !plan.Shaped(plan.Suggest([]byte(text))) {
+		return Result{}, false // not a baton plan
+	}
+	key := str(ti, "planFilePath")
+	if key == "" {
+		sum := sha256.Sum256([]byte(text))
+		key = hex.EncodeToString(sum[:8])
+	}
+	asked := false
+	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
+		if s.Worker() != "" {
+			return nil
+		}
+		if slices.Contains(st.Run.DirectivesAsked, key) {
+			st.Run.DirectivesPending = "" // asked, and the plan goes to the human now
+			return nil
+		}
+		st.Run.DirectivesAsked, st.Run.DirectivesPending, asked = append(st.Run.DirectivesAsked, key), key, true
+		return nil
+	})
+	if err != nil || !asked {
+		return Result{}, false
+	}
+	s.Event("directives_asked", map[string]any{"plan": key})
+	res := permission("deny", decide.CompetingDirectives())
+	res.Output["systemMessage"] = "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it"
+	return res, true
 }
 
 // workerRefusal is why a worker on phase may not make a tool call, or "" if it may: it never changes the
@@ -834,7 +876,7 @@ func parkedWhy(st state.State, pk *state.Park) string {
 // words is what the model-facing text depends on in this project: whether git is usable there, and how
 // long a proposal waits for the human.
 func words(c Context, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout, Worker: s.Worker() != ""}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout, Worker: s.Worker() != "", AggregateQA: config.AggregatesFromEnv(c.Env)}
 }
 
 func progressLine(pl plan.Plan, st state.State) string {

@@ -320,3 +320,28 @@ func TestWorkerMode(t *testing.T) {
 		})
 	}
 }
+
+// aggregate_qa is on unless the file or the environment turns it off; the environment wins.
+func TestAggregateQA(t *testing.T) {
+	no, yes := false, true
+	for _, c := range []struct {
+		file *bool
+		env  string
+		want bool
+	}{
+		{nil, "", true}, {&no, "", false}, {&yes, "", true}, {&yes, "0", false}, {&no, "1", true}, {nil, "off", false}, {nil, "nonsense", true},
+	} {
+		got := Config{AggregateQA: c.file}.Aggregates(func(k string) string {
+			if k == "BATON_AGGREGATE_QA" {
+				return c.env
+			}
+			return ""
+		})
+		if got != c.want {
+			t.Errorf("file %v, env %q: %v, want %v", c.file, c.env, got, c.want)
+		}
+	}
+	if !AggregatesFromEnv(func(string) string { return "" }) || AggregateEnv(false) != "BATON_AGGREGATE_QA=0" {
+		t.Error("the setting as the host passes it")
+	}
+}

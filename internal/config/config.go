@@ -43,6 +43,11 @@ type Config struct {
 	// nobody answered) before baton stops for them to review. Off (0) unless set: baton never waits on the
 	// human for its own count (BATON_MAX_AUTO_DECISIONS).
 	MaxAutoDecisions *int `json:"max_auto_decisions,omitempty"`
+	// AggregateQA runs a plan's heavy checks (full test suites, lints, end-to-end runs) in its QA phases
+	// (`Type: qa`) only: the phases between them run focused checks of what they change, and may end in a
+	// work-in-progress state, so one QA phase does the slow work for many. On unless set to false
+	// (BATON_AGGREGATE_QA=0), which has every phase check itself in full as it ends.
+	AggregateQA *bool `json:"aggregate_qa,omitempty"`
 	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
@@ -404,6 +409,29 @@ func (c Config) DesktopOn() bool { return c.Desktop == nil || *c.Desktop }
 
 // Restarts reports whether hosted sessions restart on a newer baton by themselves.
 func (c Config) Restarts() bool { return c.AutoRestart == nil || *c.AutoRestart }
+
+// Aggregates reports aggregate_qa: the environment's BATON_AGGREGATE_QA (0, false, off; or 1, true, on)
+// wins, then the file, then on.
+func (c Config) Aggregates(env func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(env("BATON_AGGREGATE_QA"))) {
+	case "0", "false", "off", "no":
+		return false
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return c.AggregateQA == nil || *c.AggregateQA
+}
+
+// AggregatesFromEnv reads aggregate_qa as the host passed it down (BATON_AGGREGATE_QA); missing, it is on.
+func AggregatesFromEnv(env func(string) string) bool { return Config{}.Aggregates(env) }
+
+// AggregateEnv is the setting as the host gives it to the session's hooks.
+func AggregateEnv(on bool) string {
+	if on {
+		return "BATON_AGGREGATE_QA=1"
+	}
+	return "BATON_AGGREGATE_QA=0"
+}
 
 // WorkerMode is the permission mode the session's workers start in, which is the lead session's (they are
 // its agents): the one it started in by its flags, which the host passes on (BATON_WORKER_MODE), or else

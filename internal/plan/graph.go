@@ -27,17 +27,55 @@ type after struct {
 	ids   []string // the phases it names (none when found, not all, and empty)
 }
 
-// parseAfter reads the After: line of a phase's section: the first non-empty line after the phase's own
-// heading. It accepts `After:` and `**After:**`, ids separated by commas, spaces or "and", `none` and
-// `all`.
+// parseAfter reads the After: line of a phase's section: one of the first non-empty lines after the
+// phase's own heading, beside its Type: line. It accepts `After:` and `**After:**`, ids separated by
+// commas, spaces or "and", `none` and `all`.
 func parseAfter(section string) (after, error) {
+	a, _, err := parseHead(section)
+	return a, err
+}
+
+// parseHead reads the lines that open a phase's section, right under its heading, in either order: its
+// After: line and its Type: line (`Type: qa` for a QA phase).
+func parseHead(section string) (a after, typ string, err error) {
 	lines := strings.Split(section, "\n")
+	seen := 0
 	for _, l := range lines[1:] { // the first line is the phase's own heading
-		if l = strings.TrimSpace(l); l != "" {
-			return parseAfterLine(l)
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		if seen++; seen > 2 {
+			break
+		}
+		if t, ok, terr := parseTypeLine(l); ok {
+			if terr != nil {
+				return a, "", terr
+			}
+			typ = t
+			continue
+		}
+		if a.found {
+			break
+		}
+		if a, err = parseAfterLine(l); err != nil || !a.found {
+			break
 		}
 	}
-	return after{}, nil
+	return a, typ, err
+}
+
+// parseTypeLine reads a `Type:` line (`**Type:**` too): ok says it is one.
+func parseTypeLine(line string) (typ string, ok bool, err error) {
+	label, rest, found := strings.Cut(line, ":")
+	if !found || !strings.EqualFold(strings.Trim(label, "*_` \t"), "type") {
+		return "", false, nil
+	}
+	switch v := strings.ToLower(strings.TrimSuffix(strings.Trim(rest, "*` \t"), ".")); v {
+	case TypeQA, "qa phase":
+		return TypeQA, true, nil
+	default:
+		return "", true, fmt.Errorf("Type: %q is not a kind of phase baton knows: write `Type: qa` for a QA phase, or leave the line out", strings.TrimSpace(rest))
+	}
 }
 
 func parseAfterLine(line string) (after, error) {
@@ -83,18 +121,19 @@ func (p *Plan) derive(text string, redo func(i int) bool) []error {
 			continue
 		}
 		ph := &p.Phases[i]
-		ph.After = nil
+		ph.After, ph.Type = nil, ""
 		where := fmt.Sprintf("phase %d (%q)", i+1, ph.ID)
 		sec, err := p.section(text, i)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			continue
 		}
-		a, err := parseAfter(sec)
+		a, typ, err := parseHead(sec)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			continue
 		}
+		ph.Type = typ
 		var at []int
 		switch {
 		case !a.found && i > 0:

@@ -24,6 +24,7 @@ type Job struct {
 	Here    bool   `json:"here,omitempty"`    // a verify job run in the session's own working tree, with no lane (HereGate)
 	Requeue bool   `json:"requeue,omitempty"` // a verify job the merge queue runs again on a worker's merged branch (Reverify)
 	Notes   string `json:"notes,omitempty"`   // where the phase stood when the job was queued, in the model's words
+	QA      string `json:"qa,omitempty"`      // why a full check runs ahead of the plan's QA phase (--qa), in the model's words
 	Status  string `json:"status"`
 	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
 	Reason  string `json:"reason,omitempty"` // why, when the job ended without the command's own verdict

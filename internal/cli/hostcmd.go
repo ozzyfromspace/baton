@@ -158,6 +158,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
 	batonEnv = append(batonEnv, workerEnv(workers, auto, usageMax)...)
+	batonEnv = append(batonEnv, config.AggregateEnv(cfg.Aggregates(io.Env))) // QA phases run the heavy checks (aggregate_qa)
 	if mode := elevate.PermissionMode(args); mode != "" {
 		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
 	}

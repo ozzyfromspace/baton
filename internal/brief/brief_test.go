@@ -458,3 +458,51 @@ func TestNotesSince(t *testing.T) {
 		}
 	}
 }
+
+// While the plan aggregates its heavy checks (aggregate_qa), a phase before a QA phase is told to run
+// focused checks only and leave the full ones to it, and a QA phase is told it is the place for them;
+// with the setting off, or no QA phase ahead, the brief says nothing of it. A phase agent's narrowed plan
+// still names its QA phase.
+func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
+	doc := []byte("# Demo\n\n## P0 — Parser\n\nAfter: none\n\nParse.\n\n## P1 — Printer\n\nPrint.\n\n## P2 — Check it all\n\nAfter: all\nType: qa\n\nRun everything.\n\n## P3 — Ship\n\nShip.\n\n## Verification\n")
+	pl, err := plan.Build("/work/plan.md", doc, plan.Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	at := func(id string) state.State {
+		st := state.Attach(pl, now, state.Origin{})
+		st.Current = id
+		return st
+	}
+	focus := "In this phase run focused checks only"
+	for _, c := range []struct {
+		name, phase string
+		on          bool
+		want, not   string
+	}{
+		{"before the QA phase", "P1", true, "the next is P2 (Check it all)", "this is a QA phase"},
+		{"the QA phase", "P2", true, "QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find in the work of P0 and P1", focus},
+		{"after the last QA phase", "P3", true, "", "QA:"},
+		{"aggregate_qa off", "P1", false, "", "QA:"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: at(c.phase), Words: decide.Words{AggregateQA: c.on}})
+			if c.want != "" && !strings.Contains(b, c.want) {
+				t.Errorf("brief lacks %q:\n%s", c.want, b)
+			}
+			if strings.Contains(b, c.not) {
+				t.Errorf("brief has %q:\n%s", c.not, b)
+			}
+		})
+	}
+	only, err := pl.Only("P1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.Attach(only, now, state.Origin{})
+	st.Current = "P1"
+	if b := Write(Input{Kind: Worker, Plan: only, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Worker: true}}); !strings.Contains(b, "the next is P2 (Check it all)") || !strings.Contains(b, focus) {
+		t.Errorf("a phase agent's brief:\n%s", b)
+	}
+}

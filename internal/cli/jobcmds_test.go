@@ -17,6 +17,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/machine"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -39,7 +40,7 @@ func TestVerifyAndAwaitRefusals(t *testing.T) {
 		want  string
 		why   string // the refused event's, if one is logged
 	}{
-		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] --notes`, ""},
+		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] [--qa "<why a full check now>"] --notes`, ""},
 		{"not hosted", func(s *session, _ string) { delete(s.env, "BATON_HOST") }, []string{"verify", "make test", notes}, "not queued — the baton host runs jobs, and this session is not hosted", ""},
 		{"no notes", nil, []string{"verify", "make test"}, `not queued — say where P0 stands with --notes "<what is done, what is left, what this job checks>"`, "no notes"},
 		{"blank notes", nil, []string{"await", "gh run watch", "--notes", " "}, "not queued — say where P0 stands", "no notes"},
@@ -149,6 +150,62 @@ func TestAJobsCommandMayBeItsWords(t *testing.T) {
 
 // A gate that needs the checkout runs there, on HEAD, with no lane (--here): baton says what it holds
 // until the gate ends.
+// Before the plan's QA phase, baton asks once of each gate whether it is a focused check or a full one
+// the QA phase runs anyway, and the model decides: the job runs either way. A full check run early on
+// purpose is flagged (--qa), and the human is told. With aggregate_qa off, or no QA phase ahead, nothing
+// is asked.
+func TestAGateBeforeTheQAPhaseIsAskedAbout(t *testing.T) {
+	qaPlan := func(s *session) {
+		pl, err := s.store().LoadPlan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pl.Phases[len(pl.Phases)-1].Type = plan.TypeQA
+		if err := s.store().WritePlan(pl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const ask = "Is this a focused check of what P0 changed, or a full suite, lint or end-to-end run that"
+	for _, c := range []struct {
+		name    string
+		qa, off bool
+		args    []string
+		asks    bool
+		flagged string
+	}{
+		{"a QA phase ahead", true, false, []string{"verify", "make test", "--notes", "n"}, true, ""},
+		{"flagged as early QA", true, false, []string{"verify", "make test", "--qa", "the parser touches every package", "--notes", "n"}, false, "the parser touches every package"},
+		{"aggregate_qa off", true, true, []string{"verify", "make test", "--notes", "n"}, false, ""},
+		{"no QA phase ahead", false, false, []string{"verify", "make test", "--notes", "n"}, false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := gitSession(t)
+			if c.qa {
+				qaPlan(s)
+			}
+			if c.off {
+				s.env["BATON_AGGREGATE_QA"] = "0"
+			}
+			out := s.must("", c.args...)
+			if got := strings.Contains(out, ask); got != c.asks {
+				t.Errorf("asked %v, want %v:\n%s", got, c.asks, out)
+			}
+			j := s.state().Job("j1")
+			if j == nil || j.QA != c.flagged {
+				t.Fatalf("job %+v, want it queued, flagged %q", j, c.flagged)
+			}
+			if c.flagged != "" {
+				if !s.logged("qa_early", map[string]any{"job": "j1", "phase": "P0", "why": c.flagged}) || !strings.Contains(strings.Join(s.state().Run.Announce, "\n"), "runs a full check ahead of its QA phase (job j1)") {
+					t.Errorf("not flagged: %s", s.events())
+				}
+				if status := s.must("", "status"); !strings.Contains(status, "(a full check ahead of QA: "+c.flagged+")") {
+					t.Errorf("status:\n%s", status)
+				}
+			}
+		})
+	}
+}
+
 func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
 	s, root := gitSession(t)
 	head := gittest.Git(t, root, "rev-parse", "HEAD")

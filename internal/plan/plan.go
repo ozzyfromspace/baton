@@ -30,6 +30,40 @@ type Phase struct {
 	// After lists the phases this one waits for, in document order (Deps). nil is a plan.json from before
 	// dependencies, read as the phase before it; empty waits for none.
 	After []string `json:"after"`
+	// Type is the kind of phase, from its section's Type: line: TypeQA, or "" for one that builds.
+	Type string `json:"type,omitempty"`
+}
+
+// TypeQA marks a QA phase: where the plan runs its full test suites, lints and end-to-end checks, and fixes
+// what the phases since the last one left incoherent. The phases between QA phases run focused checks
+// only (config aggregate_qa), so the heavy ones run once for many phases.
+const TypeQA = "qa"
+
+// QA reports a QA phase.
+func (ph Phase) QA() bool { return ph.Type == TypeQA }
+
+// NextQA is the first QA phase after phase id in the plan, or nil: where the heavy checks of what id
+// builds run.
+func (p Plan) NextQA(id string) *Phase {
+	if p.QAFor != "" && len(p.Phases) == 1 && p.Phases[0].ID == id {
+		return &Phase{ID: p.QAFor, Title: p.QAForTitle, Type: TypeQA} // a narrowed plan (Only)
+	}
+	for i := p.Index(id) + 1; i > 0 && i < len(p.Phases); i++ {
+		if p.Phases[i].QA() {
+			return &p.Phases[i]
+		}
+	}
+	return nil
+}
+
+// SinceQA lists the phases a QA phase id checks: those between the QA phase before it (or the plan's
+// start) and it.
+func (p Plan) SinceQA(id string) []string {
+	var out []string
+	for i := p.Index(id) - 1; i >= 0 && !p.Phases[i].QA(); i-- {
+		out = append([]string{p.Phases[i].ID}, out...)
+	}
+	return out
 }
 
 // Plan is the content of .baton/plan.json.
@@ -43,6 +77,10 @@ type Plan struct {
 	RulesAnchor string `json:"rules_anchor,omitempty"`
 	// EndAnchor optionally ends the last phase's section (e.g. "## Verification").
 	EndAnchor string `json:"end_anchor,omitempty"`
+	// QAFor and QAForTitle name the QA phase that checks the one phase of a narrowed plan (Only), which
+	// leaves it out (NextQA).
+	QAFor      string `json:"qa_for,omitempty"`
+	QAForTitle string `json:"qa_for_title,omitempty"`
 	// Bounds are the anchors of the phases a narrowed plan leaves out (Only): sections still end at them.
 	Bounds []string `json:"bounds,omitempty"`
 }
@@ -72,6 +110,10 @@ func Build(file string, doc []byte, spec Spec) (Plan, error) {
 	}
 	errs := p.derive(text, func(int) bool { return true })
 	for i, ph := range spec.Phases {
+		if got := p.Phases[i].Type; ph.Type != "" && ph.Type != got {
+			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"type\" (%s) differs from the plan's (%q). A phase's type comes from the plan text, "+
+				"a `Type: qa` line under its heading: edit the plan to change it, and leave \"type\" out of the spec", i+1, ph.ID, ph.Type, got))
+		}
 		if got := p.Phases[i].After; ph.After != nil && got != nil && !sameIDs(ph.After, got) {
 			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"after\" (%s) differs from the plan's (%s). Dependencies come from the plan text, "+
 				"each phase's After: line (a phase without one follows the phase before it): edit the plan to change them, and leave \"after\" out of the spec",
@@ -228,6 +270,10 @@ func (p Plan) Only(id string) (Plan, error) {
 	ph.After = []string{}
 	q := p
 	q.Phases, q.Bounds = []Phase{ph}, slices.Clone(p.Bounds)
+	q.QAFor, q.QAForTitle = "", ""
+	if qa := p.NextQA(id); qa != nil {
+		q.QAFor, q.QAForTitle = qa.ID, qa.Title
+	}
 	for _, o := range p.Phases {
 		if o.ID != id {
 			q.Bounds = append(q.Bounds, o.Anchor)
