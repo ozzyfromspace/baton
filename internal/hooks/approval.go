@@ -157,8 +157,9 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// answeredReplan acts on the human's answer about a plan they approved while the run had one.
-func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) valveAction {
+// answeredReplan acts on the human's answer about a plan they approved while the run had one. auto says
+// baton answered it for them, since nobody had by its deadline (decide.ReplanDefault).
+func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, auto bool) valveAction {
 	r := st.Replan
 	if r == nil {
 		return valveAction{}
@@ -167,8 +168,14 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 	if !found {
 		return valveAction{}
 	}
-	st.Replan, st.Run.HumanAt = nil, c.Now
-	v := valveAction{event: "replan_resolved", fields: map[string]any{"plan": r.File, "answer": answer}}
+	st.Replan = nil
+	by, chose := "human", decide.Chose(auto, c.Now)
+	if auto {
+		by = "timeout"
+	} else {
+		st.Run.HumanAt = c.Now
+	}
+	v := valveAction{event: "replan_resolved", fields: map[string]any{"plan": r.File, "answer": answer, "by": by}}
 	switch answer {
 	case "Continue with the revised plan", "Start the new plan from P0":
 		doc, err := os.ReadFile(r.File)
@@ -180,7 +187,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 			first := strings.SplitN(err.Error(), "\n", 2)[0]
 			v.fields["error"] = first
 			v.say = "baton: the approved plan no longer attaches (" + first + "); the current run is unchanged"
-			v.tell = NudgePrefix + " The human chose " + strconv.Quote(answer) + ", but the plan file no longer attaches (" + first + "). Nothing changed. Tell the human, then wait for them."
+			v.tell = NudgePrefix + " " + chose + " " + strconv.Quote(answer) + ", but the plan file no longer attaches (" + first + "). Nothing changed. Tell the human, and carry on with " + decide.Named(st.Current) + "."
 			return v
 		}
 		if answer == "Start the new plan from P0" {
@@ -209,20 +216,23 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words) 
 		switch {
 		case next == "" && st.Mode == state.ModeRunning:
 			v.say = "baton: revised — no phase of the revision can start until a job finishes"
-			v.tell = NudgePrefix + " The human chose to continue with the revised plan. Every phase of it still to run waits for a job to finish: end your turn, and baton wakes you when there is something to do."
+			v.tell = NudgePrefix + " " + chose + " to continue with the revised plan. Every phase of it still to run waits for a job to finish: end your turn, and baton wakes you when there is something to do."
 		case next == "":
 			v.say = "baton: revised — every phase of the revision is already done"
-			v.tell = NudgePrefix + " The human chose to continue with the revised plan, and every phase in it is already done. Summarize for the human and end your turn."
+			v.tell = NudgePrefix + " " + chose + " to continue with the revised plan, and every phase in it is already done. Summarize for the human and end your turn."
 		case st.BoundaryOwed:
 			v.say = fmt.Sprintf("baton: revised → compacting, then %s starts", phaseTitle(pl, next))
-			v.tell = NudgePrefix + " The human chose to continue with the revised plan. End your turn now: baton compacts the context and starts " + phaseTitle(pl, next) + " with a fresh brief."
+			v.tell = NudgePrefix + " " + chose + " to continue with the revised plan. End your turn now: baton compacts the context and starts " + phaseTitle(pl, next) + " with a fresh brief."
 		default:
 			v.say = "baton: revised — " + phaseTitle(pl, next) + " carries on"
-			v.tell = fmt.Sprintf("%s The human chose to continue with the revised plan (%s). Carry on with %s as the revision describes it.", NudgePrefix, pl.File, phaseTitle(pl, next))
+			v.tell = fmt.Sprintf("%s %s to continue with the revised plan (%s). Carry on with %s as the revision describes it.", NudgePrefix, chose, pl.File, phaseTitle(pl, next))
 		}
 	case "Keep the current run":
 		v.say = "baton: keeping the current run; the approved plan is set aside"
-		v.tell = NudgePrefix + " The human chose to keep the current run. Leave the plan they approved aside and carry on with " + decide.Named(st.Current) + "."
+		v.tell = NudgePrefix + " " + chose + " to keep the current run. Leave the plan they approved aside and carry on with " + decide.Named(st.Current) + "."
+		if auto {
+			v.say = fmt.Sprintf("baton: nobody answered by %s → keeping the current run; /baton run %s starts the plan you approved", c.Now.Local().Format("15:04"), r.File)
+		}
 	default:
 		v.say = "baton: your answer about the approved plan went to Claude; the run is unchanged"
 		v.tell = fmt.Sprintf("%s The human answered baton's question about the plan they approved in their own words: %s. baton changed nothing. "+

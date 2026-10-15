@@ -14,6 +14,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/elevate"
+	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/notify"
@@ -137,6 +138,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
+	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle, "BATON_BACKGROUND_IDLE": &timing.BackgroundIdle,
 		"BATON_STALL_AFTER": &timing.StallAfter} {
@@ -174,7 +176,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	runners := newHostRunners(io, exe, proj, instance)
 	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto,
-		Runners: runners}
+		Runners: runners, Lapse: lapser(escalation.Env())}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
@@ -538,4 +540,19 @@ func homeDir(io IO) string {
 	}
 	h, _ := os.UserHomeDir()
 	return h
+}
+
+// lapser answers a question of baton's own for the human with the settings the session's hooks read
+// (env, as KEY=value), as the mod answers one on screen (hooks.Lapse).
+func lapser(env []string) func(s *state.Store, question, answer string, now time.Time) error {
+	vars := map[string]string{}
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			vars[k] = v
+		}
+	}
+	return func(s *state.Store, question, answer string, now time.Time) error {
+		_, err := hooks.Lapse(s, question, answer, now, func(k string) string { return vars[k] })
+		return err
+	}
 }

@@ -19,6 +19,7 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 	l.watchDialog(v, st)
 	l.answerOwnQuestion(v, st, in)
 	l.lapse(v, st)
+	l.lapseQuestions(v, st)
 	comp := st.Run.Compaction
 	if comp.InFlight() || comp.Status == state.CompactFailed || l.resuming(st) {
 		return // the compaction checks own this stretch
@@ -395,5 +396,30 @@ func (l *Loop) lapse(v host.View, st state.State) {
 	l.Store.Event("proposal_resolved", map[string]any{"id": id, "by": state.ByTimeout, "answer": "Go ahead", "via": "lapsed"})
 	if last {
 		l.Store.Event("review_due", map[string]any{"phase": p.Phase, "decisions": n})
+	}
+}
+
+// lapseQuestions answers baton's own question about the run for the human once it has waited the
+// escalation timeout with no dialog of it on screen, since the model never put it to them or it went
+// away: the plan goes on (Continue), and a plan the human approved mid-run gets its default
+// (decide.ReplanDefault). Where its dialog is on screen, the mod answers it there at the same time
+// (hooks.Bound). A block is the model's own choice to wait, and a review one the human opted into: neither
+// is answered for them.
+func (l *Loop) lapseQuestions(v host.View, st state.State) {
+	if l.Lapse == nil || l.Store.Worker() != "" || st.Mode != state.ModeRunning {
+		return
+	}
+	var question, answer, kind string
+	switch e, r := st.Run.Escalation, st.Replan; {
+	case r != nil && r.Question != "" && !st.Run.Dialogs.Has("replan") && !v.Now.Before(r.Since.Add(l.Timing.EscalationTimeout)):
+		question, answer, kind = r.Question, decide.ReplanDefault(r.Same), "replan"
+	case e != nil && e.Question != "" && e.Kind != "blocked" && e.Kind != "review" && !st.Run.Dialogs.Has("escalation") &&
+		!v.Now.Before(e.Since.Add(l.Timing.EscalationTimeout)):
+		question, answer, kind = e.Question, "Continue", e.Kind
+	default:
+		return
+	}
+	if err := l.Lapse(l.Store, question, answer, v.Now); err != nil {
+		l.logf("loop: answering baton's question (%s) for the human: %v", kind, err)
 	}
 }

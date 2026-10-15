@@ -39,7 +39,7 @@ type Settings struct {
 }
 
 // DefaultWarnTimeout is how long the context question waits for the human by default.
-const DefaultWarnTimeout = 20 * time.Minute
+const DefaultWarnTimeout = 10 * time.Minute
 
 // Limits are the context sizes, in tokens, for one model window. A zero threshold is off.
 type Limits struct {

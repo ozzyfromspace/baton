@@ -254,6 +254,17 @@ func TestRefusalsCountThenEscalate(t *testing.T) {
 	if !strings.Contains(d.output["reason"].(string), "AskUserQuestion") || st.Run.Escalation == nil {
 		t.Fatalf("escalation: %v", d.output)
 	}
+
+	// A phase agent asks the human nothing itself, and nobody would answer it by a deadline: its stop
+	// goes through, and its loop's watchdog takes it from there.
+	st = running()
+	for i := 1; i <= MaxStopBlocks; i++ {
+		decideStop(&st, pl, tStop, decide.Words{Git: true, Worker: true}, nil)
+	}
+	d = decideStop(&st, pl, tStop, decide.Words{Git: true, Worker: true}, nil)
+	if d.output["decision"] == "block" || st.Run.Escalation != nil || len(d.events) == 0 || d.events[len(d.events)-1].kind != "stop_allowed" {
+		t.Fatalf("a phase agent's stop: %v, escalation %+v, events %+v", d.output, st.Run.Escalation, d.events)
+	}
 }
 
 // Background work is refused once, then the stops on it are allowed; new work is refused once again, and

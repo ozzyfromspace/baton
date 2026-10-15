@@ -214,8 +214,11 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "approved plan not asked"})
 			return d
 		}
-		st.Replan = nil
-		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times without asking you about the plan you approved", st.Run.StopBlocks), now)
+		// Asked enough: the approval is not dropped, and nothing waits on the human for it either. baton
+		// answers its default at the deadline (the host's loop, hooks.Lapse) unless they answer first.
+		answer := decide.ReplanDefault(st.Replan.Same)
+		d.say(decide.ReplanWaits(answer, st.Replan.Since.Add(w.Timeout)))
+		d.emit("replan_waits", map[string]any{"plan": st.Replan.File, "answer": answer, "count": st.Run.StopBlocks})
 	case st.BoundaryOwed && !w.Worker:
 		// (A phase's sub-run owes no boundary: nothing compacts a phase agent, and its stop took a phase
 		// reopened so up again first, Retake.)
@@ -337,6 +340,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.refuse(w.NoStatus(st.Current, cur))
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks})
 			return d
+		}
+		if w.Worker {
+			// A phase agent puts no question to the human itself, and nobody would answer one by a deadline:
+			// its stop goes through, and its loop's watchdog nudges it, or starts it afresh, as for any agent
+			// gone quiet.
+			d.say(fmt.Sprintf("baton: the agent on %s stopped %d times without reporting status; baton nudges it if it stays quiet", decide.Named(st.Current), st.Run.StopBlocks))
+			d.emit("stop_allowed", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "no status"})
+			break
 		}
 		escalate(st, &d, "stalled", fmt.Sprintf("the model stopped %d times on %s without reporting status", st.Run.StopBlocks, decide.Named(st.Current)), now)
 	}

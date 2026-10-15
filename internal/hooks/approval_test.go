@@ -209,6 +209,15 @@ func TestAnUnaskedReplanHoldsTheStopUntilTheHumanWrites(t *testing.T) {
 	if out["decision"] != "block" || !strings.Contains(out["reason"].(string), "put baton's question about the plan the human approved") {
 		t.Fatalf("stop %v", out)
 	}
+	// Asked enough, the stop goes through and the approval stays: baton answers its default at the
+	// deadline (the host's loop), unless the human writes first.
+	for range MaxStopBlocks {
+		out = f.fire("Stop", map[string]any{})
+	}
+	if out["decision"] == "block" || f.state().Replan == nil || !strings.Contains(say(out), `baton answers "Keep the current run" at`) ||
+		!f.logged("replan_waits", map[string]any{"answer": "Keep the current run"}) || f.logged("escalated", nil) {
+		t.Fatalf("stop %v; events:\n%s", out, f.eventLog())
+	}
 	out = f.fire("UserPromptSubmit", map[string]any{"prompt": "actually, leave it"})
 	if f.state().Replan != nil || !strings.Contains(additionalContext(out), "went unanswered, so baton changed nothing") {
 		t.Fatalf("after the human wrote: %v", out)

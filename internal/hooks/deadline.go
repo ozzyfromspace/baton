@@ -29,19 +29,19 @@ type Wait struct {
 // decide.MinWait after it was on screen: a question of the lead's model may be queued behind another
 // dialog, so its clock runs from when it was first seen in front (Dialog.Front, recorded here); one of
 // the mod's is asked only while no other dialog is open (the band it is asked from is not drawn then).
-func Bound(s *state.Store, question string, asked, now time.Time, warnTimeout time.Duration) (Wait, error) {
+func Bound(s *state.Store, question string, asked, now time.Time, warnTimeout, escTimeout time.Duration) (Wait, error) {
 	var w Wait
 	_, err := s.Update(func(st *state.State) error {
 		if !st.IsOwner(s.Instance, now) {
 			return errNotOwner
 		}
-		w = bound(st, question, asked, now, warnTimeout)
+		w = bound(st, question, asked, now, warnTimeout, escTimeout)
 		return nil
 	})
 	return w, err
 }
 
-func bound(st *state.State, question string, asked, now time.Time, warnTimeout time.Duration) Wait {
+func bound(st *state.State, question string, asked, now time.Time, warnTimeout, escTimeout time.Duration) Wait {
 	for _, r := range st.Relay {
 		if r.Answered != nil && r.Question != "" && decide.Normalize(r.Question) == decide.Normalize(question) {
 			// A phase agent's question settled meanwhile (withdrawn, or taken past its deadline) whose dialog
@@ -72,6 +72,21 @@ func bound(st *state.State, question string, asked, now time.Time, warnTimeout t
 	case "context_warning":
 		shown, front := shownSince(st, question, now)
 		due, answer = shown.Add(max(warnTimeout, decide.MinWait)), decide.WarnOptions[2].Label
+		if !front {
+			return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: answer}
+		}
+	case "escalation", "replan":
+		// baton's own question about the run: the plan goes on (Continue), or a plan the human approved
+		// mid-run gets its default (decide.ReplanDefault). A block is the model's own choice to wait, and is
+		// never answered for the human.
+		answer = "Continue"
+		if iq.kind == "replan" {
+			answer = decide.ReplanDefault(st.Replan.Same)
+		} else if e := st.Run.Escalation; e == nil || e.Kind == "blocked" {
+			return Wait{}
+		}
+		shown, front := shownSince(st, question, now)
+		due = shown.Add(max(escTimeout, decide.MinWait))
 		if !front {
 			return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: answer}
 		}
@@ -107,10 +122,22 @@ func shownSince(st *state.State, question string, now time.Time) (time.Time, boo
 
 // Settle records that baton's mod answered question with answer at its deadline, in the lead's session
 // of s, as the call's result would have: its dialog is closed, and a question of the lead's own is
-// answered by baton (a proposal goes ahead, the context question keeps going), which the model is told
-// at its next tool call or stop. A phase agent's question is the coordinator's to settle, from the mod's
-// report of its answer. It reports whether the question was baton's.
+// answered by baton (a proposal goes ahead, the context question keeps going, the run goes on, a plan
+// approved mid-run gets its default), which the model is told at its next tool call or stop. A phase
+// agent's question is the coordinator's to settle, from the mod's report of its answer. It reports
+// whether the question was baton's.
 func Settle(s *state.Store, question, answer string, now time.Time, env func(string) string) (bool, error) {
+	return settle(s, question, answer, now, env, "mod")
+}
+
+// Lapse is Settle for a question of the lead's own that reached its deadline with no dialog of it on
+// screen (the model never asked it, or it went away): the host's loop answers it so, and nothing waits on
+// the human for it.
+func Lapse(s *state.Store, question, answer string, now time.Time, env func(string) string) (bool, error) {
+	return settle(s, question, answer, now, env, "lapsed")
+}
+
+func settle(s *state.Store, question, answer string, now time.Time, env func(string) string, via string) (bool, error) {
 	c := Context{Event: "PostToolUse", Now: now, Env: env, Input: map[string]any{"tool_name": "AskUserQuestion",
 		"tool_response": map[string]any{"answers": map[string]any{question: answer}}}}
 	w := words(c, s)
@@ -125,8 +152,13 @@ func Settle(s *state.Store, question, answer string, now time.Time, env func(str
 		if iq, own = lookupIssued(st, question); !own || iq.kind == "relay" {
 			return nil
 		}
-		if v = answeredProposal(st, c, true); v.event == "" {
-			v = answered(st, c, true, w)
+		switch {
+		case iq.kind == "replan":
+			v = answeredReplan(st, s, c, w, true)
+		default:
+			if v = answeredProposal(st, c, true); v.event == "" {
+				v = answered(st, c, true, w)
+			}
 		}
 		if v.say != "" {
 			st.Run.Announce = append(st.Run.Announce, v.say)
@@ -139,7 +171,7 @@ func Settle(s *state.Store, question, answer string, now time.Time, env func(str
 	if err != nil || v.event == "" {
 		return own, err
 	}
-	fields := map[string]any{"via": "mod"}
+	fields := map[string]any{"via": via}
 	for k, x := range v.fields {
 		fields[k] = x
 	}

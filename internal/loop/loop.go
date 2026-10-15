@@ -119,6 +119,9 @@ type Loop struct {
 	// MaxAuto is max_auto_decisions: the decisions a phase may make without the human before they review
 	// them (0: no cap, the default).
 	MaxAuto int
+	// Lapse answers a question of the lead's own, baton's, for the human (hooks.Lapse): one past its
+	// deadline with no dialog of it on screen. Nil: such a question waits.
+	Lapse func(s *state.Store, question, answer string, now time.Time) error
 
 	why       string    // this tick's gate: why baton must not type now ("" if it may)
 	openSince time.Time // since when every gate but the quiet screen has been open

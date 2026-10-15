@@ -169,6 +169,20 @@ func TestBound(t *testing.T) {
 		state.IssueRelay(st.FrontRelay(), "baton: the agent on P2 is blocked: need a key.", 4, "inst", t0.Add(5*time.Minute), t0)
 	}
 	rq := "baton: the agent on P2 is blocked: need a key."
+	eq := "baton: the model stopped 4 times on P0 without reporting status"
+	escalation := func(kind string) func(*state.State) {
+		return func(st *state.State) {
+			st.Run.Escalation = &state.Escalation{Kind: kind, Reason: "r", Since: t0, Question: eq, Asked: true}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(eq), Since: t0, Kind: "escalation", Front: t0})
+		}
+	}
+	pq := "baton: you approved a plan. Which?"
+	replan := func(same bool) func(*state.State) {
+		return func(st *state.State) {
+			st.Replan = &state.Replan{File: "plan.md", Same: same, Question: pq, Since: t0}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(pq), Since: t0, Kind: "replan", Front: t0})
+		}
+	}
 	for _, c := range []struct {
 		name     string
 		set      []func(*state.State)
@@ -193,6 +207,11 @@ func TestBound(t *testing.T) {
 		{"an agent's question settled meanwhile", []func(*state.State){relay, func(st *state.State) {
 			state.AnswerRelay(st.FrontRelay(), state.ByWithdrawn, "", t0)
 		}}, rq, 0, time.Minute, Wait{Answer: "Wait for me"}},
+		{"a stall's question before its deadline", []func(*state.State){escalation("stalled")}, eq, 0, 9*time.Minute + 50*time.Second, Wait{For: 10 * time.Second, Answer: "Continue"}},
+		{"a stall's question at its deadline", []func(*state.State){escalation("stalled")}, eq, 0, 10 * time.Minute, Wait{Answer: "Continue"}},
+		{"a block's question", []func(*state.State){escalation("blocked")}, eq, 0, time.Hour, Wait{}},
+		{"a revised plan", []func(*state.State){replan(true)}, pq, 0, 10 * time.Minute, Wait{Answer: "Continue with the revised plan"}},
+		{"another plan", []func(*state.State){replan(false)}, pq, 0, 10 * time.Minute, Wait{Answer: "Keep the current run"}},
 		{"none of baton's", []func(*state.State){timed, front}, "baton: lunch?", 0, time.Hour, Wait{}},
 		{"the plan paused", []func(*state.State){timed, front, func(st *state.State) { st.Mode = state.ModePaused }}, q.Text, 0, time.Hour, Wait{}},
 	} {
@@ -202,7 +221,7 @@ func TestBound(t *testing.T) {
 			for _, set := range c.set {
 				set(&st)
 			}
-			if got := bound(&st, c.question, t0.Add(c.asked), t0.Add(c.now), 20*time.Minute); got != c.want {
+			if got := bound(&st, c.question, t0.Add(c.asked), t0.Add(c.now), 20*time.Minute, 10*time.Minute); got != c.want {
 				t.Errorf("waits %+v, want %+v", got, c.want)
 			}
 		})
@@ -214,15 +233,15 @@ func TestBound(t *testing.T) {
 	timed(&st)
 	st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
 	st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal"})
-	bound(&st, q.Text, t0, t0.Add(6*time.Minute), 20*time.Minute)
+	bound(&st, q.Text, t0, t0.Add(6*time.Minute), 20*time.Minute, 10*time.Minute)
 	st.Run.Dialogs.CloseExact("a1", "Bash", "k")
-	if w := bound(&st, q.Text, t0, t0.Add(7*time.Minute), 20*time.Minute); w.For != 30*time.Second {
+	if w := bound(&st, q.Text, t0, t0.Add(7*time.Minute), 20*time.Minute, 10*time.Minute); w.For != 30*time.Second {
 		t.Errorf("first in front past its deadline: waits %+v, want a minute on screen", w)
 	}
 	if d, _ := st.Run.Dialogs.Front(); !d.Front.Equal(t0.Add(7 * time.Minute)) {
 		t.Errorf("front since %s", d.Front)
 	}
-	if w := bound(&st, q.Text, t0, t0.Add(8*time.Minute), 20*time.Minute); w != (Wait{Answer: "Go ahead"}) {
+	if w := bound(&st, q.Text, t0, t0.Add(8*time.Minute), 20*time.Minute, 10*time.Minute); w != (Wait{Answer: "Go ahead"}) {
 		t.Errorf("a minute in front: waits %+v", w)
 	}
 }
@@ -260,6 +279,32 @@ func TestSettle(t *testing.T) {
 	f.set(func(st *state.State) { st.Run.WarnQuestion = "baton: the context holds a lot. Checkpoint now?" })
 	if own, _ := Settle(f.store, "baton: the context holds a lot. Checkpoint now?", "Keep going", f.now, f.env(f.inst)); !own || f.state().Run.WarnQuestion != "" {
 		t.Errorf("the context question: own %v, %q", own, f.state().Run.WarnQuestion)
+	}
+
+	// A stall's question answered at its deadline lets the plan go on, as the human's Continue would.
+	f.set(func(st *state.State) {
+		st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "the model stopped 4 times on P0 without reporting status", Since: f.now,
+			Question: "baton: the model stopped 4 times on P0 without reporting status", Asked: true}
+	})
+	if own, err := Settle(f.store, "baton: the model stopped 4 times on P0 without reporting status", "Continue", f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("a stall's question: %v, %v", own, err)
+	}
+	if st := f.state(); st.Run.Escalation != nil || !f.logged("resumed", map[string]any{"by": "timeout", "via": "mod"}) || !st.Run.HumanAt.IsZero() {
+		t.Errorf("escalation %+v, human at %s; events:\n%s", st.Run.Escalation, st.Run.HumanAt, f.eventLog())
+	}
+	if out := f.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "Nobody answered baton's question") {
+		t.Errorf("told at the next call: %v", out)
+	}
+	// A plan approved mid-run that nobody answered about: the current run is kept (another file), from the
+	// host's loop, with no dialog on screen (Lapse).
+	f.set(func(st *state.State) {
+		st.Replan = &state.Replan{File: "/plans/other.md", Same: false, Question: "baton: you approved a new plan. Which?", Since: f.now}
+	})
+	if own, err := Lapse(f.store, "baton: you approved a new plan. Which?", "Keep the current run", f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("a plan approved mid-run: %v, %v", own, err)
+	}
+	if st := f.state(); st.Replan != nil || !f.logged("replan_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) {
+		t.Errorf("replan %+v; events:\n%s", st.Replan, f.eventLog())
 	}
 
 	_, lead, _ := newWorker(t)

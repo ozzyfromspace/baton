@@ -1,6 +1,9 @@
 package decide
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // What baton says when the human approves a plan in plan mode (docs/research/sessions.md). baton attaches
 // a plan with phase headings itself; the model is only told what happened and what to do next.
@@ -54,4 +57,30 @@ func AttachedAtBoundary(title string, phases int, file, first string) string {
 func (w Words) AttachedNow(title string, phases int, file, first, firstTitle string) string {
 	return fmt.Sprintf("[baton] baton attached the plan you were just given: %q, %d phases (%s), and runs it phase by phase, compacting the context between phases. "+
 		"Work on %s (%s) only. %s", title, phases, file, first, firstTitle, w.Reporting())
+}
+
+// ReplanDefault is what baton answers, when nobody has by its deadline, about a plan the human approved
+// mid-run: a revision of the run's own plan is followed (done phases stay done, nothing is lost), and
+// another plan is left aside for /baton run, since starting it would set the current run's progress aside.
+func ReplanDefault(same bool) string {
+	if same {
+		return ReviseOptions[0].Label
+	}
+	return ReplaceOptions[1].Label
+}
+
+// Chose says who chose an answer: the human, or baton for them since nobody answered by deadline
+// (auto).
+func Chose(auto bool, deadline time.Time) string {
+	if auto {
+		return "Nobody answered by " + deadline.Local().Format("15:04") + ", so baton chose"
+	}
+	return "The human chose"
+}
+
+// ReplanWaits tells the human that the model stopped without asking about the plan they approved, so
+// baton answers answer for them at deadline unless they do first.
+func ReplanWaits(answer string, deadline time.Time) string {
+	return fmt.Sprintf("baton: Claude did not ask you about the plan you approved → baton answers %q at %s unless you do first (/baton run <file> attaches a plan any time)",
+		answer, deadline.Local().Format("15:04"))
 }

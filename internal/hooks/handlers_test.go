@@ -543,7 +543,7 @@ func TestContextWarningAsksTheHumanOnce(t *testing.T) {
 	}
 	ctx := feedback(out)
 	for _, want := range []string{"AskUserQuestion", "the context holds 730k tokens, past the 729k warning line", "on its own at about 777k",
-		"Checkpoint now? If nobody answers within 20 minutes, baton picks Keep going.", "exactly 3 options, in this order",
+		"Checkpoint now? If nobody answers within 10 minutes, baton picks Keep going.", "exactly 3 options, in this order",
 		`"Checkpoint now" (description: "Finish the current step`, `"Pause baton" (description:`, `"Keep going" (description:`,
 		"not multi-select", "baton acts on the answer itself"} {
 		if !strings.Contains(ctx, want) {

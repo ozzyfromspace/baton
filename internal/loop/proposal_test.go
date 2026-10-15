@@ -188,3 +188,60 @@ func TestProposalsBatonNeverAnswers(t *testing.T) {
 		t.Fatalf("pushes %v", r.push.kinds)
 	}
 }
+
+// baton's own question about the run, waiting the escalation timeout with no dialog of it on screen, is
+// answered for the human: the plan goes on, and a plan approved mid-run gets its default. A block, a
+// review the human opted into, a dialog on screen (the mod answers that) or a paused run: none is.
+func TestBatonsOwnQuestionsLapse(t *testing.T) {
+	type lapsed struct{ question, answer string }
+	for _, c := range []struct {
+		name string
+		set  func(st *state.State, now time.Time)
+		want *lapsed
+	}{
+		{"a stall", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+		}, &lapsed{"baton: r", "Continue"}},
+		{"a revised plan", func(st *state.State, now time.Time) {
+			st.Replan = &state.Replan{File: "p.md", Same: true, Question: "baton: which?", Since: now}
+		}, &lapsed{"baton: which?", "Continue with the revised plan"}},
+		{"another plan", func(st *state.State, now time.Time) {
+			st.Replan = &state.Replan{File: "q.md", Question: "baton: which?", Since: now}
+		}, &lapsed{"baton: which?", "Keep the current run"}},
+		{"a block", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "blocked", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+		}, nil},
+		{"a review", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "review", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+		}, nil},
+		{"on screen", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: r"), Since: now, Kind: "escalation"})
+		}, nil},
+		{"paused", func(st *state.State, now time.Time) {
+			st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "r", Since: now, Question: "baton: r", Asked: true}
+			st.Mode = state.ModePaused
+		}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newIdleRig(t)
+			var got []lapsed
+			r.loop.Lapse = func(s *state.Store, question, answer string, now time.Time) error {
+				got = append(got, lapsed{question, answer})
+				return nil
+			}
+			r.set(func(st *state.State) { c.set(st, r.now) })
+			r.run(DefaultTiming.EscalationTimeout - 20*time.Second)
+			if len(got) != 0 {
+				t.Fatalf("answered before the escalation timeout: %+v", got)
+			}
+			r.run(30 * time.Second)
+			switch {
+			case c.want == nil && len(got) != 0:
+				t.Fatalf("answered %+v", got)
+			case c.want != nil && (len(got) == 0 || got[0] != *c.want):
+				t.Fatalf("answered %+v, want %+v", got, *c.want)
+			}
+		})
+	}
+}

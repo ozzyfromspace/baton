@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -263,7 +264,7 @@ func modAsking(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modRe
 	if warn == 0 {
 		warn = valve.DefaultWarnTimeout
 	}
-	w, err := hooks.Bound(s, rep.Question, now.Add(-time.Duration(rep.Elapsed)*time.Millisecond), now, warn)
+	w, err := hooks.Bound(s, rep.Question, now.Add(-time.Duration(rep.Elapsed)*time.Millisecond), now, warn, config.EscalationFromEnv(io.Env).Timeout)
 	switch {
 	case err != nil:
 		return modReply{OK: true, WaitMs: 5000} // ask again in a moment

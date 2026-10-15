@@ -1159,7 +1159,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				v = approved(st, s, c, approvedFile(c.Input), false, w)
 			case tool == "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero()
-				if v = answeredReplan(st, s, c, w); v.event == "" {
+				if v = answeredReplan(st, s, c, w, false); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
 							v = answered(st, c, auto, w)
@@ -1255,10 +1255,17 @@ func answered(st *state.State, c Context, auto bool, w decide.Words) valveAction
 		var event, say, tell string
 		switch strings.TrimSpace(answer) {
 		case "Continue":
+			reason := ""
+			if e := st.Run.Escalation; e != nil {
+				reason = e.Reason
+			}
 			if iq.kind != "escalation" || state.Resume(st) != nil {
 				continue
 			}
 			event, say, tell = "resumed", "baton: resumed", NudgePrefix+" The human chose Continue: baton has resumed the plan. Carry on with "+decide.Named(st.Current)+"."
+			if auto {
+				say, tell = decide.Continued(reason, st.Current, c.Now)
+			}
 		case "Pause baton":
 			if state.Pause(st) != nil {
 				continue

@@ -134,6 +134,15 @@ func WentAhead(id, what, undo, phase string, deadline time.Time, last bool) (say
 	return say, tell + " Then carry on with " + Named(phase) + "."
 }
 
+// Continued is what baton says to the human (say) and tells the model (tell) when nobody answered its
+// question about reason by deadline, so baton chose Continue for them, and phase goes on.
+func Continued(reason, phase string, deadline time.Time) (say, tell string) {
+	at := deadline.Local().Format("15:04")
+	say = fmt.Sprintf("baton: nobody answered by %s, so baton chose Continue — %s", at, reason)
+	tell = fmt.Sprintf("[baton] Nobody answered baton's question (%s) by %s, so baton chose Continue for the human: the plan goes on. Carry on with %s.", reason, at, Named(phase))
+	return say, tell
+}
+
 // ProposalDismissed tells the human that the question of the lead's proposal id went away unanswered: it
 // still goes ahead at deadline unless they write in the session first.
 func ProposalDismissed(id string, deadline time.Time) string {
