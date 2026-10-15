@@ -22,8 +22,9 @@ const PasteMax = 2 * time.Second
 // keeps a rough count of what the input box holds: printable characters and pastes add to it,
 // backspace takes away, Enter, Ctrl-C (which empties Claude Code's input box) and Ctrl-U on a single
 // line clear it. The count errs on the side of "there is a draft": anything it cannot account for
-// (history recall, a multi-line draft) counts as text, so baton holds off and, if it must, asks the
-// human to press Enter or Ctrl-C.
+// (history recall, a multi-line draft, Claude Code's dim suggestion taken into an empty box with Tab or
+// the right arrow) counts as text, so baton holds off and, if it must, asks the human to press Enter or
+// Ctrl-C.
 type keyTracker struct {
 	esc     []byte // an escape sequence in progress
 	inPaste bool   // inside a bracketed paste (ESC[200~ … ESC[201~)
@@ -112,6 +113,8 @@ func (k *keyTracker) key(c byte) {
 		k.chars = 0
 	case c == 0x7f || c == 0x08: // backspace
 		k.backspace()
+	case c == '\t' && !k.draft(): // Tab on an empty box may take Claude Code's suggestion into it
+		k.chars = 1
 	case c < 0x20: // other control keys move the cursor or open views: the box is unchanged
 	default:
 		k.chars++
@@ -185,6 +188,9 @@ func (k *keyTracker) finishEscape(now time.Time) (done, human bool) {
 		case (last == 'A' || last == 'B') && !k.draft(): // Up/Down on an empty box recall history
 			k.chars = 1
 			return reset(true)
+		case last == 'C' && !k.draft(): // Right on an empty box may take Claude Code's suggestion into it
+			k.chars = 1
+			return reset(true)
 		}
 		return reset(true) // arrows, function keys, Shift-Tab: the human, but the box is unchanged
 	case ']', 'P', '_', '^': // OSC / DCS / APC / PM: terminal replies, end with BEL or ST (ESC \)
@@ -200,7 +206,7 @@ func (k *keyTracker) finishEscape(now time.Time) (done, human bool) {
 		if len(s) < 3 {
 			return false, false
 		}
-		if (s[2] == 'A' || s[2] == 'B') && !k.draft() {
+		if (s[2] == 'A' || s[2] == 'B' || s[2] == 'C') && !k.draft() { // history, or the suggestion taken
 			k.chars = 1
 		}
 		return reset(true)
@@ -236,6 +242,8 @@ func (k *keyTracker) kittyKey(body string) {
 		k.newline()
 	case cp == 127 || cp == 8:
 		k.backspace()
+	case cp == 9 && mods == 1 && !k.draft(): // Tab on an empty box may take Claude Code's suggestion
+		k.chars = 1
 	case ctrl && cp == 'c':
 		k.clear()
 	case ctrl && cp == 'u':
