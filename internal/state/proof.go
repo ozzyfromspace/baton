@@ -11,7 +11,7 @@ import (
 
 // A loop is the lead's conversation, or one phase agent's. baton changes what it knows about a loop's
 // compaction only on a Proof naming that loop, and only these make one (docs/research/visible-workers.md):
-// the mod's report of a compaction of the lead (Reported); a compact boundary written to the loop's own
+// the mod's report of a compaction of the lead (Reported, or Ran for one it ran for baton); a compact boundary written to the loop's own
 // transcript past baton's mark (Boundary for the lead's, AgentBoundary for a phase agent's); and, for a
 // phase agent, the first start of a new agent on its phase, whose conversation is new (Started). The compaction hooks
 // (PreCompact, SessionStart(compact), PostCompact) fire for a phase agent's compaction too, with no agent
@@ -27,12 +27,28 @@ type Proof struct {
 	path    string    // a boundary's transcript,
 	start   int64     // and where its line starts
 	end     int64     // and ends
+	command int       // the mod's: the bridge command it ran the compaction for (0: none of baton's),
+	epoch   int       // and the compaction that command was for (Compaction.Epoch)
 }
 
 // Reported is the proof the mod's report gives of a compaction of the lead, started by trigger: begun, or
 // over (over), reported at at. The mod sees the lead's compactions alone (spike 32).
 func Reported(over bool, trigger string, at time.Time) Proof {
 	return Proof{mod: true, over: over, trigger: trigger, at: at}
+}
+
+// Over reports a proof of a compaction over; otherwise it has begun.
+func (p Proof) Over() bool { return p.over }
+
+// Trigger is what started the compaction p proves: "manual" or "auto".
+func (p Proof) Trigger() string { return p.trigger }
+
+// Ran is the proof the mod's report gives of a compaction of the lead it ran for baton's bridge command
+// command, given for the compaction of epoch: begun, as the mod started it (its ack), or over (over), reported
+// at at. It is baton's compaction whatever trigger Claude Code gives it (the mod's own call is "plugin" to
+// the mod's hooks, "manual" to the settings hooks, spike 35); it counts as manual.
+func Ran(command, epoch int, over bool, at time.Time) Proof {
+	return Proof{mod: true, over: over, trigger: "manual", at: at, command: command, epoch: epoch}
 }
 
 // Boundary reads the lead's transcript at path for a compaction baton has not counted: a compact boundary
@@ -138,12 +154,13 @@ type ModReport struct {
 // late: the lead does not compact twice in so short a time.
 const sameCompaction = 30 * time.Second
 
-// Report records the mod's report of a compaction of the lead (p, from Reported), and reports whether it
-// changed anything. One begun by the human's or baton's /compact moves the compaction baton typed (or is
-// about to) to under way at once, or makes one baton owes count as underway, as PreCompact once did; an
-// automatic one proves nothing yet, since Claude Code prepares its summary well before it compacts, if it
-// does (docs/research/context-window.md). One over is kept for the rewake, which counts it only when the
-// lead's transcript cannot say (Compacted).
+// Report records the mod's report of a compaction of the lead (p, from Reported or Ran), and reports
+// whether it changed anything. One begun by the human's /compact, or by the mod for baton's command, moves
+// the compaction baton asked for (or is about to) to under way at once, or makes one baton owes count as
+// underway, as PreCompact once did; an automatic one proves nothing yet, since Claude Code prepares its
+// summary well before it compacts, if it does (docs/research/context-window.md). One over is kept for the
+// rewake, which counts it only when the lead's transcript cannot say (Compacted): once, so the mod's report
+// of baton's compaction that the transcript proved already is dropped, however late it comes.
 func Report(st *State, p Proof, now time.Time) bool {
 	if !p.mod || p.agent != "" {
 		return false
@@ -152,6 +169,9 @@ func Report(st *State, p Proof, now time.Time) bool {
 	if p.over {
 		if !comp.Finished.IsZero() && p.at.Sub(comp.Finished) < sameCompaction && !p.at.Before(comp.Finished) {
 			return false // the compaction the transcript proved already
+		}
+		if p.command != 0 && p.epoch == comp.Epoch && comp.Status == CompactDone {
+			return false // baton's, proven already
 		}
 		comp.Reported = &ModReport{At: p.at, Trigger: p.trigger}
 		return true
@@ -172,6 +192,23 @@ func Report(st *State, p Proof, now time.Time) bool {
 		comp.Status = CompactActive
 	}
 	comp.Trigger, comp.Started = p.trigger, now
+	return true
+}
+
+// Declined records that the try the mod made at the compaction of epoch, for bridge command command, did
+// not compact the lead, for why: its call failed (Claude Code refuses one while a turn runs), or a hook
+// vetoed it. With command 0 it is the mod's report of a /compact a hook vetoed, which counts for baton's
+// compaction only if baton took it for its own (under way, ByBaton). The host asks again (loop). It reports
+// whether it changed anything: nothing for a compaction no longer in flight, or another one.
+func Declined(st *State, epoch, command int, why string, now time.Time) bool {
+	c := &st.Run.Compaction
+	switch {
+	case command != 0 && epoch == c.Epoch && c.InFlight():
+	case command == 0 && c.Status == CompactActive && c.ByBaton:
+	default:
+		return false
+	}
+	c.Declined = &Decline{Command: command, Why: why, At: now}
 	return true
 }
 

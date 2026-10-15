@@ -42,7 +42,7 @@ func (r *rig) issue(c Command) Command {
 
 func (r *rig) hello(instance string) int {
 	r.t.Helper()
-	seen, err := r.b.SayHello(HelloInfo{Instance: instance, Version: "0.8.0", Protocol: Protocol})
+	seen, err := r.b.SayHello(HelloInfo{Instance: instance, Version: "0.8.2", Protocol: Protocol})
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestReportsAreRecordedOnce(t *testing.T) {
 		t.Errorf("a refused mod's report: %v", err)
 	}
 	if ev := strings.Join(r.events, "\n"); strings.Count(ev, "mod_turn ") != 1 || !strings.Contains(ev, `mod_turn {"agent":"a1","ms":1200,"reason":"answer","seq":1}`) ||
-		!strings.Contains(ev, `mod_hello {"mod_instance":"inst-3","protocol":2,"refused":"another baton's","version":""}`) {
+		!strings.Contains(ev, `mod_hello {"mod_instance":"inst-3","protocol":3,"refused":"another baton's","version":""}`) {
 		t.Errorf("events:\n%s", ev)
 	}
 }
@@ -484,5 +484,51 @@ func TestAVoidedCommandIsGone(t *testing.T) {
 	}
 	if !slices.ContainsFunc(r.events, func(e string) bool { return strings.HasPrefix(e, "mod_voided ") }) {
 		t.Errorf("events %v", r.events)
+	}
+}
+
+// The lead's own commands: a compaction names the one it is for, and a line its text; neither waits for an
+// agent. Accept hands back the command an ack ended, as it was issued, so its epoch goes with it; one
+// voided first ends nothing. The mod's word that the compaction it ran is over carries the command too.
+func TestTheLeadsCompactionAndLines(t *testing.T) {
+	r := newRig(t)
+	r.hello("inst")
+	if _, err := r.b.Issue(Command{Kind: Compact, Instance: "inst"}); err == nil {
+		t.Error("a compact naming no compaction was issued")
+	}
+	compact := r.issue(Command{Kind: Compact, Epoch: 4})
+	line := r.issue(Command{Kind: Submit, Text: "[baton] The results of j2 are in."})
+	var c Command
+	if data, err := os.ReadFile(r.b.CommandPath(compact.ID)); err != nil || json.Unmarshal(data, &c) != nil || c.Epoch != 4 || c.Kind != Compact {
+		t.Fatalf("the compact as written: %s (%v)", data, err)
+	}
+	if rec := r.load(); len(rec.Open) != 2 || rec.Open[0].Epoch != 4 || rec.Open[1].Kind != Submit {
+		t.Errorf("open %+v", rec.Open)
+	}
+	a, err := r.b.Accept(Report{Seq: 1, Kind: Ack, Instance: "inst", Command: compact.ID, OK: true, Result: "compacting"})
+	if err != nil || a.Dup || a.Acked == nil || a.Acked.Kind != Compact || a.Acked.Epoch != 4 {
+		t.Fatalf("the compact's ack: %+v %v", a, err)
+	}
+	if again, _ := r.b.Accept(Report{Seq: 1, Kind: Ack, Instance: "inst", Command: compact.ID, OK: true}); !again.Dup || again.Acked != nil {
+		t.Errorf("a repeat: %+v", again)
+	}
+	if ok, _ := r.b.Void("inst", line.ID); !ok {
+		t.Fatal("the line not voided")
+	}
+	if a, _ := r.b.Accept(Report{Seq: 2, Kind: Ack, Instance: "inst", Command: line.ID, OK: true}); a.Acked != nil {
+		t.Errorf("a voided line's ack ended %+v", a.Acked)
+	}
+	r.record(Report{Seq: 3, Kind: Compacted, Command: compact.ID, Epoch: 4})
+	ev := strings.Join(r.events, "\n")
+	for _, want := range []string{
+		`mod_command {"command":"compact","epoch":4,"id":1}`,
+		`mod_command {"command":"submit","id":2}`,
+		`mod_ack {"command":1,"command_kind":"compact","epoch":4,"ok":true,"result":"compacting","seq":1}`,
+		`mod_ack {"command":2,"ok":true,"seq":2,"unknown":true}`,
+		`mod_compacted {"command":1,"epoch":4,"seq":3}`,
+	} {
+		if !strings.Contains(ev, want) {
+			t.Errorf("no %s in\n%s", want, ev)
+		}
 	}
 }

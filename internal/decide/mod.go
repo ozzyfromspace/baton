@@ -1,6 +1,9 @@
 package decide
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // baton's mod is JavaScript that Claude Code runs in the lead's own process (plugin/hooks/baton.js): it
 // starts and steers the phase agents that work beside the lead, on the host's say-so (internal/bridge).
@@ -58,4 +61,30 @@ func AgentDescription(phase, title string) string {
 // AgentBegin is the task a phase agent is started with. Its brief reaches it as it starts (SubagentStart).
 func AgentBegin(phase string) string {
 	return fmt.Sprintf("[baton] Begin %s. baton's brief, given to you as you start, has your instructions.", phase)
+}
+
+// CompactVetoed is why a compaction of the lead did not happen when a hook of another plugin vetoed it.
+const CompactVetoed = "a hook vetoed the compaction"
+
+// ModSilent is why baton asks again for a compaction of the lead when its mod did not take the command up
+// within wait.
+func ModSilent(wait time.Duration) string {
+	return fmt.Sprintf("baton's mod did not take the compaction up within %s", Spell(wait))
+}
+
+// ModNoWord is why a compaction of the lead failed when nothing said within wait that it began or ended.
+func ModNoWord(wait time.Duration) string {
+	return fmt.Sprintf("nothing said within %s that the compaction baton's mod was asked for began", Spell(wait))
+}
+
+// ModCompactFailed is why a round of compactions of the lead failed: baton's mod tried tries times, and the
+// last try did not compact it, for why.
+func ModCompactFailed(tries int, why string) string {
+	return fmt.Sprintf("baton's mod could not compact the context (%d tries): %s", tries, why)
+}
+
+// DraftHolds is the notice that the human's draft in the input box holds baton, which needs to do task,
+// while an agent may be at work: clearing the box (Ctrl-C) would stop every agent of the session.
+func DraftHolds(task string) string {
+	return fmt.Sprintf("baton needs to %s, and your draft in the input box holds it: baton does not clear it while an agent is at work, since that would stop the agent. Send or clear it yourself", task)
 }

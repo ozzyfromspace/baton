@@ -121,37 +121,86 @@ func recordModReport(io IO) modReply {
 			return modReply{Retry: true, Why: err.Error()}
 		}
 	}
-	switch dup, err := b.Record(rep); {
+	a, err := b.Accept(rep)
+	switch {
 	case errors.Is(err, bridge.ErrStale):
 		return modReply{Stale: true, Why: "say hello first"}
 	case err != nil:
 		return modReply{Retry: true, Why: err.Error()}
-	case dup:
+	case a.Dup:
 		return modReply{OK: true, Ignored: "recorded already"}
 	}
-	if (rep.Kind == bridge.Compacting || rep.Kind == bridge.Compacted) && !rep.Skipped {
-		// The mod's word on a compaction of the lead is a proof of it (state.Reported), counted as it comes,
-		// with the bridge's lock let go.
-		over, now := rep.Kind == bridge.Compacted, io.Now()
-		var changed, started bool
-		var comp state.Compaction
-		s.Update(func(st *state.State) error {
-			was := st.Run.Compaction.Status
-			changed = state.Report(st, state.Reported(over, rep.Trigger, now), now)
-			comp = st.Run.Compaction
-			started = changed && !over && was != state.CompactActive && comp.Status == state.CompactActive
-			return nil
-		})
-		if changed {
-			s.Event("compact_reported", map[string]any{"over": over, "trigger": rep.Trigger})
+	// The mod's word on a compaction of the lead is counted as it comes, with the bridge's lock let go: a
+	// proof of it begun or over (state.Report), or that a try at it did not compact (state.Declined).
+	now := io.Now()
+	switch {
+	case rep.Kind == bridge.Ack && a.Acked != nil && a.Acked.Kind == bridge.Compact:
+		// The mod started the compaction baton asked for, or Claude Code refused it at once. One the mod was
+		// reloaded in the middle of may or may not have run: its proof, if it did, says so.
+		switch {
+		case rep.OK:
+			reported(s, state.Ran(a.Acked.ID, a.Acked.Epoch, false, now), now)
+		case !rep.Interrupted:
+			declined(s, a.Acked.Epoch, a.Acked.ID, rep.Error, now)
 		}
-		if started {
-			// The start is proven here, so the compaction's end does not log it (state.After.Unseen): it is
-			// logged as the hooks' proof of it would be.
-			s.Event("compact_started", map[string]any{"trigger": comp.Trigger, "by_baton": comp.ByBaton, "epoch": comp.Epoch, "reason": comp.Reason, "proof": "mod"})
+	case rep.Kind == bridge.Compacted && rep.Command != 0:
+		// The compaction the mod ran for baton's command is over, or never happened.
+		switch {
+		case rep.Error != "":
+			declined(s, rep.Epoch, rep.Command, rep.Error, now)
+		case rep.Skipped:
+			why := decide.CompactVetoed
+			if rep.Result != "" {
+				why += ": " + rep.Result // the hook's reason
+			}
+			declined(s, rep.Epoch, rep.Command, why, now)
+		default:
+			reported(s, state.Ran(rep.Command, rep.Epoch, true, now), now)
 		}
+	case rep.Kind == bridge.Compacted && rep.Skipped:
+		declined(s, 0, 0, decide.CompactVetoed, now)
+	case (rep.Kind == bridge.Compacting || rep.Kind == bridge.Compacted) && !rep.Skipped:
+		reported(s, state.Reported(rep.Kind == bridge.Compacted, rep.Trigger, now), now)
 	}
 	return modReply{OK: true}
+}
+
+// reported counts the mod's proof p of a compaction of the lead, begun or over (state.Report), and logs it.
+func reported(s *state.Store, p state.Proof, now time.Time) {
+	var changed, started bool
+	var comp state.Compaction
+	s.Update(func(st *state.State) error {
+		was := st.Run.Compaction.Status
+		changed = state.Report(st, p, now)
+		comp = st.Run.Compaction
+		started = changed && !p.Over() && was != state.CompactActive && comp.Status == state.CompactActive
+		return nil
+	})
+	if changed {
+		s.Event("compact_reported", map[string]any{"over": p.Over(), "trigger": p.Trigger()})
+	}
+	if started {
+		// The start is proven here, so the compaction's end does not log it (state.After.Unseen): it is
+		// logged as the hooks' proof of it would be.
+		s.Event("compact_started", map[string]any{"trigger": comp.Trigger, "by_baton": comp.ByBaton, "epoch": comp.Epoch, "reason": comp.Reason, "proof": "mod"})
+	}
+}
+
+// declined records that a try at the lead's compaction of epoch, the mod's for command (0: a /compact),
+// did not compact it, for why (state.Declined), and logs it: the host asks again.
+func declined(s *state.Store, epoch, command int, why string, now time.Time) {
+	var changed bool
+	s.Update(func(st *state.State) error {
+		changed = state.Declined(st, epoch, command, why, now)
+		return nil
+	})
+	if changed {
+		fields := map[string]any{"error": why}
+		if command != 0 {
+			fields["command"], fields["epoch"] = command, epoch
+		}
+		s.Event("compact_declined", fields)
+	}
 }
 
 // malformed says what is wrong with a report as read ("" if nothing is).
@@ -187,6 +236,10 @@ func malformed(data []byte, rerr, perr error, rep bridge.Report) string {
 	case bridge.Turn, bridge.Dropped:
 		if rep.Agent == "" {
 			return rep.Kind + " names no agent"
+		}
+	case bridge.Failed:
+		if rep.Command <= 0 {
+			return rep.Kind + " names no command"
 		}
 	case bridge.Compacting, bridge.Compacted:
 	default:

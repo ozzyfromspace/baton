@@ -1,6 +1,7 @@
 // baton's mod: what only something inside the lead's claude can do, on baton's say-so. It starts and
-// messages phase agents, asks the human, keeps phase agents' reports from the lead's model, and reports
-// what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge). It does
+// messages phase agents, asks the human, keeps phase agents' reports from the lead's model, compacts the
+// lead's conversation and submits baton's lines to it (so that baton types nothing into the session, and
+// the human's draft stays in the input box: spike 35), and reports what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge). It does
 // nothing unless baton hosts this session and answers its hello, and every hook lets its event through
 // when anything goes wrong.
 //
@@ -21,7 +22,7 @@
 // how long the question may wait, and at the deadline answers the call itself with the answer the host
 // gives, which closes the dialog. Nothing types into a dialog (spike 34).
 
-const PROTOCOL = 1 // what the mod and the host say to each other (bridge.Protocol)
+const PROTOCOL = 2 // what the mod and the host say to each other (bridge.Protocol)
 const POLL_MS = 500
 const HELLO_FAST_MS = 1000 // how often a hello is tried at first,
 const HELLO_FAST_TRIES = 30 // this many times,
@@ -29,6 +30,7 @@ const HELLO_SLOW_MS = 10000 // and then
 const REPORT_TIMEOUT_MS = 5000
 const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused this long
 const CUT = 1000 // the most of an agent's last words a turn report carries
+const AT_ONCE_MS = 250 // how long a compaction or a line is watched for a refusal at once (a turn running), which its ack carries
 const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
 const VIEW_TIMEOUT_MS = 5000
 const ASK_RETRY_MS = 5000 // how soon the host is asked about a question again when it gave no answer
@@ -315,13 +317,14 @@ async function poll($) {
       if (!c || c.instance !== e.instance || c.id !== id) continue
       M.keep.running = id
       await save($)
-      const result = await run($, c)
+      const { later, ...result } = await run($, c)
       M.keep.last = id
       M.keep.running = 0
       await save($)
       if (c.kind === 'spawn' && result.agent) M.agents[result.agent] = { phase: c.phase, drop: c.drop } // until the host lists it
       await report($, { kind: 'ack', command: id, ...result })
       if (c.kind === 'ask') queueAsk($, c)
+      if (later) afterwards($, later)
     }
   } finally {
     M.polling = false
@@ -346,12 +349,46 @@ async function run($, c) {
       }
       case 'ask':
         return { ok: true, result: 'queued' } // the band asks it once the ack is kept
+      case 'compact':
+        return await started($, $.session.compact({}), (r) => vetoed({ kind: 'compacted', command: c.id, epoch: c.epoch }, r), (err) => ({ kind: 'compacted', command: c.id, epoch: c.epoch, error: cut(String(err), CUT) }), 'compacting')
+      case 'submit':
+        return await started($, $.prompt.submit({ text: c.text, asUser: true }), () => null, (err) => ({ kind: 'failed', command: c.id, error: cut(String(err), CUT) }), 'submitted')
       default:
         return { ok: false, error: 'no such command: ' + c.kind }
     }
   } catch (err) {
     return { ok: false, error: cut(String(err), CUT) }
   }
+}
+
+// started acks a call the poll does not wait for: a compaction runs for seconds or minutes, and a line
+// submitted while a turn runs waits for the turn's end, and the poll would run nothing else meanwhile. A
+// refusal at once (Claude Code refuses a compaction while a turn runs) is the ack's error; otherwise the
+// ack says it started (as), and what the call comes to is reported after it (later: the report done or
+// failed makes, or null for none).
+async function started($, call, done, failed, as) {
+  const outcome = Promise.resolve(call).then(
+    (r) => ({ r }),
+    (err) => ({ err }),
+  )
+  const early = await Promise.race([outcome, $.clock.sleep(AT_ONCE_MS).then(() => null)])
+  if (early && 'err' in early) return { ok: false, error: cut(String(early.err), CUT) }
+  return { ok: true, result: as, later: outcome.then((o) => ('err' in o ? failed(o.err) : done(o.r))) }
+}
+
+// vetoed is rep, saying whether a hook vetoed the compaction r is the outcome of ({ skip: why }), and why.
+function vetoed(rep, r) {
+  if (!(r && r.skip)) return { ...rep, skipped: false }
+  return { ...rep, skipped: true, result: cut(String(r.skip), CUT) }
+}
+
+// afterwards reports what a call the poll did not wait for came to, once its ack is kept.
+function afterwards($, later) {
+  later
+    .then(async (rep) => {
+      if (rep) await report($, rep)
+    })
+    .catch(() => {})
 }
 
 // answer is what a tool call answered: whether it succeeded, and its message. A tool's error resolves
@@ -550,7 +587,9 @@ async function prompted($, e, next) {
 }
 
 // The lead's conversation compacting, before and after: what proves to baton that the compaction is the
-// lead's. A phase agent's is proven by its own transcript, which the mod never reports for.
+// lead's. A phase agent's is proven by its own transcript, which the mod never reports for. (The mod's own
+// call, for baton's compact command, does not come here: Claude Code runs it through every hook but the
+// caller's, and the command's reports say how it went.)
 async function compacting($, e, next) {
   if (!live() || e.agentId) return next(e)
   await report($, { kind: 'compacting', trigger: e.trigger })

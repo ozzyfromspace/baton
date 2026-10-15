@@ -1,7 +1,8 @@
 // Package bridge is how baton's host and baton's mod talk. The mod (plugin/hooks/baton.js) is JavaScript
 // that Claude Code runs in the lead's own process. It does what only something inside the session can do,
 // on the host's say-so: spawn and message phase agents, ask the human, keep agents' reports from the
-// lead's model. And it reports what it sees. The host decides; the mod acts. They talk through files under
+// lead's model, compact the lead's conversation and submit baton's lines to it, with no key typed into the
+// session (spike 35). And it reports what it sees. The host decides; the mod acts. They talk through files under
 // the run's directory and the CLI, as hooks do, with no network:
 //
 //	mod/out/<id>.json  the host's commands, numbered, each written whole under a temporary name and then
@@ -35,8 +36,8 @@ import (
 )
 
 // Protocol is the version of what the host and the mod say to each other. The mod sends its own with its
-// hello, and the host takes a mod of another for none.
-const Protocol = 1
+// hello, and the host takes a mod of another for none. 2: the mod compacts the lead and submits baton's lines.
+const Protocol = 2
 
 // Command kinds.
 const (
@@ -44,6 +45,12 @@ const (
 	Send  = "send"  // message an agent; Claude Code holds it for the agent's next tool round
 	Stop  = "stop"  // end a running agent (TaskStop)
 	Ask   = "ask"   // ask the human in Claude Code's own question dialog
+	// Compact compacts the lead's conversation, between turns, as /compact would; the mod acks it as it
+	// starts it, and reports it compacted (or not) when it is over. Claude Code refuses it while a turn runs.
+	Compact = "compact"
+	// Submit submits a line of baton's to the lead's model as a prompt of its own, read as one typed; the
+	// draft in the input box stays. One submitted while a turn runs waits for the turn's end.
+	Submit = "submit"
 )
 
 // Report kinds.
@@ -54,6 +61,7 @@ const (
 	Compacting = "compacting" // the lead's conversation is about to compact
 	Compacted  = "compacted"  // and has
 	Dropped    = "dropped"    // a report of one of baton's agents was kept from the lead's model
+	Failed     = "failed"     // a command the mod acked as started failed afterwards (a submit)
 	Answered   = "answered"   // the human answered a question the mod asked
 	Deadline   = "deadline"   // nobody answered a question of baton's by its deadline, and the mod answered it
 	// Asking asks how long a question of baton's on the human's screen may wait: a query, not recorded.
@@ -82,6 +90,8 @@ type Command struct {
 	Question string   `json:"question,omitempty"`
 	Options  []string `json:"options,omitempty"`
 	Header   string   `json:"header,omitempty"`
+	// Compact: the compaction it is for (state.Compaction.Epoch). Submit: the line, in Text.
+	Epoch int `json:"epoch,omitempty"`
 }
 
 // Report is what the mod saw or did, as `baton mod report` reads it.
@@ -110,9 +120,11 @@ type Report struct {
 	Refusal string `json:"refusal,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Ms      int64  `json:"ms,omitempty"`
-	// Compacting and Compacted: what started the lead's compaction; Skipped: a hook vetoed it.
+	// Compacting and Compacted: what started the lead's compaction; Skipped: a hook vetoed it. Compacted of a
+	// compaction the mod ran for a Compact command: the command, in Command, and its Epoch; Error: it failed.
 	Trigger string `json:"trigger,omitempty"`
 	Skipped bool   `json:"skipped,omitempty"`
+	Epoch   int    `json:"epoch,omitempty"`
 	// Answered: the question, and the label the human chose, or what they typed; Dismissed: the dialog
 	// closed without one; Deadline: nobody answered it, and the mod gave it the answer baton gave it.
 	// Deadline (a report of its own) is that too, for any question of baton's in the lead's session.
@@ -161,6 +173,7 @@ type Issued struct {
 	Kind     string    `json:"kind"`
 	Phase    string    `json:"phase,omitempty"`
 	Agent    string    `json:"agent,omitempty"`
+	Epoch    int       `json:"epoch,omitempty"`
 	At       time.Time `json:"at"`
 }
 
@@ -394,7 +407,11 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 			if !slices.ContainsFunc(agents, func(a Agent) bool { return a.ID == c.Agent }) {
 				return ErrUnknownAgent
 			}
-		case Ask:
+		case Ask, Submit:
+		case Compact:
+			if c.Epoch <= 0 {
+				return fmt.Errorf("a compact names no compaction")
+			}
 		default:
 			return fmt.Errorf("no such command: %q", c.Kind)
 		}
@@ -403,7 +420,7 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 		if err := writeJSON(b.CommandPath(c.ID), c); err != nil {
 			return err
 		}
-		r.Open = append(r.Open, Issued{ID: c.ID, Instance: c.Instance, Kind: c.Kind, Phase: c.Phase, Agent: c.Agent, At: c.At})
+		r.Open = append(r.Open, Issued{ID: c.ID, Instance: c.Instance, Kind: c.Kind, Phase: c.Phase, Agent: c.Agent, Epoch: c.Epoch, At: c.At})
 		if err := writeJSON(b.recordPath(), r); err != nil {
 			os.Remove(b.CommandPath(c.ID))
 			return err
@@ -414,6 +431,9 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 		}
 		if c.Agent != "" {
 			fields["agent"] = c.Agent
+		}
+		if c.Epoch != 0 {
+			fields["epoch"] = c.Epoch
 		}
 		b.event("mod_command", fields)
 		return nil
@@ -520,14 +540,28 @@ func (b *Bridge) SayHello(h HelloInfo) (seen int, err error) {
 	return seen, nil
 }
 
-// Record records report rep: it is new if the mod that said hello last made it and none numbered as it
-// was recorded before (a repeat is left out: dup). An ack ends its command, whose file goes, and an ack
+// Record records report rep, as Accept does, and reports whether it was a repeat.
+func (b *Bridge) Record(rep Report) (dup bool, err error) {
+	a, err := b.Accept(rep)
+	return a.Dup, err
+}
+
+// Accepted is what Accept made of a report: a repeat (Dup), or new; and the command a new ack ended, as it
+// was issued, if it was open (nil for one voided, or acked already).
+type Accepted struct {
+	Dup   bool
+	Acked *Issued
+}
+
+// Accept records report rep: it is new if the mod that said hello last made it and none numbered as it
+// was recorded before (a repeat is left out: Dup). An ack ends its command, whose file goes, and an ack
 // of a spawn makes its agent one of baton's (Track) before anything else can be reported of it. Every new
 // report goes to the inbox for the host, and is logged. ErrStale: the report is not from that mod.
-func (b *Bridge) Record(rep Report) (dup bool, err error) {
+func (b *Bridge) Accept(rep Report) (Accepted, error) {
 	rep.At = b.Now()
 	var cmd *Issued
-	_, err = b.update(func(r *Record) error {
+	var dup bool
+	_, err := b.update(func(r *Record) error {
 		dup, cmd = false, nil
 		if !r.Hello.Ready(rep.Instance) {
 			return ErrStale
@@ -558,10 +592,10 @@ func (b *Bridge) Record(rep Report) (dup bool, err error) {
 		return nil
 	})
 	if err != nil || dup {
-		return dup, err
+		return Accepted{Dup: dup}, err
 	}
 	b.event("mod_"+rep.Kind, reportFields(rep, cmd))
-	return false, nil
+	return Accepted{Acked: cmd}, nil
 }
 
 // reportFields are what a report's event says.
@@ -589,6 +623,11 @@ func reportFields(rep Report, cmd *Issued) map[string]any {
 	add("ms", rep.Ms, rep.Ms != 0)
 	add("trigger", rep.Trigger, rep.Trigger != "")
 	add("skipped", true, rep.Skipped)
+	if cmd != nil && cmd.Epoch != 0 {
+		f["epoch"] = cmd.Epoch
+	} else {
+		add("epoch", rep.Epoch, rep.Epoch != 0)
+	}
 	add("question", cut(rep.Question, 300), rep.Question != "")
 	add("answer", cut(rep.Answer, 300), rep.Answer != "")
 	add("dismissed", true, rep.Dismissed)

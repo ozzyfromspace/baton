@@ -359,3 +359,75 @@ func TestANewAgentEndsTheCheckpoint(t *testing.T) {
 		t.Errorf("marked %+v", m)
 	}
 }
+
+// The compaction the mod runs for baton's command is baton's, by the command, whatever trigger Claude
+// Code gives it: its ack moves it under way (also before the host recorded the try), and an automatic start
+// reported meanwhile changes nothing. It is counted once: the mod's word that it is over is kept for the
+// rewake, the transcript's boundary counts it, and the mod's word coming again, however late, is dropped.
+func TestTheModsOwnCompactionCountsOnce(t *testing.T) {
+	st := underway(t)
+	SetCheckpoint(&st)
+	st.Run.Compaction.Queue("checkpoint", t0)
+	epoch := st.Run.Compaction.Epoch
+	if !Report(&st, Ran(7, epoch, false, t0), t0) || st.Run.Compaction.Status != CompactActive || !st.Run.Compaction.ByBaton ||
+		st.Run.Compaction.Trigger != "manual" || st.Run.ModReports != t0 {
+		t.Fatalf("acked before the try was recorded: %+v", st.Run.Compaction)
+	}
+	st.Run.Compaction.Status, st.Run.Compaction.Command = CompactTyped, 7
+	if !Report(&st, Ran(7, epoch, false, t0), t0) || st.Run.Compaction.Status != CompactActive || !st.Run.Compaction.ByBaton {
+		t.Fatalf("begun: %+v", st.Run.Compaction)
+	}
+	if Report(&st, Reported(false, "auto", t0), t0) || st.Run.Compaction.Status != CompactActive {
+		t.Fatalf("an automatic start meanwhile: %+v", st.Run.Compaction)
+	}
+	over := t0.Add(5 * time.Second)
+	if !Report(&st, Ran(7, epoch, true, over), over) || st.Run.Compaction.Reported == nil {
+		t.Fatalf("over, not kept: %+v", st.Run.Compaction)
+	}
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(path, []byte(userLine+boundaryLine("b1", "manual", over)), 0o644)
+	st.Run.Proven = &Mark{Path: path, Offset: int64(len(userLine))}
+	p, _, _ := Boundary(path, st.Run.Proven, 0)
+	if a, ok := Compacted(&st, p, over, Origin{}); !ok || !a.ByBaton || a.Reason != "checkpoint" || st.Run.Compaction.Status != CompactDone || st.Run.Compaction.Reported != nil {
+		t.Fatalf("the boundary: %+v %+v", a, st.Run.Compaction)
+	}
+	late := over.Add(2 * time.Minute)
+	if Report(&st, Ran(7, epoch, true, late), late) || st.Run.Compaction.Reported != nil {
+		t.Errorf("baton's compaction counted again: %+v", st.Run.Compaction)
+	}
+}
+
+// A try that did not compact the lead is declined for the try it was: the mod's, by its command, for the
+// compaction in flight; or a /compact a hook vetoed, only if baton took it for its own. A decline of an
+// earlier try is not the latest one's.
+func TestADeclinedTry(t *testing.T) {
+	inFlight := func(status string, byBaton bool) State {
+		st := underway(t)
+		st.Run.Compaction.Queue("boundary", t0)
+		st.Run.Compaction.Status, st.Run.Compaction.ByBaton, st.Run.Compaction.Command = status, byBaton, 7
+		return st
+	}
+	for _, c := range []struct {
+		name             string
+		st               State
+		epoch, command   int
+		changed, refused bool
+	}{
+		{"the mod's try", inFlight(CompactTyped, false), 1, 7, true, true},
+		{"the mod's try, under way", inFlight(CompactActive, true), 1, 7, true, true},
+		{"queued, not recorded yet", inFlight(CompactQueued, false), 1, 7, true, true},
+		{"an earlier try", inFlight(CompactTyped, false), 1, 6, true, false},
+		{"another compaction's", inFlight(CompactTyped, false), 2, 7, false, false},
+		{"one over", inFlight(CompactDone, true), 1, 7, false, false},
+		{"a /compact baton took for its own, vetoed", inFlight(CompactActive, true), 0, 0, true, true},
+		{"the human's own /compact, vetoed", inFlight(CompactActive, false), 0, 0, false, false},
+	} {
+		st := c.st
+		if got := Declined(&st, c.epoch, c.command, "a turn is running (t1)", t0); got != c.changed {
+			t.Errorf("%s: changed %v", c.name, got)
+		}
+		if got := st.Run.Compaction.Refused() != ""; got != c.refused {
+			t.Errorf("%s: refused %q", c.name, st.Run.Compaction.Refused())
+		}
+	}
+}

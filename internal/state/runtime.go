@@ -333,8 +333,8 @@ type Task struct {
 
 // Compaction statuses, in order.
 const (
-	CompactQueued = "queued" // baton decided to compact; the host types /compact when it is safe
-	CompactTyped  = "typed"  // the host typed it; waiting for proof it has begun (the mod's) or is over
+	CompactQueued = "queued" // baton decided to compact; the host asks for it (the mod, or /compact typed) when it is safe
+	CompactTyped  = "typed"  // the host asked; waiting for proof it has begun (the mod's) or is over
 	CompactActive = "active" // proven begun: Claude Code is summarizing
 	CompactDone   = "done"   // proven over
 	CompactFailed = "failed" // no acknowledgement or completion in time; escalated
@@ -359,6 +359,11 @@ type Compaction struct {
 	ByBaton bool   `json:"by_baton,omitempty"`
 	// Reported is the mod's report of the lead's compaction over, kept for the rewake (state.Report).
 	Reported *ModReport `json:"reported,omitempty"`
+	// Command is the bridge command baton's mod was last given to run this compaction (0: /compact was
+	// typed, or nothing was asked yet), and Declined why a try did not compact the lead: the mod's call
+	// failed, a turn was running, or a hook vetoed it (state.Declined). The host asks again (Refused).
+	Command  int      `json:"command,omitempty"`
+	Declined *Decline `json:"declined,omitempty"`
 	// Nudged is when baton typed a reminder because the model did not resume after this compaction.
 	Nudged time.Time `json:"nudged,omitzero"`
 	// FailedAt and Rounds: when baton last gave up on this compaction, and how many times it started
@@ -367,6 +372,22 @@ type Compaction struct {
 	Rounds   int       `json:"rounds,omitempty"`
 	// Switch is the switch the host made, for a switch it queued (Switch, Unswitch).
 	Switch *Switched `json:"switch,omitempty"`
+}
+
+// Decline is why a try at a compaction did not compact the lead (state.Declined).
+type Decline struct {
+	Command int       `json:"command,omitempty"` // the bridge command of the mod's try (0: a /compact a hook vetoed)
+	Why     string    `json:"why"`
+	At      time.Time `json:"at"`
+}
+
+// Refused is why the latest try at this compaction did not compact the lead ("" while nothing says so): a
+// decline of an earlier try, which the host has asked again since, is not this one's.
+func (c Compaction) Refused() string {
+	if d := c.Declined; d != nil && (d.Command == 0 || d.Command == c.Command) {
+		return d.Why
+	}
+	return ""
 }
 
 // Queue asks the host to compact, for reason ("boundary", "checkpoint" or "switch"), as a new epoch.

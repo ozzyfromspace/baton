@@ -20,6 +20,19 @@ type Opts = {
   board?: (args: string[]) => string | null
   // placed: whether the board's pane is drawn once opened
   placed?: boolean
+  // compact and submit answer the mod's own $.session.compact and $.prompt.submit in Claude Code's place
+  // (undefined: as Claude Code would, between turns)
+  compact?: ($: any, e: any) => any
+  submit?: ($: any, e: any) => any
+}
+
+const SUMMARY = [{ role: 'user', text: 'The summary.', toolUses: [] }]
+
+// later is a promise the test settles when it likes: a call Claude Code takes its time over.
+function later() {
+  let settle: (v: any) => void = () => {}
+  const p = new Promise((res) => (settle = res))
+  return { p, settle }
 }
 
 function cmdPath(id: number) {
@@ -46,6 +59,7 @@ function world(on: any, o: Opts = {}) {
     boardEnv: [] as any[], // and what it set in its environment
     panes: [] as any[], // the panes open
     commands: [] as string[], // the slash commands the mod registered
+    submitted: [] as any[], // the prompts the mod submitted itself
   }
   mock.env(on, o.env ?? HOSTED)
   mock.store(on, o.store ?? {})
@@ -107,6 +121,10 @@ function world(on: any, o: Opts = {}) {
   })
   on('prompt.submit', async ($: any, e: any) => {
     w.beneath.push('prompt ' + e.origin.kind)
+    if (e.origin.kind === 'plugin') {
+      w.submitted.push(e)
+      if (o.submit) return o.submit($, e)
+    }
     return { text: e.text, origin: e.origin }
   })
   on('turn.complete', async ($: any, e: any) => {
@@ -115,7 +133,8 @@ function world(on: any, o: Opts = {}) {
   })
   on('session.compact', async ($: any, e: any) => {
     w.beneath.push(`compact ${e.agentId ?? 'lead'} after ${w.runs.filter((k) => k === 'compacting').length} compacting reports`)
-    return { messages: e.messages, tokensBefore: 2, tokensAfter: 1 }
+    if (o.compact) return o.compact($, e)
+    return { messages: e.messages?.length ? e.messages : SUMMARY, tokensBefore: 2, tokensAfter: 1 }
   })
   on('agent.offer', async ($: any, e: any) => ({ isOffered: true }))
   on('command.register', async ($: any, e: any) => {
@@ -142,6 +161,12 @@ function world(on: any, o: Opts = {}) {
 async function start($: any, w: any, ms = 3000) {
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   await w.clock.advance(ms)
+}
+
+// steps advances the clock ms in small steps, so that a call Claude Code answers at once is answered within
+// the mod's look at it (AT_ONCE_MS).
+async function steps(w: any, ms: number) {
+  for (let t = 0; t < ms; t += 50) await w.clock.advance(50)
 }
 
 function kinds(w: any) {
@@ -454,4 +479,91 @@ test("a question baton never answers waits for the human, and one not baton's is
   expect(answered).toBe(false)
   expect(w.asking.map((a: any) => a.question)).toEqual(['baton: P2 is blocked: no key.'])
   expect(kinds(w)).toEqual([])
+})
+
+test("baton's compaction and lines run without the poll waiting on them, and how each went follows its ack", async ($, on) => {
+  const compacted = later()
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'compact', epoch: 3 }),
+      ...command({ id: 2, kind: 'submit', text: '[baton] Job j1 (P1) finished; its result is attached.' }),
+    },
+    compact: () => compacted.p, // a compaction takes a while
+  })
+  await start($, w, 0)
+  await steps(w, 3000)
+  expect(w.beneath).toEqual(['compact lead after 0 compacting reports', 'prompt plugin']) // the line went while it compacted
+  expect(w.submitted.map((e: any) => e.text)).toEqual(['[baton] Job j1 (P1) finished; its result is attached.'])
+  expect(w.submitted[0].origin).toEqual(expect.objectContaining({ kind: 'plugin', asUser: true }))
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: true, result: 'compacting' }))
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true, result: 'submitted' }))
+  compacted.settle({ messages: SUMMARY, tokensBefore: 9, tokensAfter: 1 })
+  await w.clock.advance(1000)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'compacted 1'])
+  expect(w.reports[2]).toEqual(expect.objectContaining({ epoch: 3, skipped: false }))
+  expect(w.runs.filter((k) => k === 'compacting')).toEqual([]) // its own call never reaches its own hook
+})
+
+test('a compaction Claude Code refuses at once is acked as refused; one vetoed, or failing later, is reported so', async ($, on) => {
+  let n = 0
+  const failing = later()
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'compact', epoch: 1 }),
+      ...command({ id: 2, kind: 'compact', epoch: 1 }),
+      ...command({ id: 3, kind: 'compact', epoch: 2 }),
+    },
+    compact: async () => {
+      switch (++n) {
+        case 1:
+          throw new Error('a turn is running (t1); the conversation compacts between turns')
+        case 2:
+          return { skip: 'another plugin keeps this conversation whole' }
+        default:
+          await failing.p
+          throw new Error('the summary could not be made')
+      }
+    },
+  })
+  await start($, w, 0)
+  await steps(w, 3000)
+  failing.settle(null)
+  await w.clock.advance(1000)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'compacted 2', 'ack 3', 'compacted 3'])
+  // A hook that fails is skipped, and the call fails with Claude Code's own error (the kit's here): what the
+  // host reads of it is in its words (loop.turnRunning).
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false }))
+  expect(w.reports[0].error).toContain('HooksError')
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true }))
+  expect(w.reports[2]).toEqual(expect.objectContaining({ command: 2, epoch: 1, skipped: true, result: 'another plugin keeps this conversation whole' }))
+  expect(w.reports[3]).toEqual(expect.objectContaining({ ok: true }))
+  expect(w.reports[4]).toEqual(expect.objectContaining({ command: 3, epoch: 2 }))
+  expect(w.reports[4].error).toContain('HooksError')
+})
+
+test('a line Claude Code fails at once is acked as failed, and one failing later is reported', async ($, on) => {
+  let n = 0
+  const turn = later() // a turn runs: the line waits for its end
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'submit', text: 'one' }),
+      ...command({ id: 2, kind: 'submit', text: 'two' }),
+    },
+    submit: async () => {
+      if (++n === 1) throw new Error('no session to submit to')
+      await turn.p
+      throw new Error('the session ended')
+    },
+  })
+  await start($, w, 0)
+  await steps(w, 3000)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2'])
+  turn.settle(null)
+  await w.clock.advance(1000)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'failed 2'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false }))
+  expect(w.reports[0].error).toContain('HooksError')
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true, result: 'submitted' }))
+  expect(w.reports[2].error).toContain('HooksError')
 })

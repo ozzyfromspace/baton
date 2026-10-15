@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,7 @@ func (m *modRun) events() string {
 
 func (m *modRun) bridge() *bridge.Bridge { return bridge.Open(m.run.Dir, m.run.Now, nil) }
 
-const modHelloJSON = `{"kind":"hello","session":"sess","version":"0.8.0","protocol":1}`
+const modHelloJSON = `{"kind":"hello","session":"sess","version":"0.8.2","protocol":2}`
 
 // The mod says hello, and is told the run, the directory it polls, where its count of reports stands and
 // the agent type it registers for phases; then each report it makes is recorded once and logged.
@@ -97,7 +98,7 @@ func TestTheModReportsThroughTheCLI(t *testing.T) {
 	if len(agents) != 1 || agents[0].ID != "a3" || agents[0].Phase != "P3" || agents[0].Drop != decide.ReportKept("P3") {
 		t.Errorf("agents %+v", agents)
 	}
-	if rec, _ := m.bridge().Load(); len(rec.Open) != 0 || rec.Hello.Instance != "i" || rec.Hello.Session != "sess" || rec.Hello.Version != "0.8.0" {
+	if rec, _ := m.bridge().Load(); len(rec.Open) != 0 || rec.Hello.Instance != "i" || rec.Hello.Session != "sess" || rec.Hello.Version != "0.8.2" {
 		t.Errorf("record %+v (ask %d, spawn %d)", rec, ask.ID, spawn.ID)
 	}
 	// Reloaded, the mod says hello again and goes on after its last report.
@@ -206,7 +207,7 @@ func TestTheModIsDormantUnlessBatonWantsIt(t *testing.T) {
 	} {
 		saved := m.env
 		m.env = c.env
-		r := m.report(`{"kind":"hello","session":"other","protocol":1}`)
+		r := m.report(`{"kind":"hello","session":"other","protocol":2}`)
 		m.env = saved
 		if r.OK || r.Retry != c.retry || !strings.Contains(r.Why, c.why) {
 			t.Errorf("%s: %+v", c.name, r)
@@ -220,8 +221,8 @@ func TestTheModIsDormantUnlessBatonWantsIt(t *testing.T) {
 		t.Errorf("a mod whose host does not own the run: %+v", r)
 	}
 	m.run.Update(func(st *state.State) error { st.Owner = &state.Owner{Instance: "i"}; return nil })
-	r := m.report(`{"kind":"hello","session":"sess","version":"0.9.0","protocol":2}`)
-	if want := decide.ModMismatch("0.9.0", version.Version); r.OK || r.Retry || r.Why != want {
+	r := m.report(`{"kind":"hello","session":"sess","version":"0.8.1","protocol":1}`)
+	if want := decide.ModMismatch("0.8.1", version.Version); r.OK || r.Retry || r.Why != want {
 		t.Errorf("another baton's mod: %+v", r)
 	}
 	if rec, _ := m.bridge().Load(); rec.Hello == nil || rec.Hello.Refused == "" || rec.Hello.Ready("i") {
@@ -284,5 +285,81 @@ func TestTheModsCompactionReportsCount(t *testing.T) {
 	if n := strings.Count(m.events(), `"kind":"compact_started"`); n != 1 || !strings.Contains(started, `"by_baton":true`) || !strings.Contains(started, `"proof":"mod"`) ||
 		!strings.Contains(started, `"reason":"boundary"`) || !strings.Contains(started, `"trigger":"manual"`) {
 		t.Errorf("%d compact_started events:\n%s", n, m.events())
+	}
+}
+
+// The compaction baton's mod runs for the lead's loop is counted from the mod's word, as it comes: its ack
+// moves it under way, by the command, and its end is kept for the rewake; a try Claude Code refused (a turn
+// running), or that failed or a hook vetoed, is declined for the loop to ask again. A /compact a hook
+// vetoed declines a compaction baton took for its own.
+func TestTheModsCompactionForBaton(t *testing.T) {
+	m := newModRun(t)
+	m.report(modHelloJSON)
+	queue := func() (epoch, id int) {
+		var e int
+		m.run.Update(func(st *state.State) error {
+			st.Run.Compaction.Queue("boundary", m.run.Now())
+			e = st.Run.Compaction.Epoch
+			return nil
+		})
+		c, err := m.bridge().Issue(bridge.Command{Kind: bridge.Compact, Instance: "i", Epoch: e})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.run.Update(func(st *state.State) error {
+			st.Run.Compaction.Status, st.Run.Compaction.Command, st.Run.Compaction.Tries = state.CompactTyped, c.ID, 1
+			return nil
+		})
+		return e, c.ID
+	}
+	comp := func() state.Compaction {
+		st, _ := m.run.Load()
+		return st.Run.Compaction
+	}
+	seq := 0
+	report := func(format string, a ...any) {
+		seq++
+		m.report(fmt.Sprintf(`{"seq":%d,"session":"sess",`, seq) + fmt.Sprintf(format, a...) + "}")
+	}
+
+	epoch, id := queue()
+	report(`"kind":"ack","command":%d,"ok":false,"error":"HooksError: baton: $.session.compact: a turn is running (t1)"`, id)
+	if c := comp(); c.Status != state.CompactTyped || !strings.Contains(c.Refused(), "a turn is running") {
+		t.Errorf("refused as a turn ran: %+v", c)
+	}
+	epoch, id = queue()
+	report(`"kind":"ack","command":%d,"ok":true,"result":"compacting"`, id)
+	if c := comp(); c.Status != state.CompactActive || !c.ByBaton || c.Trigger != "manual" || c.Refused() != "" {
+		t.Errorf("begun: %+v", c)
+	}
+	report(`"kind":"compacted","command":%d,"epoch":%d`, id, epoch)
+	if c := comp(); c.Reported == nil || c.Status != state.CompactActive {
+		t.Errorf("over: %+v", c)
+	}
+	epoch, id = queue()
+	report(`"kind":"ack","command":%d,"ok":true,"result":"compacting"`, id)
+	report(`"kind":"compacted","command":%d,"epoch":%d,"error":"the API failed"`, id, epoch)
+	if c := comp(); c.Refused() != "the API failed" {
+		t.Errorf("failed: %+v", c)
+	}
+	epoch, id = queue()
+	report(`"kind":"ack","command":%d,"ok":true,"result":"compacting"`, id)
+	report(`"kind":"compacted","command":%d,"epoch":%d,"skipped":true`, id, epoch)
+	if c := comp(); c.Refused() != decide.CompactVetoed {
+		t.Errorf("vetoed: %+v", c)
+	}
+	m.run.Update(func(st *state.State) error {
+		st.Run.Compaction.Status, st.Run.Compaction.Declined = state.CompactQueued, nil
+		state.SetCheckpoint(st)
+		return nil
+	})
+	report(`"kind":"compacting","trigger":"manual"`)
+	report(`"kind":"compacted","trigger":"manual","skipped":true`)
+	if c := comp(); c.Status != state.CompactActive || c.Refused() != decide.CompactVetoed {
+		t.Errorf("a /compact vetoed: %+v", c)
+	}
+	ev := m.events()
+	if n := strings.Count(ev, `"kind":"compact_declined"`); n != 4 || !strings.Contains(ev, `"proof":"mod"`) {
+		t.Errorf("%d compact_declined events:\n%s", n, ev)
 	}
 }
