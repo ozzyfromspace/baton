@@ -202,7 +202,7 @@ func (c *Coordinator) fleet(v host.View, s *state.Store, st state.State) {
 	if f == nil && st.Hold != nil { // an earlier host's: no worker starts in this one
 		s.Update(func(st *state.State) error { st.Hold = nil; return nil })
 	}
-	idle := f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0 && !c.sweepOwed)
+	idle := f == nil && (c.Project == nil || len(st.LiveWorkers()) == 0 && len(st.Unretired()) == 0 && !c.sweepOwed)
 	if idle || v.Now.Sub(c.fleetAt) < fleetEvery || !c.fleetBusy.CompareAndSwap(false, true) {
 		return
 	}
@@ -258,6 +258,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 			}
 			c.retire(now, s, e, why)
 		}
+		c.retireLanded(now, s, st)
 		return
 	}
 	b := c.bridge(s)
@@ -296,6 +297,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 			c.respawn(now, s, b, e, why)
 		}
 	}
+	c.retireLanded(now, s, st)
 	if st, err = s.Load(); err != nil {
 		return
 	}
@@ -819,6 +821,17 @@ func (c *Coordinator) holdAgent(s *state.Store, b *bridge.Bridge, w *worker) {
 	})
 	s.Event("worker_held", map[string]any{"phase": w.phase, "why": "the human stopped its agent", "pushed": true})
 	c.announce(s, decide.AgentHeld(w.phase))
+}
+
+// retireLanded retires the workers of run st whose work landed that nobody retires yet, and on which no
+// agent of this host works: those the lead's `baton done` recorded as landed with no agent at work on them
+// (one at work is ended first, by watch). The merge queue retires each worker it lands.
+func (c *Coordinator) retireLanded(now time.Time, s *state.Store, st state.State) {
+	for _, e := range st.Unretired() {
+		if !c.runs(e.Ref) {
+			c.retire(now, s, e, "its work landed")
+		}
+	}
 }
 
 // retire ends a worker for good, once its agent has ended (or with none running), for why (RetireWorker):

@@ -26,7 +26,7 @@ import (
 func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", leadOnly("attach", cmdAttach))
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
-	register("done", "mark the current phase finished (verifying while its job runs): done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
+	register("done", "mark the current phase finished (verifying while its job runs), or a worker's phase whose work is on the run's branch already: done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
 	register("blocked", "stop the run until the human answers, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", leadOnly("run", cmdRun))
@@ -747,6 +747,9 @@ func cmdDone(args []string, io IO) int {
 		if followed = changed && rerr == nil && s.WritePlan(adopted) == nil; followed {
 			pl = adopted
 		}
+	}
+	if ps := cur.Phases[id]; s.Worker() == "" && ps != nil && ps.Status == state.PhaseWorking {
+		return doneLanded(io, s, pl, cur, id, p.vals["notes"], followed)
 	}
 	work := checkWork(s, id)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])

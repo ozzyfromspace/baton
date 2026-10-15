@@ -346,17 +346,21 @@ func (x *crew) spawns() []string {
 }
 
 // logged reports an event of kind in the run's log with every one of fields.
-func (x *crew) logged(kind string, fields map[string]any) bool {
+func (x *crew) logged(kind string, fields map[string]any) bool { return x.count(kind, fields) > 0 }
+
+// count counts the events of kind in the run's log with every one of fields.
+func (x *crew) count(kind string, fields map[string]any) int {
+	n := 0
 	for _, line := range strings.Split(x.events(), "\n") {
 		var e map[string]any
 		if json.Unmarshal([]byte(line), &e) != nil || e["kind"] != kind {
 			continue
 		}
 		if !slices.ContainsFunc(slices.Collect(maps.Keys(fields)), func(k string) bool { return fmt.Sprint(e[k]) != fmt.Sprint(fields[k]) }) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // tracked lists the agents the mod counts as baton's (bridge.Agents), by id.

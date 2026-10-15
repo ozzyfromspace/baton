@@ -116,12 +116,18 @@ type Landing struct {
 	Head    string    `json:"head"`            // the run's branch once they landed
 	At      time.Time `json:"at"`
 	Told    bool      `json:"told,omitempty"` // the lead was told
+	// By is LandedByLead when the lead's `baton done` recorded work already on the run's branch, and ""
+	// when the merge queue landed it.
+	By string `json:"by,omitempty"`
 	// Unverified are the commits of the checkout's own (not landed by baton) that it landed over without
 	// being verified with them, oldest first, its verification having passed on Verified before them: the
 	// merge queue verifies a landing again at most once for those (loop/merge.go).
 	Verified   string   `json:"verified,omitempty"`
 	Unverified []string `json:"unverified,omitempty"`
 }
+
+// LandedByLead is Landing.By for work the lead recorded as landed.
+const LandedByLead = "lead"
 
 // Usage is how much of the account's five-hour allowance is used, as a session's status line last
 // reported it (At). Limited is set when the lead or a phase agent hit the limit (By: "lead", or a worker's
@@ -233,6 +239,19 @@ func (st State) LiveWorkers() []Worker {
 	var out []Worker
 	for _, w := range st.Workers {
 		if w.Live() {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// Unretired lists the workers of the plan attached now whose work landed and whom nobody began to retire
+// yet: their agent, worktree and branch are still to go (loop.RetireWorker). The merge queue retires each
+// as it lands it; one the lead's `baton done` recorded as landed waits for its run's host to.
+func (st State) Unretired() []Worker {
+	var out []Worker
+	for _, w := range st.Workers {
+		if w.Status == WorkerLanded && w.Retiring.IsZero() && w.Generation == st.Generation {
 			out = append(out, w)
 		}
 	}

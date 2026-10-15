@@ -434,3 +434,72 @@ func isFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && !fi.IsDir()
 }
+
+// The lead's `baton done` recorded P1's work landed, its branch merged into main by hand, with what its
+// agent had not committed still in its worktree: an agent at work on it is stopped, and the worker is
+// retired as its work landed, by the host that runs it or, with no agent at work on it, by the next one.
+// Its uncommitted work is saved first, and its branch goes, with nothing on it left to land. It is retired
+// once.
+func TestAWorkerTheLeadRecordedLandedIsRetired(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		atWork bool
+	}{{"its agent at work", true}, {"no agent at work on it", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newCrew(t, 1)
+			var e state.Worker
+			if c.atWork {
+				x.atWork("P1")
+				e = x.worker("P1")
+			} else {
+				e = x.suspended()
+			}
+			gittest.Write(t, e.Worktree, "parser.go", "package parser\n")
+			gittest.Commit(t, e.Worktree, "the parser")
+			gittest.Git(t, x.repo, "merge", "-q", "--ff-only", e.Branch)
+			gittest.Write(t, e.Worktree, "notes.txt", "not committed\n")
+			if _, err := x.lead.Update(func(st *state.State) error {
+				head := gitx.Head(x.repo)
+				_, err := state.Landed(st, x.pl, state.Landing{Phase: "P1", Commits: []string{head}, Head: head, Told: true, By: state.LandedByLead}, x.now)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !c.atWork {
+				x.c = x.coordinator("next", 1)
+			}
+			for range 3 {
+				x.tick(time.Second)
+			}
+			if c.atWork && !slices.Contains(x.stopped, x.agent("P1").id) {
+				t.Errorf("its agent was not stopped: %v", x.stopped)
+			}
+			if w := x.worker("P1"); w.Status != state.WorkerLanded || w.Retiring.IsZero() || len(x.state().Unretired()) > 0 {
+				t.Fatalf("worker %+v", w)
+			}
+			landed := map[string]any{"phase": "P1", "why": "its work landed"}
+			if x.count("worker_ended", landed) != 1 {
+				t.Fatalf("events:\n%s", x.events())
+			}
+			if isDir(e.Worktree) {
+				t.Errorf("its worktree %s is still there", e.Worktree)
+			}
+			if gitx.RevParse(x.repo, "refs/heads/"+e.Branch) != "" {
+				t.Errorf("its branch %s is still there", e.Branch)
+			}
+			saved := false
+			for _, sn := range gitx.Snapshots(x.repo) {
+				if strings.TrimSpace(gittest.Git(t, x.repo, "show", sn.Ref+":notes.txt")) == "not committed" {
+					saved = true
+				}
+			}
+			if !saved {
+				t.Errorf("what its agent had not committed was not saved: %+v", gitx.Snapshots(x.repo))
+			}
+			x.tick(time.Second)
+			if n := x.count("worker_ended", landed); n != 1 {
+				t.Errorf("retired %d times", n)
+			}
+		})
+	}
+}
