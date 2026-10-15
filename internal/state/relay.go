@@ -51,6 +51,10 @@ type Relay struct {
 	Dismissed time.Time `json:"dismissed,omitzero"`
 	// Applied is when the answer reached the worker's sub-run.
 	Applied time.Time `json:"applied,omitzero"`
+	// Lapsed is when the coordinator was done with the hold an answer with no way on (Wait for me, Pause
+	// baton, none) put on a proposal's phase: it lifted it, as nobody had answered for loop's
+	// Timing.HoldLapse since, or found it settled already.
+	Lapsed time.Time `json:"lapsed,omitzero"`
 }
 
 // Relay kinds.
@@ -111,7 +115,7 @@ func QueueRelay(st *State, r Relay, now time.Time) bool {
 // fresh is r as it joins the queue at now: asked of nobody yet.
 func fresh(r Relay, now time.Time) Relay {
 	r.Queued, r.Question, r.Issued, r.Ask, r.Instance, r.Deadline = now, "", time.Time{}, 0, "", time.Time{}
-	r.Asked, r.AskedAt, r.Answered, r.Applied, r.Dismissed = false, time.Time{}, nil, time.Time{}, time.Time{}
+	r.Asked, r.AskedAt, r.Answered, r.Applied, r.Dismissed, r.Lapsed = false, time.Time{}, nil, time.Time{}, time.Time{}, time.Time{}
 	return r
 }
 

@@ -59,23 +59,27 @@ type Timing struct {
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
+	HoldLapse      time.Duration // a proposal held for the human (Wait for me) with no word from them this long: baton lifts the hold (lapseHold)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
 	EscalationTimeout time.Duration
 }
 
-// DefaultTiming is baton's production timing.
+// DefaultTiming is baton's production timing. Nothing baton can decide waits on the human for longer
+// than 20 minutes (most for 10): a question gets its default at escalation_timeout, and a hold the human
+// chose lapses after HoldLapse. The rest is sized to what it waits for: a turn, a compaction, the mod, a
+// subagent, a reply over the network.
 var DefaultTiming = Timing{
 	Quiet: 1500 * time.Millisecond, QuietMax: 30 * time.Second, HandsOff: 3 * time.Second,
-	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute, FailedRetryMax: 15 * time.Minute, StalledNudge: 30 * time.Minute,
+	AckTimeout: 15 * time.Second, CompactTimeout: 10 * time.Minute, FailedRetry: 5 * time.Minute, FailedRetryMax: 15 * time.Minute, StalledNudge: 15 * time.Minute,
 	ResumeNudge: 60 * time.Second, ResumeEscalate: 3 * time.Minute,
 	DraftGrace: 20 * time.Second, RescueBackoff: 2 * time.Minute, DraftEscalate: 2 * time.Minute,
-	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, BackgroundMax: 30 * time.Minute, BackgroundIdle: time.Hour,
+	StaleTurn: 15 * time.Minute, IdleNudge: 10 * time.Minute, BackgroundMax: 20 * time.Minute, BackgroundIdle: 20 * time.Minute,
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
-	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 30 * time.Minute,
-	EscalationTimeout: config.DefaultEscalationTimeout,
+	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
+	HoldLapse: decide.HoldLapse, EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
 // MaxTries is how many times baton asks for a compaction in one round (typing /compact, or by its mod)
@@ -89,8 +93,10 @@ const MaxRounds = 3
 // MaxIdleNudges is how many reminders baton types without the plan moving before it brings the human in.
 const MaxIdleNudges = 2
 
-// Reminders are when an unresolved escalation is pushed again, measured from when it was raised.
-var Reminders = []time.Duration{30 * time.Minute, 2 * time.Hour, 6 * time.Hour}
+// Reminders are when an unresolved escalation is pushed again, measured from when it was raised. Twice is
+// enough: by then a question of baton's has had its default (escalation_timeout), and a hold has lapsed
+// (Timing.HoldLapse), and what still waits on the human is told on the board and by the stall alarm.
+var Reminders = []time.Duration{10 * time.Minute, 20 * time.Minute}
 
 // clearLine is sent before retrying: Ctrl-U ×6 wipes whatever is left of baton's own failed attempt.
 // It is only sent when the human has no draft (a gate), so it never erases their text, and only where
@@ -717,7 +723,9 @@ func (l *Loop) retryFailed(v host.View, st state.State) {
 	l.Store.Event("compact_requeued", map[string]any{"epoch": comp.Epoch, "round": comp.Rounds + 2})
 }
 
-// checkResumed makes sure the model actually started working after a compaction baton asked for.
+// checkResumed makes sure the model actually started working after a compaction baton asked for: it is
+// reminded, then the human is brought in, and the model is still reminded every StalledNudge after that,
+// as a session that went quiet is (watch), so that it picks the plan up again by itself.
 func (l *Loop) checkResumed(v host.View, st state.State, in host.Injector) {
 	comp := st.Run.Compaction
 	if !comp.ByBaton || comp.Finished.IsZero() {
@@ -728,30 +736,45 @@ func (l *Loop) checkResumed(v host.View, st state.State, in host.Injector) {
 	}
 	switch {
 	case comp.Nudged.IsZero() && v.Now.Sub(l.since(comp.Finished)) > l.Timing.ResumeNudge:
-		if l.why != "" {
-			l.held(v, st, "remind the model to resume after the compaction")
-			return
-		}
-		l.proceed()
-		verb := "Begin"
-		switch {
-		case comp.Reason == "checkpoint":
-			verb = "Continue"
-		case st.Resumed():
-			verb = "Resume"
-		}
-		msg := fmt.Sprintf("[baton] Context compacted. %s %s now — the brief above has your instructions.", verb, st.Current)
-		if err := l.say(v, in, msg); err != nil {
-			l.unsaid(err, "reminding the model to resume")
-			return
-		}
-		l.update(func(st *state.State) { st.Run.Compaction.Nudged = v.Now })
-		l.Store.Event("resume_nudge", map[string]any{"epoch": comp.Epoch, "via": l.via()})
+		l.resumeNudge(v, st, in, false)
 	case !comp.Nudged.IsZero() && v.Now.Sub(l.since(comp.Nudged)) > l.Timing.ResumeEscalate:
 		if e := st.Run.Escalation; e == nil || e.Kind != "stalled" {
 			l.escalate("stalled", fmt.Sprintf("the model did not resume %s after the compaction", st.Current))
+		} else if v.Now.Sub(l.since(comp.Nudged)) >= l.Timing.StalledNudge {
+			l.resumeNudge(v, st, in, true)
 		}
 	}
+}
+
+// resumeNudge reminds the model to take up the phase in hand after a compaction baton asked for. stalled
+// says the human was brought in already: what holds the reminder back then is not escalated over it.
+func (l *Loop) resumeNudge(v host.View, st state.State, in host.Injector, stalled bool) {
+	comp := st.Run.Compaction
+	if l.why != "" {
+		if !stalled {
+			l.held(v, st, "remind the model to resume after the compaction")
+		}
+		return
+	}
+	l.proceed()
+	verb := "Begin"
+	switch {
+	case comp.Reason == "checkpoint":
+		verb = "Continue"
+	case st.Resumed():
+		verb = "Resume"
+	}
+	msg := fmt.Sprintf("[baton] Context compacted. %s %s now — the brief above has your instructions.", verb, st.Current)
+	if err := l.say(v, in, msg); err != nil {
+		l.unsaid(err, "reminding the model to resume")
+		return
+	}
+	l.update(func(st *state.State) { st.Run.Compaction.Nudged = v.Now })
+	fields := map[string]any{"epoch": comp.Epoch, "via": l.via()}
+	if stalled {
+		fields["stalled"] = true
+	}
+	l.Store.Event("resume_nudge", fields)
 }
 
 func (l *Loop) fail(comp state.Compaction, reason string) {
@@ -817,10 +840,13 @@ func (l *Loop) resolve(v host.View, st state.State) {
 }
 
 // remind pushes an unresolved escalation again, a few times, further and further apart: one push is
-// easy to miss, and a run waiting on the human loses hours until they see it.
+// easy to miss, and a run waiting on the human loses hours until they see it. A hold for the human is
+// not pushed as still waiting once it would have lapsed (Timing.HoldLapse): the push that it lapsed says
+// what became of it.
 func (l *Loop) remind(v host.View, st state.State) {
 	e := st.Run.Escalation
-	if e == nil || e.Reminded >= len(Reminders) || v.Now.Sub(e.Since) < Reminders[e.Reminded] {
+	if e == nil || e.Reminded >= len(Reminders) || v.Now.Sub(e.Since) < Reminders[e.Reminded] ||
+		e.Kind == "decision" && l.Timing.HoldLapse > 0 && Reminders[e.Reminded] >= l.Timing.HoldLapse {
 		return
 	}
 	text := fmt.Sprintf("still waiting on you, since %s: %s", e.Since.Local().Format("15:04"), e.Reason)

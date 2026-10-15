@@ -83,7 +83,7 @@ func answeredProposal(st *state.State, c Context, auto bool) valveAction {
 		}
 	case "Wait for me":
 		v.also = holdProposal(st, p, state.ByHeld, answer, c.Now)
-		v.say = "baton: holding " + p.ID + " for you — answer in the session when you're ready"
+		v.say = decide.Holding(p.ID, decide.HoldLapse, p.Untimed != "")
 		v.tell = NudgePrefix + " The human chose Wait for me: do not do what you proposed (" + p.What + "). " +
 			"End your turn now; the run waits for them, and their answer will reach you here."
 	case "Pause baton":

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -53,7 +54,7 @@ func TestIdleSessionIsRemindedThenEscalated(t *testing.T) {
 		t.Fatalf("push %v", r.push.kinds)
 	}
 	// The human may be asleep: the model is still reminded, every StalledNudge.
-	for i := 0; i < 25; i++ {
+	for i := 0; i < int(DefaultTiming.StalledNudge/time.Minute)-5; i++ {
 		r.tick(time.Minute)
 	}
 	if len(r.in.text) != 1 {
@@ -115,19 +116,20 @@ func TestActivityKeepsTheWatchdogQuiet(t *testing.T) {
 // The model's own background work keeps reminders away until the oldest of it has run for BackgroundIdle,
 // counted from when a Stop first reported it. Then baton looks in, and reminders that change nothing bring
 // the human in.
-func TestBackgroundWorkHoldsTheWatchdogForAnHour(t *testing.T) {
+func TestBackgroundWorkHoldsTheWatchdogForBackgroundIdle(t *testing.T) {
+	idle := int(DefaultTiming.BackgroundIdle / time.Minute)
 	r := newIdleRig(t)
 	r.set(func(st *state.State) {
 		st.Run.Background = []state.Task{{ID: "b1", Type: "shell", Status: "running", Since: r.now}}
 	})
-	for i := 0; i < 20; i++ {
+	for i := 0; i < idle/3; i++ {
 		r.tick(time.Minute)
 	}
 	r.set(func(st *state.State) { // the model stops on it again, and starts more
 		st.Run.Background = append(st.Run.Background, state.Task{ID: "b2", Type: "shell", Since: r.now})
 		st.Run.LastActivity, st.Run.LastStop = r.now, r.now
 	})
-	for i := 0; i < 39; i++ {
+	for i := 0; i < idle-idle/3-1; i++ {
 		r.tick(time.Minute)
 	}
 	if len(r.in.text) != 0 {
@@ -136,8 +138,10 @@ func TestBackgroundWorkHoldsTheWatchdogForAnHour(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		r.tick(time.Minute)
 	}
-	if len(r.in.text) != 1 || r.in.text[0] != "[baton] Background work has been running for over 60 minutes with no progress on P1. Check on it, then continue, or report your status." {
-		t.Fatalf("after an hour: %q\n%s", r.in.text, r.events())
+	want := "[baton] Background work has been running for over " + decide.Spell(DefaultTiming.BackgroundIdle) +
+		" with no progress on P1. Check on it, then continue, or report your status."
+	if len(r.in.text) != 1 || r.in.text[0] != want {
+		t.Fatalf("after BackgroundIdle: %q\n%s", r.in.text, r.events())
 	}
 	// The model answers each reminder and stops on the work again: one more reminder, then the human.
 	for n := 1; n <= 2; n++ {

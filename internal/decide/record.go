@@ -45,8 +45,12 @@ func PlanDone(phases, decided int) string {
 	return s
 }
 
-// Happened says what a decision made without the human did: a note, or a proposal baton went ahead with.
+// Happened says what a decision made without the human did: a note, or a proposal baton went ahead with,
+// at its deadline or once its hold for the human lapsed.
 func Happened(d state.Decision) string {
+	if d.Kind == state.Proposal && !d.Lapsed.IsZero() {
+		return fmt.Sprintf("went ahead (or a more reversible way did) once its hold for you lapsed at %s, as nobody answered: %s", d.Lapsed.Local().Format("15:04"), clause(d.What))
+	}
 	if d.Kind == state.Proposal {
 		return fmt.Sprintf("went ahead, as nobody answered by %s: %s", d.Deadline.Local().Format("15:04"), clause(d.What))
 	}

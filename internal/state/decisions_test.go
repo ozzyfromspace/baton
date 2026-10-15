@@ -126,6 +126,58 @@ func TestResumingReviewsTheDecisions(t *testing.T) {
 	}
 }
 
+// A hold for the human that lapsed is settled by baton for them: Go ahead, a decision without the human
+// that may make a review due, or Not now for one only they could let through, which is none. A notice
+// says so either way.
+func TestAHoldLapses(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		untimed string
+		held    bool // the lead's: resolved held already; otherwise an agent's, pending in its sub-run
+		maxAuto int
+		answer  string
+		without bool
+		last    bool
+	}{
+		{"the lead's, held", "", true, 0, "Go ahead", true, false},
+		{"an agent's, pending", "", false, 0, "Go ahead", true, false},
+		{"the last one before a review", "", true, 1, "Go ahead", true, true},
+		{"outward: Not now, never a review", "'push' looks outward-facing", true, 1, NotNow, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := running(t)
+			p, _ := AddProposal(&st, Decision{What: "use a fake clock", Untimed: c.untimed}, t0)
+			if c.held {
+				Resolve(&st, p.ID, ByHeld, "Wait for me", t0)
+				if h := st.HeldProposal(t0); h == nil || h.ID != p.ID {
+					t.Fatalf("held proposal %+v", h)
+				}
+				if h := st.HeldProposal(t0.Add(time.Minute)); h != nil {
+					t.Fatalf("a hold raised later holds %+v, held before it", h)
+				}
+			}
+			at := t0.Add(20 * time.Minute)
+			answer, n, last := LapseHold(&st, &st.Decisions[0], c.maxAuto, at)
+			d := st.Decisions[0]
+			if answer != c.answer || last != c.last || d.Resolved == nil || d.Resolved.By != ByTimeout || d.Resolved.Answer != c.answer || !d.Lapsed.Equal(at) {
+				t.Fatalf("answer %q last %v: %+v %+v", answer, last, d, d.Resolved)
+			}
+			if d.WithoutHuman() != c.without || (n == 1) != c.without {
+				t.Errorf("without the human %v, %d unattended", d.WithoutHuman(), n)
+			}
+			if (st.ReviewDue == "P0") != c.last {
+				t.Errorf("review due %q", st.ReviewDue)
+			}
+			if len(st.Run.Notices) != 1 || st.Run.Notices[0].Kind != "hold_lapsed" || st.Run.Notices[0].Text != "use a fake clock" {
+				t.Errorf("notices %+v", st.Run.Notices)
+			}
+			if h := st.HeldProposal(t0); h != nil {
+				t.Errorf("still held: %+v", h)
+			}
+		})
+	}
+}
+
 // A worker's proposal is put to the human by the lead: the worker owes no question of its own.
 func TestOwnProposalLeavesRelayedOnesToTheLead(t *testing.T) {
 	for _, c := range []struct {
