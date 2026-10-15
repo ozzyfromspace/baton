@@ -49,3 +49,11 @@ func inherited(event string, stdin io.Reader, stdout, stderr io.Writer, env func
 		}
 	}
 }
+
+// dormantWorktree makes the worktree Claude Code asks for in a session baton does not host that has baton's
+// hooks all the same (one that only inherited its environment, and the settings its host started claude
+// with): baton's WorktreeCreate hook takes the place of Claude Code's own making of one, so it is made where
+// Claude Code would have made it, and no run keeps a record of it.
+func dormantWorktree(c Context) (Result, error) {
+	return (&handlers{}).plainWorktree(c, nil, str(c.Input, "name"))
+}

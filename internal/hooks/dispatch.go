@@ -55,7 +55,7 @@ type Handler func(Context) (Result, error)
 
 // Dispatch runs the handler for event and returns the process exit code. It never returns 2 unless the
 // handler deliberately asked for a rewake, and it is a no-op unless the session is hosted by baton, as
-// BATON_HOST alone says (DispatchAs takes hostcheck's answer).
+// BATON_HOST alone says (DispatchAs takes hostcheck's answer), but for the worktrees Claude Code asks for.
 func Dispatch(event string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string, now func() time.Time, handlers map[string]Handler) int {
 	return DispatchAs(hostcheck.Trust(env), event, stdin, stdout, stderr, env, now, handlers)
 }
@@ -63,7 +63,8 @@ func Dispatch(event string, stdin io.Reader, stdout, stderr io.Writer, env func(
 // DispatchAs is Dispatch in a session whose standing with baton is status (hostcheck.Check). A session
 // that only inherited baton's environment (hostcheck.Inherited) is dormant: no handler runs, so nothing
 // binds or claims a run or moves a host's link; baton only tells the human, once, that it does not host
-// the session and how to give it back (inherited).
+// the session and how to give it back (inherited). Whatever the status, a worktree Claude Code asks for is
+// made (dormantWorktree): baton's WorktreeCreate hook takes the place of its own making of one.
 func DispatchAs(status hostcheck.Status, event string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string, now func() time.Time, handlers map[string]Handler) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -71,14 +72,16 @@ func DispatchAs(status hostcheck.Status, event string, stdin io.Reader, stdout, 
 			code = 0
 		}
 	}()
-	switch status {
-	case hostcheck.Plain:
+	h, ok := handlers[event]
+	switch {
+	case status != hostcheck.Hosted && event == "WorktreeCreate":
+		h, ok = dormantWorktree, true
+	case status == hostcheck.Plain:
 		return 0
-	case hostcheck.Inherited:
+	case status == hostcheck.Inherited:
 		inherited(event, stdin, stdout, stderr, env, now)
 		return 0
 	}
-	h, ok := handlers[event]
 	if !ok {
 		return 0
 	}

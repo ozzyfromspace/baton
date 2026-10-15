@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -104,11 +105,35 @@ func (panicky) Read([]byte) (int, error) { panic("boom") }
 
 // The inherited path fails open too: a panic exits 0 and says nothing.
 func TestInheritedPanicFailsOpen(t *testing.T) {
-	for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "WorktreeCreate"} {
 		var out, errb bytes.Buffer
 		code := DispatchAs(hostcheck.Inherited, event, panicky{}, &out, &errb, hosted, now, nil)
 		if code != 0 || out.Len() > 0 || !strings.Contains(errb.String(), "failed open") {
 			t.Errorf("%s: code %d stdout %q stderr %q", event, code, out.String(), errb.String())
+		}
+	}
+}
+
+// baton's WorktreeCreate hook takes the place of Claude Code's own making of a worktree, so a session baton
+// does not host that has its hooks all the same (one that only inherited its environment and its host's
+// settings) still gets every worktree it asks for, where Claude Code makes one, and no run records it.
+func TestADormantSessionStillGetsItsWorktrees(t *testing.T) {
+	for _, status := range []hostcheck.Status{hostcheck.Inherited, hostcheck.Plain} {
+		r := newAgentRun(t)
+		before := r.eventLog()
+		name := fmt.Sprintf("agent-%d", status)
+		raw, _ := json.Marshal(map[string]any{"hook_event_name": "WorktreeCreate", "session_id": "bg-sess", "cwd": r.checkout, "name": name})
+		var out, errb bytes.Buffer
+		code := DispatchAs(status, "WorktreeCreate", bytes.NewReader(raw), &out, &errb, r.env(r.inst), r.clock, Handlers(Deps{Open: OpenRun(r.clock)}))
+		want := filepath.Join(gitxReal(t, r.checkout), ".claude", "worktrees", name)
+		if code != 0 || strings.TrimSpace(out.String()) != want {
+			t.Errorf("status %v: exit %d, stdout %q, stderr %q", status, code, out.String(), errb.String())
+		}
+		if _, err := os.Stat(filepath.Join(want, "a.go")); err != nil {
+			t.Errorf("status %v: no worktree made: %v", status, err)
+		}
+		if r.eventLog() != before {
+			t.Errorf("status %v: the run recorded it:\n%s", status, r.eventLog())
 		}
 	}
 }
