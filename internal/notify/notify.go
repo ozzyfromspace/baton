@@ -45,6 +45,7 @@ var headline = map[string]string{
 	"proceeded":         "baton went ahead with a proposal nobody answered",
 	"decision":          "baton is holding a proposal for you",
 	"hold_lapsed":       "baton stopped holding a proposal nobody answered",
+	"answered":          "baton answered Claude's question for you, as nobody did",
 	"review":            "baton needs you: review the decisions made without you",
 	"workers":           "baton needs you: its workers could not start",
 	"worker_held":       "baton needs you: a phase waits for you",
@@ -52,9 +53,9 @@ var headline = map[string]string{
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a
-// note needs nothing from the human; a proposal has a deadline; and a hold, a review, a phase held for
-// them and a run that stopped moving each wait on them.
-var priority = map[string]string{"note": "2", "proposal": "4", "decision": "4", "review": "4", "worker_held": "4", "run_stalled": "4"}
+// note, and a question baton answered for them, need nothing from the human; a proposal has a deadline;
+// and a hold, a review, a phase held for them and a run that stopped moving each wait on them.
+var priority = map[string]string{"note": "2", "answered": "2", "proposal": "4", "decision": "4", "review": "4", "worker_held": "4", "run_stalled": "4"}
 
 func (m *multi) Notify(project, kind, detail string) error {
 	title := "baton — " + project

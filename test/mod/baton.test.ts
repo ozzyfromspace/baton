@@ -492,7 +492,7 @@ test("the lead model's own question of baton's is bounded too; the human's answe
   expect(kinds(w)).toEqual([])
 })
 
-test("a question baton never answers waits for the human, and one not baton's is not asked about", async ($, on) => {
+test('a question baton never answers waits for the human, the model\'s own included, and is asked about once', async ($, on) => {
   const w = world(on)
   w.hang = true
   await start($, w)
@@ -501,7 +501,52 @@ test("a question baton never answers waits for the human, and one not baton's is
   $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'q', options: [], multiSelect: false }] } as any).then(() => (answered = true))
   await w.clock.advance(120_000)
   expect(answered).toBe(false)
-  expect(w.asking.map((a: any) => a.question)).toEqual(['baton: P2 is blocked: no key.'])
+  expect(w.asking.map((a: any) => a.question)).toEqual(['baton: P2 is blocked: no key.', 'Which colour?'])
+  expect(kinds(w)).toEqual([])
+})
+
+test("the lead model's own question is answered at the host's deadline, each of its questions", async ($, on) => {
+  const qs = [
+    { question: 'Which database?', header: 'db', options: [{ label: 'sqlite', description: '' }, { label: 'Postgres (Recommended)', description: '' }], multiSelect: false },
+    { question: 'Which checks?', header: 'checks', options: [{ label: 'unit', description: '' }, { label: 'e2e', description: '' }], multiSelect: true },
+  ]
+  const answers = { 'Which database?': 'Postgres (Recommended)', 'Which checks?': 'unit' }
+  let due = false
+  const w = world(on, { reply: (rep) => (rep.kind === 'asking' ? (due ? { ok: true, answers } : { ok: true, wait_ms: 60_000 }) : undefined) })
+  w.hang = true
+  await start($, w)
+  let r: any = null
+  $.tool.call({ tool: 'AskUserQuestion', questions: qs } as any).then((v) => (r = v))
+  await w.clock.advance(30_000)
+  expect(r).toBe(null)
+  due = true
+  await w.clock.advance(30_000)
+  await w.clock.advance(1000)
+  expect(r.result).toEqual({ questions: qs, answers }) // AskUserQuestion's own output, one answer per question
+  expect(w.asking[0]).toEqual(
+    expect.objectContaining({
+      question: 'Which database?',
+      questions: [
+        { question: 'Which database?', options: ['sqlite', 'Postgres (Recommended)'], multi: false },
+        { question: 'Which checks?', options: ['unit', 'e2e'], multi: true },
+      ],
+    }),
+  )
+  expect(w.asking.length).toBe(2)
+  expect(kinds(w)).toEqual(['deadline'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ question: 'Which database?', answer: 'Postgres (Recommended)', answers }))
+  expect(w.reports[0].questions.length).toBe(2)
+})
+
+test("the human's answer to the model's own question in time stands, and an agent's question is not asked about", async ($, on) => {
+  const q = { question: 'Which database?', header: 'db', options: [{ label: 'sqlite', description: '' }, { label: 'Postgres', description: '' }], multiSelect: false }
+  const w = world(on, { reply: (rep) => (rep.kind === 'asking' ? { ok: true, wait_ms: 60_000 } : undefined) })
+  w.answer = 'sqlite'
+  await start($, w)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: [q] } as any)
+  expect((r as any).result.answers).toEqual({ 'Which database?': 'sqlite' })
+  await $.tool.call({ tool: 'AskUserQuestion', agentId: 'a1', questions: [q] } as any)
+  expect(w.asking.map((a: any) => a.question)).toEqual(['Which database?'])
   expect(kinds(w)).toEqual([])
 })
 

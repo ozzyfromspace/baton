@@ -1133,15 +1133,20 @@ func dialogKey(in map[string]any) string {
 	case "ExitPlanMode":
 		return "plan"
 	case "AskUserQuestion":
-		qs := questions(in)
-		for i, q := range qs {
-			qs[i] = decide.Normalize(q)
-		}
-		return strings.Join(qs, "\n")
+		return questionsKey(questions(in))
 	}
 	b, _ := json.Marshal(in["tool_input"]) // map keys are sorted, so the encoding is canonical
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:12])
+}
+
+// questionsKey is the dialog key of an AskUserQuestion call that asks these questions, in order.
+func questionsKey(texts []string) string {
+	keys := make([]string, len(texts))
+	for i, q := range texts {
+		keys[i] = decide.Normalize(q)
+	}
+	return strings.Join(keys, "\n")
 }
 
 // questions lists the question texts of an AskUserQuestion call.

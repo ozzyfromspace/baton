@@ -63,8 +63,9 @@ const (
 	Dropped    = "dropped"    // a report of one of baton's agents was kept from the lead's model
 	Failed     = "failed"     // a command the mod acked as started failed afterwards (a submit)
 	Answered   = "answered"   // the human answered a question the mod asked
-	Deadline   = "deadline"   // nobody answered a question of baton's by its deadline, and the mod answered it
-	// Asking asks how long a question of baton's on the human's screen may wait: a query, not recorded.
+	Deadline   = "deadline"   // nobody answered a question in the lead's session by its deadline, and the mod answered it
+	// Asking asks how long a question on the human's screen in the lead's session may wait, and what baton
+	// answers it then: a query, not recorded.
 	Asking = "asking"
 )
 
@@ -127,14 +128,28 @@ type Report struct {
 	Epoch   int    `json:"epoch,omitempty"`
 	// Answered: the question, and the label the human chose, or what they typed; Dismissed: the dialog
 	// closed without one; Deadline: nobody answered it, and the mod gave it the answer baton gave it.
-	// Deadline (a report of its own) is that too, for any question of baton's in the lead's session.
+	// Deadline (a report of its own) is that too, for any question baton answers in the lead's session: one
+	// of baton's, or a call of the lead model's own (with Questions and Answers).
 	Question  string `json:"question,omitempty"`
 	Answer    string `json:"answer,omitempty"`
 	Dismissed bool   `json:"dismissed,omitempty"`
 	Deadline  bool   `json:"deadline,omitempty"`
-	// Asking (asked, not recorded: `baton mod report` answers it at once): a question of baton's is on
-	// the human's screen, put to them Elapsed milliseconds ago; the reply says how long it may wait.
-	Elapsed int64 `json:"elapsed,omitempty"`
+	// Asking (asked, not recorded: `baton mod report` answers it at once): a question is on the human's
+	// screen in the lead's session, put to them Elapsed milliseconds ago; the reply says how long it may
+	// wait. Question is the call's first question, and Questions every one of it, with its options.
+	Elapsed   int64   `json:"elapsed,omitempty"`
+	Questions []Asked `json:"questions,omitempty"`
+	// Deadline of a call of the lead model's own: the answer baton gave each of its questions (and the
+	// first's in Answer), by the question's text as asked.
+	Answers map[string]string `json:"answers,omitempty"`
+}
+
+// Asked is one question of an AskUserQuestion call in the lead's session, as the mod saw it: its text, its
+// options' labels in order, and whether it takes several of them.
+type Asked struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+	Multi    bool     `json:"multi,omitempty"`
 }
 
 // Record is the host's side of the bridge (bridge.json).

@@ -159,6 +159,61 @@ func TestTheModBoundsBatonsQuestions(t *testing.T) {
 	}
 }
 
+// A call of the lead model's own, while the plan runs, waits the escalation timeout from when it was first
+// in front, and then the mod is given an answer to each of its questions; its report closes the dialog and
+// tells the human and the model that baton chose, once. Paused, the human answers it.
+func TestTheModBoundsTheModelsOwnQuestions(t *testing.T) {
+	m := newModRun(t)
+	now := time.Unix(0, 0)
+	m.report(modHelloJSON)
+	call := []bridge.Asked{
+		{Question: "Which database?", Options: []string{"sqlite", "Postgres (Recommended)"}},
+		{Question: "Which checks?", Options: []string{"unit", "e2e"}, Multi: true},
+	}
+	asking := func() modReply {
+		t.Helper()
+		b, _ := json.Marshal(map[string]any{"kind": "asking", "session": "sess", "question": call[0].Question, "questions": call, "elapsed": 0})
+		return m.report(string(b))
+	}
+	m.run.Update(func(st *state.State) error {
+		st.Mode, st.Current = state.ModeRunning, "P0"
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: "Which database?\nWhich checks?", Since: now.Add(-time.Minute)})
+		return nil
+	})
+	if r := asking(); !r.OK || r.WaitMs != 30_000 || len(r.Answers) != 0 {
+		t.Errorf("first in front: %+v", r)
+	}
+	m.run.Update(func(st *state.State) error { st.Run.Dialogs[0].Front = now.Add(-10 * time.Minute); return nil })
+	want := map[string]string{"Which database?": "Postgres (Recommended)", "Which checks?": "unit"}
+	r := asking()
+	if !r.OK || r.WaitMs != 0 || r.Answer != "" || len(r.Answers) != 2 || r.Answers["Which database?"] != want["Which database?"] || r.Answers["Which checks?"] != want["Which checks?"] {
+		t.Fatalf("at its deadline: %+v", r)
+	}
+	deadline, _ := json.Marshal(map[string]any{"seq": 1, "kind": "deadline", "session": "sess", "question": call[0].Question, "answer": want[call[0].Question], "questions": call, "answers": want})
+	if r := m.report(string(deadline)); !r.OK || r.Ignored != "" {
+		t.Fatalf("deadline: %+v", r)
+	}
+	st, _ := m.run.Load()
+	if st.Run.Dialogs.AnyOpen() || len(st.Inbox) != 1 || !strings.Contains(st.Inbox[0].Text, "so baton chose for the human") {
+		t.Errorf("dialogs %+v, inbox %+v", st.Run.Dialogs, st.Inbox)
+	}
+	if strings.Count(m.events(), `"kind":"question_answered"`) != 1 {
+		t.Errorf("events:\n%s", m.events())
+	}
+	if r := m.report(string(deadline)); !r.OK || r.Ignored != "recorded already" || strings.Count(m.events(), `"kind":"question_answered"`) != 1 {
+		t.Errorf("again: %+v\n%s", r, m.events())
+	}
+
+	m.run.Update(func(st *state.State) error {
+		st.Mode = state.ModePaused
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: "Which database?\nWhich checks?", Since: now.Add(-time.Hour), Front: now.Add(-time.Hour)})
+		return nil
+	})
+	if r := asking(); !r.OK || r.WaitMs != 0 || len(r.Answers) != 0 {
+		t.Errorf("paused: %+v", r)
+	}
+}
+
 // A report that cannot be read is let go (the mod drops it), and logged; one before any hello, or from a
 // mod another claude ran, sends the mod back to say hello.
 func TestABadModReportIsLetGo(t *testing.T) {

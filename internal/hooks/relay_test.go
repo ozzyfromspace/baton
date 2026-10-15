@@ -3,10 +3,12 @@ package hooks
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -221,7 +223,7 @@ func TestBound(t *testing.T) {
 			for _, set := range c.set {
 				set(&st)
 			}
-			if got := bound(&st, c.question, t0.Add(c.asked), t0.Add(c.now), 20*time.Minute, 10*time.Minute); got != c.want {
+			if got := bound(&st, one(c.question), t0.Add(c.asked), t0.Add(c.now), 20*time.Minute, 10*time.Minute); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("waits %+v, want %+v", got, c.want)
 			}
 		})
@@ -233,16 +235,134 @@ func TestBound(t *testing.T) {
 	timed(&st)
 	st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
 	st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: t0, Kind: "proposal"})
-	bound(&st, q.Text, t0, t0.Add(6*time.Minute), 20*time.Minute, 10*time.Minute)
+	bound(&st, one(q.Text), t0, t0.Add(6*time.Minute), 20*time.Minute, 10*time.Minute)
 	st.Run.Dialogs.CloseExact("a1", "Bash", "k")
-	if w := bound(&st, q.Text, t0, t0.Add(7*time.Minute), 20*time.Minute, 10*time.Minute); w.For != 30*time.Second {
+	if w := bound(&st, one(q.Text), t0, t0.Add(7*time.Minute), 20*time.Minute, 10*time.Minute); w.For != 30*time.Second {
 		t.Errorf("first in front past its deadline: waits %+v, want a minute on screen", w)
 	}
 	if d, _ := st.Run.Dialogs.Front(); !d.Front.Equal(t0.Add(7 * time.Minute)) {
 		t.Errorf("front since %s", d.Front)
 	}
-	if w := bound(&st, q.Text, t0, t0.Add(8*time.Minute), 20*time.Minute, 10*time.Minute); w != (Wait{Answer: "Go ahead"}) {
+	if w := bound(&st, one(q.Text), t0, t0.Add(8*time.Minute), 20*time.Minute, 10*time.Minute); !reflect.DeepEqual(w, Wait{Answer: "Go ahead"}) {
 		t.Errorf("a minute in front: waits %+v", w)
+	}
+}
+
+// one is a call that asks question alone, with no options: how a question of baton's is asked about.
+func one(question string) []bridge.Asked { return []bridge.Asked{{Question: question}} }
+
+// A call of the lead model's own waits for the human escalation_timeout from when it was first in front,
+// a minute at least, and then gets an answer to each of its questions: the option the model marked
+// (Recommended), else its first; a stale question of baton's shape its third, where baton's default sits.
+// Only while the plan runs, and only for a call whose every question offers something to choose.
+func TestBoundOwn(t *testing.T) {
+	t0 := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	db := bridge.Asked{Question: "Which database?", Options: []string{"sqlite", "Postgres (Recommended)"}}
+	color := bridge.Asked{Question: "Which colour?", Options: []string{"red", "blue"}}
+	checks := bridge.Asked{Question: "Which  checks?", Options: []string{"unit", "e2e"}, Multi: true}
+	stale := bridge.Asked{Question: "baton: the model stopped 4 times on P0 without reporting status", Options: []string{"Pause baton", "Wait for me", "Continue"}}
+	bare := bridge.Asked{Question: "Anything else?"}
+	front := func(call ...bridge.Asked) func(*state.State) {
+		return func(st *state.State) {
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: callKey(call), Since: t0, Front: t0})
+		}
+	}
+	behind := func(call ...bridge.Asked) func(*state.State) {
+		return func(st *state.State) {
+			st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "a1", Key: "k", Since: t0})
+			front(call...)(st)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		set  []func(*state.State)
+		call []bridge.Asked
+		esc  time.Duration
+		now  time.Duration // after t0
+		want Wait
+	}{
+		{"its recommended option, at the timeout", []func(*state.State){front(db)}, []bridge.Asked{db}, 10 * time.Minute, 10 * time.Minute,
+			Wait{Answers: map[string]string{"Which database?": "Postgres (Recommended)"}}},
+		{"its first, with none recommended", []func(*state.State){front(color)}, []bridge.Asked{color}, 10 * time.Minute, 10 * time.Minute,
+			Wait{Answers: map[string]string{"Which colour?": "red"}}},
+		{"before the timeout", []func(*state.State){front(color)}, []bridge.Asked{color}, 10 * time.Minute, 9*time.Minute + 50*time.Second,
+			Wait{For: 10 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"long before it, asked again within the recheck", []func(*state.State){front(color)}, []bridge.Asked{color}, 10 * time.Minute, time.Minute,
+			Wait{For: 30 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"several questions, a multi-select one too, each answered", []func(*state.State){front(db, color, checks)}, []bridge.Asked{db, color, checks}, 10 * time.Minute, 10 * time.Minute,
+			Wait{Answers: map[string]string{"Which database?": "Postgres (Recommended)", "Which colour?": "red", "Which  checks?": "unit"}}},
+		{"behind another dialog", []func(*state.State){behind(color)}, []bridge.Asked{color}, 10 * time.Minute, time.Hour,
+			Wait{For: 30 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"not on record yet", nil, []bridge.Asked{color}, 10 * time.Minute, time.Hour,
+			Wait{For: 30 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"another call in front", []func(*state.State){front(db)}, []bridge.Asked{color}, 10 * time.Minute, time.Hour,
+			Wait{For: 30 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"a minute on screen at least", []func(*state.State){front(color)}, []bridge.Asked{color}, 10 * time.Second, 50 * time.Second,
+			Wait{For: 10 * time.Second, Answers: map[string]string{"Which colour?": "red"}}},
+		{"a stale question of baton's gets its default", []func(*state.State){front(stale)}, []bridge.Asked{stale}, 10 * time.Minute, 10 * time.Minute,
+			Wait{Answers: map[string]string{stale.Question: "Continue"}}},
+		{"a question with nothing to choose", []func(*state.State){front(color, bare)}, []bridge.Asked{color, bare}, 10 * time.Minute, time.Hour, Wait{}},
+		{"the plan paused", []func(*state.State){front(db), func(st *state.State) { st.Mode = state.ModePaused }}, []bridge.Asked{db}, 10 * time.Minute, time.Hour, Wait{}},
+		{"no plan", []func(*state.State){front(db), func(st *state.State) { st.Mode = state.ModeIdle }}, []bridge.Asked{db}, 10 * time.Minute, time.Hour, Wait{}},
+		{"no question", nil, nil, 10 * time.Minute, time.Hour, Wait{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := state.New()
+			st.Mode, st.Current = state.ModeRunning, "P0"
+			for _, set := range c.set {
+				set(&st)
+			}
+			if got := bound(&st, c.call, t0, t0.Add(c.now), 20*time.Minute, c.esc); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("waits %+v, want %+v", got, c.want)
+			}
+		})
+	}
+
+	// A call baton issued word for word is baton's, a call with one of its questions among others is not.
+	st := state.New()
+	st.Mode, st.Current = state.ModeRunning, "P0"
+	q := decide.ProposalQuestion("gpg signing times out", "commit P0 unsigned", t0.Add(5*time.Minute))
+	state.AddProposal(&st, state.Decision{What: "commit P0 unsigned", Because: "b", Undo: "x", Deadline: t0.Add(5 * time.Minute), Question: q.Text}, t0)
+	mixed := []bridge.Asked{{Question: q.Text, Options: []string{"Wait for me", "Pause baton", "Go ahead"}}, color}
+	front(mixed...)(&st)
+	if w := bound(&st, mixed, t0, t0.Add(10*time.Minute), 20*time.Minute, 10*time.Minute); w.Answer != "" || w.Answers["Which colour?"] != "red" || w.Answers[q.Text] != "Go ahead" {
+		t.Errorf("a call that only includes baton's question: %+v", w)
+	}
+}
+
+// The mod's answer to a call of the lead model's own at its deadline closes its dialog, tells the human
+// (and pushes) and the model that baton chose for them, and is logged by timeout; once.
+func TestSettleOwn(t *testing.T) {
+	f := newFixture(t, true)
+	f.set(func(st *state.State) { st.Mode, st.Current = state.ModeRunning, "P0" })
+	call := []bridge.Asked{{Question: "Which database?", Options: []string{"sqlite", "Postgres (Recommended)"}}, {Question: "Which colour?", Options: []string{"red", "blue"}}}
+	in := map[string]any{"tool_name": "AskUserQuestion", "tool_input": map[string]any{"questions": []any{
+		map[string]any{"question": "Which database?", "options": []any{map[string]any{"label": "sqlite"}, map[string]any{"label": "Postgres (Recommended)"}}},
+		map[string]any{"question": "Which colour?", "options": []any{map[string]any{"label": "red"}, map[string]any{"label": "blue"}}},
+	}}}
+	f.fire("PermissionRequest", in)
+	if st := f.state(); len(st.Run.Dialogs) != 1 || st.Run.Dialogs[0].Key != callKey(call) {
+		t.Fatalf("dialogs %+v: the call's key differs from the hooks'", st.Run.Dialogs)
+	}
+	answers := map[string]string{"Which database?": "Postgres (Recommended)", "Which colour?": "red"}
+	if err := SettleOwn(f.store, call, answers, f.now); err != nil {
+		t.Fatal(err)
+	}
+	st := f.state()
+	if st.Run.Dialogs.AnyOpen() || len(st.Run.Announce) == 0 || !strings.Contains(st.Run.Announce[len(st.Run.Announce)-1], `"Which colour?" → "red"`) {
+		t.Errorf("dialogs %+v, announce %q", st.Run.Dialogs, st.Run.Announce)
+	}
+	if n := st.Run.Notices; len(n) == 0 || n[len(n)-1].Kind != "answered" {
+		t.Errorf("notices %+v: no push", n)
+	}
+	if !f.logged("question_answered", map[string]any{"by": state.ByTimeout, "via": "mod", "questions": float64(2), "answer": "Postgres (Recommended)"}) {
+		t.Errorf("events:\n%s", f.eventLog())
+	}
+	if out := f.fire("PostToolUse", bash("ls")); !strings.Contains(feedback(out), "so baton chose for the human") {
+		t.Errorf("told at the next call: %v", out)
+	}
+	if err := SettleOwn(f.store, call, answers, f.now); err != nil || len(f.state().Run.Announce) > len(st.Run.Announce) {
+		t.Errorf("settled again: %v, announce %q", err, f.state().Run.Announce)
 	}
 }
 

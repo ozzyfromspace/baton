@@ -45,9 +45,11 @@ type modReply struct {
 	Agent *modAgentType `json:"agent,omitempty"`
 	Board *modBoard     `json:"board,omitempty"`
 	// An asking's: how long the question may wait before the mod asks again (WaitMs), or, with none, the
-	// answer it gives the question now (Answer); with neither, baton never answers it, and the human does.
-	WaitMs int64  `json:"wait_ms,omitempty"`
-	Answer string `json:"answer,omitempty"`
+	// answer it gives the question now (Answer, for one of baton's; Answers, one per question by its text,
+	// for a call of the lead model's own); with neither, baton never answers it, and the human does.
+	WaitMs  int64             `json:"wait_ms,omitempty"`
+	Answer  string            `json:"answer,omitempty"`
+	Answers map[string]string `json:"answers,omitempty"`
 }
 
 // modBoard is what the mod says about baton's board: the line of its own command (which opens it while
@@ -118,7 +120,13 @@ func recordModReport(io IO) modReply {
 		if rec, err := b.Peek(); err != nil || !rec.Hello.Ready(inst) {
 			return modReply{Stale: true, Why: "say hello first"}
 		}
-		if _, err := hooks.Settle(s, rep.Question, rep.Answer, io.Now(), io.Env); err != nil {
+		var err error
+		if len(rep.Answers) > 0 {
+			err = hooks.SettleOwn(s, askedOf(rep), rep.Answers, io.Now()) // a call of the lead model's own
+		} else {
+			_, err = hooks.Settle(s, rep.Question, rep.Answer, io.Now(), io.Env)
+		}
+		if err != nil {
 			return modReply{Retry: true, Why: err.Error()}
 		}
 	}
@@ -252,8 +260,9 @@ func malformed(data []byte, rerr, perr error, rep bridge.Report) string {
 	return ""
 }
 
-// modAsking answers the mod's asking: how long the question of baton's it shows the human may wait, and
-// what baton answers it then (hooks.Bound). Nothing is recorded but when the question was first seen in
+// modAsking answers the mod's asking: how long the question it shows the human in the lead's session may
+// wait, and what baton answers it then (hooks.Bound): one of baton's, or a call of the lead model's own,
+// each of whose questions gets an answer. Nothing is recorded but when the question was first seen in
 // front of the human. A mod baton does not work with is told nothing: the human answers.
 func modAsking(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modReply {
 	if rec, err := b.Peek(); err != nil || !rec.Hello.Ready(rep.Instance) {
@@ -264,16 +273,25 @@ func modAsking(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modRe
 	if warn == 0 {
 		warn = valve.DefaultWarnTimeout
 	}
-	w, err := hooks.Bound(s, rep.Question, now.Add(-time.Duration(rep.Elapsed)*time.Millisecond), now, warn, config.EscalationFromEnv(io.Env).Timeout)
+	w, err := hooks.Bound(s, askedOf(rep), now.Add(-time.Duration(rep.Elapsed)*time.Millisecond), now, warn, config.EscalationFromEnv(io.Env).Timeout)
 	switch {
 	case err != nil:
 		return modReply{OK: true, WaitMs: 5000} // ask again in a moment
-	case w.Answer == "":
+	case w.Answer == "" && len(w.Answers) == 0:
 		return modReply{OK: true}
 	case w.For > 0:
 		return modReply{OK: true, WaitMs: max(w.For.Milliseconds(), 1)}
 	}
-	return modReply{OK: true, Answer: w.Answer}
+	return modReply{OK: true, Answer: w.Answer, Answers: w.Answers}
+}
+
+// askedOf is the call a report of the mod's asks about: its questions, or, from a mod that sends only the
+// first, that one.
+func askedOf(rep bridge.Report) []bridge.Asked {
+	if len(rep.Questions) > 0 {
+		return rep.Questions
+	}
+	return []bridge.Asked{{Question: rep.Question}}
 }
 
 // modHello records the mod's hello. A mod of another protocol is recorded as refused, and does nothing

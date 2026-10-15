@@ -18,9 +18,9 @@
 // It asks the human baton's questions from inside the band's render hook, one at a time: only there does
 // it see its own question's call (from a timer it would not), and the band is never drawn while another
 // dialog is open, so a question of baton's never waits behind a permission prompt. Its tool.call hook
-// bounds each of baton's questions in the lead's session, the lead model's own included: it asks the host
-// how long the question may wait, and at the deadline answers the call itself with the answer the host
-// gives, which closes the dialog. Nothing types into a dialog (spike 34).
+// bounds every question in the lead's session, baton's and the lead model's own: it asks the host how
+// long the question may wait, and at the deadline answers the call itself with the answer the host gives,
+// which closes the dialog. Nothing types into a dialog (spike 34).
 
 const PROTOCOL = 2 // what the mod and the host say to each other (bridge.Protocol)
 const POLL_MS = 500
@@ -438,14 +438,17 @@ function ask($) {
     .catch(() => {})
 }
 
-// bounded is the tool.call hook of AskUserQuestion in the lead's session: a question of baton's ("baton:
-// …") waits for the human as long as the host says, then the mod answers it with the host's answer,
-// which closes its dialog, and reports that it did (Claude Code fires no PostToolUse then). The host asks
-// nothing of the questions it never answers, and the human's answer in time stands.
+// bounded is the tool.call hook of AskUserQuestion in the lead's session: it asks the host about every
+// question put to the human there, with the call's questions and their options. One the host answers
+// waits for the human as long as it says, then the mod answers it with the host's answer (one of baton's)
+// or answers (one per question, a call of the lead model's own), which closes its dialog, and reports that
+// it did (Claude Code fires no PostToolUse then). The host asks nothing of the questions it never answers,
+// and the human's answer in time stands.
 async function bounded($, e, next) {
   const qs = e.questions
-  const q = Array.isArray(qs) && qs.length === 1 && qs[0] ? qs[0].question : null
-  if (!live() || e.agentId || typeof q !== 'string' || !q.startsWith('baton:')) return next(e)
+  if (!live() || e.agentId || !Array.isArray(qs) || !qs.length || !qs.every((x) => x && typeof x.question === 'string')) return next(e)
+  const q = qs[0].question
+  const asked = qs.map((x) => ({ question: x.question, options: (Array.isArray(x.options) ? x.options : []).map((o) => String((o && o.label) ?? '')), multi: !!x.multiSelect }))
   const t0 = await $.clock.now()
   let done = null
   const beneath = next(e).then(
@@ -453,8 +456,14 @@ async function bounded($, e, next) {
     (err) => (done = { err }),
   )
   for (;;) {
-    const r = await call($, { kind: 'asking', question: q, elapsed: (await $.clock.now()) - t0 })
+    const r = await call($, { kind: 'asking', question: q, questions: asked, elapsed: (await $.clock.now()) - t0 })
     if (done) break
+    const answers = r && r.ok && r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers) ? r.answers : null
+    if (r && r.ok && answers && !r.wait_ms) {
+      await keep($, { kind: 'deadline', question: q, answer: String(answers[q] ?? ''), questions: asked, answers })
+      flush($)
+      return { result: { questions: qs, answers } } // AskUserQuestion's own output
+    }
     if (r && r.ok && r.answer && !r.wait_ms) {
       M.settled[q] = true
       await keep($, { kind: 'deadline', question: q, answer: r.answer })
