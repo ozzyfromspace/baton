@@ -13,7 +13,6 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
-	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -379,9 +378,6 @@ func (h hostRunners) Spawn(ref, id string) (int, error) {
 
 func (h hostRunners) Alive(pid int) bool { return lane.Alive(pid) }
 func (h hostRunners) Kill(pgid int)      { lane.KillGroup(pgid) }
-
-// Usage reads the CPU time a job's process tree has used, for telling a gate that hangs (loop's hung).
-func (h hostRunners) Usage(pgid int) (procs.Usage, error) { return procs.TreeUsage(pgid) }
 
 // Down brings down the lanes this host brought up that no job holds: its plan is complete.
 func (h hostRunners) Down() []int {
