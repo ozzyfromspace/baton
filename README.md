@@ -30,7 +30,7 @@ So baton takes those decisions away from the model. The model does the work; det
 - **The status line** starts with your session's segment: `◆ baton · P6 6/23 <title> · ctx 412k/810k`. It also shows a job your session waits on, `? proposal · goes ahead 15:33`, or `⚠ waiting on you`.
 - **Every action** baton takes is announced in the session and logged to `.baton/runs/<session>/events.jsonl`.
 
-A phase agent reports to baton, not to your session's model: its transcript line reads *"P3's report went to baton, not to Claude"*. In auto mode Claude Code also hands each agent's report back as a message from another session; baton's mod drops that too, and it never counts as yours.
+A phase agent reports to baton, not to your session's model: its transcript line reads *"Prompt dropped by a hook: P3's report went to baton as usual — nothing for Claude to do"*, the first part Claude Code's own. In auto mode Claude Code also hands each agent's report back as a message from another session; baton's mod drops that too, and it never counts as yours.
 
 Phase agents need baton's mod, which ships in its plugin. Where Claude Code doesn't load the mod (an organization that allows only managed mods, or an older Claude Code), or loads one from another baton release, the plan runs one phase at a time in your session, and baton says so. There baton types `/compact` itself (see [Privacy and safety](#privacy-and-safety)).
 

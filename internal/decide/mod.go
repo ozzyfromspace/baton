@@ -27,8 +27,10 @@ const BoardTitle = "baton"
 
 // ReportKept is the line the human reads in the lead's transcript when baton's mod keeps a report of the
 // agent on phase from the lead's model: baton takes the agent's reports, and tells the lead what it needs.
+// Claude Code puts it after its own "Prompt dropped by a hook:", which reads like an error, so it says
+// that this is the usual course and needs nothing.
 func ReportKept(phase string) string {
-	return fmt.Sprintf("%s's report went to baton, not to Claude", phase)
+	return fmt.Sprintf("%s's report went to baton as usual — nothing for Claude to do", phase)
 }
 
 // Serial says, once, that a run's phases go one at a time in the lead session, and why (ModMissing or
