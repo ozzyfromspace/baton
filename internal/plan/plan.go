@@ -56,6 +56,18 @@ func (p Plan) NextQA(id string) *Phase {
 	return nil
 }
 
+// QAAhead names the QA phase where the heavy checks of what phase id builds run, "P5 (QA)", or "" when id
+// is a QA phase itself, which runs them, or none is ahead of it.
+func (p Plan) QAAhead(id string) string {
+	if i := p.Index(id); i >= 0 && p.Phases[i].QA() {
+		return ""
+	}
+	if qa := p.NextQA(id); qa != nil {
+		return qa.ID + " (" + qa.Title + ")"
+	}
+	return ""
+}
+
 // SinceQA lists the phases a QA phase id checks: those between the QA phase before it (or the plan's
 // start) and it.
 func (p Plan) SinceQA(id string) []string {

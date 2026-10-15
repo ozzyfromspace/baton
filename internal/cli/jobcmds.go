@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -22,8 +23,8 @@ import (
 // starts a runner for each (hostRunners), and `baton lane-run` runs it to its end.
 
 func init() {
-	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] --notes \"<where the phase stands>\", or the command's words after --", cmdVerify)
-	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" --notes \"<where the phase stands>\", or the command's words after --", cmdAwait)
+	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] --notes \"<where the phase stands>\", or the command's words after --", cmdVerify)
+	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] --notes \"<where the phase stands>\", or the command's words after --", cmdAwait)
 }
 
 func cmdVerify(args []string, io IO) int { return queueJob(args, io, state.JobVerify) }
@@ -32,11 +33,11 @@ func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAw
 // queueJob queues a job of kind for the phase in hand.
 func queueJob(args []string, io IO, kind string) int {
 	var bools []string
-	usage := ""
-	vals := []string{"notes"}
+	usage := " [--qa \"<why a full check now>\"]"
 	if kind == state.JobVerify {
-		bools, usage, vals = []string{"here"}, " [--here] [--qa \"<why a full check now>\"]", []string{"notes", "qa"}
+		bools, usage = []string{"here"}, " [--here]"+usage
 	}
+	vals := []string{"notes", "qa"}
 	p, err := parseArgs(args, vals, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
 	if p.dash >= 0 {
@@ -131,10 +132,11 @@ func queueJob(args []string, io IO, kind string) int {
 	if qa != "" {
 		s.Event("qa_early", map[string]any{"job": queued.ID, "phase": phase, "why": qa, "command": command})
 	}
-	// baton cannot tell a focused check from a full one: it asks, once per gate, and the model decides.
+	// baton cannot tell a focused check from a full one: it asks, once per job, and the model decides. A wait
+	// on CI is often a full check in disguise.
 	ask := ""
-	if next := pl.NextQA(phase); kind == state.JobVerify && qa == "" && next != nil && config.AggregatesFromEnv(io.Env) {
-		ask = "baton: " + decide.QAAsk(phase, next.ID+" ("+next.Title+")")
+	if next := qaAhead(io, pl, phase); qa == "" && next != "" {
+		ask = "baton: " + decide.QAAsk(kind, phase, next)
 	}
 
 	where := "run from the working tree"
@@ -180,6 +182,16 @@ func queueJob(args []string, io IO, kind string) int {
 			n, plural(n, "file was", "files were"), phase, plural(n, "it", "them"))
 	}
 	return 0
+}
+
+// qaAhead names the QA phase ahead of phase in pl ("P5 (QA)") while the plan leaves its heavy checks to
+// its QA phases (aggregate_qa, as the host passed it down), "" when it does not, phase is a QA phase, or
+// none is ahead.
+func qaAhead(io IO, pl plan.Plan, phase string) string {
+	if !config.AggregatesFromEnv(io.Env) {
+		return ""
+	}
+	return pl.QAAhead(phase)
 }
 
 // jobRefusal turns down a job when there is no phase in hand to run it for, or no notes to resume the

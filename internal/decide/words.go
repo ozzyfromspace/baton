@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // Words builds the text the model reads about reporting progress and reaching the human. It depends on
@@ -250,12 +252,17 @@ func QAPhase(since string) string {
 	return s + ". Heavy checks belong here; finish when they pass."
 }
 
-// QAAsk is baton's standard question to a phase that queues a gate before the plan's QA phase qa ("P5
-// (QA)"): baton cannot tell a focused check from a full one, so the model decides, and nothing is refused.
-func QAAsk(phase, qa string) string {
-	return "Is this a focused check of what " + phase + " changed, or a full suite, lint or end-to-end run that " + qa + " runs anyway? " +
+// QAAsk is baton's standard question to a phase that queues a job of kind (state.JobVerify, state.JobAwait)
+// before the plan's QA phase qa ("P5 (QA)"): baton cannot tell a focused check from a full one, so the
+// model decides, and nothing is refused. A wait on CI is often a full check in disguise.
+func QAAsk(kind, phase, qa string) string {
+	what := "this a focused check of what " + phase + " changed, or a full suite, lint or end-to-end run"
+	if kind == state.JobAwait {
+		what = "what this waits on a focused check of what " + phase + " changed, or a full check in disguise (a CI run of every suite, a lint or end-to-end run)"
+	}
+	return "Is " + what + " that " + qa + " runs anyway? " +
 		"If it is the latter and nothing in particular calls for it now, leave such runs to " + qa + ": their time is the human's. " +
-		"The job runs either way. A full check you run early on purpose is flagged: baton verify \"<command>\" --qa \"<why now>\" --notes \"…\"."
+		"The job runs either way. A full check you run early on purpose is flagged: baton " + kind + " \"<command>\" --qa \"<why now>\" --notes \"…\"."
 }
 
 // QAEarly tells the human that phase runs a full check ahead of the plan's QA phase, as job id, and why.
