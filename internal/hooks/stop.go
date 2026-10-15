@@ -193,10 +193,11 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		if !st.Run.CompleteNotified {
 			st.Run.CompleteNotified = true
 			n := len(decide.WithoutHuman(st.Decisions)) + len(decide.WithoutHuman(workers))
-			done := decide.PlanDone(len(pl.Phases), n)
+			left := len(decide.LeftForYou(st.Decisions)) + len(decide.LeftForYou(workers))
+			done := decide.PlanDone(len(pl.Phases), n, left)
 			notice(st, "plan_complete", pl.Title+": "+done, now)
 			d.say("baton: plan complete — " + done)
-			d.emit("plan_complete", map[string]any{"decisions": n})
+			d.emit("plan_complete", map[string]any{"decisions": n, "left": left})
 		}
 		return d
 	}
@@ -265,7 +266,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		// The model proposed something and stopped without asking: nothing would ever answer it.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
-			d.refuse(NudgePrefix + " You stopped, but " + decide.AskFirst(p.ID, p.Question) + ". baton acts on the answer itself; then follow what it tells you.")
+			d.refuse(NudgePrefix + " You stopped, but " + decide.AskFirst(*p) + ". baton acts on the answer itself; then follow what it tells you.")
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "proposal not asked"})
 			return d
 		}
@@ -306,7 +307,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		// and their answer wakes it. It is queued again, in case its own queueing failed.
 		rp := st.PendingProposal()
 		st.Run.StopBlocks = 0
-		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID, What: rp.What, Because: rp.Because, Untimed: rp.Untimed}
+		d.relay = &state.Relay{Kind: state.RelayProposal, Decision: rp.ID, What: rp.What, Because: rp.Because, Outward: rp.Outward, Wait: rp.Wait}
 		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which baton puts to them", cur, rp.ID))
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":

@@ -7,10 +7,9 @@ import (
 
 // A proposal the human chose to hold (Wait for me), or whose question went away unanswered, holds its
 // phase for them, but not for long: once nobody has written for loop's Timing.HoldLapse, baton lifts the
-// hold. A proposal baton could have let go ahead at a deadline goes ahead then, or a more reversible way
-// to the same end; one only the human could let through (state.Decision.Untimed) is answered Not now, and
-// the model does it only if it is the safe kind (NotNowRule). These are the words the human and the model
-// read about it.
+// hold. A proposal goes ahead then, or a more reversible way to the same end; an outward one
+// (state.Decision.Outward) is answered Not now, and the model does it only if it is the safe kind
+// (NotNowRule). These are the words the human and the model read about it.
 
 // HoldLapse is how long a hold for the human lasts with no word from them (loop's Timing.HoldLapse): as
 // long as the longest a proposal may wait for them (ProposalWaitMax).
@@ -18,7 +17,7 @@ const HoldLapse = ProposalWaitMax
 
 // Holding is what baton says to the human as it holds the lead's proposal id for them, at their word
 // (Wait for me): how long the hold lasts with no word from them (lapse), and what baton does then.
-// outward says it is one only they could let through.
+// outward says it is an outward one, answered Not now then.
 func Holding(id string, lapse time.Duration, outward bool) string {
 	then := "baton lifts the hold and Claude goes ahead with it, or a more reversible way"
 	if outward {
@@ -27,9 +26,9 @@ func Holding(id string, lapse time.Duration, outward bool) string {
 	return fmt.Sprintf("baton: holding %s for you — answer in the session; with no word from you in %s, %s", id, Spell(lapse), then)
 }
 
-// NotNowRule is what the model does with a proposal baton answered Not now for the human: only the kind
-// that is safely reversible and stays inside the project, noted; nothing irreversible, nothing that
-// reaches outside.
+// NotNowRule is what the model does with a proposal answered Not now, by baton for the human or by them:
+// only the kind that is safely reversible and stays inside the project, noted; nothing irreversible,
+// nothing that reaches outside.
 func NotNowRule() string {
 	return "Do it only if it is safely reversible and stays inside the project (pushing your own branch, a draft pull request, deleting files you generated), " +
 		"and then record it: baton note \"<what you did>\" --undo \"<how to reverse it>\". If it is irreversible or reaches outside the project " +
@@ -39,8 +38,7 @@ func NotNowRule() string {
 
 // HoldLapsed is what baton says to the human (say) and tells the model (tell) when the hold on the lead's
 // proposal id (to do what, undone with undo) lapsed, nobody having written for after. outward says it was
-// one only the human could let through, answered Not now; otherwise it goes ahead, or a more reversible
-// way does. last says it was the last decision phase may make without the human before they review them;
+// an outward one, answered Not now; otherwise it goes ahead, or a more reversible way does. last says it was the last decision phase may make without the human before they review them;
 // otherwise the model carries on with phase.
 func HoldLapsed(id, what, undo, phase string, after time.Duration, outward, last bool) (say, tell string) {
 	return holdLapsed("", id, what, undo, Named(phase), after, outward, last)

@@ -149,7 +149,7 @@ func (l *Loop) watchDialog(v host.View, st state.State) {
 		return
 	}
 	if _, alone := st.Run.Dialogs.Only(); alone && d.Kind == "proposal" {
-		if p := st.PendingProposal(); p != nil && p.Untimed == "" {
+		if p := st.PendingProposal(); p != nil && !p.Deadline.IsZero() {
 			return // the human was told when it was asked, and baton answers it at the deadline
 		}
 	}
@@ -198,9 +198,9 @@ func agentPhase(st state.State, agent string) string {
 
 // answerOwnQuestion answers baton's own questions that have a default, when nobody has: the context
 // question (Keep going) after WarnTimeout, since it only warns and Claude Code compacts on its own when
-// the context is full; and a timed proposal (Go ahead) at its deadline, since a run must not stop for
-// something it can work around (docs/design.md). An untimed proposal is never answered: only the
-// human can let it go ahead. The answer arrives through the usual hook.
+// the context is full; and a proposal at its deadline, since a run must not stop for something it can
+// work around (docs/design.md): Go ahead, or Not now for an outward one, which only the human can let go
+// ahead (its options put Not now third and Go ahead fourth). The answer arrives through the usual hook.
 //
 // It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
 // baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog; nor
@@ -232,8 +232,8 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		due = l.since(latest(d.Since, l.aloneAt, v.LastHumanKey)).Add(l.Timing.WarnTimeout)
 	case "proposal":
 		p := st.PendingProposal()
-		if p == nil || p.Untimed != "" || p.Deadline.IsZero() || decide.Normalize(p.Question) != d.Key {
-			return // untimed, settled, or not the question this proposal issued
+		if p == nil || p.Deadline.IsZero() || decide.Normalize(p.Question) != d.Key {
+			return // settled, or not the question this proposal issued
 		}
 		if !l.alone.Same(d) {
 			l.alone, l.aloneAt = d, v.Now
@@ -241,7 +241,7 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 		// A key is a moment on the wall clock: one pressed before a sleep does not restart the timer at
 		// the wake (the minute alone does that).
 		due = latest(p.Deadline, l.since(latest(d.Since, l.aloneAt)).Add(MinProposalWait), v.LastHumanKey.Add(l.Timing.EscalationTimeout))
-		fields["id"] = p.ID
+		fields["id"], fields["answer"] = p.ID, p.Default()
 	default:
 		return
 	}
@@ -388,49 +388,64 @@ func latest(ts ...time.Time) time.Time {
 	return out
 }
 
-// lapse goes ahead with the lead's own timed proposal whose question went away unanswered (dismissed)
-// once its deadline passes, as baton would have answered it on screen: nobody chose anything, so nothing
-// waits on the human for it. The human writing first answers it instead (hooks.vanished). The model is
-// told with its next tool call or stop, or woken (deliver).
+// lapse answers the lead's own proposal for the human once its deadline passes with no dialog of it on
+// screen: its question went away unanswered (dismissed), or the model never put it to them. baton answers
+// it as it would have on screen, Go ahead, or Not now for an outward one: nobody chose anything, so
+// nothing waits on the human for it. The human writing first answers it instead (hooks.vanished). The
+// model is told with its next tool call or stop, or woken (deliver).
 func (l *Loop) lapse(v host.View, st state.State) {
 	p := st.OwnProposal()
-	if l.Store.Worker() != "" || p == nil || p.Dismissed.IsZero() || p.Untimed != "" || p.Deadline.IsZero() ||
+	if l.Store.Worker() != "" || p == nil || onScreen(*p) || p.Deadline.IsZero() ||
 		st.Mode != state.ModeRunning || v.Now.Before(p.Deadline) || st.Run.Dialogs.Has("proposal") {
 		return
 	}
-	var id string
+	var id, answer string
 	var n int
 	var last bool
 	l.update(func(st *state.State) {
 		q := st.OwnProposal()
-		if q == nil || q.ID != p.ID || q.Dismissed.IsZero() {
+		if q == nil || q.ID != p.ID || onScreen(*q) {
 			return
 		}
-		id = q.ID
-		n, last = state.WentAhead(st, q, l.MaxAuto, v.Now)
-		phase := st.Current
-		if last {
-			phase = q.Phase
+		id, answer = q.ID, q.Default()
+		var say, tell string
+		if q.Outward != "" {
+			state.LeftNotNow(st, q, v.Now)
+			say, tell = decide.AnsweredNotNow(q.ID, q.What, st.Current, q.Deadline)
+		} else {
+			n, last = state.WentAhead(st, q, l.MaxAuto, v.Now)
+			phase := st.Current
+			if last {
+				phase = q.Phase
+			}
+			say, tell = decide.WentAhead(q.ID, q.What, q.Undo, phase, q.Deadline, last)
 		}
-		say, tell := decide.WentAhead(q.ID, q.What, q.Undo, phase, q.Deadline, last)
 		st.Run.Announce = append(st.Run.Announce, say)
 		state.Tell(st, state.Message{Kind: state.MessageAnswer, Text: tell}, v.Now)
 	})
 	if id == "" {
 		return
 	}
-	l.Store.Event("proposal_resolved", map[string]any{"id": id, "by": state.ByTimeout, "answer": "Go ahead", "via": "lapsed"})
+	fields := map[string]any{"id": id, "by": state.ByTimeout, "answer": answer, "via": "lapsed"}
+	if !p.Asked {
+		fields["asked"] = false
+	}
+	l.Store.Event("proposal_resolved", fields)
 	if last {
 		l.Store.Event("review_due", map[string]any{"phase": p.Phase, "decisions": n})
 	}
 }
 
+// onScreen reports a proposal whose question reached the human and has not gone away: baton answers it in
+// its dialog at its deadline (hooks.Bound, answerOwnQuestion), not here.
+func onScreen(p state.Decision) bool { return p.Asked && p.Dismissed.IsZero() }
+
 // lapseHold lifts the lead's hold for the human (an escalation of kind decision: a proposal they chose
 // Wait for me on, or whose question went away unanswered) once nobody has written for Timing.HoldLapse,
 // counted from the hold or the human's last word, whichever is later, and not while the machine slept:
-// the run does not wait on them any longer. A proposal baton could have let go ahead does (or a more
-// reversible way to the same end does); one only the human could let through is answered Not now, and
-// the model does it only if it is the safe kind (decide.NotNowRule). The human writing first answers the
+// the run does not wait on them any longer. A proposal goes ahead (or a more reversible way to the same
+// end does); an outward one is answered Not now, and the model does it only if it is the safe kind
+// (decide.NotNowRule). The human writing first answers the
 // hold instead (hooks.released), and while the run is paused nothing lapses. The model is told with its
 // next tool call or stop, or woken (deliver). A phase agent's hold is the coordinator's (lapseHolds).
 func (l *Loop) lapseHold(v host.View, st state.State) {
@@ -451,13 +466,13 @@ func (l *Loop) lapseHold(v host.View, st state.State) {
 		var say, tell string
 		if p := st.HeldProposal(e.Since); p != nil {
 			var answer string
-			id, what, undo, untimed := p.ID, p.What, decide.UndoOf(*p), p.Untimed != ""
+			id, what, undo, outward := p.ID, p.What, decide.UndoOf(*p), p.Outward != ""
 			answer, n, last = state.LapseHold(st, p, l.MaxAuto, v.Now)
 			phase = st.Current
 			if last {
 				phase = st.ReviewDue
 			}
-			say, tell = decide.HoldLapsed(id, what, undo, phase, l.Timing.HoldLapse, untimed, last)
+			say, tell = decide.HoldLapsed(id, what, undo, phase, l.Timing.HoldLapse, outward, last)
 			fields["id"], fields["answer"] = id, answer
 		} else {
 			say, tell = decide.HoldLifted(reason, st.Current, l.Timing.HoldLapse)

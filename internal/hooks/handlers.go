@@ -401,7 +401,7 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 	case st.ReviewDue != "" && !st.Run.HumanAt.After(st.ReviewAt) && !goingAhead(st):
 		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 	case p != nil && !p.Asked:
-		return NudgePrefix + " Not yet: " + decide.AskFirst(p.ID, p.Question) + ". Until the human has it, nothing else runs."
+		return NudgePrefix + " Not yet: " + decide.AskFirst(*p) + ". Until the human has it, nothing else runs."
 	case st.Replan != nil:
 		return replanHold(st.Replan)
 	}
