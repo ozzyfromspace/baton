@@ -25,9 +25,9 @@ func RelayOptions(r state.Relay) []Option {
 	goAhead := Option{"Go ahead", "Do what it proposed"}
 	switch {
 	case r.Timed() && r.Outward != "":
-		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again"}, pause, {state.NotNow, notNowOption}, goAhead}
+		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again, or it is answered Not now after " + Spell(HoldLapse) + " with no word"}, pause, {state.NotNow, notNowOption}, goAhead}
 	case r.Timed():
-		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again"}, pause, goAhead}
+		return []Option{{"Wait for me", "Don't do it yet; /baton run asks me again, or it goes ahead after " + Spell(HoldLapse) + " with no word"}, pause, goAhead}
 	case r.Kind == state.RelayReview:
 		return []Option{{"Continue", "I've seen them; let " + r.Phase + " go on"}, pause, wait}
 	}

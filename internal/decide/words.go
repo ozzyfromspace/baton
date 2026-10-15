@@ -56,15 +56,16 @@ func (w Words) Playbook() string {
 		"  · baton note \"<what you did>\" --undo \"<how to reverse it>\"\n" +
 		"        you already took a reversible path, and the human should know. The run continues.\n" +
 		"  · baton propose \"<what you will do to keep the plan moving>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"\n")
-	fmt.Fprintf(&b, "        a human might choose differently: %s, and no answer means you do it.\n", w.putToHuman())
+	fmt.Fprintf(&b, "        a human might choose differently: %s, and no answer means you do it (%s).\n", w.putToHuman(), outwardNoAnswer)
 	b.WriteString("        A proposal is an action that makes progress. Waiting, doing nothing or stopping is not a proposal.\n" +
 		"  · baton blocked \"<why>\" --tried \"<what you tried>\"\n" +
 		"        only if every way forward is irreversible, or needs a secret only the human holds. ")
 	if w.Worker {
-		b.WriteString("Your phase stops until they answer.")
+		b.WriteString("Your phase stops until they answer, ")
 	} else {
-		b.WriteString("The run stops until they answer.")
+		b.WriteString("The run stops until they answer, ")
 	}
+	b.WriteString(lookAgainAfter + ".")
 	return b.String()
 }
 
@@ -76,13 +77,13 @@ func (w Words) Reporting() string {
 		safePoint = "work committed"
 	}
 	done := "when the current phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — baton then compacts the context and starts the next phase with a fresh brief. "
-	blocked := ", and end your turn. "
+	blocked := ", and end your turn: " + lookAgainAfter + ". "
 	unattended := "The plan runs unattended, so do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. " +
 		"A question baton gives you to put to the human is the exception: ask it as given. "
 	pause := "(If the human wants to talk instead of running the plan, they can run /baton pause.)"
 	if w.Worker {
 		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " "
-		blocked = ", and end your turn: it stops only your phase, and baton asks the human. "
+		blocked = ", and end your turn: it stops only your phase, and baton asks the human; " + lookAgainAfter + ". "
 		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
 		pause = ""
 	}
@@ -90,7 +91,7 @@ func (w Words) Reporting() string {
 		"A run must not stop for something it can work around. When something goes wrong, keep the plan moving on a reversible path, and tell the human in the lightest way that fits: " +
 		"`baton note \"<what you did>\" --undo \"<how to reverse it>\"` when you already took one and the human should know (the run continues); " +
 		"`baton propose \"<what you will do>\" --because \"<what went wrong>\" --undo \"<how to reverse it>\"` when a rule or convention of the plan can't be followed right now, or a human might choose differently: " +
-		w.putToHuman() + ", and no answer means you do it. " +
+		w.putToHuman() + ", and no answer means you do it (" + outwardNoAnswer + "). " +
 		"A proposal is an action that makes progress; waiting, doing nothing or stopping is not a proposal. " +
 		"One proposal covers the case in front of you: when the same thing happens again, `baton note` it each time. " +
 		"Only if every way forward is irreversible or needs a secret only the human holds: `baton blocked \"<why>\" --tried \"<what you tried>\"`" + blocked +
@@ -135,6 +136,13 @@ func (w Words) proposeThen() string {
 	}
 	return "baton puts it to the human with " + w.deadline() + ", then you do it"
 }
+
+// outwardNoAnswer is what no answer means for a proposal that reaches outside the project or can't be
+// undone (Outward): baton answers it Not now (NotNowRule).
+const outwardNoAnswer = "for an outward or irreversible act, that you do it only if it is safely reversible and stays in the project"
+
+// lookAgainAfter is what becomes of a block nobody answers (BlockLook).
+var lookAgainAfter = "if nobody answers in " + Spell(BlockLook) + ", baton lifts the block, and you look again for a safe way on and propose it"
 
 // landing is what becomes of a worker's phase once it is done.
 const landing = "baton then lands your work on the run's branch, and tells you here if anything needs you first (a conflict, a red verification)."
@@ -204,7 +212,7 @@ func (w Words) QuestionRefused(call string) string {
 	return head +
 		"Decide yourself and carry on; if the human should know what you decided, run `baton note \"<what you did>\" --undo \"<how to reverse it>\"`. " +
 		"If a human might choose differently, run `baton propose \"<what you will do>\" --because \"<why>\" --undo \"<how to reverse it>\"`: " +
-		w.putToHuman() + ", and no answer means you do it. " +
+		w.putToHuman() + ", and no answer means you do it (" + outwardNoAnswer + "). " +
 		"Only if every way forward is irreversible or needs a secret only the human holds: `baton blocked \"<why>\" --tried \"<what you tried>\"`."
 }
 

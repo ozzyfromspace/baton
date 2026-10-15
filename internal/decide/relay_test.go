@@ -23,11 +23,11 @@ func TestRelayQuestions(t *testing.T) {
 	}{
 		{"timed proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "Use a fake \"clock\"", Because: "the clock is flaky."},
 			"baton: the agent on P3: the clock is flaky. Unless you answer by 15:33, I will use a fake 'clock'.", "Wait for me|Pause baton|Go ahead", "Go ahead",
-			"Don't do it yet; /baton run asks me again"},
+			"Don't do it yet; /baton run asks me again, or it goes ahead after 20 minutes with no word"},
 		{"outward proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "the release needs it", Outward: "'push' looks outward-facing or irreversible"},
 			"baton: the agent on P3: the release needs it. I propose to push the tag, but 'push' looks outward-facing or irreversible: unless you answer by 15:33, " +
 				"I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise.",
-			"Wait for me|Pause baton|Not now|Go ahead", "Not now", "Don't do it yet; /baton run asks me again"},
+			"Wait for me|Pause baton|Not now|Go ahead", "Not now", "Don't do it yet; /baton run asks me again, or it is answered Not now after 20 minutes with no word"},
 		{"block", state.Relay{Phase: "P4", Kind: state.RelayBlocked, Because: "the API key expired."},
 			"baton: the agent on P4 is blocked: the API key expired. Only P4 waits for you; the rest of the run goes on. Unless you answer by 15:33, it looks again for a safe way around it.",
 			"Continue|Pause baton|Look again", "Look again", "The agent looks for a safe way around it and proposes it first"},

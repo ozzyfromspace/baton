@@ -215,11 +215,13 @@ func TestWords(t *testing.T) {
 	git := texts(Words{Git: true, Timeout: 5 * time.Minute})
 	for name, wants := range map[string][]string{
 		"playbook": {"commit it, degraded if need be (e.g. --no-gpg-sign)", "never discard, stash, reset or unstage work", "baton note", "baton propose",
-			"a deadline of 5 minutes", "baton blocked \"<why>\" --tried", "Waiting, doing nothing or stopping is not a proposal"},
+			"a deadline of 5 minutes", "baton blocked \"<why>\" --tried", "Waiting, doing nothing or stopping is not a proposal",
+			"for an outward or irreversible act, that you do it only if it is safely reversible", "if nobody answers in 30 minutes, baton lifts the block, and you look again"},
 		"reporting": {"complete and committed", "baton note", "baton propose", "baton blocked \"<why>\" --tried", "a deadline of 5 minutes",
 			"waiting, doing nothing or stopping is not a proposal", "One proposal covers the case in front of you", "`baton note` it each time", "(work committed)",
 			"`baton verify \"<command>\" --notes", "run `baton done` even while its gate still runs", "moves to the background by itself and wakes you when it ends",
-			"do not ask the human questions (AskUserQuestion) of your own", "A question baton gives you to put to the human is the exception: ask it as given."},
+			"do not ask the human questions (AskUserQuestion) of your own", "A question baton gives you to put to the human is the exception: ask it as given.",
+			"for an outward or irreversible act, that you do it only if it is safely reversible", "if nobody answers in 30 minutes, baton lifts the block, and you look again"},
 		"no status":        {"(the phase is finished and committed, even while a job you handed to baton still runs)", "baton propose", "--tried", "`baton await \"<a command that ends when it is ready>\"", "`baton note` it and carry on"},
 		"question refused": {"baton note", "baton propose", "a deadline of 5 minutes", "--tried"},
 		"finish step":      {"and commit it"},

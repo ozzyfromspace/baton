@@ -46,7 +46,7 @@ func optionList(opts []Option) string {
 // for the human, and lapses like any hold (HoldLapse).
 var EscalationOptions = []Option{
 	{"Pause baton", "I'll take it from here"},
-	{"Wait for me", "Hold the run until I write in the session"},
+	{"Wait for me", "Hold the run until I write in the session; with no word for " + Spell(HoldLapse) + ", it carries on"},
 	{"Continue", "I've handled it; carry on with the plan"},
 }
 
@@ -70,7 +70,7 @@ var WarnOptions = []Option{
 
 // ProposalOptions are the answers to a proposal. Go ahead is third for the same reason as Keep going.
 var ProposalOptions = []Option{
-	{"Wait for me", "Don't do it yet; I'll answer in the session"},
+	{"Wait for me", "Don't do it yet; I'll answer in the session, or it goes ahead after " + Spell(HoldLapse) + " with no word"},
 	{"Pause baton", "I'm taking over; baton stops driving the plan"},
 	{"Go ahead", "Do what you proposed"},
 }
@@ -78,7 +78,7 @@ var ProposalOptions = []Option{
 // OutwardOptions are the answers to an outward proposal (Outward). Not now, what baton answers when
 // nobody does, is third for the same reason as Keep going; Go ahead, which only the human gives it, last.
 var OutwardOptions = []Option{
-	{"Wait for me", "Don't do it yet; I'll answer in the session"},
+	{"Wait for me", "Don't do it yet; I'll answer in the session, or it is answered Not now after " + Spell(HoldLapse) + " with no word"},
 	{"Pause baton", "I'm taking over; baton stops driving the plan"},
 	{state.NotNow, notNowOption},
 	{"Go ahead", "Do what you proposed"},

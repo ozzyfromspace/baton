@@ -17,12 +17,12 @@ import (
 var (
 	ReviseOptions = []Option{
 		{"Start the new plan from P0", "Drop this run's progress and run the approved plan from the beginning"},
-		{"Wait for me", "Change nothing yet; I'll write in the session"},
+		{"Wait for me", "Change nothing yet; I'll write in the session, or the revised plan goes on after " + Spell(HoldLapse) + " with no word"},
 		{"Continue with the revised plan", "Phases already done stay done; the run goes on from the first one left"},
 	}
 	ReplaceOptions = []Option{
 		{"Start the new plan from P0", "Stop the current run and run the plan you just approved"},
-		{"Wait for me", "Change nothing yet; I'll write in the session"},
+		{"Wait for me", "Change nothing yet; I'll write in the session, or the current run goes on after " + Spell(HoldLapse) + " with no word"},
 		{"Keep the current run", "Leave the approved plan aside; the current run goes on"},
 	}
 )
