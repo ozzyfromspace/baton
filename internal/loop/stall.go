@@ -172,8 +172,9 @@ func (c *Coordinator) readLogs(now time.Time, loops []state.State) map[string]ti
 }
 
 // stillWhy says why the run st cannot be stalled now ("" when it can): it is not running, has nothing
-// left to do, waits on the account's usage limit or on a dialog, or something in one of its loops is
-// busy (quiet: the running jobs whose logs stopped growing).
+// left to do, waits on the account's usage limit or on a dialog (a phase agent's too, named by its phase:
+// the human is told of it already), or something in one of its loops is busy (quiet: the running jobs
+// whose logs stopped growing).
 func (c *Coordinator) stillWhy(now time.Time, st state.State, pl plan.Plan, loops []state.State, quiet map[string]time.Duration) string {
 	switch {
 	case st.Mode != state.ModeRunning:
@@ -182,8 +183,11 @@ func (c *Coordinator) stillWhy(now time.Time, st state.State, pl plan.Plan, loop
 		return "no phase is left"
 	case now.Before(c.Lead.limited(st)):
 		return gateUsage
-	case st.Run.Dialogs.AnyOpen():
+	case st.Run.Dialogs.LeadOpen():
 		return gateDialog
+	case st.Run.Dialogs.AnyOpen():
+		d, _ := st.Run.Dialogs.Front()
+		return "a dialog of " + d.Phase + "'s agent is open"
 	}
 	for _, x := range loops {
 		if len(x.Run.InFlight(now)) > 0 {

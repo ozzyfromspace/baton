@@ -269,7 +269,7 @@ func (h *handlers) briefed(c Context, s *state.Store, st state.State, b state.Br
 	var result *state.Job
 	if j := st.Job(b.Job); b.Job != "" && j != nil {
 		result = j
-		in.Result = jobResult(s, *j, nil)
+		in.Result = jobResult(s, pl, *j, nil, in.Words.AggregateQA)
 	}
 	text := brief.Write(in)
 	if result != nil {

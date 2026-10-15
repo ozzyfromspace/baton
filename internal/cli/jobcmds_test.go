@@ -148,51 +148,65 @@ func TestAJobsCommandMayBeItsWords(t *testing.T) {
 	s.mustFail("-- <the command's words>", "verify", "--notes", "n", "--")
 }
 
-// A gate that needs the checkout runs there, on HEAD, with no lane (--here): baton says what it holds
-// until the gate ends.
 // Before the plan's QA phase, baton asks once of each gate whether it is a focused check or a full one
-// the QA phase runs anyway, and the model decides: the job runs either way. A full check run early on
-// purpose is flagged (--qa), and the human is told. With aggregate_qa off, or no QA phase ahead, nothing
-// is asked.
+// the QA phase runs anyway, and the model decides: the job runs either way. So it asks of each await, as
+// a wait on CI is often a full check in disguise. A full check run early on purpose is flagged (--qa), and
+// the human is told. With aggregate_qa off, no QA phase ahead, or in the QA phase itself, nothing is asked.
 func TestAGateBeforeTheQAPhaseIsAskedAbout(t *testing.T) {
-	qaPlan := func(s *session) {
+	qaPlan := func(s *session, phase int) {
 		pl, err := s.store().LoadPlan()
 		if err != nil {
 			t.Fatal(err)
 		}
-		pl.Phases[len(pl.Phases)-1].Type = plan.TypeQA
+		if phase < 0 {
+			phase += len(pl.Phases)
+		}
+		pl.Phases[phase].Type = plan.TypeQA
 		if err := s.store().WritePlan(pl); err != nil {
 			t.Fatal(err)
 		}
 	}
-	const ask = "Is this a focused check of what P0 changed, or a full suite, lint or end-to-end run that"
+	asks := map[string]string{
+		"verify": "Is this a focused check of what P0 changed, or a full suite, lint or end-to-end run that",
+		"await":  "Is what this waits on a focused check of what P0 changed, or a full check in disguise",
+	}
+	const last, none, first = -1, 99, 0
 	for _, c := range []struct {
 		name    string
-		qa, off bool
+		qa      int // the phase made a QA phase: last, first (P0, the phase in hand), or none
+		off     bool
 		args    []string
 		asks    bool
 		flagged string
 	}{
-		{"a QA phase ahead", true, false, []string{"verify", "make test", "--notes", "n"}, true, ""},
-		{"flagged as early QA", true, false, []string{"verify", "make test", "--qa", "the parser touches every package", "--notes", "n"}, false, "the parser touches every package"},
-		{"aggregate_qa off", true, true, []string{"verify", "make test", "--notes", "n"}, false, ""},
-		{"no QA phase ahead", false, false, []string{"verify", "make test", "--notes", "n"}, false, ""},
+		{"a QA phase ahead", last, false, []string{"verify", "make test", "--notes", "n"}, true, ""},
+		{"flagged as early QA", last, false, []string{"verify", "make test", "--qa", "the parser touches every package", "--notes", "n"}, false, "the parser touches every package"},
+		{"aggregate_qa off", last, true, []string{"verify", "make test", "--notes", "n"}, false, ""},
+		{"no QA phase ahead", none, false, []string{"verify", "make test", "--notes", "n"}, false, ""},
+		{"in the QA phase", first, false, []string{"verify", "make test", "--notes", "n"}, false, ""},
+		{"await, a QA phase ahead", last, false, []string{"await", "gh run watch", "--notes", "n"}, true, ""},
+		{"await, flagged as early QA", last, false, []string{"await", "gh run watch", "--qa", "CI runs on three systems", "--notes", "n"}, false, "CI runs on three systems"},
+		{"await, aggregate_qa off", last, true, []string{"await", "gh run watch", "--notes", "n"}, false, ""},
+		{"await, no QA phase ahead", none, false, []string{"await", "gh run watch", "--notes", "n"}, false, ""},
+		{"await, in the QA phase", first, false, []string{"await", "gh run watch", "--notes", "n"}, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, _ := gitSession(t)
-			if c.qa {
-				qaPlan(s)
+			if c.qa != none {
+				qaPlan(s, c.qa)
 			}
 			if c.off {
 				s.env["BATON_AGGREGATE_QA"] = "0"
 			}
 			out := s.must("", c.args...)
-			if got := strings.Contains(out, ask); got != c.asks {
-				t.Errorf("asked %v, want %v:\n%s", got, c.asks, out)
+			for kind, ask := range asks {
+				if got, want := strings.Contains(out, ask), c.asks && kind == c.args[0]; got != want {
+					t.Errorf("asked as %s %v, want %v:\n%s", kind, got, want, out)
+				}
 			}
 			j := s.state().Job("j1")
-			if j == nil || j.QA != c.flagged {
-				t.Fatalf("job %+v, want it queued, flagged %q", j, c.flagged)
+			if j == nil || j.Kind != c.args[0] || j.QA != c.flagged {
+				t.Fatalf("job %+v, want a %s queued, flagged %q", j, c.args[0], c.flagged)
 			}
 			if c.flagged != "" {
 				if !s.logged("qa_early", map[string]any{"job": "j1", "phase": "P0", "why": c.flagged}) || !strings.Contains(strings.Join(s.state().Run.Announce, "\n"), "runs a full check ahead of its QA phase (job j1)") {
@@ -206,6 +220,8 @@ func TestAGateBeforeTheQAPhaseIsAskedAbout(t *testing.T) {
 	}
 }
 
+// A gate that needs the checkout runs there, on HEAD, with no lane (--here): baton says what it holds
+// until the gate ends.
 func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
 	s, root := gitSession(t)
 	head := gittest.Git(t, root, "rev-parse", "HEAD")

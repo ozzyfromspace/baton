@@ -24,7 +24,7 @@ func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state
 	in := brief.Input{Kind: brief.Worker, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s),
 		Tree: s.Root, Branch: gitx.Branch(s.Root), Needs: builtOn(s, st.Current), Decisions: s.Decisions(st), Again: again, Checkpointed: checkpointed}
 	if result != nil {
-		in.Result = jobResult(s, *result, nil)
+		in.Result = jobResult(s, pl, *result, nil, in.Words.AggregateQA)
 	}
 	text := brief.Write(in)
 	if result != nil {
