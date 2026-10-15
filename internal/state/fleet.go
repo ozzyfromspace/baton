@@ -103,6 +103,13 @@ type Merge struct {
 	// files), since DeferredAt.
 	Deferred   string    `json:"deferred,omitempty"`
 	DeferredAt time.Time `json:"deferred_at,omitzero"`
+	// Overlap is since when the lead's uncommitted changes to files the branch changes have held it, as
+	// long as they still do; Nudged is when the lead's model was asked to commit them (once a landing).
+	Overlap time.Time `json:"overlap,omitzero"`
+	Nudged  time.Time `json:"nudged,omitzero"`
+	// OffBranch is when the human was told that it waits for the checkout to be back on the run's branch
+	// (once a landing).
+	OffBranch time.Time `json:"off_branch,omitzero"`
 	// Reverify is the sub-run's job verifying the merged branch again, since the run's branch moved on
 	// from the commit its verification passed on.
 	Reverify string `json:"reverify,omitempty"`

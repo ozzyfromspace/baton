@@ -59,6 +59,7 @@ type Timing struct {
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
+	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
 	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
@@ -76,7 +77,7 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 30 * time.Minute,
-	HungAfter: 20 * time.Minute,
+	LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 

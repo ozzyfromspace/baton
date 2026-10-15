@@ -30,11 +30,14 @@ import (
 //     it, and the lead is told that its next gate checks them together (Landing.Unverified), so a lead
 //     that commits more often than the gate takes cannot hold a landing up for good;
 //  3. the branch's changed paths are checked against the lead's local changes, ignored files included,
-//     without taking git's locks: on an overlap, landing waits until the lead has committed those files;
+//     without taking git's locks: on an overlap, landing waits until the lead has committed those files.
+//     Once they have held it for Timing.LandNudge, the lead's model is asked to commit them, by path
+//     (nudge), once a landing;
 //  4. holding the project's landing lock, and only while no tool call of a lead in the checkout runs, nor
 //     a gate a lead runs there (baton verify --here, state.HereGate), the checkout fast-forwards to the
 //     branch (git merge --ff-only), all or nothing. The run's branch moving on meanwhile sends it back
-//     to 1; a locked index tries again shortly;
+//     to 1; a locked index tries again shortly. A checkout on another branch than the run's lands
+//     nothing, and the human is told once a landing (offBranch): baton never moves it back itself;
 //  5. HEAD must be the branch's tip, and the lead's local changes as they were: anything else is
 //     reported (land_check);
 //  6. the phase is done (state.Landed), the lead is told what landed at its next hook, and the worker is
@@ -335,6 +338,7 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	}
 	if br := g.Branch(s.Checkout); br != st.RunBranch {
 		c.deferLanding(now, s, e, fmt.Sprintf("the lead's checkout is on %q, not on the run's branch %s", br, st.RunBranch), nil, overlapRetry)
+		c.offBranch(now, s, e, br)
 		return false
 	}
 	changes, err := g.Changes(ctx, s.Checkout, onto, tip)
@@ -349,7 +353,15 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	}
 	if len(overlap) > 0 {
 		c.deferLanding(now, s, e, "the lead has local changes to "+strings.Join(overlap, ", ")+", which its work changes too", overlap, overlapRetry)
+		c.nudge(now, s, e, overlap)
 		return false
+	}
+	if !e.Merge.Overlap.IsZero() {
+		c.setEntry(s, e, func(x *state.Worker) {
+			if x.Merge != nil {
+				x.Merge.Overlap = time.Time{} // the lead's changes are out of its way: a new overlap counts afresh
+			}
+		})
 	}
 	commits, err := g.Commits(ctx, s.Checkout, onto, tip)
 	if err != nil {
@@ -549,6 +561,64 @@ func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, wh
 	}
 	s.Event("land_returned", fields)
 	c.announce(s, fmt.Sprintf("baton: %s's work did not land: %s → its worker takes it up again", e.Phase, why))
+}
+
+// nudge records that the lead's uncommitted changes to paths hold worker e's landing, and once they have
+// held it for Timing.LandNudge, asks the lead's model to commit them, by path (state.MessageCommit): once
+// a landing. A lead left untold would never know it holds the landing up: a model commits when its own
+// work calls for it.
+func (c *Coordinator) nudge(now time.Time, s *state.Store, e state.Worker, paths []string) {
+	m := e.Merge
+	after := c.Lead.Timing.LandNudge
+	switch {
+	case m.Overlap.IsZero():
+		c.setEntry(s, e, func(x *state.Worker) {
+			if x.Merge != nil && x.Merge.Overlap.IsZero() {
+				x.Merge.Overlap = now
+			}
+		})
+		return
+	case !m.Nudged.IsZero() || after <= 0 || now.Sub(m.Overlap) < after:
+		return
+	}
+	waited := now.Sub(m.Overlap)
+	told := false
+	s.Update(func(st *state.State) error {
+		x := st.Entry(e)
+		if x == nil || x.Merge == nil || !x.Merge.Nudged.IsZero() {
+			return nil
+		}
+		x.Merge.Nudged, told = now, true
+		state.Tell(st, state.Message{Kind: state.MessageCommit, Text: decide.LandCommit(e.Phase, st.RunBranch, paths, waited), About: "land:" + e.Ref}, now)
+		st.Run.Announce = append(st.Run.Announce, decide.LandNudged(e.Phase, paths, waited))
+		return nil
+	})
+	if told {
+		c.Lead.logf("loop: %s: the lead's changes to %s have held its landing for %s: asked the lead to commit them", e.Phase, strings.Join(paths, ", "), waited.Round(time.Second))
+		s.Event("land_nudged", map[string]any{"phase": e.Phase, "paths": paths, "waited": waited.Round(time.Second).String()})
+	}
+}
+
+// offBranch pushes the human, once a landing, that worker e's work waits for the checkout, on the branch
+// on, to be back on the run's branch: nothing of baton's moves a checkout from one branch to another.
+func (c *Coordinator) offBranch(now time.Time, s *state.Store, e state.Worker, on string) {
+	if !e.Merge.OffBranch.IsZero() {
+		return
+	}
+	var branch string
+	pushed := false
+	s.Update(func(st *state.State) error {
+		x := st.Entry(e)
+		if x == nil || x.Merge == nil || !x.Merge.OffBranch.IsZero() {
+			return nil
+		}
+		x.Merge.OffBranch, branch, pushed = now, st.RunBranch, true
+		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "land_off_branch", Text: decide.LandOffBranch(e.Phase, on, branch), At: now})
+		return nil
+	})
+	if pushed {
+		s.Event("land_off_branch", map[string]any{"phase": e.Phase, "branch": on, "run_branch": branch})
+	}
 }
 
 // deferLanding records why worker e's work waits to land (paths: the lead's files in its way), and tries

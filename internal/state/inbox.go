@@ -28,6 +28,7 @@ const (
 	MessageAnswer = "answer" // the human answered a question of baton's, or baton did for them at its deadline
 	MessageRewind = "rewind" // the human rewound the conversation past what baton recorded, which stands
 	MessagePlan   = "plan"   // the human changed the plan, and a phase agent's part of it reads differently
+	MessageCommit = "commit" // the lead's uncommitted changes have held a phase's landing long: it is to commit them
 )
 
 // PlanText is what a worker's agent was given of the plan, as hashes (TextSum): the standing rules, and
