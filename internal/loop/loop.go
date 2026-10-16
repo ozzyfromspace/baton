@@ -460,7 +460,9 @@ const (
 // Where baton's mod runs, nothing is typed, so neither the human's draft nor the screen holds baton: the
 // mod compacts the lead and submits baton's lines with the draft left in the box (spike 35). A turn, a
 // dialog of the lead's (dialogHolds), the usage limit and the human typing this moment still do. Until the
-// mod in a restarted claude says hello (modWaiting), nothing goes out.
+// mod in a restarted claude says hello (modWaiting), nothing goes out. A phase agent's loop types nothing
+// either (agentLine): its lines are messages the mod sends (line.go), which Claude Code holds for the
+// agent's next tool round, and it has no screen to settle.
 func (l *Loop) gate(v host.View, st state.State) string {
 	why := ""
 	switch {
@@ -483,7 +485,7 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		l.openSince = time.Time{}
 		return why
 	}
-	if l.mode == modOn {
+	if l.mode == modOn || l.agentLine() {
 		return ""
 	}
 	if l.openSince.IsZero() {
