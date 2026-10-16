@@ -63,6 +63,13 @@ One phase is enough: a small task can be a plan of one phase. A plan with no pha
 work, and baton leaves it alone. Each anchor is the phase's heading, or more of its lines where the plan quotes its
 own headings, and fenced code is passed over, so the anchor occurs once.
 
+A phase's id is also the name of its agent and the human's handle on it ([Phases at once](#phases-at-once)), so it is
+a name Claude Code takes for an agent: 1 to 32 letters, digits, `_` or `-`, starting with a letter or digit (`P8b`,
+not `P8.5`), none of the names Claude Code keeps for itself (`main`, `team-lead`, `user`, `system`) nor of an agent
+id's shape, and no two ids of a plan equal ignoring case, as Claude Code matches a name ignoring case. A plan with
+another id is not attached, and baton says why; so is a replan's draft, or a phase added to the plan file. The ids a
+running plan already has stand as they are.
+
 - **The shape sets how long a plan runs.** Phase agents work beside the lead only on phases whose dependencies are
   done, so a plan's longest chain of `After:` lines, not its number of phases, sets how long it takes. In a real run,
   a plan of 57 phases had a longest chain of 42, and of the 12 phases it ran in 13 hours, 2 ran beside the lead;
@@ -79,8 +86,8 @@ own headings, and fenced code is passed over, so the anchor occurs once.
   6. A small task can be one phase.
 - **Checked before the human sees it.** At the lead's `ExitPlanMode`, each check once per plan, and none of them
   blocking (the same plan again goes on):
-  - a plan with phase headings that baton could not attach as written (a duplicate id, an `After:` naming an unknown
-    or later phase) is turned back with what is wrong;
+  - a plan with phase headings that baton could not attach as written (an id that cannot name an agent, a duplicate
+    id, an `After:` naming an unknown or later phase) is turned back with what is wrong;
   - the plan's first `ExitPlanMode` is turned back with baton's request to check it against CLAUDE.md, memory, skills
     and settings, and address in it anything that competes (a rule to run the full suite before every commit, say);
   - in the same turn-back, a plan that is mostly one chain (6 phases or more, the longest chain over 60% of them) is
@@ -257,9 +264,10 @@ The plan's `After:` lines make a graph. The lead, the session in the human's ter
 Each other phase that can start runs as a **phase agent**: a background agent of the lead's session.
 
 - **The mod is a thin executor.** `plugin/hooks/baton.js` is JavaScript that Claude Code runs in the lead's claude.
-  It spawns and messages `baton:phase` agents, asks the human in Claude Code's own dialog, compacts the lead and
-  submits baton's lines to it, drops the agents' reports before the lead's model reads them (a task notification, or
-  in auto mode a peer hand-back), draws the band, and reports what it sees. It decides nothing and words nothing:
+  It spawns `baton:phase` agents, each named for its phase, and messages them, asks the human in Claude Code's own
+  dialog, compacts the lead and submits baton's lines to it, empties the lead's input box of a prompt baton sent on
+  to an agent (below), drops the agents' reports before the lead's model reads them (a task notification, or in auto
+  mode a peer hand-back), draws the band, and reports what it sees. It decides nothing and words nothing:
   the host does both. A mod of another baton release speaks another protocol, and the run is serial.
 - **The bridge** is files and the CLI:
   - host to mod: numbered command files under `.baton/runs/<run>/mod/`, each addressed to one host instance,
@@ -300,7 +308,33 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   - An agent's permission prompt holds that agent alone where the mod runs: the lead's compaction, its deliveries and
     its switching go on under it, and the prompt survives them ([spike 36](../spikes/36-agent-dialog/)). In serial
     mode any dialog holds the lead, since a typed key would answer the agent's prompt.
-  - A model's own call to the `baton:phase` type is refused.
+  - A model's own call to the `baton:phase` type is refused, and so is its own Agent call named for one of the
+    plan's phases (below).
+- **Writing to a phase agent.** An agent's name is the human's handle on it: `@P23 <words>` at the lead's prompt
+  writes to P23's agent. Claude Code sends `@name` at the main prompt only to agent-team teammates; for a subagent
+  the whole line is an ordinary prompt of the lead's ([spike 40](../spikes/40-agent-handles/README.md)). So the
+  lead's `UserPromptSubmit` hook routes it, by its shape alone, since the hook cannot tell who typed it: a prompt
+  from the human (never one of baton's lines or an agent's report) that starts with `@` and one of the run's phase
+  ids, ignoring case, then whitespace.
+  - When an agent of baton's is at work on the phase, the hook queues the words in the run's state and blocks the
+    prompt: no turn starts, and nothing of it reaches the lead's model, whether the lead is idle or mid-turn. Claude
+    Code shows the human only the block's reason, under its own frame, so the reason says what baton did: "sent to
+    P23". The host sends the words through the mod, by the agent's id, framed as the human's own: Claude Code gives
+    them to the agent at its next tool round, and they wake an idle one, which goes on with its phase. Claude Code
+    keeps a blocked prompt in the input box, where a second Enter would send it again, so a second later the mod
+    empties the box, only while it still holds exactly that prompt. Words the agent cannot take after all (it ended
+    or was stopped first, or Claude Code refused the message) go to the lead's model, and the human is told.
+  - For a phase no agent of baton's works on (not started, done, the lead's own, an agent the human stopped, one
+    starting or landing), nothing is woken: the prompt goes on to the lead's model, told where that phase stands, and
+    the human is told why.
+
+  A name in Claude Code points to the latest agent given it (the typeahead, a message by name), so a model's own
+  Agent call named for one of the plan's phases is refused with why. The board shows each working agent's handle,
+  and an agent's question to the human names it. The human can also type in an agent's own view in Claude Code's
+  agent panel, which wakes it whatever it is, and which baton does not see; an agent whose unchanged worktree Claude
+  Code removed is resumed in the lead's own checkout. So baton records every agent it lets go of for good (retired,
+  or replaced by a fresh one), and refuses every tool call of one that wakes, letting its stop through: it ends its
+  turn having changed nothing, and nothing waits on it.
 - **Room.** `workers: auto` sizes the fleet to the machine. New agents start at least 2 minutes apart, since the
   machine's readings lag the load an agent brings. A new agent also waits while the machine is busy, the lanes fall
   behind, landings keep conflicting, a usage limit holds, or a replan is open or owed ([Replans](#replans)). Every

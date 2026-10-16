@@ -17,12 +17,14 @@ every system (Linux 18 s to 20 s, macOS 81 s to 116 s, Windows about 8 to 11 min
 its own full end-to-end gate had caught, because a narrower gate that passed stood in for the red one. A stray
 key could misanswer two of baton's questions, and a phase agent you stopped twice could stall a run for good.
 So the model now gets a heads-up at 60% and the checkpoint ask at 80%, baton moves the plan file out of Claude
-Code's way, and each of the rest is fixed.
+Code's way, and each of the rest is fixed. And you can now write to a phase agent from your own prompt,
+`@P3 <your words>`, so each phase's id must be a name Claude Code takes for an agent.
 
 A session on v0.8.x moves to v0.8.6 by itself at its next restart point; `baton update` updates baton's host
 and its mod together. A run attached before v0.8.6 from the session's plan-mode file has that file moved before
 the compaction that starts the lead's next phase. A `checkpoint_pct` you set keeps its value. The planning rules
-did not change (`plan.RulesVersion` stays 1), so no run is replanned for this upgrade.
+did not change (`plan.RulesVersion` stays 1), so no run is replanned for this upgrade. A running plan keeps the
+phase ids it has; a new plan, a replan's draft and a phase added to the plan file need ids an agent can take.
 
 ### Added
 - **A heads-up at 60% of the context.** At `notice_pct` (60 by default, `0` off; `BATON_NOTICE_PCT`) the model
@@ -45,6 +47,20 @@ did not change (`plan.RulesVersion` stays 1), so no run is replanned for this up
 - **A replan's brief names phases that share files.** It lists the phases not started that could run at once and
   whose sections name the same file, as information: they collide when they land (`replan_opened` logs
   `shared`). What a replan may change is the same.
+- **Write to a phase agent from your prompt.** `@P3 <your words>` at your session's prompt sends the words to
+  P3's agent, framed as yours: it gets them at its next tool call, and an idle one wakes for them and goes on with
+  its phase. No turn starts in your session and its model never sees them; Claude Code shows you baton's "sent to
+  P3", and baton empties the input box a second later, unless you've typed since. For a phase no agent of baton's
+  works on (not started, done, your session's own, one you stopped), nothing is woken: the words go to your
+  session's model, which is told where that phase stands, and you're told why; so do words an agent could not take
+  after all. Each step is logged `human_to_agent`. The board shows each working agent's handle, an agent's
+  question to you names it, and `/baton help` says how. Spike 40 found that Claude Code sends `@name` at the main
+  prompt only to agent-team teammates, and that a hook's block keeps a prompt from the model at no cost: no turn,
+  nothing in any request.
+- **An agent baton let go of changes nothing if it wakes.** Typing in an agent's own view in Claude Code's agent
+  panel wakes it whatever it is, and one whose unchanged worktree Claude Code removed wakes in your checkout.
+  baton now records every agent it lets go of (retired, or replaced by a fresh one) and refuses its every tool call
+  with why, so it ends its turn having changed nothing, and nothing waits on it (`retired_agent_woke`, once).
 
 ### Changed
 - **The checkpoint is asked at 80% of the context,** not 60% (`checkpoint_pct`). With an 810k cap: the
@@ -80,6 +96,14 @@ did not change (`plan.RulesVersion` stays 1), so no run is replanned for this up
 - **Background work is never polled.** baton's reminders of the model's background work, and the skill, now say
   never to start a loop or another background task only to wait for one: Claude Code wakes the model when it
   ends. The real run's lead had started such loops.
+- **Phase ids are agent names.** Each phase agent is named for its phase, and Claude Code takes for a name only
+  letters, digits, `_` and `-`, and none of `main`, `team-lead`, `user`, `system` or an agent id's shape. A plan's
+  ids are now held to that, within baton's 32 characters (so no dot: `P8b`, not `P8.5`), and no two may be equal
+  ignoring case, as Claude Code matches a name ignoring case. A plan with another id is turned back at
+  `ExitPlanMode` with why, and not attached; so is a replan's draft, or a phase added to the plan file.
+- **A model's agent can't take a phase's name.** Claude Code gives a name to the latest agent that took it, so a
+  model's own Agent call named for one of the plan's phases, ignoring case, is refused with why
+  (`agent_name_refused`). baton's own messages go to an agent by its id.
 - `compact_reported`, `compact_declined` and `compact_started` are now logged before the `mod_*` event of the
   report that carries them, and `baton clean` takes a stray temporary file once it is a minute old, not ten.
 

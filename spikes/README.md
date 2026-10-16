@@ -39,6 +39,7 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `37-compact-at-turn-end/` | Does Claude Code take a compaction the mod calls from the lead's `turn.complete`, where one called as the turn ends is refused? (2026-10-16, Claude Code 2.1.301; [findings](37-compact-at-turn-end/README.md)) |
 | `38-plan-file-reference/` | Does renaming the session's plan-mode file stop Claude Code from attaching the plan in full after every compaction (`plan_file_reference`), and does a later planning or anything else in the session break? Hosted, does a plan baton moved stay out of the next phase's context? (2026-10-16, Claude Code 2.1.301; [findings](38-plan-file-reference/README.md)) |
 | `39-escape-answers/` | What does Esc do to a question of baton's and to a permission prompt, and what does each digit mean in today's permission prompt? Can an Esc from the host touch a draft, a turn or a background agent? (2026-10-16, Claude Code 2.1.301; [findings](39-escape-answers/README.md)) |
+| `40-agent-handles/` | Can the human write to a phase agent with `@<phase> <words>` at the lead's prompt: does a `UserPromptSubmit` block keep the words from the lead's model, at what cost, and what stays in the input box? What do a message and the human's typing in an agent's view do to a running, a completed, a stopped and a retired agent? Who owns an agent's name? (2026-10-16, Claude Code 2.1.301; [findings](40-agent-handles/README.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 
