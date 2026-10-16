@@ -67,8 +67,10 @@ type Fleet struct {
 	// agent started again for a worker it had before (a resume, a respawn) does not wait for it.
 	Ramp time.Duration
 	// Machine reads the machine (nil: machine.Read): no agent starts while it has no room for another
-	// (room.go).
-	Machine func() machine.Reading
+	// (room.go). RoomSettle is how long the kind of room it lacks must hold before the host's log follows
+	// it (0: RoomSettle).
+	Machine    func() machine.Reading
+	RoomSettle time.Duration
 	// AutoReplan is auto_replan: baton opens replans of its own at the lead's phase boundaries (package
 	// replan's Auto). While the boundary under way owes one, no new agent starts, for at most ReplanMax
 	// (0: replan.Max), as while a replan is open.

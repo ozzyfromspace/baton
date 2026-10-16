@@ -61,9 +61,13 @@ type Coordinator struct {
 	modSince time.Time
 	stepRun  string
 	// The machine's swap readings of the last minute, and why it had no room for another worker at the
-	// last step ("" if it had) (room.go).
-	swaps  []swapAt
-	noRoom string
+	// last step ("" if it had); the kind of room it lacks ("" for none) and since when, and the kind the
+	// log last said (room.go).
+	swaps     []swapAt
+	noRoom    string
+	roomKind  string
+	roomSince time.Time
+	roomSaid  string
 	// genRun and gen are the host's run and its plan's generation as the lead's tick last saw them; a
 	// plan attached since owes a sweep of the workers other runs left behind (sweep.go). Only the lead's
 	// tick touches them.
