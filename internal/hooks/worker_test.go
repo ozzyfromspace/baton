@@ -303,6 +303,27 @@ func TestAWorkerIsNudgedToCheckpointNotAsked(t *testing.T) {
 	}
 }
 
+// A phase agent gets the notice and the nudge as the lead does, in words of its own: for it a checkpoint is
+// a fresh agent.
+func TestAPhaseAgentGetsTheNoticeThenTheNudge(t *testing.T) {
+	w, _, _ := newWorker(t)
+	w.fire("SubagentStart", map[string]any{})
+	w.vars["BATON_COMPACT_CAP"] = "810000"
+	w.setContext(500_000)
+	out := w.fire("PostToolUse", bash("go test ./..."))
+	if feedback(out) != "" || !strings.Contains(additionalContext(out), "Keep working on P2") ||
+		!strings.Contains(additionalContext(out), "At 648k baton asks you to checkpoint at your next safe point (a checkpoint ends you mid-phase, and a fresh agent continues the phase from your notes).") {
+		t.Fatalf("the notice: %v", out)
+	}
+	if !w.logged("context_notice", map[string]any{"tokens": float64(500_000)}) {
+		t.Errorf("not logged in the sub-run:\n%s", w.eventLog())
+	}
+	w.setContext(650_000)
+	if tell := feedback(w.fire("PostToolUse", bash("go test ./..."))); !strings.Contains(tell, "Checkpoint due") || !strings.Contains(tell, "baton starts a fresh agent on this phase") {
+		t.Fatalf("the nudge: %q", tell)
+	}
+}
+
 // A worker's proposal is the lead's to put to the human: meanwhile nothing is held in the worker, and its
 // valves still run.
 func TestAWorkersProposalHoldsNothingUp(t *testing.T) {
@@ -313,7 +334,7 @@ func TestAWorkersProposalHoldsNothingUp(t *testing.T) {
 		t.Fatalf("held: %q", d)
 	}
 	w.vars["BATON_COMPACT_CAP"] = "810000"
-	w.setContext(500_000)
+	w.setContext(650_000)
 	if tell := feedback(w.fire("PostToolUse", bash("go test ./..."))); !strings.Contains(tell, "Checkpoint due") {
 		t.Errorf("the checkpoint nudge waited on the lead's question: %q", tell)
 	}
@@ -577,7 +598,7 @@ func TestAPhaseAgentsCheckpointIsAFreshAgent(t *testing.T) {
 		t.Fatalf("its transcript %q, marked %+v", st.Run.Transcript, st.Run.Proven)
 	}
 
-	w.set(func(st *state.State) { st.Run.Context = &state.ContextUse{Tokens: 130_000, WindowSize: 200_000} })
+	w.set(func(st *state.State) { st.Run.Context = &state.ContextUse{Tokens: 140_000, WindowSize: 200_000} })
 	tell := feedback(w.fire("PostToolUse", map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "go test"}}))
 	if !strings.Contains(tell, "Checkpoint due") || !strings.Contains(tell, "baton starts a fresh agent on this phase") || strings.Contains(tell, "compacts the context") {
 		t.Errorf("the nudge: %s", tell)

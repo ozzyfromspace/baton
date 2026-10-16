@@ -795,7 +795,7 @@ func contextLine(cu state.ContextUse, io IO) string {
 	vs := valve.FromEnv(io.Env)
 	if !hosted(io) {
 		cfg := config.Load(batonRoot(io), io.Env)
-		vs = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+		vs = valve.Settings{NoticePct: *cfg.NoticePct, CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
 	}
 	if vs.Cap == 0 {
 		vs.Cap = cu.Limit
@@ -805,6 +805,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 		return fmt.Sprintf("%.0f%% of the window", cu.UsedPct)
 	}
 	parts := []string{valve.Tokens(cu.Used()) + " of " + valve.Tokens(l.Window)}
+	if l.Notice > 0 {
+		parts = append(parts, "heads-up at "+valve.Tokens(l.Notice))
+	}
 	if l.Checkpoint > 0 {
 		parts = append(parts, "checkpoint at "+valve.Tokens(l.Checkpoint))
 	}
