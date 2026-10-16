@@ -78,6 +78,10 @@ func cmdReplanned(args []string, io IO) (code int) {
 		_, tell := decide.ReplanDeclined("", true)
 		fmt.Fprintln(io.Out, tell)
 		return 0
+	case f.Unimproved:
+		st := f.State
+		fmt.Fprintln(io.Out, f.Tell+" "+decide.ReplanNext("", phaseLabel(f.Plan, st.Current), st.Mode, st.BoundaryOwed, st.InHand()))
+		return 0
 	}
 	st, took := f.State, ""
 	if f.Took != "" {

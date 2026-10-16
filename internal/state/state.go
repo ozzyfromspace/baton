@@ -157,6 +157,11 @@ type State struct {
 	// baton followed since the human approved the plan, oldest first.
 	Replan  *Replan     `json:"replanning,omitempty"`
 	Replans []Replanned `json:"replans,omitempty"`
+	// RulesVersion is the planning rules (plan.RulesVersion) the run's plan was made or last replanned
+	// under: 0 for a plan attached before baton numbered them. ReplanCued lists the cues of the automatic
+	// replans baton has looked at, each once ("qa:P9", "marked:P3"; replan.go).
+	RulesVersion int      `json:"rules_version,omitempty"`
+	ReplanCued   []string `json:"replan_cued,omitempty"`
 	// RunBranch is the branch checked out when the plan was attached: workers branch off it, and their
 	// work lands on it. Workers, Relay, Landed, Usage and Hold are the run's worker sessions and what they
 	// need of the lead (fleet.go). Conflicts counts the workers' landings in a row that conflicted with the
@@ -312,7 +317,7 @@ func attachKeeping(prev State, run *Runtime, p plan.Plan, now time.Time, o Origi
 	if run != nil {
 		st.Run = *run
 	}
-	st.Mode = ModeRunning
+	st.Mode, st.RulesVersion = ModeRunning, plan.RulesVersion // made by the planning rules of now
 	if prev.Mode == ModePaused {
 		// The human has the wheel: the new plan waits for /baton run, as the one it replaces did.
 		st.Mode, st.PauseContext, st.PauseCompacted = ModePaused, prev.PauseContext, prev.PauseCompacted

@@ -228,6 +228,7 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 		// The revision is the plan the human approved now: replans are compared with it from here on.
 		replan.KeepApproved(s, pl, kept)
 		st.Replan, st.Replans = nil, nil
+		st.RulesVersion = plan.RulesVersion // made by the planning rules of the baton running it
 		next := state.Revise(st, pl, c.Now)
 		v.also = append(v.also, event{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}})
 		switch {

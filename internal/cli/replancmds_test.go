@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
+	"github.com/ozzyfromspace/baton/internal/replan"
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // The human's /baton replan through the CLI: baton replan opens it and prints the brief, the model edits
@@ -72,6 +74,28 @@ func TestReplanClosedOrRefused(t *testing.T) {
 	s.mustFail("no replan opened: this session is not hosted by baton", "replan")
 	if s.state().Replan != nil {
 		t.Error("an unhosted session opened a replan")
+	}
+}
+
+// A replan of baton's own whose draft leaves the shape no better is not kept: baton replanned says why,
+// and what to do next, and the plan file stays as it was.
+func TestAnUnimprovedReplanThroughTheCLI(t *testing.T) {
+	s := attached(t)
+	if _, err := replan.Open(s.store(), state.ReplanUpgrade, "", s.now, replan.Max); err != nil {
+		t.Fatal(err)
+	}
+	pl, _ := s.store().LoadPlan()
+	was, _ := os.ReadFile(pl.File)
+	draft := s.store().DraftPath()
+	b, _ := os.ReadFile(draft)
+	os.WriteFile(draft, []byte(strings.Replace(string(b), "Add people to a household.", "After: P1\n\nAdd people to a household.", 1)), 0o644) // R1's need said aloud
+	out := s.must("", "replanned", "--notes", "said R1's need aloud")
+	if !strings.HasPrefix(out, "baton: not replanned — the draft leaves the phases not started no better") ||
+		!strings.HasSuffix(out, "The plan file stays as it was, and the replan is closed. Carry on with P0 (The overlay) as the plan describes it.\n") {
+		t.Errorf("baton replanned:\n%s", out)
+	}
+	if now, _ := os.ReadFile(pl.File); string(now) != string(was) || s.state().Replan != nil || !s.logged("replan_unchanged", map[string]any{"by": "upgrade"}) {
+		t.Errorf("the plan file changed, or the replan stayed open:\n%s", s.events())
 	}
 }
 

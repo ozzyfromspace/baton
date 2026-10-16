@@ -62,17 +62,34 @@ type ReplanBrief struct {
 	Shape   plan.Shape    // the shape of the phases not started (plan.Plan.Part)
 	Limits  plan.Limits   // what it may change beyond their order and After: lines
 	Max     time.Duration // how long it may stay open (Timing.ReplanMax)
+	// A replan baton opened by itself, at the lead's phase boundary (autoreplan.go): the phases that cued
+	// it (the QA phase that starts, or the phases marked Replan: after that are done), the phase whose
+	// brief follows this one, which the model begins once it is finished, and where the phases' notes are.
+	Cue   []ReplanPhase
+	Then  string
+	Notes string
 }
 
 // Brief is the model's brief for a replan: what it replans, what it may change, and how to finish.
 func (b ReplanBrief) Brief() string {
 	var s strings.Builder
-	fmt.Fprintf(&s, "[baton] Replan the phases of %q that have not started, so more of them can run at once. Do it now, in this turn.\n\n", b.Title)
+	if b.Then != "" {
+		purpose := "so more of them can run at once"
+		if b.By == state.ReplanMarked {
+			purpose = "with what " + phaseIDs(b.Cue) + " found"
+		}
+		fmt.Fprintf(&s, "[baton] Before you begin %s: replan the phases of %q that have not started, %s. Do it first, in this turn; %s's brief follows this one.\n\n",
+			b.Then, b.Title, purpose, b.Then)
+	} else {
+		fmt.Fprintf(&s, "[baton] Replan the phases of %q that have not started, so more of them can run at once. Do it now, in this turn.\n\n", b.Title)
+	}
 	switch {
 	case b.By == state.ReplanHuman && b.Words != "":
 		fmt.Fprintf(&s, "The human asked you to consider: %q. Weigh it first.\n\n", b.Words)
 	case b.By == state.ReplanHuman:
 		s.WriteString("The human gave nothing in particular to consider: replan by baton's shape rules below.\n\n")
+	default:
+		s.WriteString(b.cause() + "\n\n")
 	}
 	s.WriteString("Not started (yours to restructure):\n")
 	for _, ph := range b.Pending {
@@ -88,11 +105,18 @@ func (b ReplanBrief) Brief() string {
 		fmt.Fprintf(&s, "The phases not started now: %s.\n", line)
 	}
 	fmt.Fprintf(&s, "\nbaton's shape rules:\n%s\n\nWhat you may change:\n%s\n", ShapeRules, b.allowed())
+	if structural(b.By) {
+		fmt.Fprintf(&s, "\nbaton keeps the draft only if it shortens the longest chain of the phases not started (%d now) or lets more of them run at once (%d now); otherwise the plan stays as it is.\n",
+			len(b.Shape.Chain), b.Shape.Width)
+	}
 	fmt.Fprintf(&s, "\nEdit only the draft, %s, never the plan file: baton checks the draft, then writes it over the plan file itself. Then, still in this turn, run one of:\n"+
 		"- `baton replanned --notes \"<what changed and why>\"`: baton checks the draft, follows it, and records the change with its undo. If a check fails, it says exactly what: fix the draft and run it again.\n"+
 		"- `baton replanned --none \"<why nothing should change>\"`, when the plan is right as it is.\n"+
 		"Keep backticks and $ out of the double-quoted text, or use single quotes. While the replan is open, no new phase agent starts; agents at work go on. "+
 		"If it is not finished within %s, baton drops the draft and the plan goes on as it was.", b.Draft, Spell(b.Max))
+	if b.Then != "" {
+		fmt.Fprintf(&s, "\n\nOnce baton replanned has answered, begin %s, as its brief below says.", b.Then)
+	}
 	return s.String()
 }
 
@@ -102,8 +126,13 @@ func (b ReplanBrief) allowed() string {
 	if b.Limits.Add {
 		lines = append(lines, "- split a phase not started: keep its id on one part, and give each other part a new id in the plan's notation (P5b after P5, or the next free number) under a heading like the others'")
 	}
-	if b.Limits.Edit {
+	switch {
+	case b.Limits.Edit && b.By == state.ReplanMarked:
+		lines = append(lines, "- rework the steps of a phase not started with what "+phaseIDs(b.Cue)+" found, and its done-when where that needs it")
+	case b.Limits.Edit:
 		lines = append(lines, "- reword a phase not started, as a split or the human's words need")
+	default:
+		lines = append(lines, "- nothing else of a phase: its heading, its steps and its done-when stay byte for byte, as they are")
 	}
 	if b.Limits.Drop {
 		lines = append(lines, "- merge or drop phases not started, only as far as the human's words ask; name each phase you drop or merge away in your --notes")

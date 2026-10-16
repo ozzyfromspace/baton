@@ -1,5 +1,6 @@
 // Package replan restructures the phases of a running plan that have not started. The human's
-// `/baton replan "<what to consider>"` opens one (Open); the lead's model edits a draft of the plan file,
+// `/baton replan "<what to consider>"` opens one (Open), and baton opens its own at the lead's phase
+// boundaries, where its cues say (Auto, auto.go); the lead's model edits a draft of the plan file,
 // in the session, where the human sees it; and baton checks the draft against what the replan may change
 // before it writes it over the plan file and follows it (Finish), records the change as a decision with
 // its undo, and says what changed. The model decides how; the host decides when, and whether the draft
@@ -42,12 +43,30 @@ func MaxFrom(env func(string) string) time.Duration {
 // LimitsOf is what replan r may change beyond the order and the After: lines of the phases not started.
 // The human's may split and reword phases (the shape rules split enabling work and contracts out), and
 // drop or merge phases, or change the plan's goal sections, only when they gave words to consider: the
-// model goes as far as those ask, and names in its notes each phase it drops.
+// model goes as far as those ask, and names in its notes each phase it drops. One a phase marked Replan:
+// after cued may rework the steps of the phases not started with what it found, and split them, but never
+// drop or merge work. baton's others, at an upgrade or a QA phase, change the structure alone (Structural):
+// every phase's text but its After: line stays as it is, so what the human approved of each phase stays,
+// however many such replans run.
 func LimitsOf(r state.Replan) plan.Limits {
-	if r.By == state.ReplanHuman {
+	switch r.By {
+	case state.ReplanHuman:
 		return plan.Limits{Add: true, Edit: true, Drop: r.Words != "", Goal: r.Words != ""}
+	case state.ReplanMarked:
+		return plan.Limits{Add: true, Edit: true}
 	}
 	return plan.Limits{}
+}
+
+// Structural reports a kind of replan that may change only the structure of the phases not started (their
+// After: lines and their order), and is kept only if their shape improves (Improved): baton's own at an
+// upgrade or a QA phase.
+func Structural(by string) bool { return by == state.ReplanUpgrade || by == state.ReplanQA }
+
+// Improved reports that after, the shape of the phases not started once replanned, is better than before:
+// their longest chain is shorter, or more of them can run at once.
+func Improved(before, after plan.Shape) bool {
+	return len(after.Chain) < len(before.Chain) || after.Width > before.Width
 }
 
 // Opened is a replan Open opened, or found open already (Again), and the brief the model replans from.
@@ -77,6 +96,12 @@ func Open(s *state.Store, by, words string, now time.Time, max time.Duration) (O
 	if r := st.Replan; r != nil {
 		return again(s, st, pl, by, words, max)
 	}
+	return open(s, st, pl, state.Replan{By: by, Words: words, Since: now}, max)
+}
+
+// open opens replan r of plan pl on run s, as st stands, with none open: it numbers r, keeps its files,
+// marks it open (which fails if one opened meanwhile), tells the human, and gives its brief.
+func open(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time.Duration) (Opened, error) {
 	doc, err := os.ReadFile(pl.File)
 	if err != nil {
 		return Opened{}, fmt.Errorf("cannot read the plan file: %w", err)
@@ -89,27 +114,37 @@ func Open(s *state.Store, by, words string, now time.Time, max time.Duration) (O
 		return Opened{}, errors.New(decide.NothingToReplan)
 	}
 	n := s.NextReplan()
-	r := state.Replan{By: by, Words: words, Since: now, N: n}
+	r.N = n
 	if err := errors.Join(s.WriteReplanText(0, doc, false), s.WriteReplanText(n, doc, true), s.WriteDraft(doc)); err != nil {
 		s.DropReplan(n)
 		return Opened{}, fmt.Errorf("cannot keep the replan's files: %w", err)
+	}
+	say := decide.ReplanOpened(r.By, r.Words, max)
+	if r.By != state.ReplanHuman {
+		say = decide.AutoReplanOpened(r.By, r.Cue, max)
 	}
 	if _, err := s.Update(func(st *state.State) error {
 		if err := state.OpenReplan(st, r); err != nil {
 			return err
 		}
-		st.Run.Announce = append(st.Run.Announce, decide.ReplanOpened(by, words, max))
+		st.Run.Announce = append(st.Run.Announce, say)
 		return nil
 	}); err != nil {
 		s.DropReplan(n)
 		return Opened{}, err
 	}
-	fields := map[string]any{"by": by, "n": n, "unstarted": len(state.Unstarted(st, old))}
-	if words != "" {
-		fields["words"] = words
+	fields := map[string]any{"by": r.By, "n": n, "unstarted": len(state.Unstarted(st, old))}
+	if r.Words != "" {
+		fields["words"] = r.Words
+	}
+	if len(r.Cue) > 0 {
+		fields["cue"] = r.Cue
+	}
+	if r.Then != "" {
+		fields["then"] = r.Then
 	}
 	s.Event("replan_opened", fields)
-	return Opened{Replan: r, Brief: brief(st, old, r, s.DraftPath(), max)}, nil
+	return Opened{Replan: r, Brief: brief(s, st, old, r, max)}, nil
 }
 
 // again gives the replan open on run s again, its draft copied afresh from the text it found if it is
@@ -122,6 +157,7 @@ func again(s *state.Store, st state.State, pl plan.Plan, by, words string, max t
 				return errors.New(decide.NoReplanOpen)
 			}
 			st.Replan.By = by
+			st.Replan.Then = "" // the human's turn: the phase baton's own was to begin first may be under way
 			if words != "" {
 				st.Replan.Words = words
 			}
@@ -144,7 +180,7 @@ func again(s *state.Store, st state.State, pl plan.Plan, by, words string, max t
 			old = p
 		}
 	}
-	return Opened{Replan: r, Brief: brief(st, old, r, s.DraftPath(), max), Again: true}, nil
+	return Opened{Replan: r, Brief: brief(s, st, old, r, max), Again: true}, nil
 }
 
 // follow is pl as it reads in doc: pl itself when doc is the text it was made from, or the change in doc
@@ -157,10 +193,22 @@ func follow(st state.State, pl plan.Plan, doc []byte) (plan.Plan, error) {
 	return adopted, err
 }
 
-// brief is the brief of replan r of plan pl, run st, whose draft is at draft.
-func brief(st state.State, pl plan.Plan, r state.Replan, draft string, max time.Duration) string {
+// brief is the brief of replan r of plan pl, run st on s. One baton opened by itself names the phases
+// that cued it, and the phase the model begins once it is finished, whose brief follows it; where they
+// have notes, it says where (a marked phase's findings are in its notes).
+func brief(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time.Duration) string {
 	frozen := state.Frozen(st, pl)
-	b := decide.ReplanBrief{Title: pl.Title, By: r.By, Words: r.Words, Draft: draft, Limits: LimitsOf(r), Max: max}
+	b := decide.ReplanBrief{Title: pl.Title, By: r.By, Words: r.Words, Draft: s.DraftPath(), Limits: LimitsOf(r), Max: max, Then: r.Then}
+	for _, id := range r.Cue {
+		ph := decide.ReplanPhase{ID: id}
+		if i := pl.Index(id); i >= 0 {
+			ph.Title = pl.Phases[i].Title
+		}
+		b.Cue = append(b.Cue, ph)
+	}
+	if r.By == state.ReplanMarked {
+		b.Notes = s.HandoffPath()
+	}
 	var pending []string
 	for _, ph := range pl.Phases {
 		if frozen[ph.ID] {
@@ -188,21 +236,26 @@ type Refused struct {
 func (r Refused) Error() string { return r.Text }
 
 // Finished is what Finish did: the replan it followed, or found unchanged (Unchanged: the draft was the
-// text it found, so it is closed as declined).
+// text it found, so it is closed as declined), or closed with the plan as it was since the draft left the
+// shape of the phases not started no better (Unimproved: a Structural replan; Tell says so to the model).
 type Finished struct {
 	Replanned     state.Replanned
 	Decision      state.Decision
 	Plan          plan.Plan
 	Before, After plan.Shape  // the phases not started, before and after
 	Took          string      // the phase the run took up, which starts after a compaction
-	State         state.State // the run once the replan is followed
+	State         state.State // the run once the replan is followed, or closed (Unimproved)
 	Unchanged     bool
+	Unimproved    bool
+	Tell          string
 }
 
 // Finish follows the draft of the replan open on run s, with the model's notes on what changed and why.
 // The draft is checked first (plan.Redraft, against LimitsOf the replan; a phase it drops must be named in
 // the notes), and refused (Refused) with the plan file untouched and the replan open, for the model to fix
-// it. A draft made while the plan file itself changed is refused too, and the replan closed. A draft that
+// it. A draft made while the plan file itself changed is refused too, and the replan closed. A Structural
+// replan's draft that passes but leaves the shape of the phases not started no better (Improved) is not
+// written either: the replan is closed with the plan as it was (Unimproved, replan_unchanged). A draft that
 // passes is written over the plan file, and the run follows it (state.AdoptReplan): its plan.json, which
 // the coordinator passes on to the phase agents at work, its phases, and the decision that records the
 // replan with its undo (copy replan/<n>.md back over the plan file). Nothing else changes the plan file
@@ -252,6 +305,17 @@ func Finish(s *state.Store, notes string, now time.Time) (f Finished, err error)
 	changes := plan.Compare(old, found, next, draft)
 	rec := state.Replanned{N: r.N, By: r.By, Words: r.Words, At: now, Notes: notes, Changed: changes, Approved: approved(s, old, next, draft)}
 	f.Before, f.After = old.Part(unstarted(old, frozen)).Shape(), next.Part(unstarted(next, frozen)).Shape()
+	if Structural(r.By) && !Improved(f.Before, f.After) {
+		// baton's own replan of the structure stands only where it gains something.
+		say, tell := decide.ReplanUnimproved(f.Before, f.After)
+		if _, err := closeReplan(s, *r, now, say, "replan_unchanged", map[string]any{"why": "the shape is no better",
+			"before": shapeFields(f.Before), "after": shapeFields(f.After), "changed": changes, "notes": notes}); err != nil {
+			return f, err
+		}
+		f.Unimproved, f.Tell, f.Plan = true, tell, pl
+		f.State, _ = s.Load()
+		return f, nil
+	}
 	if err := state.ReplacePlanFile(pl.File, draft); err != nil {
 		return f, fmt.Errorf("cannot write the draft over the plan file: %w", err)
 	}

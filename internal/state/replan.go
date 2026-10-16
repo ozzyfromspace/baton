@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,22 @@ type Replan struct {
 	Words string    `json:"words,omitempty"` // what the human asked it to consider
 	Since time.Time `json:"since"`
 	N     int       `json:"n"` // replan/<n>.md holds the plan's text as it found it
+	// Cue is the phases that cued a replan baton opened by itself: the QA phase that started, or the
+	// phases marked Replan: after that are done. Then is the phase whose brief came after its own, which
+	// the lead begins once it is finished.
+	Cue  []string `json:"cue,omitempty"`
+	Then string   `json:"then,omitempty"`
+}
+
+// Cued reports that baton has looked at the cue of an automatic replan of kind by (ReplanQA,
+// ReplanMarked) that phase gives, which it does once (State.ReplanCued).
+func (st State) Cued(by, phase string) bool { return slices.Contains(st.ReplanCued, by+":"+phase) }
+
+// Cue records that baton looked at the cue of an automatic replan of kind by that phase gives.
+func (st *State) Cue(by, phase string) {
+	if !st.Cued(by, phase) {
+		st.ReplanCued = append(st.ReplanCued, by+":"+phase)
+	}
 }
 
 // Replanned is a replan baton followed: what it changed, against the plan before it and against the plan
@@ -142,13 +159,15 @@ func phasesOf(st *State) []plan.Phase {
 }
 
 // RecordReplan records r, a replan baton followed, with its decision: a note of the run's own (no phase's,
-// so no phase's review counts it), shown in the session already (Announced), with how to undo it. It
-// returns the decision.
+// so no phase's review counts it), shown in the session already (Announced), with how to undo it. The plan
+// is replanned under the planning rules of the baton that followed it (RulesVersion). It returns the
+// decision.
 func RecordReplan(st *State, r Replanned, what, undo string) Decision {
 	d := Decision{ID: fmt.Sprintf("%sd%d", st.IDPrefix, len(st.Decisions)+1), Kind: Note, What: what, Undo: undo, At: r.At, Announced: true}
 	st.Decisions = append(st.Decisions, d)
 	r.Decision = d.ID
 	st.Replans = append(st.Replans, r)
+	st.RulesVersion = plan.RulesVersion
 	return d
 }
 
