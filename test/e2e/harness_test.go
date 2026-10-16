@@ -402,18 +402,28 @@ func (s *Session) ApprovePermissions() {
 	}()
 }
 
-// RemovePlansAfter deletes plan files the session wrote into ~/.claude/plans (plan mode writes there),
-// so tests never leave plans behind in the developer's real plans folder.
-func (s *Session) RemovePlansAfter() {
-	home, _ := os.UserHomeDir()
-	plans := filepath.Join(home, ".claude", "plans")
-	s.t.Cleanup(func() {
-		for _, e := range s.Events() {
-			if p, _ := e["plan"].(string); (e["kind"] == "attached" || e["kind"] == "plan_not_attached") && filepath.Dir(p) == plans {
-				os.Remove(p)
-			}
-		}
-	})
+// PlansHere sets the project's plansDirectory to plans/ inside it (Claude Code wants it in the project),
+// so plan mode writes the session's plan there, never into the developer's own plans folder, where baton
+// would move it as it attaches it. Both the folder and the settings file stay out of git, so the working
+// tree stays clean. It returns the folder.
+func PlansHere(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(`{"plansDirectory": "plans"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exclude := filepath.Join(dir, ".git", "info", "exclude")
+	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("/plans/\n/.claude/\n"); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "plans")
 }
 
 // Events reads the event logs of every run in the project (.baton/runs/*/events.jsonl), oldest first.

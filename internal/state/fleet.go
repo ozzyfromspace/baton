@@ -481,6 +481,26 @@ func (s *Store) WorkerJobs(st State) []Job {
 	return out
 }
 
+// OthersTold is the background work the other loops of s's run were told of as it started
+// (Runtime.BackgroundTold): the lead's and every phase agent's but s's own. Claude Code reports every
+// background task of the session at each Stop, whoever started it, so a loop counts none of those as its
+// own. The others' states are read without their locks, or the project's, so an Update of s may call it.
+func (s *Store) OthersTold() []string {
+	p := s.ProjectOf()
+	run := s.Ref
+	var out []string
+	if s.Parent != "" {
+		run = s.Parent
+		out = append(out, p.info(run, p.refDir(run, ""), nil).State.Run.BackgroundTold...)
+	}
+	for _, w := range p.Workers(run) {
+		if w.ID != s.Ref {
+			out = append(out, w.State.Run.BackgroundTold...)
+		}
+	}
+	return out
+}
+
 // ToldWorkers records the workers' decisions ids (P3.d1, …) as handed to the lead's model (Decision.Told),
 // each in its own sub-run, one at a time. Other ids, and a sub-run's store, change nothing.
 func (s *Store) ToldWorkers(ids []string) {

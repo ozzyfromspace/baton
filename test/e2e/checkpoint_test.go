@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,4 +96,63 @@ func TestContextQuestionTimesOut(t *testing.T) {
 		t.Errorf("the mod did not report the deadline:\n%s", eventLog(s))
 	}
 	none(t, s, "auto_answered")
+}
+
+// readingPlan's P0 reads ten files of about 5k tokens each, one at a time, so the context climbs a few
+// thousand tokens a step: past the notice line first, then past the checkpoint line.
+const readingPlan = `# Reading plan
+
+## P0 — Read the parts
+Read the files part01.txt to part10.txt with the Read tool, in order, one file per tool call and never two at once. After each one, run ` + "`echo read N`" + ` with the Bash tool, N being its number. Then write the last word of part10.txt into a new file named last, and commit it.
+If baton asks you to checkpoint, do exactly as it says, at once.
+
+## P1 — Wrap up
+Run ` + "`echo done`" + `.
+`
+
+// The context valves on a small window (a 100k cap): at the notice line baton tells the model where its
+// context stands and asks nothing, so the model reads on; at the checkpoint line it asks for a checkpoint,
+// and the model takes one. The question to the human (warn) is off, so it cannot come first.
+func TestTheContextNoticeAsksNothingBeforeTheCheckpoint(t *testing.T) {
+	dir := NewProject(t)
+	for i := 1; i <= 10; i++ {
+		var b strings.Builder
+		for l := 1; l <= 200; l++ {
+			fmt.Fprintf(&b, "Part %d, line %d: the heron waits by the reeds while the river carries leaves past the old stone mill.\n", i, l)
+		}
+		fmt.Fprintf(&b, "The last word of part %d is lantern%d\n", i, i)
+		name := fmt.Sprintf("part%02d.txt", i)
+		writeFile(t, dir, name, b.String())
+		Git(t, dir, "add", name)
+	}
+	Git(t, dir, "commit", "-q", "-m", "docs: the parts")
+	Attach(t, dir, readingPlan)
+	s := StartEnv(t, dir, []string{"BATON_NOTICE_PCT=1", "BATON_CHECKPOINT_PCT=55", "BATON_WARN_PCT=0"},
+		"--autocompact", "100k", "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.")
+	s.Trust()
+	s.ApprovePermissions()
+	waitSequence(t, s, 10*time.Minute,
+		kind("context_notice"),
+		kind("context_nudge"),
+		kind("checkpoint"),
+		is("compact_queued", "reason", "checkpoint"),
+		is("brief", "type", "checkpoint", "phase", "P0"),
+	)
+	evs := s.Events()
+	n, nudge := first(evs, kind("context_notice")), first(evs, kind("context_nudge"))
+	notice := evs[n]
+	if lim, _ := notice["limit"].(float64); lim != 100_000 {
+		t.Errorf("the notice's limit: %v", notice)
+	}
+	if at, cp := notice["notice"].(float64), notice["checkpoint"].(float64); at <= 0 || at >= cp || cp != 55_000 {
+		t.Errorf("the notice at %v, the checkpoint at %v", at, cp)
+	}
+	// The notice asked nothing: the model read on (the nudge comes with a later call's result), and
+	// checkpointed only once asked.
+	for _, e := range evs[n:nudge] {
+		if e["kind"] == "checkpoint" || e["kind"] == "stop_refused" {
+			t.Errorf("before the checkpoint was asked: %v", e)
+		}
+	}
+	none(t, s, "context_warning")
 }

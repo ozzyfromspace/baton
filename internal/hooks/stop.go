@@ -35,6 +35,7 @@ func (h *handlers) stop(c Context) (Result, error) {
 			origin, retake = state.OriginOf(s.Root), true
 		}
 	}
+	others := s.OthersTold() // read before the lock
 	var d decision
 	var ann string
 	var owed *state.Briefing
@@ -49,7 +50,7 @@ func (h *handlers) stop(c Context) (Result, error) {
 			vd := st.ParkedOn()
 			retook = &vd
 		}
-		recordStop(st, c)
+		recordStop(st, c, others)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
 		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to

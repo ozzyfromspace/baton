@@ -164,6 +164,33 @@ func TestAPhaseAgentsBackgroundWorkIsToldAtItsStart(t *testing.T) {
 	}
 }
 
+// Claude Code reports every background task of the session at each Stop, whoever started it. Work a phase
+// agent was told of as it started is the agent's: it neither refuses the lead's stop nor keeps the lead
+// waiting on it; and the lead's own work is not the agent's.
+func TestAStopLeavesOutAnotherLoopsBackgroundWork(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	w.fire("PostToolUse", bgBash("go test ./...", "b1", true))
+	lead.fire("PostToolUse", bgBash("npm test", "b2", false))
+	out := lead.fire("Stop", map[string]any{"background_tasks": shells("b1", "b2")})
+	if feedback(out) != "" || !strings.Contains(say(out), "waits on background work (task b2)") {
+		t.Fatalf("the lead's stop: %v", out)
+	}
+	if bg := lead.state().Run.Background; len(bg) != 1 || bg[0].ID != "b2" {
+		t.Errorf("the lead's background work: %+v", bg)
+	}
+	// The agent's own started where baton did not see it is the agent's to be told of, not the lead's.
+	out = w.fire("SubagentStop", map[string]any{"background_tasks": shells("b1", "b2", "b3")})
+	if r := feedback(out); !strings.Contains(r, "(task b1, and 1 more)") {
+		t.Fatalf("the agent's stop: %v", out)
+	}
+	if bg := w.state().Run.Background; len(bg) != 2 || bg[0].ID != "b1" || bg[1].ID != "b3" {
+		t.Errorf("the agent's background work: %+v", bg)
+	}
+	if len(lead.eventsOf("stop_refused")) != 0 {
+		t.Errorf("the lead's events: %s", lead.eventLog())
+	}
+}
+
 // Telling background work at its start fails open: a panic in it exits 0 and writes nothing.
 func TestTellingBackgroundWorkFailsOpen(t *testing.T) {
 	failsOpen(t, []failCase{

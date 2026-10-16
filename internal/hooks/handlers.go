@@ -1671,11 +1671,14 @@ func (h *handlers) phaseAgent(c Context) (*state.Store, error) {
 }
 
 // recordStop notes what every Stop tells us; the decision about the stop is made in stop.go.
-func recordStop(st *state.State, c Context) {
+func recordStop(st *state.State, c Context, others []string) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
 	st.Run.ToolsEnded("")
-	st.Run.SetBackground(tasks(c.Input["background_tasks"]), c.Now)
+	// Claude Code reports every background task of the session, whoever started it: the work another loop
+	// of the run was told of as it started (others, Store.OthersTold) is that loop's.
+	own := slices.DeleteFunc(tasks(c.Input["background_tasks"]), func(t state.Task) bool { return slices.Contains(others, t.ID) })
+	st.Run.SetBackground(own, c.Now)
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
