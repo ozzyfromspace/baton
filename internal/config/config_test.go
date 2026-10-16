@@ -15,17 +15,17 @@ import (
 func TestLoadFileEnvAndDefaults(t *testing.T) {
 	root := t.TempDir()
 	c := Load(root, func(string) string { return "" })
-	if c.Autocompact != DefaultAutocompact || *c.CheckpointPct != DefaultCheckpointPct || *c.WarnPct != DefaultWarnPct || c.NtfyServer != DefaultNtfyServer || !c.DesktopOn() || !c.Restarts() {
+	if c.Autocompact != DefaultAutocompact || *c.NoticePct != 60 || *c.CheckpointPct != 80 || *c.WarnPct != DefaultWarnPct || c.NtfyServer != DefaultNtfyServer || !c.DesktopOn() || !c.Restarts() {
 		t.Fatalf("defaults: %+v", c)
 	}
-	os.WriteFile(Path(root), []byte(`{"ntfy_topic":"file","details":true,"autocompact":"off","checkpoint_pct":50,"warn_pct":0,"auto_restart":false}`), 0o644)
+	os.WriteFile(Path(root), []byte(`{"ntfy_topic":"file","details":true,"autocompact":"off","notice_pct":0,"checkpoint_pct":50,"warn_pct":0,"auto_restart":false}`), 0o644)
 	c = Load(root, func(string) string { return "" })
-	if c.NtfyTopic != "file" || !c.Details || c.Autocompact != "" || *c.CheckpointPct != 50 || *c.WarnPct != 0 || c.Restarts() {
+	if c.NtfyTopic != "file" || !c.Details || c.Autocompact != "" || *c.NoticePct != 0 || *c.CheckpointPct != 50 || *c.WarnPct != 0 || c.Restarts() {
 		t.Fatalf("file: %+v", c)
 	}
-	env := map[string]string{"BATON_NTFY_TOPIC": "env", "BATON_NOTIFY_DESKTOP": "0", "BATON_AUTOCOMPACT": "600k", "BATON_CHECKPOINT_PCT": "0", "BATON_WARN_PCT": "80", "BATON_AUTO_RESTART": "1"}
+	env := map[string]string{"BATON_NTFY_TOPIC": "env", "BATON_NOTIFY_DESKTOP": "0", "BATON_AUTOCOMPACT": "600k", "BATON_NOTICE_PCT": "55", "BATON_CHECKPOINT_PCT": "0", "BATON_WARN_PCT": "80", "BATON_AUTO_RESTART": "1"}
 	c = Load(root, func(k string) string { return env[k] })
-	if c.NtfyTopic != "env" || c.DesktopOn() || c.Autocompact != "600k" || *c.CheckpointPct != 0 || *c.WarnPct != 80 || !c.Restarts() {
+	if c.NtfyTopic != "env" || c.DesktopOn() || c.Autocompact != "600k" || *c.NoticePct != 55 || *c.CheckpointPct != 0 || *c.WarnPct != 80 || !c.Restarts() {
 		t.Fatalf("env: %+v", c)
 	}
 }
