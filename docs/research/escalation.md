@@ -2,10 +2,12 @@
 
 **In short:** the evidence behind graduated escalation, now in [`design.md`](../design.md). Dialogs queue, and a
 digit typed into the wrong one can approve a command, so baton answers its own question only when it is the only
-dialog open, with the default at option 3 (since v0.8, where baton's mod runs, nothing types into a dialog at all).
-Replaying the signing incident, a question with a fallback still blocked 4 times in 4, and an action-first `propose`
-finished the plan 4 times in 4. A late answer works from baton's record alone, and a snapshot saves uncommitted work
-without touching anything else.
+dialog open. Where baton's mod runs (since v0.8), nothing types into a dialog at all; where it does not, the host
+typed `3`, where the default sits, until v0.8.6, when Claude Code's Bash prompt had made `3` "Yes, and switch to
+auto mode": it now dismisses its question with Esc, which picks nothing anywhere, and records the default itself
+([spike 39](#esc-in-place-of-a-digit-spike-39-v086)). Replaying the signing incident, a question with a fallback
+still blocked 4 times in 4, and an action-first `propose` finished the plan 4 times in 4. A late answer works from
+baton's record alone, and a snapshot saves uncommitted work without touching anything else.
 
 Measured 2026-10-05 against Claude Code 2.1.289 on macOS (arm64), with
 [`spikes/16-escalation`](../../spikes/16-escalation). This is the evidence behind
@@ -32,6 +34,22 @@ replayed the incident that started it all through baton, before and after the pr
 Only Bash prompts were measured. Other dialogs (`ExitPlanMode`, MCP elicitation) may give `3` another
 meaning, so the key is a second layer of safety, not the first. baton answers only when its own question is
 the **only** dialog open, and only when the question has exactly the shape baton issued.
+
+## Esc in place of a digit (spike 39, v0.8.6)
+
+[`spikes/39-escape-answers`](../../spikes/39-escape-answers/README.md), 2026-10-16, Claude Code 2.1.301, Haiku 5.5,
+with no mod (serial mode) and every hook logged. The key S1 chose had stopped being safe, and the question about a
+plan approved mid-run had put its most costly answer where Enter lands.
+
+| Probe | What happened | Consequence for baton |
+|---|---|---|
+| The lead's Bash permission prompt, default and acceptEdits mode | `1. Yes`, `2. Yes, and don't ask again for: <command>`, **`3. Yes, and switch to auto mode`**, `4. No`. Typing `3` ran the command and switched the session to auto mode. | No digit is safe to type into a dialog any more. Serial mode types none. |
+| A Write prompt | `1. Yes`, `2. Yes, and switch to accept edits for this session`, `3. No`. | Each dialog numbers its own options; nothing about a digit holds across them. |
+| Esc on a permission prompt (the lead's Bash and Write; an agent's Bash) | Rejected: the call did not run, the lead's turn ended ("Interrupted · What should Claude do instead?"), no hook fired. An agent's call came back "Permission for this tool use was denied", and the agent went on without it. | Esc is "No" in every permission prompt. |
+| Esc on baton's question (and with its free-text option focused and words typed in it) | Dismissed in one press: "User declined to answer questions". The call's result is an error, "The user doesn't want to proceed with this tool use. … STOP what you are doing and wait for the user to tell you how to proceed.", then `[Request interrupted by user for tool use]`. The turn ended. **No hook fired**: no `PostToolUse`, `PostToolUseFailure`, `PermissionDenied` or `Stop`. The idle notification came 61 s later, and none when another key was pressed meanwhile. | The host answers its own question by Esc, and records the default itself as it does (`hooks.Lapse`), since nothing else will; it closes the lead's turn on record, which nothing else will for a minute or more. The model, told to stop and wait, moves on at baton's next line, which carries the answer. |
+| Esc at the idle prompt, with a draft in the box, and during a lead turn, a background agent at work each time | Nothing at the idle prompt; the draft stayed; the lead's turn ended. The agent ran on every time. | An Esc that lands anywhere else costs at most the lead's turn, which baton's next line starts again. |
+| A terminal that speaks the kitty keyboard protocol | A bare Esc byte still dismissed the question and rejected the prompt. | The host types the plain byte. |
+| Enter on baton's question | It picked the first option. | The question about a plan approved mid-run puts Wait for me first, Start the new plan from P0 second and the default third: a stray Enter holds the approved plan for the human, and lapses into the default. |
 
 ## A timed ask, end to end (S3)
 
@@ -110,7 +128,8 @@ and `commit-tree` needs an identity, so baton supplies its own (`GIT_AUTHOR_*`, 
 - **v0.1.1's context-question auto-answer is fixed before anything else.**
   - Open dialogs become a queue: closed only by an exact match, swept at turn ends and idle notices.
   - baton answers only when its own question is the only dialog open, and has the shape baton issued.
-  - The default is option 3, typed as `3`.
+  - The default is option 3, typed as `3`. (Since v0.8.6 nothing is typed but Esc, and the host records the
+    default itself: spike 39, above.)
 - **The soft tier is a proposal, put to the human through `AskUserQuestion`.** With no ntfy topic, that
   question's notification is the only thing that reaches a phone. If nobody answers, baton answers it.
 - **The default is the action** (`propose`), never a fallback the model has to invent.

@@ -3,6 +3,8 @@ package state
 import (
 	"testing"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/plan"
 )
 
 // Whether a phase agent's work needs it any more is read from the record alone: landed, or done in its
@@ -109,5 +111,102 @@ func TestStopAgent(t *testing.T) {
 	w.Status = WorkerHeld
 	if st.AgentWaits(q) {
 		t.Error("a restart's question waits once its agent is held again")
+	}
+}
+
+// stoppedTwice is a running run of p0 (the lead's, done), p1 (its agent stopped twice and taken down at
+// down, its question with no deadline queued then), p2 (after p1) and p3, done: nothing else can move.
+func stoppedTwice(down time.Time) (State, plan.Plan) {
+	p := plan.Plan{Version: 1, Phases: []plan.Phase{{ID: "P0"}, {ID: "P1", After: []string{}}, {ID: "P2", After: []string{"P1"}}, {ID: "P3", After: []string{}}}}
+	st := Attach(p, down.Add(-time.Hour), Origin{})
+	st.Phases["P0"].Status, st.Phases["P3"].Status, st.Current = PhaseDone, PhaseDone, ""
+	st.Phases["P1"] = &PhaseState{Status: PhaseWorking, Worker: "run/P1"}
+	st.Workers = []Worker{{Phase: "P1", Ref: "run/P1", Status: WorkerHeld, Assigned: down.Add(-time.Hour), Generation: st.Generation, Stops: 2, TakenDown: down}}
+	st.Relay = []Relay{{Phase: "P1", Kind: RelayStopped, Since: down, Count: 2, Persist: "only they can say", Queued: down}}
+	return st, p
+}
+
+// The question about a twice-stopped phase is open until the human answers it, and only while the phase
+// still waits on it; what else in the run can move is named, and once nothing can, the phase is taken back
+// for the lead escalation_timeout later, never sooner than its dialog's time, nor than the lead's last turn
+// or the human's last word allow.
+func TestATwiceStoppedPhaseWaitsOnTheRunAlone(t *testing.T) {
+	down := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	now := down.Add(time.Minute)
+	for _, c := range []struct {
+		name  string
+		set   func(st *State)
+		open  bool
+		moves string
+	}{
+		{"nothing else can move", nil, true, ""},
+		{"stepped aside", func(st *State) {
+			st.Relay[0].Answered, st.Relay[0].Applied = &Resolution{By: ByTimeout, Answer: "Ask me later", At: now}, now
+		}, true, ""},
+		{"answered by the human", func(st *State) { st.Relay[0].Answered = &Resolution{By: ByHuman, Answer: "Restart it", At: now} }, false, ""},
+		{"withdrawn", func(st *State) { st.Relay[0].Answered = &Resolution{By: ByWithdrawn, At: now} }, false, ""},
+		{"its worker restarted", func(st *State) { st.Workers[0].Status, st.Workers[0].TakenDown = WorkerSuspended, time.Time{} }, false, ""},
+		{"paused", func(st *State) { st.Mode = ModePaused }, true, "the run is paused"},
+		{"the lead holds a phase", func(st *State) { st.Current = "P3" }, true, "the lead holds P3"},
+		{"the lead's turn runs", func(st *State) { st.Run.TurnOpen = true }, true, "the lead's turn runs"},
+		{"a compaction", func(st *State) { st.Run.Compaction.Queue("boundary", now) }, true, "a compaction is under way"},
+		{"a replan", func(st *State) { st.Replan = &Replan{} }, true, "a replan is open"},
+		{"the lead's own question", func(st *State) { st.Run.Escalation = &Escalation{Kind: "blocked"} }, true, "a question of the lead's waits"},
+		{"a usage limit", func(st *State) { st.Usage = &Usage{Limited: now.Add(time.Hour)} }, true, "a usage limit lifts at 2026-10-15T13:01:00Z"},
+		{"a usage limit lifted", func(st *State) { st.Usage = &Usage{Limited: now.Add(-time.Minute)} }, true, ""},
+		{"a job", func(st *State) { st.Jobs = []Job{{ID: "j1", Phase: "P0", Status: JobRunning}} }, true, "job j1 runs"},
+		{"a phase can start", func(st *State) { st.Phases["P3"].Status = PhasePending }, true, "P3 can start"},
+		{"another agent at work", func(st *State) {
+			st.Phases["P3"] = &PhaseState{Status: PhaseWorking, Worker: "run/P3"}
+			st.Workers = append(st.Workers, Worker{Phase: "P3", Ref: "run/P3", Status: WorkerSuspended, Generation: st.Generation})
+		}, true, "the agent on P3 is at work"},
+		{"another agent stopped, asked with a deadline", func(st *State) {
+			st.Phases["P3"] = &PhaseState{Status: PhaseWorking, Worker: "run/P3"}
+			st.Workers = append(st.Workers, Worker{Phase: "P3", Ref: "run/P3", Status: WorkerHeld, Generation: st.Generation, Stops: 1, StoppedAt: now})
+			st.Relay = append(st.Relay, Relay{Phase: "P3", Kind: RelayStopped, Since: now, Count: 1, Queued: now})
+		}, true, "the question about the agent on P3 has a deadline"},
+		{"another agent left stopped by the human", func(st *State) {
+			st.Phases["P3"] = &PhaseState{Status: PhaseWorking, Worker: "run/P3"}
+			st.Workers = append(st.Workers, Worker{Phase: "P3", Ref: "run/P3", Status: WorkerHeld, Generation: st.Generation, Stops: 1, StoppedAt: now})
+		}, true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st, p := stoppedTwice(down)
+			if c.set != nil {
+				c.set(&st)
+			}
+			r := st.StoppedTwice()
+			if (r != nil) != c.open {
+				t.Fatalf("open %v, want %v", r != nil, c.open)
+			}
+			if got := st.Moves(p, "P1", now); got != c.moves {
+				t.Errorf("moves %q, want %q", got, c.moves)
+			}
+		})
+	}
+
+	st, _ := stoppedTwice(down)
+	r := st.Relay[0]
+	const wait = 10 * time.Minute
+	for _, c := range []struct {
+		name  string
+		set   func(st *State, r *Relay)
+		since time.Time
+		want  time.Time
+	}{
+		{"from when nothing could move", nil, now, now.Add(wait)},
+		{"named as HH:MM, never sooner", nil, now.Add(30 * time.Second), now.Add(wait + time.Minute)},
+		{"from the lead's last stop", func(st *State, _ *Relay) { st.Run.LastStop = now.Add(2 * time.Minute) }, now, now.Add(wait + 2*time.Minute)},
+		{"from the human's last word", func(st *State, _ *Relay) { st.Run.HumanAt = now.Add(5 * time.Minute) }, now, now.Add(wait + 5*time.Minute)},
+		{"from the question asked again", func(_ *State, r *Relay) { r.Queued = now.Add(3 * time.Minute) }, now, now.Add(wait + 3*time.Minute)},
+		{"not before its dialog's time", func(_ *State, r *Relay) { r.Deadline = now.Add(wait + 4*time.Minute) }, now, now.Add(wait + 4*time.Minute)},
+	} {
+		s, q := st, r // copies: Run and the relay are values
+		if c.set != nil {
+			c.set(&s, &q)
+		}
+		if got := s.TakeUpAt(q, c.since, wait); !got.Equal(c.want) {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
 	}
 }

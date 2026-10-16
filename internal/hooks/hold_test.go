@@ -171,7 +171,7 @@ func TestNoSentenceHasABlankForThePhase(t *testing.T) {
 		f.startRun()
 		f.set(none)
 		f.approve(f.writePlan("after-clear.md", approvedDoc))
-		q := ask(f.state().PlanQuestion.Question, "Start the new plan from P0", "Wait for me", "Keep the current run")
+		q := ask(f.state().PlanQuestion.Question, "Wait for me", "Start the new plan from P0", "Keep the current run")
 		if strings.Contains(q["tool_input"].(map[string]any)["questions"].([]any)[0].(map[string]any)["question"].(string), "(at )") {
 			t.Fatalf("asked %v", q)
 		}

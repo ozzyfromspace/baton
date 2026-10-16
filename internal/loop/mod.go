@@ -107,7 +107,7 @@ var errSubmitOpen = errors.New("the line before it is not acked yet")
 // first tick. A phase agent's loop has no claude of its own: its line is a message.
 func (l *Loop) modMode(v host.View) int {
 	switch {
-	case l.Store.Worker() != "":
+	case l.agentLine():
 		return modOff
 	case l.modOn:
 		return modOn
@@ -252,13 +252,18 @@ func (l *Loop) redo(v host.View, comp state.Compaction, why string) {
 // 35: "a turn is running (<turnId>); the conversation compacts between turns").
 func turnRunning(why string) bool { return strings.Contains(why, "a turn is running") }
 
-// via says, for an event, how the loop gave the lead its line: "mod", or "keys".
+// via says, for an event, how the loop gave its session its line: "mod", or "keys". A phase agent's line
+// is a message baton's mod sends (agentLine).
 func (l *Loop) via() string {
-	if l.viaMod() {
+	if l.viaMod() || l.agentLine() {
 		return "mod"
 	}
 	return "keys"
 }
+
+// agentLine reports that the loop is a phase agent's (Agent), whose line is a message baton's mod sends
+// (line.go): nothing it says is typed.
+func (l *Loop) agentLine() bool { return l.Store.Worker() != "" }
 
 // unsaid logs that a line baton was giving the model (doing what) did not go out; it is given again at a
 // later tick. One held back while the line before it is not acked yet is no news.

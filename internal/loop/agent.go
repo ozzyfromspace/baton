@@ -80,8 +80,7 @@ func (a *Agent) tick(now time.Time) {
 	if a.in == nil || st.Mode != state.ModeRunning {
 		return
 	}
-	// Nothing draws an agent's screen: it is quiet once its hooks have been, and no human key holds it.
-	v.LastOutput = latest(st.Run.LastActivity, st.Run.LastStop)
+	// Nothing draws an agent's screen, and no human key holds it: its gate skips the screen (Loop.gate).
 	a.loop.clock(v)
 	a.loop.why, a.loop.wished = a.loop.gate(v, st), false
 	a.loop.resolve(v, st)

@@ -87,6 +87,10 @@ type Runtime struct {
 	// runs, it reports each one as it begins, so a /compact baton typed that it says nothing of soon did
 	// not take; where it does not (this claude has not shown it yet), only the compaction's proof can say.
 	ModReports time.Time `json:"mod_reports,omitzero"`
+	// ModCounted is the mod's report of the lead's compaction counted here last (CountOnce): the same
+	// report sent again, by a mod whose report process was killed before the bridge recorded it, is not
+	// counted twice.
+	ModCounted *ModSeq `json:"mod_counted,omitempty"`
 	// Serial is why the host that decided it runs the plan's phases one at a time in the lead: baton's mod
 	// did not say hello in its claude, or is another baton's (loop/mod.go). Another host decides afresh.
 	Serial *Serial `json:"serial,omitempty"`
@@ -251,7 +255,8 @@ type Dialog struct {
 	Phase string `json:"phase,omitempty"`
 	// Kind names a question baton issued, put to the human word for word in the shape baton gave it:
 	// "escalation", "review", or one baton answers itself if nobody has within a while: "context_warning"
-	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when it did.
+	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when the host dismissed it
+	// to answer it so, where baton's mod does not run (loop's answerOwnQuestion).
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
 	// Front is when baton first saw it at the front of the queue, on screen (hooks.Bound).

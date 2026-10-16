@@ -105,6 +105,10 @@ type Plan struct {
 	QAForTitle string `json:"qa_for_title,omitempty"`
 	// Bounds are the anchors of the phases a narrowed plan leaves out (Only): sections still end at them.
 	Bounds []string `json:"bounds,omitempty"`
+	// Origin is the file the plan was approved or attached in, when baton moved it out of Claude Code's
+	// way to File (MoveAside): the session's plan-mode file, which Claude Code writes afresh at the
+	// session's next planning, so an approval of it is a revision of this plan. "" for a plan never moved.
+	Origin string `json:"plan_origin,omitempty"`
 }
 
 // Spec is what the model supplies to `baton attach`: everything except the file identity.

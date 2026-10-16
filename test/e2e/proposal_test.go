@@ -27,8 +27,8 @@ func startProposal(t *testing.T, timeout string, args ...string) (*Session, stri
 
 // Nobody answers: at the deadline baton picks Go ahead itself, and the model does what it proposed. Where
 // baton's mod runs, the mod answers the question itself, never sooner than a minute after it was shown,
-// and no key is typed into any dialog; where it does not, the host types 3 once its question is alone on
-// screen.
+// and no key is typed into any dialog; where it does not, the host dismisses its question with Esc once it
+// is alone on screen, and records Go ahead itself (spike 39), and its mail line tells the model.
 func TestProposalGoesAheadWhenNobodyAnswers(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -44,7 +44,7 @@ func TestProposalGoesAheadWhenNobodyAnswers(t *testing.T) {
 			if !c.mod {
 				args = []string{"--plugin-dir", noModPlugin(t)}
 				steps = append(steps, func(e map[string]any) bool {
-					return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "3"
+					return e["kind"] == "auto_answered" && e["dialog"] == "proposal" && e["key"] == "esc"
 				})
 			}
 			// Where the mod settles it, baton records the answer before the mod's report of it (mod_deadline),

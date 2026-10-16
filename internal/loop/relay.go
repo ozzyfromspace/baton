@@ -64,6 +64,7 @@ func (c *Coordinator) relay(now time.Time, s *state.Store, b *bridge.Bridge) {
 	}
 	c.lapseHolds(now, s, st)
 	c.stoppedAgain(now, s, st)
+	c.takeStopped(now, s, b)
 	c.ask(now, s, b)
 }
 
