@@ -355,7 +355,11 @@ func TestAGateHereInAWorktreeHoldsALane(t *testing.T) {
 	path := calls(t)
 	pool := Pool{Home: t.TempDir(), Root: root}
 	busy := filepath.Join(t.TempDir(), "busy") // there while a gate runs
-	gate := fmt.Sprintf(`test ! -e %[1]s && touch %[1]s && echo "$BATON_LANE $BATON_LANE_DIR" > lane.txt && sleep 0.3 && rm %[1]s`, busy)
+	// Each gate holds its lane until the second gate waits for it (go), so the wait never rests on timing; at
+	// most 30 seconds, so a second gate that never waits fails the test rather than hanging it.
+	goFile := filepath.Join(t.TempDir(), "go")
+	gate := fmt.Sprintf(`test ! -e %[1]s && touch %[1]s && echo "$BATON_LANE $BATON_LANE_DIR" > lane.txt && i=0 && `+
+		`while [ ! -e %[2]s ] && [ "$i" -lt 3000 ]; do sleep 0.01; i=$((i + 1)); done && rm %[1]s`, busy, goFile)
 	trees := []string{t.TempDir(), t.TempDir()}
 	runner := func(tree string) *Runner {
 		r := testRunner(t, root)
@@ -367,7 +371,7 @@ func TestAGateHereInAWorktreeHoldsALane(t *testing.T) {
 	go func() {
 		first <- runner(trees[0]).Run(context.Background(), Job{ID: "P1.j1", Command: gate, Commit: head, Here: true})
 	}()
-	for deadline := time.Now().Add(5 * time.Second); !isFile(busy); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); !isFile(busy); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the first gate never ran")
 		}
@@ -380,7 +384,12 @@ func TestAGateHereInAWorktreeHoldsALane(t *testing.T) {
 		slots, ahead int
 	}
 	var waits []wait
-	r.LaneWait = func(since time.Time, slots, ahead int) { waits = append(waits, wait{since, slots, ahead}) }
+	r.LaneWait = func(since time.Time, slots, ahead int) {
+		waits = append(waits, wait{since, slots, ahead})
+		if err := os.WriteFile(goFile, nil, 0o644); err != nil {
+			t.Error(err)
+		}
+	}
 	second := r.Run(context.Background(), Job{ID: "P2.j1", Command: gate, Commit: head, Here: true})
 	for i, got := range []Result{<-first, second} {
 		if got.Status != Passed || got.Lane != 1 {
