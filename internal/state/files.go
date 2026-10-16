@@ -5,5 +5,5 @@ package state
 func WriteFile(path string, data []byte) error { return writeAtomic(path, data) }
 
 // Locked runs fn holding an exclusive lock on path, waiting for another process's as long as an update of
-// a run's state does.
-func Locked(path string, fn func() error) error { return withLockFile(path, fn) }
+// a run's state does, and logging what the lock tells it as w says (see withLockFile).
+func Locked(path string, w LockWatch, fn func() error) error { return withLockFile(path, w, fn) }

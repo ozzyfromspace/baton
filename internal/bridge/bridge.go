@@ -291,7 +291,7 @@ func (b *Bridge) locked(fn func() error) error {
 	if err := os.MkdirAll(b.Dir, 0o755); err != nil {
 		return err
 	}
-	return state.Locked(filepath.Join(b.Dir, "lock"), fn)
+	return state.Locked(filepath.Join(b.Dir, "lock"), state.LockWatch{Now: b.Now, Event: b.Event}, fn)
 }
 
 // update applies fn to the record under the lock, and saves it unless fn fails.

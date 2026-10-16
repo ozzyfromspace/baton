@@ -71,7 +71,16 @@ func (p *Project) path(parts ...string) string {
 	return filepath.Join(append([]string{p.Dir}, parts...)...)
 }
 
-func (p *Project) withLock(fn func() error) error { return withLockFile(p.path("lock"), fn) }
+func (p *Project) withLock(fn func() error) error {
+	return withLockFile(p.path("lock"), LockWatch{Now: p.Now, Event: p.logLock}, fn)
+}
+
+// logLock writes what the project's lock tells its holder or a waiter (withLockFile) into the hosts' log,
+// baton.log, tagged with the process: the project keeps no events of its own. Best effort.
+func (p *Project) logLock(kind string, fields map[string]any) {
+	b, _ := json.Marshal(fields)
+	appendLine(p.path("baton.log"), fmt.Appendf(nil, "%s [pid %d] %s %s\n", p.Now().Format("2006-01-02 15:04:05.000"), os.Getpid(), kind, b))
+}
 
 // WorkerRef is the ref of the sub-run of run's worker on phase.
 func WorkerRef(run, phase string) string { return run + "/" + phase }
