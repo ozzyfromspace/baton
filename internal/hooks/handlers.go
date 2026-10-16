@@ -255,6 +255,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 		return permission("deny", decide.PhaseTypeIsBatons), nil
 	}
+	if res, refused := h.agentNameTaken(c); refused {
+		return res, nil
+	}
 	if res, ok := h.unbuilt(c); ok {
 		return res, nil
 	}
