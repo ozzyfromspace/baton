@@ -106,6 +106,21 @@ func TestAnApprovedOnePhasePlanRunsToCompletion(t *testing.T) {
 	}
 }
 
+// A plan that quotes its own headings in its text is attached at approval all the same: each anchor baton
+// picks occurs once.
+func TestAPlanQuotingItsOwnHeadingsIsAttached(t *testing.T) {
+	f := newFixture(t, false)
+	doc := "# Quoting\n\n## Decisions\n\nThe goal sections (`## Standing rules`, `## Verification`) stay as approved.\n\n" +
+		"## Standing rules\n\nBe careful.\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b.\n\n## Verification\n\nAll green.\n"
+	file := f.writePlan("quoting.md", doc)
+	if out := f.approve(file); !strings.Contains(say(out), `attached "Quoting" (2 phases;`) {
+		t.Fatalf("announced %q", say(out))
+	}
+	if pl, _ := f.store.LoadPlan(); pl.RulesAnchor != "## Standing rules\n" || pl.EndAnchor != "## Verification\n" {
+		t.Errorf("anchors %q, %q", pl.RulesAnchor, pl.EndAnchor)
+	}
+}
+
 // Not every plan is a baton plan: one without phase headings is left alone.
 func TestAPlanWithoutPhasesIsLeftAlone(t *testing.T) {
 	f := newFixture(t, false)
