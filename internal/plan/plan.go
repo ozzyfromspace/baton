@@ -338,6 +338,12 @@ func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error)
 	if err != nil {
 		return p, true, fmt.Errorf("the plan file cannot be read: %w", err)
 	}
+	return Follow(p, doc, remaining)
+}
+
+// Follow is Recheck of doc, the plan document's text as read already: a copy of it kept elsewhere (a
+// replan's original) is followed as the file would be.
+func Follow(p Plan, doc []byte, remaining []string) (adopted Plan, changed bool, err error) {
 	sum := sha256.Sum256(doc)
 	if hex.EncodeToString(sum[:]) == p.SHA256 {
 		return p, false, nil
