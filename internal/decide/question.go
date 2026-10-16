@@ -41,9 +41,11 @@ func optionList(opts []Option) string {
 }
 
 // EscalationOptions are the answers to an escalation. The default, Continue, is third, as in every
-// question of baton's that has one: where baton's mod does not run, the host answers it by typing 3 at its
-// deadline, which in a permission prompt is "No" (docs/research/escalation.md). Wait for me holds the run
-// for the human, and lapses like any hold (HoldLapse).
+// question of baton's that has one (OwnAnswer counts on it). No key picks it: the mod answers with it at
+// the deadline, and where the mod does not run, the host dismisses the question with Esc and records the
+// default itself, since a digit typed into a permission prompt may approve the call (on Claude Code
+// 2.1.30x a Bash prompt's 3 is "Yes, and switch to auto mode"; docs/research/escalation.md). Wait for me
+// holds the run for the human, and lapses like any hold (HoldLapse).
 var EscalationOptions = []Option{
 	{"Pause baton", "I'll take it from here"},
 	{"Wait for me", "Hold the run until I write in the session; with no word for " + Spell(HoldLapse) + ", it carries on"},
@@ -60,15 +62,16 @@ var ReviewOptions = []Option{
 // after a sleep, or once a dialog in front of it goes, they get that long again.
 const MinWait = time.Minute
 
-// WarnOptions are the context question's answers. The default, Keep going, is third on purpose: baton
-// types 3 when nobody answers, and in a permission prompt 3 is "No" (docs/research/escalation.md).
+// WarnOptions are the context question's answers. The default, Keep going, is third, as in every
+// question of baton's that has one (EscalationOptions).
 var WarnOptions = []Option{
 	{"Checkpoint now", "Finish the current step, save notes and compact; this phase continues from the notes"},
 	{"Pause baton", "I'm taking over; baton stops driving the plan"},
 	{"Keep going", "Carry on; Claude Code compacts on its own when the context is full"},
 }
 
-// ProposalOptions are the answers to a proposal. Go ahead is third for the same reason as Keep going.
+// ProposalOptions are the answers to a proposal. Go ahead, the default, is third, as in every question of
+// baton's that has one (EscalationOptions).
 var ProposalOptions = []Option{
 	{"Wait for me", "Don't do it yet; I'll answer in the session, or it goes ahead after " + Spell(HoldLapse) + " with no word"},
 	{"Pause baton", "I'm taking over; baton stops driving the plan"},
@@ -76,7 +79,8 @@ var ProposalOptions = []Option{
 }
 
 // OutwardOptions are the answers to an outward proposal (Outward). Not now, what baton answers when
-// nobody does, is third for the same reason as Keep going; Go ahead, which only the human gives it, last.
+// nobody does, is third, where every question of baton's keeps its default (EscalationOptions); Go ahead,
+// which only the human gives it, last.
 var OutwardOptions = []Option{
 	{"Wait for me", "Don't do it yet; I'll answer in the session, or it is answered Not now after " + Spell(HoldLapse) + " with no word"},
 	{"Pause baton", "I'm taking over; baton stops driving the plan"},

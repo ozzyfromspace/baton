@@ -204,17 +204,27 @@ func agentPhase(st state.State, agent string) string {
 // ahead (its options put Not now third and Go ahead fourth); baton's question about the run (Continue)
 // or about a plan the human approved mid-run (decide.PlanQuestionDefault) after EscalationTimeout, as the mod
 // answers them where it runs; and a block nobody answered for Timing.BlockLook (Look again, lookAgain).
-// The answer arrives through the usual hook.
 //
-// It types only where baton's mod does not run (serial mode): where it does, the mod settles each of
+// It acts only where baton's mod does not run (serial mode): where it does, the mod settles each of
 // baton's questions at its deadline with no key typed (hooks.Bound), and nothing types into a dialog; nor
-// while a mod that may yet say hello is waited for (modWaiting).
+// while a mod that may yet say hello is waited for (modWaiting); nor with nothing to record the answer
+// (Lapse nil).
 //
-// A key typed into the wrong dialog can approve something nobody approved (in a permission prompt, 2 is
-// "Yes, and always allow"), so three layers keep it out of anyone else's (docs/research/escalation.md):
+// It answers by dismissing the question with Esc, and records the dismissal as the question's default
+// (Lapse, as the mod's answer is recorded), since no hook reports a dismissal (spikes/39-escape-answers).
+// No digit is typed: a key typed into the wrong dialog can approve something nobody approved, and on
+// Claude Code 2.1.30x a Bash permission prompt's 3 is "Yes, and switch to auto mode", its 2 "Yes, and
+// don't ask again". Esc picks nothing anywhere: it dismisses a question, rejects a permission prompt (an
+// agent's too, which goes on without the call), leaves the input box and its draft alone, stops no
+// background agent, and at most ends the lead's turn. Two more layers keep it out of anyone else's dialog
+// (docs/research/escalation.md):
 //   - baton's question must be the only dialog open, so nothing can be on screen in front of it;
-//   - the hooks mark an entry as baton's only for the exact question baton issued;
-//   - the key is 3, where the default sits, which in a permission prompt means "No".
+//   - the hooks mark an entry as baton's only for the exact question baton issued.
+//
+// A dismissal ends the lead's turn with no Stop hook, and Claude Code's idle notification comes a minute
+// later at best (none if a key is pressed meanwhile), so the record of the turn and its calls is closed
+// here; the model hears the answer as baton's mail (deliver), as after any answer baton gives for the
+// human.
 //
 // The clock runs from when the question was first alone, and every key the human presses starts it over:
 // somebody at the keyboard is answering it. A proposal is never answered before the time its question
@@ -223,17 +233,18 @@ func agentPhase(st state.State, agent string) string {
 // per question.
 func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) {
 	d, alone := st.Run.Dialogs.Only()
-	if !alone || !d.AutoAnswered.IsZero() || l.mode != modOff {
+	if !alone || !d.AutoAnswered.IsZero() || l.mode != modOff || l.Lapse == nil {
 		return
 	}
 	var due time.Time
-	fields := map[string]any{"dialog": d.Kind, "key": ownAnswerKey}
+	fields := map[string]any{"dialog": d.Kind, "key": ownAnswerKeyName}
 	switch d.Kind {
 	case "context_warning":
 		if !l.alone.Same(d) {
 			l.alone, l.aloneAt = d, v.Now
 		}
 		due = l.since(latest(d.Since, l.aloneAt, v.LastHumanKey)).Add(l.Timing.WarnTimeout)
+		fields["answer"] = decide.WarnOptions[2].Label
 	case "proposal":
 		p := st.PendingProposal()
 		if p == nil || p.Deadline.IsZero() || decide.Normalize(p.Question) != d.Key {
@@ -275,20 +286,36 @@ func (l *Loop) answerOwnQuestion(v host.View, st state.State, in host.Injector) 
 	if v.Now.Before(due) || v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff {
 		return
 	}
+	if err := in.Type(ownAnswerKey, false); err != nil {
+		l.logf("loop: dismissing baton's question (%s): %v", d.Kind, err)
+		return // nothing reached the dialog: tried again at a later tick
+	}
 	l.update(func(st *state.State) {
 		for i := range st.Run.Dialogs {
 			if st.Run.Dialogs[i].Same(d) {
 				st.Run.Dialogs[i].AutoAnswered = v.Now
 			}
 		}
+		// The dismissal ended the lead's turn, and every call of it (spike 39), with no hook to say so.
+		st.Run.TurnOpen = false
+		st.Run.ToolsEnded("")
 	})
 	fields["after"] = v.Now.Sub(l.since(l.aloneAt)).Round(time.Second).String()
 	l.Store.Event("auto_answered", fields)
-	in.Type(ownAnswerKey, false)
+	answer, _ := fields["answer"].(string)
+	if err := l.Lapse(l.Store, d.Key, answer, v.Now); err != nil {
+		// Its dialog is gone from the screen: off the record too, so the loop's lapses take the question up.
+		l.logf("loop: recording the default of baton's question (%s): %v", d.Kind, err)
+		l.update(func(st *state.State) { st.Run.Dialogs.CloseExact(d.Agent, d.Tool, d.Key) })
+	}
 }
 
-// ownAnswerKey picks the third option of baton's own questions, where the default sits.
-const ownAnswerKey = "3"
+// ownAnswerKey is Esc, which dismisses baton's question with no option picked; ownAnswerKeyName is how
+// events name it.
+const (
+	ownAnswerKey     = "\x1b"
+	ownAnswerKeyName = "esc"
+)
 
 // ownOpen reports whether dialog d, of kind escalation or plan_question, is the question baton has open
 // now, as issued: an escalation's of a kind baton answers (not a review's, which the human opted into), or

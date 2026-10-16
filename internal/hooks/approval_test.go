@@ -313,21 +313,36 @@ func TestWaitForMeHoldsAnApprovedPlan(t *testing.T) {
 	}
 }
 
-// Where the mod does not run, the host types the default's key (3): the answer that arrives on the dialog
-// it marked is baton's, by timeout, and says nobody answered.
-func TestAPlanQuestionTheHostAnsweredIsBatons(t *testing.T) {
+// Where the mod does not run, the host dismisses its question with Esc at the deadline, which no hook
+// reports (spike 39), and records the default itself (Lapse): baton's, by timeout, with the approved plan
+// set aside, not the human's taking part. The model, whose call came back declined, is told at the prompt
+// the host's mail line starts.
+func TestAPlanQuestionTheHostDismissedIsBatons(t *testing.T) {
 	f := newFixture(t, false)
 	f.startRun()
-	f.approve(f.writePlan("after-clear.md", approvedDoc))
-	question := ask(f.state().PlanQuestion.Question, labelsOf(decide.ReplaceOptions)...)
-	f.fire("PermissionRequest", question)
+	file := f.writePlan("after-clear.md", approvedDoc)
+	f.approve(file)
+	q := f.state().PlanQuestion.Question
+	f.fire("PermissionRequest", ask(q, labelsOf(decide.ReplaceOptions)...))
 	f.set(func(st *state.State) { st.Run.Dialogs[0].AutoAnswered = f.now })
 	human := f.state().Run.HumanAt
 	f.now = f.now.Add(10 * time.Minute)
-	out := f.fire("PostToolUse", answer(question, "Keep the current run"))
-	if !f.logged("plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout"}) || !strings.Contains(say(out), "nobody answered by") ||
-		!f.state().Run.HumanAt.Equal(human) {
-		t.Fatalf("out %v; events:\n%s", out, f.eventLog())
+	if own, err := Lapse(f.store, decide.Normalize(q), decide.PlanQuestionDefault(false), f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("recorded %v, %v", own, err)
+	}
+	st := f.state()
+	if st.PlanQuestion != nil || st.Run.Dialogs.AnyOpen() || !st.Run.HumanAt.Equal(human) {
+		t.Fatalf("plan question %+v, dialogs %+v, human at %s", st.PlanQuestion, st.Run.Dialogs, st.Run.HumanAt)
+	}
+	if !f.logged("plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) {
+		t.Fatalf("events:\n%s", f.eventLog())
+	}
+	if pl, _ := f.store.LoadPlan(); pl.Title != "Demo" || pl.File == file {
+		t.Fatalf("the approved plan was attached: %+v", pl)
+	}
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": decide.MailTyped([]string{state.MessageAnswer})})
+	if told := additionalContext(out); !strings.Contains(told, "Nobody answered by") || !strings.Contains(told, "keep the current run") {
+		t.Fatalf("the model was told %q", told)
 	}
 }
 

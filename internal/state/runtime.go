@@ -249,7 +249,8 @@ type Dialog struct {
 	Phase string `json:"phase,omitempty"`
 	// Kind names a question baton issued, put to the human word for word in the shape baton gave it:
 	// "escalation", "review", or one baton answers itself if nobody has within a while: "context_warning"
-	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when it did.
+	// (Keep going) and "proposal" (Go ahead, at its deadline). AutoAnswered is when the host dismissed it
+	// to answer it so, where baton's mod does not run (loop's answerOwnQuestion).
 	Kind         string    `json:"kind,omitempty"`
 	AutoAnswered time.Time `json:"auto_answered,omitzero"`
 	// Front is when baton first saw it at the front of the queue, on screen (hooks.Bound).

@@ -326,7 +326,10 @@ interface had made *notify* and *halt* the same operation.
   stray Enter lands, so no single key sets a run's progress aside) wait `escalation_timeout`; then the third
   answer: Continue, and for the plan, a revision of the running plan is followed and another plan is left for
   `/baton run`. The mod answers one on screen (`hooks.Bound`); the host's loop answers one that never reached it
-  (`hooks.Lapse`); in serial mode the host types its `3`. A review the human opted into is never answered for them.
+  (`hooks.Lapse`); in serial mode the host dismisses it with Esc, which picks no option in any dialog, and records
+  the default itself (`hooks.Lapse`): no digit is typed, since a Bash prompt's `3` now approves the call and switches
+  to auto mode ([spike 39](../spikes/39-escape-answers/README.md)). A review the human opted into is never answered
+  for them.
 - **The model's own question** (AskUserQuestion, in a turn the human started while a plan runs) is answered at
   `escalation_timeout` where the mod runs: the option the model marked Recommended, else its first, and the model is
   told that baton chose for the human. Serial mode leaves it to the human, since no typed key can pick an option
@@ -341,8 +344,10 @@ interface had made *notify* and *halt* the same operation.
   follow is reported, and the run goes on with the plan as attached; a lead's block holds the lead alone.
 - **Answering its own question.** Where the mod runs, its `tool.call` hook answers baton's question at the deadline,
   so nothing types into a dialog. That matters because dialogs queue, and in Claude Code 2.1.296 a permission
-  prompt's third option is "Yes, and switch to auto mode". Where the mod doesn't run (serial mode), the host types
-  `3`, and only while baton's question, in exactly the shape baton issued, is the only dialog open.
+  prompt's third option is "Yes, and switch to auto mode". Where the mod doesn't run (serial mode), the host
+  dismisses the question with Esc, which picks nothing in any dialog (it rejects a permission prompt, leaves a
+  draft and background agents alone, and at most ends the lead's turn), and records the default itself, since no
+  hook reports a dismissal; only while baton's question, in exactly the shape baton issued, is the only dialog open.
 - **A phase agent's question** is asked by the mod in the lead's terminal, without stopping the lead's turn, and the
   answer goes to the agent as a message. A phase agent's block stops only its phase, and looks again after 30
   minutes as the lead's does (its question's default is Look again).

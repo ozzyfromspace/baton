@@ -18,8 +18,8 @@ const BlockLook = 30 * time.Minute
 // nobody answers.
 const LookAgain = "Look again"
 
-// BlockedOptions are the answers to the lead's block. Look again is third, where the default sits: where
-// baton types (serial mode), it types 3 for it, which in a permission prompt means "No".
+// BlockedOptions are the answers to the lead's block. Look again is third, where every question of
+// baton's keeps its default (EscalationOptions).
 var BlockedOptions = []Option{
 	{"Continue", "I've dealt with it; carry on with the plan"},
 	{"Pause baton", "I'll take it from here"},

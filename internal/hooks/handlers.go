@@ -1303,7 +1303,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			case tool == "ExitPlanMode":
 				v = approved(st, s, c, approvedFile(c.Input), false, w, g)
 			case tool == "AskUserQuestion":
-				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
+				// The host dismissed it at its deadline (loop's answerOwnQuestion), which no hook reports, and
+				// records its default itself (Lapse): an answer that still arrives on it came with the dismissal.
+				auto := !closed.AutoAnswered.IsZero()
 				if v = answeredPlanQuestion(st, s, c, w, auto, g); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
