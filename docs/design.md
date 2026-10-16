@@ -321,8 +321,9 @@ interface had made *notify* and *halt* the same operation.
   cannot tell a push to the model's own branch from a deploy, so the model judges which it is. What was left so is
   listed by `baton status`, and the run's summary names it as left for the human.
 - **baton's own questions answer themselves.** The stall question (Pause baton · Wait for me · Continue, when the
-  model stopped without a status) and the question about a plan approved mid-run (Start the new plan from P0 · Wait
-  for me · Continue with the revised plan, or for another plan Keep the current run) wait `escalation_timeout`; then the third
+  model stopped without a status) and the question about a plan approved mid-run (Wait for me · Start the new plan
+  from P0 · Continue with the revised plan, or for another plan Keep the current run; Wait for me first, where a
+  stray Enter lands, so no single key sets a run's progress aside) wait `escalation_timeout`; then the third
   answer: Continue, and for the plan, a revision of the running plan is followed and another plan is left for
   `/baton run`. The mod answers one on screen (`hooks.Bound`); the host's loop answers one that never reached it
   (`hooks.Lapse`); in serial mode the host types its `3`. A review the human opted into is never answered for them.
