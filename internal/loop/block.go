@@ -25,11 +25,11 @@ func (t Timing) blockLook() time.Duration {
 // block or the human's last word, whichever is later, and not while the machine slept or the run is
 // paused. Where its question is on screen, the model's call waits on that dialog, so the block is only
 // marked lapsed (Block.Lapsed) and the dialog answered Look again: by baton's mod (hooks.Bound), or where
-// baton types, by answerOwnQuestion; that answer lifts it (hooks' answered). Otherwise (the model never
-// asked it, its dialog went away, or the human wrote and it was not asked again) the loop lifts it itself:
-// announced, logged block_lapsed by timeout, pushed, and told to the model, which is woken (deliver). A
-// phase agent's block is put to the human by the coordinator, and lifted the same way at its question's
-// deadline (Coordinator.relay).
+// it does not run, by answerOwnQuestion's dismissal; that answer lifts it (hooks' answered). Otherwise
+// (the model never asked it, its dialog went away, or the human wrote and it was not asked again) the
+// loop lifts it itself: announced, logged block_lapsed by timeout, pushed, and told to the model, which is
+// woken (deliver). A phase agent's block is put to the human by the coordinator, and lifted the same way
+// at its question's deadline (Coordinator.relay).
 func (l *Loop) lookAgain(v host.View, st state.State) {
 	if l.Store.Worker() != "" || !l.blockLapsed(v, st) {
 		return

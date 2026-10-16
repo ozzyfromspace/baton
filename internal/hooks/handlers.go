@@ -1304,7 +1304,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			case tool == "ExitPlanMode":
 				v = approved(st, s, c, approvedFile(c.Input), false, w, g)
 			case tool == "AskUserQuestion":
-				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
+				// The host dismissed it at its deadline (loop's answerOwnQuestion), which no hook reports, and
+				// records its default itself (Lapse): an answer that still arrives on it came with the dismissal.
+				auto := !closed.AutoAnswered.IsZero()
 				if v = answeredPlanQuestion(st, s, c, w, auto, g); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
@@ -1373,10 +1375,11 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	if msg := lines(ann, notes, dl.says(), v.say, waitsSay); msg != "" {
 		out["systemMessage"] = msg
 	}
-	if bgTell != "" {
-		// Advice, not a request: nothing waits on the model heeding it, as the work wakes it either way, so it
-		// goes as context (docs/research/workers.md) and shows no hook error under every backgrounded call.
-		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": bgTell}
+	if advice := strings.TrimSpace(bgTell + "\n\n" + v.advise); advice != "" {
+		// Advice, not a request: nothing waits on the model heeding it (background work wakes it either way,
+		// and the context notice asks nothing), so it goes as context (docs/research/workers.md) and shows no
+		// hook error under every call it comes with.
+		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": advice}
 	}
 	if v.event != "" {
 		s.Event(v.event, v.fields)
@@ -1496,18 +1499,20 @@ type valveAction struct {
 	fields    map[string]any
 	also      []event
 	say, tell string
+	advise    string        // advice for the model, given beside the tool result: it asks nothing, so it blocks nothing
 	record    *state.Record // the record of a plan it replaced, written once the run's lock is let go (keep)
 	approved  *plan.Plan    // a plan the human approved, its text kept for replans then (keep)
 }
 
-// contextValves runs the two mid-phase valves after a tool call of the loop's own: the lead's, or a phase
+// contextValves runs the three mid-phase valves after a tool call of the loop's own: the lead's, or a phase
 // agent's in its sub-run, whose context its loop reads from its own transcript (loop.Agent). Past the
-// checkpoint line, the model is asked to checkpoint at its next safe point, and asked again for every
-// further tenth of the limit. Past the warning line (never in a phase agent), the model is asked to put a
-// fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its own. Each
-// fires once, and re-arms only after the context falls a tenth of the window below its line, so a
-// compaction that leaves the context high cannot start a loop. A subagent of the loop's model is never
-// asked: it cannot end its loop's turn.
+// notice line, the model is told where its context stands, asking nothing of it, beside the tool result.
+// Past the checkpoint line, the model is asked to checkpoint at its next safe point, and asked again for
+// every further tenth of the limit. Past the warning line (never in a phase agent), the model is asked to
+// put a fixed question to the human: checkpoint now, or keep going and let Claude Code compact on its own.
+// Each fires once, a later one standing for those before it, and re-arms only after the context falls a
+// tenth of the window below its line, so a compaction that leaves the context high cannot start a loop. A
+// subagent of the loop's model is never asked: it cannot end its loop's turn.
 func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveAction {
 	cu := st.Run.Context
 	if cu == nil {
@@ -1518,6 +1523,9 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 		return valveAction{}
 	}
 	rearm := lim.Window / 10
+	if st.Run.ContextNoticed && used < lim.Notice-rearm {
+		st.Run.ContextNoticed = false
+	}
 	if st.Run.ContextNudged && used < lim.Checkpoint-rearm {
 		st.Run.ContextNudged, st.Run.ContextNudgedAt = false, 0
 	}
@@ -1532,7 +1540,7 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 	case lim.Warn > 0 && used >= lim.Warn && !st.Run.ContextWarned && !w.Worker:
 		// A phase agent asks the human nothing of its own: it is nudged to checkpoint instead.
 		// The warning includes the checkpoint option, so the nudge has nothing left to say.
-		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt = true, true, used
+		st.Run.ContextWarned, st.Run.ContextNudged, st.Run.ContextNudgedAt, st.Run.ContextNoticed = true, true, used, true
 		q := warnQuestion(used, lim, vs.WarnTimeout)
 		st.Run.WarnQuestion, st.Run.WarnOwed = q.Text, true
 		return valveAction{
@@ -1544,7 +1552,7 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 	case lim.Checkpoint > 0 && used >= lim.Checkpoint && !st.Run.ContextWarned &&
 		(!st.Run.ContextNudged || used >= st.Run.ContextNudgedAt+rearm):
 		// Asked again for every further tenth of the limit: one request is easy to put off.
-		st.Run.ContextNudged, st.Run.ContextNudgedAt = true, used
+		st.Run.ContextNudged, st.Run.ContextNudgedAt, st.Run.ContextNoticed = true, used, true
 		return valveAction{
 			event:  "context_nudge",
 			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "checkpoint": lim.Checkpoint, "limit": lim.Window},
@@ -1552,6 +1560,15 @@ func contextValves(st *state.State, vs valve.Settings, w decide.Words) valveActi
 			tell: fmt.Sprintf("%s Checkpoint due: the context holds %s tokens, %.0f%% of its %s limit. %s, then run "+
 				"`baton checkpoint --notes \"<where you are and what is left>\"` and end your turn: %s. "+
 				"(If the phase is already complete, run `baton done` instead.)", NudgePrefix, valve.Tokens(used), pct, valve.Tokens(lim.Window), w.FinishStep(), w.CheckpointThen()),
+		}
+	case lim.Notice > 0 && used >= lim.Notice && !st.Run.ContextNoticed && !st.Run.ContextNudged && !st.Run.ContextWarned:
+		// A heads-up, not a request: the model keeps working, so it goes beside the tool result.
+		st.Run.ContextNoticed = true
+		return valveAction{
+			event:  "context_notice",
+			fields: map[string]any{"pct": math.Round(pct), "tokens": used, "notice": lim.Notice, "checkpoint": lim.Checkpoint, "limit": lim.Window},
+			say:    decide.ContextNoticeSay(used, lim.Window, lim.Checkpoint),
+			advise: w.ContextNotice(st.Current, used, lim.Window, lim.Checkpoint, lim.AutoAt),
 		}
 	}
 	return valveAction{}

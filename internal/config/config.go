@@ -29,6 +29,10 @@ type Config struct {
 	// Autocompact is the launch-time --autocompact cap, e.g. "810k"; "off" leaves it to Claude Code's own
 	// settings (BATON_AUTOCOMPACT).
 	Autocompact string `json:"autocompact,omitempty"`
+	// NoticePct is the context fill (percent of the compaction window) at which baton tells the model where
+	// its context stands, asking nothing of it, so it keeps working and spends the room with care
+	// (BATON_NOTICE_PCT). 0 disables the notice.
+	NoticePct *float64 `json:"notice_pct,omitempty"`
 	// CheckpointPct is the context fill (percent of the compaction window) at which baton asks the model
 	// to checkpoint at its next safe point (BATON_CHECKPOINT_PCT). 0 disables the nudge.
 	CheckpointPct *float64 `json:"checkpoint_pct,omitempty"`
@@ -90,7 +94,8 @@ type Config struct {
 // Defaults.
 const (
 	DefaultAutocompact   = "810k"
-	DefaultCheckpointPct = 60.0
+	DefaultNoticePct     = 60.0
+	DefaultCheckpointPct = 80.0
 	DefaultWarnPct       = 90.0
 	DefaultNtfyServer    = "https://ntfy.sh"
 
@@ -153,6 +158,11 @@ func Load(root string, env func(string) string) Config {
 	if v := env("BATON_AUTOCOMPACT"); v != "" {
 		c.Autocompact = v
 	}
+	if v := env("BATON_NOTICE_PCT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.NoticePct = &f
+		}
+	}
 	if v := env("BATON_CHECKPOINT_PCT"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			c.CheckpointPct = &f
@@ -175,6 +185,10 @@ func Load(root string, env func(string) string) Config {
 	}
 	if c.Autocompact == "off" {
 		c.Autocompact = ""
+	}
+	if c.NoticePct == nil {
+		d := DefaultNoticePct
+		c.NoticePct = &d
 	}
 	if c.CheckpointPct == nil {
 		d := DefaultCheckpointPct

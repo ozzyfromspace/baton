@@ -229,7 +229,7 @@ func TestStatuslineRecordsContextAndWrapsTheUsersLine(t *testing.T) {
 	if c := loaded.Run.Context; c == nil || c.Tokens != 412_345 || c.WindowSize != 1_000_000 || c.Limit != 810_000 {
 		t.Fatalf("context not recorded: %+v", loaded.Run.Context)
 	}
-	want := "context: 412k of 810k · checkpoint at 486k · asks you at 729k · Claude Code compacts at about 777k"
+	want := "context: 412k of 810k · heads-up at 486k · checkpoint at 648k · asks you at 729k · Claude Code compacts at about 777k"
 	if out := s.must("", "status"); !strings.Contains(out, want) {
 		t.Fatalf("status (hosted) lacks %q:\n%s", want, out)
 	}

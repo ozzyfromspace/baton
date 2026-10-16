@@ -444,7 +444,7 @@ func cmdStatusline(_ []string, io IO) int {
 // none of its own (claude checks that value itself). So does CLAUDE_CODE_AUTO_COMPACT_WINDOW, which
 // Claude Code reads before either.
 func contextSettings(cfg config.Config, args []string, env func(string) string) (autocompact string, s valve.Settings, err error) {
-	s = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+	s = valve.Settings{NoticePct: *cfg.NoticePct, CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
 	if n, err := strconv.Atoi(env("BATON_WARN_TOKENS")); err == nil && n > 0 {
 		s.WarnTokens = n
 	}

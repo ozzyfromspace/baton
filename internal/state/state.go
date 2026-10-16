@@ -119,6 +119,9 @@ type State struct {
 	// JobSeq numbers jobs. It outlives the jobs, and the plan they ran for, so a runner still winding
 	// down can never take a later job for its own.
 	JobSeq int `json:"job_seq,omitempty"`
+	// KeptLogs are the ids of the red jobs dropped from the record (MaxJobs): their logs stay with the
+	// plan's, and go with its record when it is replaced or dropped (Store.Record).
+	KeptLogs []string `json:"kept_logs,omitempty"`
 	// BoundaryOwed: a phase finished and a compaction is owed before the next phase starts.
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
@@ -343,11 +346,15 @@ var ErrNoPlan = errors.New("no plan is attached (run /baton plan or /baton run f
 // DoneOpts are what `baton done` may override.
 type DoneOpts struct {
 	Force      bool // finish a phase other than the one in hand
-	DespiteRed bool // finish it although its latest verification is red
+	DespiteRed bool // finish it although its verification is red
 }
 
-// RedError turns down done for a phase whose latest verification is red.
-type RedError struct{ Job Job }
+// RedError turns down done for a phase whose verification stands on a red job (Standing): Job, and After,
+// the checks of its kind queued since that did not clear it.
+type RedError struct {
+	Job   Job
+	After []Job
+}
 
 func (e RedError) Error() string {
 	return fmt.Sprintf("phase %s's verification, job %s (`%s`), is red (%s)", e.Job.Phase, e.Job.ID, e.Job.Command, e.Job.Status)
@@ -386,7 +393,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 	}
 	for _, j := range st.Standing(id) {
 		if j.Red() && !o.DespiteRed {
-			return "", RedError{j}
+			return "", RedError{j, st.After(j)}
 		}
 	}
 	if running := st.Running(id); len(running) > 0 {

@@ -34,13 +34,15 @@ const POLL_MS = 500
 const HELLO_FAST_MS = 1000 // how often a hello is tried at first,
 const HELLO_FAST_TRIES = 30 // this many times,
 const HELLO_SLOW_MS = 10000 // and then
-const REPORT_TIMEOUT_MS = 5000
+// How long `baton mod report` may take: above two lock waits (the run's and the bridge's, 5 s each), so a
+// report that waits out both is answered, not killed.
+const REPORT_TIMEOUT_MS = 15000
 const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused this long
 const CUT = 1000 // the most of an agent's last words a turn report carries
 const AT_ONCE_MS = 250 // how long a compaction or a line is watched for a refusal at once (a turn running), which its ack carries
 const HOLD_MS = 30000 // how long a compaction refused while the lead's turn runs waits for that turn's end (within the host's modAckWait)
 const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
-const VIEW_TIMEOUT_MS = 5000
+const VIEW_TIMEOUT_MS = 15000 // how long `baton board` may take: above two lock waits, as a report
 const ASK_RETRY_MS = 5000 // how soon the host is asked about a question again when it gave no answer
 const PANE = 'baton-board' // the pane of baton's board
 const SKILL = 'baton:baton' // the /baton skill's command, as Claude Code names it to a command.run hook

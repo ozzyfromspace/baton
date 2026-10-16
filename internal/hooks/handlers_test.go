@@ -486,47 +486,174 @@ func feedback(out map[string]any) string {
 	return s
 }
 
-// With the default 810k cap on a 1M model: checkpoint at 486k, warning at 729k, re-arm 81k below each.
+// With the default 810k cap on a 1M model: a notice at 486k, the checkpoint at 648k, the warning at 729k,
+// each re-armed 81k below its line.
 var defaultCap = map[string]string{"BATON_COMPACT_CAP": "810000"}
 
 func TestContextNudgeOncePerCompaction(t *testing.T) {
 	f := newFixture(t, true)
-	f.vars = defaultCap
-	f.setContext(500_000)
+	// No notice, and the warning at 95% (769.5k), so the nudge can be asked again a tenth further on.
+	f.vars = map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_NOTICE_PCT": "0", "BATON_WARN_PCT": "95"}
+	f.setContext(650_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "agent_id": "sub-1"}); out != nil {
 		t.Fatalf("nudged a subagent: %v", out)
 	}
 	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
-	if out["systemMessage"] != "baton: context at 500k of 810k → checkpoint at the next safe point" {
+	if out["systemMessage"] != "baton: context at 650k of 810k → checkpoint at the next safe point" {
 		t.Fatalf("not announced: %v", out["systemMessage"])
 	}
 	ctx := feedback(out)
-	if !strings.Contains(ctx, "Checkpoint due: the context holds 500k tokens, 62% of its 810k limit") || !strings.Contains(ctx, "baton checkpoint --notes") {
+	if !strings.Contains(ctx, "Checkpoint due: the context holds 650k tokens, 80% of its 810k limit") || !strings.Contains(ctx, "baton checkpoint --notes") {
 		t.Fatalf("nudge: %q", ctx)
 	}
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
 		t.Fatalf("nudged twice: %v", out)
 	}
 	// Another tenth of the limit later, the request is repeated.
-	f.setContext(590_000)
-	if !strings.Contains(feedback(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "the context holds 590k tokens") {
+	f.setContext(735_000)
+	if !strings.Contains(feedback(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})), "the context holds 735k tokens") {
 		t.Fatal("the nudge was not repeated as the context grew")
 	}
-	f.setContext(500_000)
+	f.setContext(650_000)
 	// A compaction that leaves the context above the threshold must not start a loop of checkpoints.
 	f.fire("PreCompact", map[string]any{"trigger": "manual"})
-	f.setContext(450_000)
+	f.setContext(600_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
 		t.Fatalf("nudged again without the context dropping: %v", out)
 	}
 	// Well below the threshold, the nudge re-arms (but does not fire); past it again, it fires once more.
-	f.setContext(300_000)
+	f.setContext(500_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil || f.state().Run.ContextNudged {
 		t.Fatalf("below the threshold: %v nudged=%v", out, f.state().Run.ContextNudged)
 	}
-	f.setContext(490_000)
+	f.setContext(655_000)
 	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out == nil {
 		t.Fatal("the re-armed nudge did not fire")
+	}
+}
+
+// At the notice line the model is told where its context stands, beside the tool result: nothing is asked,
+// nothing is blocked. It comes once per stretch, the nudge follows at the checkpoint line, and both re-arm
+// once a compaction takes the context a tenth below them.
+func TestContextNoticeAsksNothing(t *testing.T) {
+	f := newFixture(t, true)
+	f.vars = defaultCap
+	f.setContext(500_000)
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash", "agent_id": "sub-1"}); out != nil {
+		t.Fatalf("told a subagent: %v", out)
+	}
+	out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
+	if out["systemMessage"] != "baton: context at 500k of 810k → a heads-up to the model; checkpoint at 648k" {
+		t.Fatalf("not announced: %v", out["systemMessage"])
+	}
+	if out["decision"] != nil || feedback(out) != "" {
+		t.Fatalf("the notice blocked: %v", out)
+	}
+	ctx := additionalContext(out)
+	for _, want := range []string{"[baton] Context heads-up; nothing is asked of you now.", "The context holds 500k tokens, 62% of its 810k limit.",
+		"Keep working on P0", "a line range, a grep", "keep command output short",
+		"At 648k baton asks you to checkpoint at your next safe point (a checkpoint compacts mid-phase)."} {
+		if !strings.Contains(ctx, want) {
+			t.Fatalf("notice lacks %q: %q", want, ctx)
+		}
+	}
+	if !f.logged("context_notice", map[string]any{"tokens": float64(500_000), "notice": float64(486_000), "checkpoint": float64(648_000), "limit": float64(810_000), "pct": float64(62)}) {
+		t.Fatalf("not logged:\n%s", f.eventLog())
+	}
+	f.setContext(520_000)
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+		t.Fatalf("told twice: %v", out)
+	}
+	f.setContext(650_000)
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); !strings.Contains(feedback(out), "Checkpoint due") || additionalContext(out) != "" {
+		t.Fatalf("at the checkpoint line: %v", out)
+	}
+	// A compaction to 400k, under 486k - 81k: both re-arm, and past the notice line again, it comes again.
+	f.setContext(400_000)
+	if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil || f.state().Run.ContextNoticed || f.state().Run.ContextNudged {
+		t.Fatalf("below the lines: %v %+v", out, f.state().Run)
+	}
+	f.setContext(490_000)
+	if ctx := additionalContext(f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})); !strings.Contains(ctx, "Context heads-up") {
+		t.Fatalf("the re-armed notice: %q", ctx)
+	}
+}
+
+// The notice follows the settings: without a checkpoint line it names Claude Code's own compaction, it can
+// be turned off, and a later line stands for it when the context is already past one.
+func TestContextNoticeLines(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		vars    map[string]string
+		tokens  int
+		say     string // the line for the human
+		context string // in the notice, "" for none
+		block   string // in the blocking feedback, "" for none
+	}{
+		{"no checkpoint line", map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_CHECKPOINT_PCT": "0"}, 500_000,
+			"baton: context at 500k of 810k → a heads-up to the model", "Claude Code compacts the context on its own at about 777k.", ""},
+		{"notice off", map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_NOTICE_PCT": "0"}, 500_000, "", "", ""},
+		{"straight past the checkpoint line", defaultCap, 650_000, "baton: context at 650k of 810k → checkpoint at the next safe point", "", "Checkpoint due"},
+		{"straight past the warning line", defaultCap, 730_000, "baton: context at 730k of 810k → asking you whether to checkpoint", "", "Context warning"},
+		{"a 200k model: the lines before Claude Code's compaction", map[string]string{}, 0, "", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.vars = c.vars
+			if c.tokens == 0 { // 110k of a 200k window: past the notice (100.2k), short of the checkpoint (133.6k)
+				f.store.Update(func(st *state.State) error {
+					st.Run.Context = &state.ContextUse{Tokens: 110_000, WindowSize: 200_000}
+					return nil
+				})
+				c.say, c.context = "baton: context at 110k of 200k → a heads-up to the model; checkpoint at 134k", "At 134k baton asks you to checkpoint"
+			} else {
+				f.setContext(c.tokens)
+			}
+			out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"})
+			if c.say == "" {
+				if out != nil {
+					t.Fatalf("said %v", out)
+				}
+				return
+			}
+			if out["systemMessage"] != c.say {
+				t.Errorf("said %v", out["systemMessage"])
+			}
+			if ctx := additionalContext(out); c.context == "" && ctx != "" || !strings.Contains(ctx, c.context) {
+				t.Errorf("context %q", ctx)
+			}
+			if fb := feedback(out); c.block == "" && fb != "" || !strings.Contains(fb, c.block) {
+				t.Errorf("feedback %q", fb)
+			}
+			// A later line stands for the notice: it does not follow.
+			if out := f.fire("PostToolUse", map[string]any{"tool_name": "Bash"}); out != nil {
+				t.Errorf("then %v", out)
+			}
+		})
+	}
+}
+
+// The notice's path fails open: a panic in it exits 0 and writes nothing.
+func TestContextNoticeFailsOpen(t *testing.T) {
+	f := newFixture(t, true)
+	f.vars = defaultCap
+	f.setContext(500_000)
+	open := func(ctx Context) (*state.Store, error) {
+		s, err := OpenRun(f.clock)(ctx)
+		if s != nil {
+			s.Now = func() time.Time { panic("boom") }
+		}
+		return s, err
+	}
+	in := map[string]any{"hook_event_name": "PostToolUse", "session_id": f.sid, "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}}
+	raw, _ := json.Marshal(in)
+	var out, errb bytes.Buffer
+	code := Dispatch("PostToolUse", bytes.NewReader(raw), &out, &errb, f.env(f.inst), f.clock, Handlers(Deps{Open: open}))
+	if code != 0 || out.Len() != 0 || !strings.Contains(errb.String(), "failed open") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+	if f.state().Run.ContextNoticed {
+		t.Error("the notice was recorded")
 	}
 }
 
@@ -639,7 +766,7 @@ func TestContextWarningStaysQuiet(t *testing.T) {
 		{"compaction owed", defaultCap, func(st *state.State) { st.CheckpointOwed = true }},
 		{"compaction underway", defaultCap, func(st *state.State) { st.Run.Compaction.Status = state.CompactActive }},
 		{"paused", defaultCap, func(st *state.State) { st.Mode = state.ModePaused }},
-		{"turned off", map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_WARN_PCT": "0", "BATON_CHECKPOINT_PCT": "0"}, func(*state.State) {}},
+		{"turned off", map[string]string{"BATON_COMPACT_CAP": "810000", "BATON_WARN_PCT": "0", "BATON_CHECKPOINT_PCT": "0", "BATON_NOTICE_PCT": "0"}, func(*state.State) {}},
 	} {
 		f := newFixture(t, true)
 		f.vars = c.vars

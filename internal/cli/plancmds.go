@@ -15,7 +15,6 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
-	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -805,7 +804,7 @@ func contextLine(cu state.ContextUse, io IO) string {
 	vs := valve.FromEnv(io.Env)
 	if !hosted(io) {
 		cfg := config.Load(batonRoot(io), io.Env)
-		vs = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+		vs = valve.Settings{NoticePct: *cfg.NoticePct, CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
 	}
 	if vs.Cap == 0 {
 		vs.Cap = cu.Limit
@@ -815,6 +814,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 		return fmt.Sprintf("%.0f%% of the window", cu.UsedPct)
 	}
 	parts := []string{valve.Tokens(cu.Used()) + " of " + valve.Tokens(l.Window)}
+	if l.Notice > 0 {
+		parts = append(parts, "heads-up at "+valve.Tokens(l.Notice))
+	}
 	if l.Checkpoint > 0 {
 		parts = append(parts, "checkpoint at "+valve.Tokens(l.Checkpoint))
 	}
@@ -922,7 +924,7 @@ func cmdDone(args []string, io IO) int {
 	})
 	var re state.RedError
 	if errors.As(err, &re) {
-		return refusedRed(io, s, pl, re.Job)
+		return refusedRed(io, s, pl, re.Job, re.After)
 	}
 	if err != nil {
 		return refused(io, s, "done", err)
@@ -958,7 +960,7 @@ func cmdDone(args []string, io IO) int {
 	case note != nil:
 		fmt.Fprintf(io.Out, "baton: noted (%s): %s finished despite its red verification; the human will be told.\n", note.ID, id)
 	case despite != "":
-		fmt.Fprintf(io.Out, "baton: note — %s's latest verification is not red, so --despite-red recorded nothing.\n", id)
+		fmt.Fprintf(io.Out, "baton: note — %s's verification is not red, so --despite-red recorded nothing.\n", id)
 	}
 	for _, j := range standing {
 		if j.Finished() && !j.Red() && j.Status != state.JobPassed {
@@ -1016,9 +1018,9 @@ func cmdDone(args []string, io IO) int {
 	return 0
 }
 
-// refusedRed turns down done for a phase whose latest verification is red. A result the model has not
-// been given yet comes with it, and counts as given.
-func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job) int {
+// refusedRed turns down done for a phase whose verification stands on red job j, naming the checks after
+// it that did not clear it. A result the model has not been given yet comes with it, and counts as given.
+func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job, after []state.Job) int {
 	var fresh bool
 	s.Update(func(st *state.State) error {
 		if x := st.Job(j.ID); x != nil && x.Delivered.IsZero() {
@@ -1028,10 +1030,9 @@ func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job) int {
 	})
 	s.Event("refused", map[string]any{"command": "done", "phase": j.Phase, "why": "red", "job": j.ID})
 	if fresh {
-		tail, _ := lane.Tail(jobLog(s, j), 80, 6<<10)
-		fmt.Fprintln(io.Err, decide.JobResult(j, jobLog(s, j), tail, nil, qaAhead(io, pl, j.Phase)))
+		fmt.Fprintln(io.Err, decide.JobResult(j, hooks.JobLog(s, j), nil, qaAhead(io, pl, j.Phase)))
 	}
-	return fail(io, "%s", decide.RedRefusal(j))
+	return fail(io, "%s", decide.RedRefusal(j, after))
 }
 
 // jobLog is where job j's output is.

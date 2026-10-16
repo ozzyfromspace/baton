@@ -5,6 +5,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -23,10 +24,16 @@ import (
 //     deadline asks the human what to do with the phase. Only that phase and the phases that need it wait.
 //     Its dialog steps aside after escalation_timeout, so that it holds neither the lead nor the other
 //     agents' questions, and comes back when the human next writes in the lead's session.
+//   - a twice-stopped phase the run cannot go on without: while that question is open and nothing else
+//     in the run can move (state.Moves: no phase can start, no other agent is at work, the lead is idle),
+//     baton waits escalation_timeout from that moment (state.TakeUpAt), then takes the phase back from
+//     its agent (takeBack): the question closes, its worker is retired (RetireWorker), which puts the
+//     phase back for the lead (state.Unassign), and the lead takes it up at a boundary, its brief saying
+//     why and where the agent's work is. While anything else can move, nothing changes.
 //
 // The human's answer is done as they chose: Restart it starts a fresh agent (and on a second stop counts
 // the stops afresh), Leave it stopped leaves the phase waiting for them (/baton run starts a fresh agent),
-// Pause baton pauses the run.
+// Pause baton pauses the run. Their answer wins until baton takes the phase back.
 
 // holdAgent holds w's phase for the human, who stopped its agent: a message to it was refused as stopped
 // by the user. Nothing is sent to the agent again, its work stays in its worktree, and its loop goes on
@@ -163,7 +170,7 @@ func (c *Coordinator) applyStop(now time.Time, s *state.Store, st state.State, r
 		c.announce(s, decide.AgentReleased(r.Phase))
 	case decide.StopTakeDown:
 		s.Event("agent_taken_down", map[string]any{"phase": r.Phase, "by": a.By, "stops": e.Stops, "pushed": true})
-		c.announce(s, decide.AgentTakenDown(r.Phase))
+		c.announce(s, decide.AgentTakenDown(r.Phase, c.Lead.Timing.EscalationTimeout))
 	case decide.StopKeep:
 		if human && a.Answer != decide.KeepItGoing {
 			if sub := c.subStore(st, r.Phase); sub != nil {
@@ -211,6 +218,136 @@ func (c *Coordinator) stoppedAgain(now time.Time, s *state.Store, st state.State
 			s.Event("relay_again", relayFields(r, map[string]any{"why": "the human is back"}))
 		}
 	}
+}
+
+// takeStopped takes back for the lead a phase whose agent the human stopped twice, once the run can go on
+// no other way (see above). While the question about it is open (state.StoppedTwice), the moment this host
+// first sees nothing else in the run able to move (state.Moves) is kept on the question (Relay.Stuck), and
+// let go as soon as something can; escalation_timeout from then, and from the machine's last wake, the
+// phase is taken back (takeBack). One such phase at a time: once the lead holds it, that moves.
+func (c *Coordinator) takeStopped(now time.Time, s *state.Store, b *bridge.Bridge) {
+	st, err := s.Load()
+	if err != nil {
+		return
+	}
+	r := st.StoppedTwice()
+	if r == nil {
+		return
+	}
+	pl, err := s.LoadPlan()
+	if err != nil {
+		return
+	}
+	wait := c.Lead.Timing.EscalationTimeout
+	switch moves := st.Moves(pl, r.Phase, now); {
+	case moves != "" && r.Stuck.IsZero():
+		return
+	case moves != "":
+		c.stuck(s, *r, time.Time{})
+		c.Lead.logf("loop: %s: something else in the run can move again (%s): it waits on the human's answer", r.Phase, moves)
+		return
+	case r.Stuck.IsZero():
+		c.stuck(s, *r, now)
+		c.Lead.logf("loop: %s: nothing else in the run can move: baton takes it back for the lead at %s, unless the human answers first",
+			r.Phase, st.TakeUpAt(*r, c.Lead.since(now), wait).Format(time.RFC3339))
+		return
+	}
+	if now.Before(st.TakeUpAt(*r, c.Lead.since(r.Stuck), wait)) {
+		return
+	}
+	c.takeBack(now, s, b, pl, *r)
+}
+
+// stuck keeps on question r since when nothing else in the run can move (zero: something can).
+func (c *Coordinator) stuck(s *state.Store, r state.Relay, at time.Time) {
+	s.Update(func(st *state.State) error {
+		if q := st.RelayOf(r); q != nil {
+			q.Stuck = at
+		}
+		return nil
+	})
+}
+
+// takeBack takes the phase of r, whose agent the human stopped twice, back for the lead (takeStopped).
+// First the question closes, under the run's lock, as long as the human has not answered it and nothing
+// else can move: their answer wins until then. Then its worker is retired as any is (RetireWorker): what
+// its agent had not committed is saved, its jobs are stopped, its worktree is removed and its branch kept
+// while it holds commits that never landed, and its phase goes back to the run (state.Unassign), which the
+// lead, holding none, takes up after a boundary compaction. The decision is recorded with its undo, the
+// human is told and pushed, and a note on the phase, which the lead's brief quotes, says why the phase is
+// the lead's now and where the agent's work is.
+func (c *Coordinator) takeBack(now time.Time, s *state.Store, b *bridge.Bridge, pl plan.Plan, r state.Relay) {
+	var e state.Worker
+	var q state.Relay
+	closed, answered := false, false
+	s.Update(func(st *state.State) error {
+		x, w := st.RelayOf(r), st.WorkerOn(r.Phase)
+		if x == nil || w == nil || x.Answered != nil && (x.Answered.By == state.ByHuman || x.Answered.By == state.ByWithdrawn) ||
+			!st.AgentWaits(*x) || st.Moves(pl, r.Phase, now) != "" {
+			return nil
+		}
+		if x.Answered == nil {
+			state.AnswerRelay(x, state.ByTimeout, decide.StoppedTakenAnswer, now)
+			if x.Question != "" {
+				st.Run.Dialogs.CloseExact("", "AskUserQuestion", decide.Normalize(x.Question))
+			}
+			answered = true
+		}
+		x.Applied = now
+		e, q, closed = *w, *x, true
+		return nil
+	})
+	if !closed {
+		return
+	}
+	if answered {
+		if q.Ask != 0 {
+			b.Void(q.Instance, q.Ask) // not on the human's screen yet: it never will be
+		}
+		s.Event("relay_answered", relayFields(q, map[string]any{"by": state.ByTimeout, "via": "taken", "answer": decide.StoppedTakenAnswer}))
+	}
+	if w := c.session(e); w != nil {
+		c.unregister(w)
+		w.agent.Ended()
+	}
+	got := RetireWorker(Retirement{Project: c.Project, Home: c.Home, Run: s, Entry: e, Why: decide.StoppedTakenWhy, By: s.Instance, Host: true, Now: now,
+		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, between: c.retireStep})
+	if got.Skipped != "" {
+		c.Lead.logf("loop: %s: not taken back yet: %s", r.Phase, got.Skipped)
+		return // the question stays open, answered for nobody: the next step tries again
+	}
+	t := decide.Taken{Phase: r.Phase, Branch: got.Branch, Unlanded: got.Unlanded, Snapshot: got.Snapshot, Worktree: e.Worktree, Kept: got.Kept}
+	what, undo := decide.StoppedTakenDecision(t)
+	var d state.Decision
+	s.Update(func(st *state.State) error {
+		if nd, err := state.NoteOn(st, r.Phase, what, undo, now); err == nil {
+			st.Decisions[len(st.Decisions)-1].Announced = true // told below, in words of its own
+			d, t.ID = nd, nd.ID
+		}
+		st.Run.Announce = append(st.Run.Announce, decide.StoppedTaken(t))
+		st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "agent_stopped", Text: decide.StoppedTakenNotice(r.Phase), At: now})
+		return nil
+	})
+	if err := s.AppendHandoff(r.Phase, decide.StoppedTakenBrief(t)); err != nil {
+		c.Lead.logf("loop: %s: the note for the lead's brief: %v", r.Phase, err)
+	}
+	if d.ID != "" {
+		s.Event("note", map[string]any{"id": d.ID, "phase": r.Phase, "what": d.What, "undo": d.Undo, "by": "baton"})
+	}
+	fields := map[string]any{"phase": r.Phase, "stops": e.Stops, "decision": d.ID, "stuck": q.Stuck.UTC().Format(time.RFC3339)}
+	for k, v := range map[string]string{"branch": got.Branch, "snapshot": got.Snapshot, "worktree_kept": got.Kept, "next": got.Next} {
+		if v != "" {
+			fields[k] = v
+		}
+	}
+	if got.Unlanded > 0 {
+		fields["unlanded"] = got.Unlanded
+	}
+	s.Event("stopped_phase_taken", fields)
+	if got.Next != "" {
+		s.Event("compact_queued", map[string]any{"reason": "boundary", "next": got.Next, "by": "stopped_phase_taken"})
+	}
+	c.Lead.logf("loop: %s: taken back for the lead: the human stopped its agent twice, did not answer, and nothing else could move", r.Phase)
 }
 
 // needsAgent reports that worker e, whose stopped agent baton let go with its work done (Released), has

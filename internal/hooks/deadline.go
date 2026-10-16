@@ -14,9 +14,10 @@ import (
 // Bound), and at the deadline answers the call itself with the answer the host gives it, which closes the
 // dialog; then it reports that it did (Settle). Claude Code fires no PostToolUse for a call answered so,
 // so Settle records the answer as the call's result would have. Where the mod does not run (serial mode),
-// the host types the default's key instead, as v0.7 did (loop.answerOwnQuestion). The lead model's own
-// questions get a deadline the same way where the mod runs (SettleOwn); in serial mode they stay the
-// human's, since no key typed could pick a given option safely.
+// the host dismisses the question with Esc instead, which picks no option, and records its default the
+// same way (Lapse; loop.answerOwnQuestion, spike 39). The lead model's own questions get a deadline the
+// same way where the mod runs (SettleOwn); in serial mode they stay the human's, since no key typed could
+// pick a given option safely.
 
 // A Wait is how long a question may wait for the human, and what baton answers then: one of baton's gets
 // Answer, and a call of the lead model's own gets Answers, one per question, by its text as asked. Neither
@@ -193,8 +194,8 @@ func Settle(s *state.Store, question, answer string, now time.Time, env func(str
 }
 
 // Lapse is Settle for a question of the lead's own that reached its deadline with no dialog of it on
-// screen (the model never asked it, or it went away): the host's loop answers it so, and nothing waits on
-// the human for it.
+// screen (the model never asked it, it went away, or the host dismissed it with Esc where the mod does not
+// run): the host's loop answers it so, and nothing waits on the human for it.
 func Lapse(s *state.Store, question, answer string, now time.Time, env func(string) string) (bool, error) {
 	return settle(s, question, answer, now, env, "lapsed")
 }

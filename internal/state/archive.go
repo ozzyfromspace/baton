@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,8 +22,9 @@ const archivePrefix = "gen-"
 // Archive keeps the record of the plan st runs before something replaces it (an attach over it, a
 // revision, a drop): st as state.json, and the run's plan.json and handoff.md as they are now, copied into
 // gen-<N>/ in the run's directory, N being st's generation (gen-<N>.2 and on for another record of the
-// same one). It returns the folder, "" for a run that keeps nothing (Record). It writes the folder at
-// once: from inside an Update, take the Record there and Save it once the lock is let go.
+// same one), with the log of every job of it that failed in jobs/. It returns the folder, "" for a run
+// that keeps nothing (Record). It writes the folder at once: from inside an Update, take the Record there
+// and Save it once the lock is let go.
 func (s *Store) Archive(st State) (string, error) {
 	r, err := s.Record(st)
 	if err != nil {
@@ -37,14 +40,16 @@ type Record struct {
 	Generation int
 	dir        string            // the run's directory
 	files      map[string][]byte // what its folder holds, by name
+	logs       []string          // the logs of the plan's red jobs, copied into its jobs/ as Save writes it
 }
 
 // recordFiles are the files of a Record, in the order Save writes them.
 var recordFiles = []string{"state.json", "plan.json", "handoff.md"}
 
 // Record reads what Archive keeps of the plan st runs: st, and the run's plan.json and handoff.md as they
-// are now. It takes no lock, so an Update may call it. A run with no plan attached, or a worker's sub-run,
-// keeps nothing (nil).
+// are now, and names the logs of its red jobs, on record or dropped from it (KeptLogs), which Save copies.
+// It takes no lock, so an Update may call it. A run with no plan attached, or a worker's sub-run, keeps
+// nothing (nil).
 func (s *Store) Record(st State) (*Record, error) {
 	if s.Parent != "" || st.Mode == ModeIdle {
 		return nil, nil
@@ -66,6 +71,15 @@ func (s *Store) Record(st State) (*Record, error) {
 			return nil, err
 		}
 		r.files[filepath.Base(f)] = data
+	}
+	ids := slices.Clone(st.KeptLogs)
+	for _, j := range st.Jobs {
+		if j.Red() {
+			ids = append(ids, j.ID)
+		}
+	}
+	for _, id := range ids {
+		r.logs = append(r.logs, s.JobLog(id))
 	}
 	return r, nil
 }
@@ -96,7 +110,33 @@ func (r *Record) Save() (string, error) {
 			}
 		}
 	}
+	for _, l := range r.logs {
+		copyLog(l, filepath.Join(dir, "jobs", filepath.Base(l)))
+	}
 	return dir, nil
+}
+
+// copyLog copies the job log at from to to, making its folder; best effort, as a log that is gone (one
+// pruned before baton kept them) has nothing to keep.
+func copyLog(from, to string) {
+	in, err := os.Open(from)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	if os.MkdirAll(filepath.Dir(to), 0o755) != nil {
+		return
+	}
+	out, err := os.Create(to)
+	if err != nil {
+		return
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(to)
+		return
+	}
+	out.Close()
 }
 
 // Archived is an earlier plan of a run, kept by Archive.

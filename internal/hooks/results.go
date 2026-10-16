@@ -16,10 +16,13 @@ import (
 // turn, or, when the session is idle, the UserPromptSubmit of the line the host types to wake it. Each is
 // given once. A phase that was set aside gets its result in the brief it resumes from.
 
-// The end of a job's log a result carries.
+// What a result carries of a job's log: its end, and at most resultFailures of the lines before it that
+// report a failure, each clipped to resultClip bytes.
 const (
-	resultLines = 80
-	resultBytes = 6 << 10
+	resultLines    = 80
+	resultBytes    = 6 << 10
+	resultFailures = 20
+	resultClip     = 200
 )
 
 // delivery is the results a hook took for the model under the state's lock; the logs are read after.
@@ -73,19 +76,26 @@ func (d delivery) event(s *state.Store, via string) {
 	s.Event("results_delivered", map[string]any{"jobs": ids, "via": via})
 }
 
-// jobResult is one job's result for the model (decide.JobResult), with the end of its log. With aggregate
-// (aggregate_qa), a red result of a phase with a QA phase ahead in pl says other phases' work may be why.
+// jobResult is one job's result for the model (decide.JobResult), with what it shows of its log (JobLog).
+// With aggregate (aggregate_qa), a red result of a phase with a QA phase ahead in pl says other phases' work
+// may be why.
 func jobResult(s *state.Store, pl plan.Plan, j state.Job, red []state.Job, aggregate bool) string {
-	log := j.Log
-	if log == "" {
-		log = s.JobLog(j.ID)
-	}
-	tail, _ := lane.Tail(log, resultLines, resultBytes)
 	qa := ""
 	if aggregate {
 		qa = pl.QAAhead(j.Phase)
 	}
-	return decide.JobResult(j, log, tail, red, qa)
+	return decide.JobResult(j, JobLog(s, j), red, qa)
+}
+
+// JobLog reads what a result shows of job j's log: its end, and the lines before that end that report a
+// failure, so that one early in a long log is never lost behind it.
+func JobLog(s *state.Store, j state.Job) decide.Log {
+	path := j.Log
+	if path == "" {
+		path = s.JobLog(j.ID)
+	}
+	e, _ := lane.ReadExcerpt(path, resultLines, resultBytes, resultFailures, resultClip)
+	return decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More}
 }
 
 // announced takes the lines the host left for the human (Runtime.Announce).

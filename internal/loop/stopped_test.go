@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/board"
 	"github.com/ozzyfromspace/baton/internal/bridge"
+	"github.com/ozzyfromspace/baton/internal/brief"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -243,7 +245,7 @@ func TestASecondStopNobodyAnswers(t *testing.T) {
 		x.lapse()
 		w := x.worker("P1")
 		if w.Status != state.WorkerHeld || w.TakenDown.IsZero() || !x.logged("agent_taken_down", map[string]any{"phase": "P1", "stops": 2, "by": state.ByTimeout}) ||
-			!strings.Contains(x.announced(), decide.AgentTakenDown("P1")) {
+			!strings.Contains(x.announced(), decide.AgentTakenDown("P1", DefaultTiming.EscalationTimeout)) {
 			t.Fatalf("worker %+v\n%s", w, x.events())
 		}
 		if got := p.of("worker_held"); len(got) != 1 || got[0] != decide.AgentTakenDownNotice("P1") {
@@ -378,5 +380,169 @@ func TestAStopQuestionTheHumanOvertookIsWithdrawn(t *testing.T) {
 	x.lapse()
 	if x.status("P1") != state.WorkerWorking || x.spawnsOf("P1") != 2 {
 		t.Errorf("P1 %+v, spawns %v", x.worker("P1"), x.spawns())
+	}
+}
+
+// takenDown brings the crew's P1 to a take-down: its agent stopped twice, nobody answering, its work not
+// done. ready sets the rest of the run first, while the second stop's question is open (nil: as it is).
+// It returns the question with no deadline that waits for the human then.
+func takenDown(t *testing.T, ready func(x *crew)) (*crew, *pushes, state.Relay) {
+	t.Helper()
+	x, p := secondStop(t)
+	if ready != nil {
+		ready(x)
+	}
+	x.lapse()
+	st := x.state()
+	r := st.StoppedTwice()
+	if r == nil || x.worker("P1").TakenDown.IsZero() {
+		t.Fatalf("not taken down: %+v, relay %+v\n%s", x.worker("P1"), st.Relay, x.events())
+	}
+	return x, p, *r
+}
+
+// leadDone has the lead done with all it can do: P0 and P2 are done, and P3 waits for P1.
+func leadDone(x *crew) {
+	x.lead.Update(func(st *state.State) error {
+		st.Phases["P0"].Status, st.Phases["P2"].Status, st.Current = state.PhaseDone, state.PhaseDone, ""
+		return nil
+	})
+}
+
+// takenBack checks that the crew's P1 was taken back from its twice-stopped agent for the lead: its
+// worker retired, the question closed, the lead holding P1 after a boundary, the decision recorded, the
+// human told and pushed, and the lead's brief saying why; and that no agent takes P1 up after (spawns:
+// the agents started on it before). It returns the decision.
+func takenBack(x *crew, p *pushes, spawns int) state.Decision {
+	t := x.t
+	t.Helper()
+	w := x.worker("P1")
+	st := x.state()
+	if w.Status != state.WorkerFailed || w.Why != decide.StoppedTakenWhy || isDir(w.Worktree) {
+		t.Fatalf("P1's worker %+v\n%s", w, x.events())
+	}
+	if st.Current != "P1" || !st.BoundaryOwed || !x.logged("compact_queued", map[string]any{"reason": "boundary", "next": "P1", "by": "stopped_phase_taken"}) {
+		t.Fatalf("the lead holds %q (owed %v)\n%s", st.Current, st.BoundaryOwed, x.events())
+	}
+	if q := st.StoppedTwice(); q != nil {
+		t.Errorf("the question is still open: %+v", q)
+	}
+	for _, r := range st.Relay {
+		if r.Persistent() && (r.Answered == nil || r.Answered.By != state.ByTimeout || r.Applied.IsZero()) {
+			t.Errorf("the question did not close: %+v", r)
+		}
+	}
+	d := st.Decisions[len(st.Decisions)-1]
+	if d.Kind != state.Note || d.Phase != "P1" || !strings.Contains(d.What, "took P1 back from its agent") || !strings.HasPrefix(d.Undo, "/baton pause") {
+		t.Errorf("decision %+v", d)
+	}
+	if !x.logged("stopped_phase_taken", map[string]any{"phase": "P1", "decision": d.ID, "stops": 2, "next": "P1"}) {
+		t.Errorf("not logged\n%s", x.events())
+	}
+	if !strings.Contains(x.announced(), "baton: noted ("+d.ID+") — nobody answered about the agent you stopped twice on P1, and nothing else in the run could move") {
+		t.Errorf("announced %q", x.announced())
+	}
+	handoff, _ := os.ReadFile(x.lead.HandoffPath())
+	b := brief.Write(brief.Input{Kind: brief.Boundary, Plan: x.pl, State: st, Handoff: string(handoff), Words: decide.Words{Git: true, Timeout: DefaultTiming.EscalationTimeout}})
+	for _, want := range []string{"Now: P1 — one. Begin it now.", "[baton] The human stopped the phase agent on P1 twice and did not answer baton's question about it", d.ID} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the lead's brief lacks %q:\n%s", want, b)
+		}
+	}
+	x.wait(15 * time.Minute)
+	if got := p.of("agent_stopped"); !slices.Contains(got, decide.StoppedTakenNotice("P1")) {
+		t.Errorf("pushed %q", got)
+	}
+	if x.spawnsOf("P1") != spawns || x.status("P1") != state.WorkerFailed {
+		t.Errorf("an agent took P1 up again: %v, %+v", x.spawns(), x.worker("P1"))
+	}
+	return d
+}
+
+// A phase whose agent the human stopped twice, which the rest of the run needs, waits for their answer
+// only while something else can move. Once nothing can, baton takes it back from its agent
+// escalation_timeout later, and the lead takes it up at a boundary; the human's answer before then wins.
+func TestATwiceStoppedPhaseTheRunNeeds(t *testing.T) {
+	timeout := DefaultTiming.EscalationTimeout
+	t.Run("nothing else can move", func(t *testing.T) {
+		x, p, r := takenDown(t, leadDone)
+		if r.Stuck.IsZero() {
+			t.Fatalf("the moment nothing could move was not kept: %+v\n%s", r, x.events())
+		}
+		spawns := x.spawnsOf("P1")
+		due := x.state().TakeUpAt(r, r.Stuck, timeout)
+		x.wait(due.Sub(x.now) - time.Second)
+		if x.logged("stopped_phase_taken", nil) || x.status("P1") != state.WorkerHeld {
+			t.Fatalf("taken back before %s (now %s): %+v", due, x.now, x.worker("P1"))
+		}
+		x.tick(time.Second)
+		x.tick(time.Second)
+		takenBack(x, p, spawns)
+	})
+	t.Run("the lead holds a phase meanwhile", func(t *testing.T) {
+		x, p, _ := takenDown(t, func(x *crew) {
+			x.lead.Update(func(st *state.State) error { st.Phases["P2"].Status = state.PhaseDone; return nil })
+		})
+		spawns := x.spawnsOf("P1")
+		x.wait(40 * time.Minute)
+		if r := x.state().StoppedTwice(); r == nil || !r.Stuck.IsZero() || x.logged("stopped_phase_taken", nil) || x.status("P1") != state.WorkerHeld {
+			t.Fatalf("P1 did not wait while the lead held P0: %+v, %+v\n%s", r, x.worker("P1"), x.events())
+		}
+		leadDone(x)
+		x.tick(time.Second)
+		x.tick(time.Second)
+		if r := x.state().StoppedTwice(); r == nil || r.Stuck.IsZero() {
+			t.Fatalf("the moment nothing could move was not kept: %+v", r)
+		}
+		x.wait(timeout - 2*time.Minute)
+		if x.logged("stopped_phase_taken", nil) {
+			t.Fatalf("taken back less than %s after nothing could move\n%s", timeout, x.events())
+		}
+		x.wait(3 * time.Minute)
+		takenBack(x, p, spawns)
+	})
+	t.Run("another agent at work meanwhile", func(t *testing.T) {
+		x, p, _ := takenDown(t, nil)
+		// P2 can start, and starts once the question's dialog has stepped aside (no agent starts under one);
+		// then the lead is done with P0.
+		x.wait(15 * time.Minute)
+		x.atWork("P2")
+		x.lead.Update(func(st *state.State) error {
+			st.Phases["P0"].Status, st.Current = state.PhaseDone, ""
+			return nil
+		})
+		spawns := x.spawnsOf("P1")
+		x.wait(30 * time.Minute)
+		if r := x.state().StoppedTwice(); r == nil || !r.Stuck.IsZero() || x.logged("stopped_phase_taken", nil) {
+			t.Fatalf("P1 did not wait while P2's agent worked: %+v\n%s", r, x.events())
+		}
+		x.finish("P2", map[string]string{"two.txt": "two\n"}, true)
+		for range 5 {
+			x.tick(time.Second)
+		}
+		if x.status("P2") != state.WorkerLanded {
+			t.Fatalf("P2 did not land: %+v\n%s", x.worker("P2"), x.events())
+		}
+		x.wait(timeout - 2*time.Minute)
+		if x.logged("stopped_phase_taken", nil) {
+			t.Fatalf("taken back less than %s after nothing could move\n%s", timeout, x.events())
+		}
+		x.wait(3 * time.Minute)
+		takenBack(x, p, spawns)
+	})
+	for _, c := range []struct {
+		answer, status string
+	}{{decide.RestartIt, state.WorkerWorking}, {decide.LeaveStopped, state.WorkerHeld}} {
+		t.Run("the human answers first: "+c.answer, func(t *testing.T) {
+			x, _, r := takenDown(t, leadDone)
+			x.asked("P1", "What should become of P1?")
+			x.wait(x.state().TakeUpAt(r, r.Stuck, timeout).Sub(x.now) - 2*time.Minute)
+			x.answers(c.answer, false, false)
+			x.tick(time.Second)
+			x.wait(30 * time.Minute)
+			if x.logged("stopped_phase_taken", nil) || x.status("P1") != c.status || x.state().Current != "" {
+				t.Fatalf("the human's %s: P1 %+v, the lead on %q\n%s", c.answer, x.worker("P1"), x.state().Current, x.events())
+			}
+		})
 	}
 }
