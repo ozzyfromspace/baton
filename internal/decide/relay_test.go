@@ -22,17 +22,17 @@ func TestRelayQuestions(t *testing.T) {
 		waitFor string // the description that says how the human answers later
 	}{
 		{"timed proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "Use a fake \"clock\"", Because: "the clock is flaky."},
-			"baton: the agent on P3: the clock is flaky. Unless you answer by 15:33, I will use a fake 'clock'.", "Wait for me|Pause baton|Go ahead", "Go ahead",
+			"baton: the agent on P3: the clock is flaky. Unless you answer by 15:33, I will use a fake 'clock'. To write to the agent, use @P3 <your words> at the lead's prompt.", "Wait for me|Pause baton|Go ahead", "Go ahead",
 			"Don't do it yet; /baton run asks me again, or it goes ahead after 20 minutes with no word"},
 		{"outward proposal", state.Relay{Phase: "P3", Kind: state.RelayProposal, Decision: "P3.d1", What: "push the tag", Because: "the release needs it", Outward: "'push' looks outward-facing or irreversible"},
 			"baton: the agent on P3: the release needs it. I propose to push the tag, but 'push' looks outward-facing or irreversible: unless you answer by 15:33, " +
-				"I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise.",
+				"I will do it only if it is safely reversible and stays in the project, and leave it for you otherwise. To write to the agent, use @P3 <your words> at the lead's prompt.",
 			"Wait for me|Pause baton|Not now|Go ahead", "Not now", "Don't do it yet; /baton run asks me again, or it is answered Not now after 20 minutes with no word"},
 		{"block", state.Relay{Phase: "P4", Kind: state.RelayBlocked, Because: "the API key expired."},
-			"baton: the agent on P4 is blocked: the API key expired. Only P4 waits for you; the rest of the run goes on. Unless you answer by 15:33, it looks again for a safe way around it.",
+			"baton: the agent on P4 is blocked: the API key expired. Only P4 waits for you; the rest of the run goes on. Unless you answer by 15:33, it looks again for a safe way around it. To write to the agent, use @P4 <your words> at the lead's prompt.",
 			"Continue|Pause baton|Look again", "Look again", "The agent looks for a safe way around it and proposes it first"},
 		{"review", state.Relay{Phase: "P4", Kind: state.RelayReview, Count: 3},
-			"baton: the agent on P4 has made 3 decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let P4 go on?",
+			"baton: the agent on P4 has made 3 decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let P4 go on? To write to the agent, use @P4 <your words> at the lead's prompt.",
 			"Continue|Pause baton|Wait for me", "Wait for me", "Leave P4 waiting; /baton run asks me again"},
 	} {
 		q := RelayQuestion(c.r, deadline)

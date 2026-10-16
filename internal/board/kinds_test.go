@@ -43,7 +43,7 @@ func TestAGateAndAWaitSideBySide(t *testing.T) {
 			sub.Phases["P3"].Status, sub.Phases["P3"].On = state.PhaseVerifying, []string{"P3.j2", "P3.j3"}
 			sub.Jobs = both("P3", "P3.")
 			return r
-		}, []string{"        ⧗ P3  Phase agents — verifying 2m (jobs P3.j2 and P3.j3) · agent a1b2c3d4"}},
+		}, []string{"        ⧗ P3  Phase agents — verifying 2m (jobs P3.j2 and P3.j3) · @P3 <your words> · agent a1b2c3d4"}},
 		{"a phase set aside on both", func() *run {
 			r := newRun()
 			r.st.Phases["P3"] = &state.PhaseState{Status: state.PhaseParked, On: []string{"j2", "j3"}, Park: &state.Park{Reason: state.ParkJob, Since: now, Job: "j3"}}

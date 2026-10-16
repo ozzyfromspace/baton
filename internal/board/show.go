@@ -157,6 +157,7 @@ func (b Board) Lines(width int) []string {
 			id = max(id, cells(p.ID))
 		}
 	}
+	handles := false
 	for _, s := range b.Steps {
 		for i, p := range s.Phases {
 			step := ""
@@ -164,6 +165,10 @@ func (b Board) Lines(width int) []string {
 				step = decide.BoardStep(s.N)
 			}
 			stand := p.Stand.Board(b.At)
+			if p.Agent != "" && p.Worker == state.WorkerWorking {
+				stand += sep + decide.Handle(p.ID) // how the human writes to it, before its id, which a narrow board cuts
+				handles = true
+			}
 			if p.Agent != "" {
 				stand += sep + "agent " + short(p.Agent)
 			}
@@ -177,6 +182,36 @@ func (b Board) Lines(width int) []string {
 	}
 	if l := b.Limit; l != nil {
 		out = append(out, clip(decide.BoardLimit(l.By, l.Until), width))
+	}
+	if handles {
+		for _, line := range decide.BoardWrite {
+			out = append(out, wrap(line, width)...)
+		}
+	}
+	return out
+}
+
+// wrap breaks s into lines at most width cells wide (0: no limit), between words: a word wider than a line
+// is cut.
+func wrap(s string, width int) []string {
+	if width <= 0 || cells(s) <= width {
+		return []string{s}
+	}
+	var out []string
+	line := ""
+	for _, w := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = w
+		case cells(line)+1+cells(w) <= width:
+			line += " " + w
+		default:
+			out = append(out, clip(line, width))
+			line = w
+		}
+	}
+	if line != "" {
+		out = append(out, clip(line, width))
 	}
 	return out
 }

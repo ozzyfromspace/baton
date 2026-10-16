@@ -94,7 +94,7 @@ func RelayQuestion(r state.Relay, deadline time.Time) Question {
 		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on. Unless you answer by %s, it looks again for a safe way around it.",
 			who, clause(r.Because), r.Phase, deadline.Local().Format("15:04"))
 	}
-	return Question{Text: Sanitize(text), Options: RelayOptions(r)}
+	return Question{Text: Sanitize(text + RelayHandle(r.Phase)), Options: RelayOptions(r)}
 }
 
 // RelayGoAhead tells the agent on phase that the human chose Go ahead on its proposal id, to do what.

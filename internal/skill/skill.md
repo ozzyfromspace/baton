@@ -20,7 +20,7 @@ Explain briefly:
 - `/baton setup`: check this machine and say what is left to set up.
 - `/baton update`: update baton to the latest release (`--check` only looks).
 
-Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start phase agents: background agents of this session, each on another phase that can go ahead, in a git worktree of its own, as many as the plan and the machine have room for. Claude Code lists them in the agent panel below the prompt, where each one's transcript opens. baton lands their work on this session's branch when they finish.
+Each session runs its own plan, so several terminals can each run one in the same project. While a plan runs, baton may also start phase agents: background agents of this session, each on another phase that can go ahead, in a git worktree of its own, as many as the plan and the machine have room for. Claude Code lists them in the agent panel below the prompt, where each one's transcript opens. baton lands their work on this session's branch when they finish. Each goes by its phase's id: `@P3 <your words>` at this prompt writes to the agent on P3, which gets them at its next tool call (an idle one wakes and goes on with its phase), and Claude here never sees them; for a phase no agent works on (not started, done, or the lead's own), the words come to Claude here. Typing in an agent's own view in the agent panel wakes it whatever it is, but baton refuses every tool call of an agent it let go.
 
 ## status
 
