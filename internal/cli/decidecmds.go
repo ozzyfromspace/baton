@@ -109,7 +109,8 @@ func cmdPropose(args []string, io IO) int {
 	if !ok {
 		return 1
 	}
-	if !hosted(io) {
+	isHosted := hosted(io) // read before the run's lock: it reads processes
+	if !isHosted {
 		s.Event("refused", map[string]any{"command": "propose", "why": "not hosted"})
 		return fail(io, "not recorded — this session is not hosted by baton, so nothing would put your proposal to the human or go ahead with it. Ask the human directly.")
 	}
@@ -136,7 +137,7 @@ func cmdPropose(args []string, io IO) int {
 		if st.ReviewDue != "" {
 			return reviewRefusal(st)
 		}
-		if err := guard(io, st, "not recorded", false); err != nil {
+		if err := guard(isHosted, st, "not recorded", false); err != nil {
 			return err
 		}
 		switch pending := st.PendingProposal(); {
@@ -205,9 +206,10 @@ func waitNote(wait time.Duration, why string) string {
 // guard turns down a command the model could use to get out of a halt only the human may clear (a hard
 // block, a proposal held for them, a review), or to move on before its proposal is put to the human.
 // verb is how the refusal starts ("not done", "not recorded"). A command run outside the hosted session
-// is the human's own, and is never held.
-func guard(io IO, st *state.State, verb string, proposalToo bool) error {
-	if !hosted(io) {
+// (isHosted false: hosted(io), read before the run's lock, as it reads processes) is the human's own, and is
+// never held.
+func guard(isHosted bool, st *state.State, verb string, proposalToo bool) error {
+	if !isHosted {
 		return nil
 	}
 	if what, since, held := st.Held(); held {

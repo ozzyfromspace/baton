@@ -234,25 +234,24 @@ func cmdAttach(args []string, io IO) int {
 	if err := state.ExcludeFromGit(root); err != nil {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
-	origin, branch := state.OriginOf(root), gitx.Branch(root)
-	inSession := io.Env("CLAUDE_CODE_SESSION_ID") != ""
+	origin, branch := state.OriginOf(root), gitx.Branch(root) // read before the lock, as is whether it is hosted
+	inSession, isHosted := io.Env("CLAUDE_CODE_SESSION_ID") != "", hosted(io)
 	var boundary bool
-	var kept string
-	var gen int
+	var rec *state.Record
 	st, err := s.Update(func(st *state.State) error {
-		// The plan this replaces keeps its record (its state, plan and notes) before anything overwrites it.
+		// The plan this replaces keeps its record (its state, plan and notes) as it was before anything
+		// overwrites it, written once the lock is let go.
 		var err error
-		if kept, err = s.Archive(*st); err != nil {
+		if rec, err = s.Record(*st); err != nil {
 			return fmt.Errorf("could not keep the record of the plan this replaces: %w", err)
 		}
-		gen = st.Generation
 		if err := s.WritePlan(pl); err != nil {
 			return err
 		}
 		// The first phase starts from a brief, after a compaction, unless there is nothing before it to
 		// compact: a hosted conversation whose first turn this is, or a shell (the next session starts
 		// fresh). A plain session is resumed under baton to run the plan, and compacts then.
-		boundary = inSession && (!hosted(io) || st.Run.History)
+		boundary = inSession && (!isHosted || st.Run.History)
 		if boundary {
 			*st = state.AttachAtBoundary(*st, pl, io.Now())
 		} else {
@@ -264,9 +263,7 @@ func cmdAttach(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	if kept != "" {
-		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
-	}
+	kept := keepRecord(io, s, rec)
 	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
 	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
@@ -282,7 +279,7 @@ func cmdAttach(args []string, io IO) int {
 	switch {
 	case paused:
 		fmt.Fprintln(io.Out, decide.AttachedPaused(first.ID+" ("+first.Title+")"))
-	case boundary && hosted(io):
+	case boundary && isHosted:
 		fmt.Fprintf(io.Out, "End your turn now: baton compacts this conversation, then starts %s (%s) with a fresh brief.\n", first.ID, first.Title)
 	case boundary:
 		fmt.Fprintf(io.Out, "%s (%s) starts once baton has compacted this conversation.\n", first.ID, first.Title)
@@ -292,7 +289,7 @@ func cmdAttach(args []string, io IO) int {
 	if kept != "" {
 		fmt.Fprintf(io.Out, "baton: the record of %q (its state, plan and notes) is kept in %s.\n", replaced.Title, shown(s, kept))
 	}
-	if !hosted(io) {
+	if !isHosted {
 		fmt.Fprintln(io.Out, notHostedNote(io, "this session is not hosted by baton, so nothing will compact automatically"))
 	} else if line := workersAttached(io, s.Checkout, pl); line != "" {
 		fmt.Fprintln(io.Out, "baton: tell the human: "+line) // it is theirs to act on, not the model's
@@ -826,7 +823,8 @@ func cmdDone(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	if err := guard(io, &cur, "not done", true); err != nil {
+	isHosted := hosted(io) // read before the run's lock: it reads processes
+	if err := guard(isHosted, &cur, "not done", true); err != nil {
 		return refused(io, s, "done", err)
 	}
 	// The plan file is read again as the phase ends, so a phase the human just added to it comes next. A
@@ -854,7 +852,7 @@ func cmdDone(args []string, io IO) int {
 	var count int
 	var latest *state.Job
 	st, err := s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not done", true); err != nil {
+		if err := guard(isHosted, st, "not done", true); err != nil {
 			return err
 		}
 		if ps := st.Phases[id]; ps != nil {
@@ -1035,10 +1033,11 @@ func cmdBlocked(args []string, io IO) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	if err := guard(io, &st, "not recorded", true); err != nil {
+	isHosted := hosted(io) // read before the run's lock: it reads processes
+	if err := guard(isHosted, &st, "not recorded", true); err != nil {
 		return refused(io, s, "blocked", err)
 	}
-	if hosted(io) && st.Mode == state.ModeRunning && !st.BoundaryOwed && !st.InHand() { // with a boundary owed, the next phase is the lead's
+	if isHosted && st.Mode == state.ModeRunning && !st.BoundaryOwed && !st.InHand() { // with a boundary owed, the next phase is the lead's
 		return refused(io, s, "blocked", refusal{"no phase in hand", decide.NoPhase("not recorded")})
 	}
 	work := checkWork(s, st.Current)
@@ -1049,7 +1048,7 @@ func cmdBlocked(args []string, io IO) int {
 	}
 	var since time.Time
 	if _, err := s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not recorded", true); err != nil {
+		if err := guard(isHosted, st, "not recorded", true); err != nil {
 			return err
 		}
 		if err := state.SetBlocked(st, reason, io.Now()); err != nil {
@@ -1162,8 +1161,9 @@ func cmdCheckpoint(args []string, io IO) int {
 	clean := len(work.fresh) == 0 && work.warn == ""
 	var to, back, why string
 	var epoch int
+	isHosted := hosted(io) // read before the run's lock: it reads processes
 	_, err = s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not recorded", true); err != nil {
+		if err := guard(isHosted, st, "not recorded", true); err != nil {
 			return err
 		}
 		if err := state.SetCheckpoint(st, io.Now()); err != nil {
@@ -1467,8 +1467,9 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 	var kept state.After
 	var keeps, covered bool
 	var owed hooks.Owing
+	isHosted := hosted(io) // read before the run's lock: it reads processes
 	st, err := s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not resumed", false); err != nil {
+		if err := guard(isHosted, st, "not resumed", false); err != nil {
 			return err
 		}
 		if changed {
@@ -1565,8 +1566,7 @@ func cmdDrop(args []string, io IO) int {
 	var stopped []state.Job
 	var logs int
 	var workers []string
-	var kept string
-	var gen int
+	var rec *state.Record
 	if _, err := s.Update(func(st *state.State) error {
 		stopped, logs = st.Unfinished(), len(st.Jobs)
 		for _, w := range st.LiveWorkers() {
@@ -1576,17 +1576,14 @@ func cmdDrop(args []string, io IO) int {
 			return state.Detach(st) // refused: nothing to drop
 		}
 		var err error
-		if kept, err = s.Archive(*st); err != nil {
+		if rec, err = s.Record(*st); err != nil { // written once the lock is let go
 			return fmt.Errorf("could not keep the record of the plan: %w", err)
 		}
-		gen = st.Generation
 		return state.Detach(st)
 	}); err != nil {
 		return refused(io, s, "drop", err)
 	}
-	if kept != "" {
-		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
-	}
+	kept := keepRecord(io, s, rec)
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
 	stopRunners(stopped, io.Now())
 	os.RemoveAll(jobsDir(s))
