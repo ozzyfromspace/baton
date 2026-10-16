@@ -351,6 +351,7 @@ func TestLongestChain(t *testing.T) {
 		deps  string
 	}{
 		{"chain", graph(nil, nil, nil, nil), 4, "P0 P1 P2 P3", "dependencies: each phase follows the one before it"},
+		{"one phase", graph(nil), 1, "P0", "no dependencies"},
 		{"diamond", graph(none, []string{"P0"}, []string{"P0"}, []string{"P1", "P2"}), 3, "P0 P1 P3",
 			"dependencies: P2 after P0; P3 after P1 and P2; every other phase follows the one before it; longest chain 3 of 4 phases"},
 		{"wide", graph(none, none, none, none), 1, "P0", "dependencies: P0, P1, P2 and P3 need no other phase; longest chain 1 of 4 phases"},

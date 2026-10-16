@@ -96,14 +96,14 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, state.OriginOf(s.Root))
 		st.RunBranch = branch
-		v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → %s starts now", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
+		v.say = fmt.Sprintf("baton: attached %q (%s; %s) → %s starts now", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = append(v.also, event{"phase_started", map[string]any{"phase": first.ID}})
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
 	st.RunBranch = branch
-	v.say = fmt.Sprintf("baton: attached %q (%d phases; %s) → compacting the planning conversation, then %s starts", pl.Title, len(pl.Phases), pl.Dependencies(), first.ID) + workers
+	v.say = fmt.Sprintf("baton: attached %q (%s; %s) → compacting the planning conversation, then %s starts", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	return v
 }
@@ -116,6 +116,9 @@ func archived(st state.State, dir string) event {
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
 // and warns when they would stop at permission prompts (decide.WorkersAttached). "" with no workers.
 func workersAttached(c Context, checkout string, pl plan.Plan) string {
+	if len(pl.Phases) < 2 {
+		return "" // nothing could go ahead beside a plan's one phase
+	}
 	read := c.Machine
 	if read == nil {
 		read = machine.Read

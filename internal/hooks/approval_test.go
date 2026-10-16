@@ -68,6 +68,44 @@ func TestAnApprovedPlanIsAttachedAndStartsAfterACompaction(t *testing.T) {
 	}
 }
 
+// A small task can be a plan of one phase: approved, it is attached, starts after the compaction and
+// runs to completion like any other.
+func TestAnApprovedOnePhasePlanRunsToCompletion(t *testing.T) {
+	f := newFixture(t, false)
+	file := f.writePlan("small-fix.md", "# Fix the login bug\n\n## Standing rules\nBe careful.\n\n## P0 — Fix it\nChange the check.\n\n## Verification\nAll green.\n")
+	out := f.approve(file)
+	if got := say(out); !strings.Contains(got, `attached "Fix the login bug" (1 phase; no dependencies) → compacting the planning conversation, then P0 starts`) || strings.Contains(got, "worker") {
+		t.Fatalf("announced %q", got)
+	}
+	if tell := feedback(out); !strings.Contains(tell, `"Fix the login bug", 1 phase (`) || !strings.Contains(tell, "Do not start P0 in this turn") {
+		t.Fatalf("told %q", tell)
+	}
+	if !f.logged("attached", map[string]any{"plan": file, "phases": float64(1), "longest_chain": float64(1), "by": "approval"}) {
+		t.Errorf("events: %s", f.eventLog())
+	}
+	if msg := say(f.fire("Stop", map[string]any{})); !strings.Contains(msg, "plan attached → compacting the conversation so far, then P0 (Fix it) starts") {
+		t.Fatalf("stop said %q", msg)
+	}
+	f.store.Update(func(st *state.State) error { st.Run.Compaction.Status = state.CompactTyped; return nil })
+	_, brief := f.compacted("manual")
+	for _, want := range []string{"Now: P0 — Fix it. Begin it now.", "Be careful.", "Change the check."} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+	pl, _ := f.store.LoadPlan()
+	f.store.Update(func(st *state.State) error {
+		_, err := state.Done(st, pl, "P0", f.now, state.DoneOpts{})
+		return err
+	})
+	if st := f.state(); st.Mode != state.ModeComplete {
+		t.Fatalf("mode %s after its one phase", st.Mode)
+	}
+	if msg := say(f.fire("Stop", map[string]any{})); !strings.Contains(msg, "plan complete — its 1 phase done") {
+		t.Errorf("stop said %q", msg)
+	}
+}
+
 // Not every plan is a baton plan: one without phase headings is left alone.
 func TestAPlanWithoutPhasesIsLeftAlone(t *testing.T) {
 	f := newFixture(t, false)
@@ -467,5 +505,8 @@ func TestCompetingDirectivesAreAskedForOnce(t *testing.T) {
 	}
 	if d, _ := exit("/plans/c.md", "# Lunch\n\nSandwiches.\n"); d == "deny" {
 		t.Error("a plan with no phase headings was held back")
+	}
+	if d, _ := exit("/plans/d.md", "# Small\n\n## P0 — Only\nDo it.\n"); d != "deny" {
+		t.Error("a one-phase plan was not asked")
 	}
 }

@@ -361,8 +361,12 @@ func (p Plan) DepsLabel(id string) string {
 }
 
 // Dependencies describes the graph in one line: "dependencies: P0, P1 and P3 need no other phase; P5
-// after P2 and P4; every other phase follows the one before it; longest chain 4 of 6 phases".
+// after P2 and P4; every other phase follows the one before it; longest chain 4 of 6 phases", or "no
+// dependencies" for a plan of one phase.
 func (p Plan) Dependencies() string {
+	if len(p.Phases) == 1 {
+		return "no dependencies"
+	}
 	if p.Sequential() {
 		return "dependencies: each phase follows the one before it"
 	}

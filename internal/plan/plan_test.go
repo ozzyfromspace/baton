@@ -183,13 +183,61 @@ func TestShaped(t *testing.T) {
 	}{
 		{"# T\n\n## P0 — A\nx\n\n## P1 — B\ny\n", true},
 		{"# T\n\n### Phase 1: A\nx\n\n### Phase 2: B\ny\n", true},
-		{"# T\n\n## P0 — Only one\nx\n", false},
-		{"# T\n\n- **P0 A:** x\n- **P1 B:** y\n", false},
-		{"# Fix the login bug\n\nChange the check in auth.go.\n", false},
+		{"# T\n\n## P0 — Only one\nx\n", true}, // a small task can be one phase
+		{"# T\n\n## Standing rules\nr\n\n## P0 — Only one\nx\n\n## Verification\nv\n", true},
+		{"# T\n\n### Phase 1: Only one\nx\n", true},
+		{"# T\n\n- **P0 A:** x\n- **P1 B:** y\n", false}, // phases, but not at headings of their own
+		{"# T\n\n- **P0 Only one:** x\n", false},
+		{"# T\n\n| P0 | A | x |\n| P1 | B | y |\n", false},
+		{"# Fix the login bug\n\nChange the check in auth.go.\n", false}, // no phase at all: not baton's
+		{"", false},
 	} {
 		if got := Shaped(Suggest([]byte(c.doc))); got != c.want {
 			t.Errorf("%q: %v, want %v", c.doc, got, c.want)
 		}
+	}
+}
+
+// A small task can be a plan of one phase: it builds, its section and rules read as in any plan, its
+// graph is one step wide, and a phase the human adds later joins it.
+func TestOnePhasePlan(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "plan.md")
+	doc := "# Fix the login bug\n\n## Standing rules\nr\n\n## P0 — Fix it\n\nAfter: none\n\nChange the check.\n\n## Verification\nv\n"
+	os.WriteFile(file, []byte(doc), 0o644)
+	spec := Suggest([]byte(doc))
+	if !Shaped(spec) || spec.RulesAnchor != "## Standing rules" || spec.EndAnchor != "## Verification" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	p, err := Build(file, []byte(doc), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Phases) != 1 || len(p.Deps("P0")) != 0 || p.Width() != 1 || !p.Sequential() {
+		t.Errorf("graph: %s, width %d", graphOf(p), p.Width())
+	}
+	if k, chain := p.LongestChain(); k != 1 || chain[0] != "P0" {
+		t.Errorf("LongestChain = %d %v", k, chain)
+	}
+	if steps := p.Steps(); len(steps) != 1 || len(steps[0]) != 1 {
+		t.Errorf("Steps = %v", steps)
+	}
+	if p.NextQA("P0") != nil || p.QAAhead("P0") != "" || len(p.SinceQA("P0")) != 0 {
+		t.Error("a one-phase plan has no QA phase ahead")
+	}
+	if sec, err := p.Section([]byte(doc), 0); err != nil || sec != "## P0 — Fix it\n\nAfter: none\n\nChange the check." {
+		t.Errorf("Section = %q, %v", sec, err)
+	}
+	if got := p.Rules([]byte(doc)); got != "## Standing rules\nr" {
+		t.Errorf("Rules = %q", got)
+	}
+	if only, err := p.Only("P0"); err != nil || len(only.Phases) != 1 {
+		t.Errorf("Only = %+v, %v", only, err)
+	}
+	os.WriteFile(file, []byte(doc+"\n## P1 — Follow up\nmore\n"), 0o644)
+	adopted, changed, err := Recheck(p, nil)
+	if err != nil || !changed || len(adopted.Phases) != 2 || adopted.Phases[1].ID != "P1" {
+		t.Errorf("Recheck = %s, %v, %v", graphOf(adopted), changed, err)
 	}
 }
 
