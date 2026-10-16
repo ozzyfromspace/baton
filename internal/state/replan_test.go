@@ -199,12 +199,13 @@ func TestReplanFiles(t *testing.T) {
 func TestReplacePlanFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plan.md")
 	os.WriteFile(path, []byte("old"), 0o600)
+	was, _ := os.Stat(path) // 0600, where the system keeps such a mode (not on Windows)
 	if err := ReplacePlanFile(path, []byte("new")); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(path)
 	fi, _ := os.Stat(path)
-	if string(b) != "new" || fi.Mode().Perm() != 0o600 {
+	if string(b) != "new" || fi.Mode().Perm() != was.Mode().Perm() {
 		t.Errorf("%q, mode %v", b, fi.Mode())
 	}
 }

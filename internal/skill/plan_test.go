@@ -5,14 +5,16 @@ import (
 	"testing"
 )
 
-// planSection is the text of the skill's `plan <goal>` section.
+// planSection is the text of the skill's `plan <goal>` section, its line ends as written (a checkout on
+// Windows may turn them into CRLF).
 func planSection(t *testing.T) string {
 	t.Helper()
-	start := strings.Index(Text, "\n## plan <goal>\n")
+	text := strings.ReplaceAll(Text, "\r\n", "\n")
+	start := strings.Index(text, "\n## plan <goal>\n")
 	if start < 0 {
 		t.Fatal("the skill has no plan section")
 	}
-	rest := Text[start+1:]
+	rest := text[start+1:]
 	if end := strings.Index(rest[1:], "\n## "); end >= 0 {
 		rest = rest[:end+1]
 	}
