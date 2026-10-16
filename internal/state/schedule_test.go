@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -434,20 +435,40 @@ func TestDoneRefusesRed(t *testing.T) {
 	if next, err := Done(&st, p, "P0", t0, DoneOpts{DespiteRed: true}); err != nil || next != "P1" || st.Phases["P0"].Status != PhaseDone || st.Job("j1").Delivered.IsZero() {
 		t.Fatalf("despite red: next %q err %v state %+v", next, err, st)
 	}
-	// Another phase's red, an older red, and a job with no verdict do not stand in the way.
-	for name, jobs := range map[string][]Job{
-		"another phase":  {{ID: "j1", Phase: "P1", Status: JobFailed}},
-		"verified again": {red, {ID: "j2", Phase: "P0", Status: JobPassed}},
-		"lane error":     {red, {ID: "j2", Phase: "P0", Status: JobLaneError}},
+	// Another phase's red, and an older red the same command passed since, do not stand in the way; a gate of
+	// another command, or one of the same that checked nothing, leaves it red (P7).
+	for _, c := range []struct {
+		name  string
+		jobs  []Job
+		want  string // the phase's status after done, "" for refused as red
+		after []string
+	}{
+		{"another phase", []Job{{ID: "j1", Phase: "P1", Status: JobFailed}}, PhaseDone, nil},
+		{"verified again", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Status: JobPassed}}, PhaseDone, nil},
+		{"verified again in the working tree", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Here: true, Status: JobPassed}}, PhaseDone, nil},
+		{"a narrower gate passed", []Job{red, {ID: "j2", Phase: "P0", Command: "go test -run TestX ./x", Status: JobPassed}}, "", []string{"j2"}},
+		{"the same command could not run", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Status: JobLaneError}}, "", []string{"j2"}},
+		{"the same command, verifying again", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Status: JobQueued}}, PhaseVerifying, nil},
+		{"another command running", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Status: JobRunning}}, "", []string{"j2"}},
+		{"made the gate (--replace)", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Replaces: "j1", Status: JobPassed}}, PhaseDone, nil},
+		{"made the gate, and running", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Replaces: "j1", Status: JobRunning}}, PhaseVerifying, nil},
+		{"made the gate, then interrupted", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Replaces: "j1", Status: JobInterrupted}}, "", []string{"j2"}},
+		{"cleared, then a narrower one red", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Status: JobPassed},
+			{ID: "j3", Phase: "P0", Command: "make lint", Status: JobFailed}}, "", nil},
+		{"a red wait outside, waited on again with another command", []Job{{ID: "j1", Phase: "P0", Kind: JobAwait, Command: "gh run watch 1", Status: JobFailed},
+			{ID: "j2", Phase: "P0", Kind: JobAwait, Command: "gh run watch 2", Status: JobPassed}}, PhaseDone, nil},
 	} {
-		st := run(jobs...)
-		if _, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || st.Phases["P0"].Status != PhaseDone {
-			t.Errorf("%s: err %v, P0 %+v", name, err, st.Phases["P0"])
+		st := run(c.jobs...)
+		_, err := Done(&st, p, "P0", t0, DoneOpts{})
+		var re RedError
+		switch {
+		case c.want == "" && !errors.As(err, &re):
+			t.Errorf("%s: err %v, P0 %+v, want refused as red", c.name, err, st.Phases["P0"])
+		case c.want == "" && !slices.Equal(ids(re.After), c.after):
+			t.Errorf("%s: after %v, want %v", c.name, ids(re.After), c.after)
+		case c.want != "" && (err != nil || st.Phases["P0"].Status != c.want):
+			t.Errorf("%s: err %v, P0 %+v, want %s", c.name, err, st.Phases["P0"], c.want)
 		}
-	}
-	st = run(red, Job{ID: "j2", Phase: "P0", Status: JobQueued})
-	if _, err := Done(&st, p, "P0", t0, DoneOpts{}); err != nil || st.Phases["P0"].Status != PhaseVerifying {
-		t.Errorf("verifying again: err %v, P0 %+v", err, st.Phases["P0"])
 	}
 }
 
