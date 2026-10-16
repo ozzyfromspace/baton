@@ -291,10 +291,11 @@ func (c *Coordinator) mergeIn(now time.Time, s *state.Store, st state.State, w *
 	return true
 }
 
-// verified is the verification phase's sub-run last passed on a commit, or nil.
+// verified is the gate phase's sub-run last passed on a commit (its latest verify, which stands beside any
+// wait on something outside), or nil.
 func verified(sub state.State, phase string) *state.Job {
-	j := sub.Latest(phase)
-	if j == nil || j.Kind != state.JobVerify || j.Commit == "" || j.Status != state.JobPassed {
+	j := sub.LatestOf(phase, state.JobVerify)
+	if j == nil || j.Commit == "" || j.Status != state.JobPassed {
 		return nil
 	}
 	return j

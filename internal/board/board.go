@@ -121,40 +121,55 @@ func phase(st state.State, pl plan.Plan, subs map[string]state.State, id string,
 		p.Stand = decide.Stand{Kind: decide.StandNext}
 	case p.Status == state.PhaseActive && id == st.Current:
 		p.Stand = decide.Stand{Kind: decide.StandLead, Since: ps.StartedAt}
-		if j := st.CurrentJob(); j != nil {
-			p.Stand.Job = j.ID
-			if !st.Run.TurnOpen { // the lead's turn is over, and the phase waits on its gate
-				p.Stand = gate(*j)
+		if jobs := st.CurrentJobs(); len(jobs) > 0 {
+			g := gate(jobs)
+			p.Stand.Job, p.Stand.Also = g.Job, g.Also
+			if !st.Run.TurnOpen { // the lead's turn is over, and the phase waits on its gates
+				p.Stand = g
 			}
 		}
 	case p.Status == state.PhaseVerifying:
 		p.Stand = decide.Stand{Kind: decide.StandVerifying}
-		if j := st.Latest(id); j != nil && !j.Finished() {
-			p.Stand = gate(*j)
+		if jobs := st.Running(id); len(jobs) > 0 {
+			p.Stand = gate(jobs)
 		}
 	case p.Status == state.PhaseParked:
-		p.Stand = parked(st, ps)
+		p.Stand = parked(st, id)
 	default:
 		p.Stand = pending(st, pl, id)
 	}
 	return p
 }
 
-// gate is how a phase stands while its job j runs: verifying, or awaiting something outside the project.
-func gate(j state.Job) decide.Stand {
-	if j.Kind == state.JobAwait {
-		return decide.Stand{Kind: decide.StandAwaiting, Since: j.Queued, Job: j.ID}
+// gate is how a phase stands while its jobs run (a verify and an await at most, oldest first): verifying
+// while a gate runs, else awaiting something outside the project, since the first was queued.
+func gate(jobs []state.Job) decide.Stand {
+	s := decide.Stand{Kind: decide.StandAwaiting, Since: jobs[0].Queued, Job: jobs[0].ID}
+	for _, j := range jobs {
+		if j.Kind != state.JobAwait {
+			s.Kind = decide.StandVerifying
+		}
 	}
-	return decide.Stand{Kind: decide.StandVerifying, Since: j.Queued, Job: j.ID}
+	if len(jobs) > 1 {
+		s.Also = jobs[1].ID
+	}
+	return s
 }
 
-// parked is how a phase stands that was set aside (ps.Park), in run st.
-func parked(st state.State, ps *state.PhaseState) decide.Stand {
+// parked is how phase id stands, set aside (its Park) in run st, with the jobs it waits on that run.
+func parked(st state.State, id string) decide.Stand {
 	s := decide.Stand{Kind: decide.StandParked}
-	if pk := ps.Park; pk != nil {
+	if pk := st.Phases[id].Park; pk != nil {
 		s.Since, s.Why = pk.Since, decide.ParkedWhy(pk.Reason)
-		if j := st.Job(pk.Job); j != nil && !j.Finished() {
-			s.Job = j.ID
+		var running []state.Job
+		for _, j := range st.WaitsOn(id) {
+			if !j.Finished() {
+				running = append(running, j)
+			}
+		}
+		if len(running) > 0 {
+			g := gate(running)
+			s.Job, s.Also = g.Job, g.Also
 		}
 	}
 	return s
@@ -216,25 +231,23 @@ func agent(st state.State, subs map[string]state.State, id string, p *Phase) dec
 	if !ok {
 		return s
 	}
-	j := sub.Latest(id)
-	if j != nil && j.Finished() {
-		j = nil
-	}
+	jobs := sub.Running(id)
 	switch ps := sub.Phases[id]; {
 	case ps != nil && ps.Status == state.PhaseVerifying:
-		if j != nil {
-			return gate(*j)
+		if len(jobs) > 0 {
+			return gate(jobs)
 		}
 		return decide.Stand{Kind: decide.StandVerifying}
 	case ps != nil && ps.Status == state.PhaseParked:
-		return parked(sub, ps)
-	case j != nil && !sub.Run.TurnOpen: // its turn is over, and it waits on its gate
-		return gate(*j)
+		return parked(sub, id)
+	case len(jobs) > 0 && !sub.Run.TurnOpen: // its turn is over, and it waits on its gates
+		return gate(jobs)
 	}
-	if j != nil {
-		s.Job = j.ID // its gate runs while it works on
+	if len(jobs) > 0 {
+		g := gate(jobs)
+		s.Job, s.Also = g.Job, g.Also // its gates run while it works on
 	}
-	s.Idle = !sub.Run.TurnOpen && j == nil
+	s.Idle = !sub.Run.TurnOpen && len(jobs) == 0
 	return s
 }
 
@@ -304,11 +317,15 @@ func lead(st state.State, now time.Time) decide.LeadStand {
 		return decide.LeadStand{Kind: decide.LeadOwed}
 	}
 	if st.Current != "" {
-		switch j := st.CurrentJob(); {
+		switch jobs := st.CurrentJobs(); {
 		case st.Run.TurnOpen:
 			return decide.LeadStand{Kind: decide.LeadWorking, Phase: st.Current, Since: st.Run.TurnStarted}
-		case j != nil:
-			return decide.LeadStand{Kind: decide.LeadWaiting, Phase: st.Current, Since: j.Queued, On: []string{j.ID}}
+		case len(jobs) > 0:
+			l := decide.LeadStand{Kind: decide.LeadWaiting, Phase: st.Current, Since: jobs[0].Queued}
+			for _, j := range jobs {
+				l.On = append(l.On, j.ID)
+			}
+			return l
 		}
 		return decide.LeadStand{Kind: decide.LeadIdle, Phase: st.Current}
 	}

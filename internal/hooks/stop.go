@@ -218,25 +218,25 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.StopBlocks = 0
 		q := decide.ReviewQuestion(st.ReviewDue, st.Unattended(st.ReviewDue))
 		escalateAsking(st, &d, "review", "review the decisions "+st.ReviewDue+" made without you", q, now)
-	case st.Replan != nil && !st.Replan.Held.IsZero():
+	case st.PlanQuestion != nil && !st.PlanQuestion.Held.IsZero():
 		// The human chose Wait for me about the plan they approved: the stop is right, and their next
 		// message answers it; with no word from them, baton answers its default (loop's lapseQuestions).
 		st.Run.StopBlocks = 0
-		answer := decide.ReplanDefault(st.Replan.Same)
-		d.say(decide.ReplanHeldWaits(answer, latest(st.Replan.Held, st.Run.HumanAt).Add(decide.HoldLapse)))
-	case st.Replan != nil:
+		answer := decide.PlanQuestionDefault(st.PlanQuestion.Same)
+		d.say(decide.PlanQuestionHeldWaits(answer, latest(st.PlanQuestion.Held, st.Run.HumanAt).Add(decide.HoldLapse)))
+	case st.PlanQuestion != nil:
 		// The human approved a plan mid-run, and the model stopped without asking what to do with it.
 		st.Run.StopBlocks++
 		if st.Run.StopBlocks <= MaxStopBlocks {
-			d.refuse(NudgePrefix + " You stopped, but put baton's question about the plan the human approved to them first: " + replanQuestion(st.Replan).Call() + ". baton acts on the answer itself; then follow what it tells you.")
+			d.refuse(NudgePrefix + " You stopped, but put baton's question about the plan the human approved to them first: " + planQuestionOf(st.PlanQuestion).Call() + ". baton acts on the answer itself; then follow what it tells you.")
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "count": st.Run.StopBlocks, "why": "approved plan not asked"})
 			return d
 		}
 		// Asked enough: the approval is not dropped, and nothing waits on the human for it either. baton
 		// answers its default at the deadline (the host's loop, hooks.Lapse) unless they answer first.
-		answer := decide.ReplanDefault(st.Replan.Same)
-		d.say(decide.ReplanWaits(answer, st.Replan.Since.Add(w.Timeout)))
-		d.emit("replan_waits", map[string]any{"plan": st.Replan.File, "answer": answer, "count": st.Run.StopBlocks})
+		answer := decide.PlanQuestionDefault(st.PlanQuestion.Same)
+		d.say(decide.PlanQuestionWaits(answer, st.PlanQuestion.Since.Add(w.Timeout)))
+		d.emit("plan_question_waits", map[string]any{"plan": st.PlanQuestion.File, "answer": answer, "count": st.Run.StopBlocks})
 	case st.BoundaryOwed && !w.Worker:
 		// (A phase's sub-run owes no boundary: nothing compacts a phase agent, and its stop took a phase
 		// reopened so up again first, Retake.)
@@ -328,13 +328,17 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			waiting = waitingOn(jobs)
 		}
 		d.say(decide.NoPhaseYet(waiting, st.HereGate()))
-	case st.CurrentJob() != nil:
-		// The phase in hand waits on its job, and nothing else is owed: the session idles in place. The
+	case len(st.CurrentJobs()) > 0:
+		// The phase in hand waits on its jobs, and nothing else is owed: the session idles in place. Each
 		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.
 		st.Run.StopBlocks = 0
-		j := st.CurrentJob()
-		d.say(decide.GateWait(cur, *j))
-		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
+		jobs := st.CurrentJobs()
+		d.say(decide.GateWait(cur, jobs))
+		idle := map[string]any{"phase": st.Current, "job": jobs[len(jobs)-1].ID}
+		if len(jobs) > 1 {
+			idle["beside"] = jobs[0].ID
+		}
+		d.emit("idle_on_job", idle)
 	case len(st.Run.BusyBackground()) > 0:
 		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.
 		// The model is told to keep working meanwhile as the work starts, with the result of the call that

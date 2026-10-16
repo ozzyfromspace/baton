@@ -425,10 +425,10 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 	case p != nil && !p.Asked:
 		return NudgePrefix + " Not yet: " + decide.AskFirst(*p) + ". Until the human has it, nothing else runs."
-	case st.Replan != nil && !st.Replan.Held.IsZero():
-		return endTurn(decide.ReplanHeldTurn)
-	case st.Replan != nil:
-		return replanHold(st.Replan)
+	case st.PlanQuestion != nil && !st.PlanQuestion.Held.IsZero():
+		return endTurn(decide.PlanQuestionHeldTurn)
+	case st.PlanQuestion != nil:
+		return planQuestionHold(st.PlanQuestion)
 	}
 	return ""
 }
@@ -906,8 +906,16 @@ func phasesAside(pl plan.Plan, st state.State) string {
 		name := ph.ID + " — " + ph.Title
 		switch ps.Status {
 		case state.PhaseVerifying:
-			if j := st.Latest(ph.ID); j != nil {
-				name += " (job " + j.ID + ")"
+			var jobs []string
+			for _, j := range st.WaitsOn(ph.ID) {
+				jobs = append(jobs, j.ID)
+			}
+			switch len(jobs) {
+			case 0:
+			case 1:
+				name += " (job " + jobs[0] + ")"
+			default:
+				name += " (jobs " + strings.Join(jobs, " and ") + ")"
 			}
 			verifying = append(verifying, name)
 		case state.PhaseParked:
@@ -918,7 +926,7 @@ func phasesAside(pl plan.Plan, st state.State) string {
 	}
 	var out []string
 	if len(verifying) > 0 {
-		out = append(out, "Verifying, each done once its job passes: "+strings.Join(verifying, "; ")+".")
+		out = append(out, "Verifying, each done once its jobs pass: "+strings.Join(verifying, "; ")+".")
 	}
 	if len(parked) > 0 {
 		out = append(out, "Set aside unfinished: "+strings.Join(parked, "; ")+".")
@@ -1073,12 +1081,12 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			if told, record = tellDecisions(st, s.WorkerDecisions(*st)); record != "" {
 				tell = strings.TrimSpace(tell + "\n\n" + record)
 			}
-			if r := st.Replan; r != nil {
+			if r := st.PlanQuestion; r != nil {
 				// The question about the plan they approved went unanswered, or they chose Wait for me, and
 				// they wrote.
-				st.Replan = nil
-				events = append(events, event{"replan_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
-				tell = strings.TrimSpace(tell + "\n\n" + decide.ReplanUnsettled(r.File, !r.Held.IsZero()))
+				st.PlanQuestion = nil
+				events = append(events, event{"plan_question_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
+				tell = strings.TrimSpace(tell + "\n\n" + decide.PlanQuestionUnsettled(r.File, !r.Held.IsZero()))
 			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
@@ -1296,7 +1304,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				v = approved(st, s, c, approvedFile(c.Input), false, w, g)
 			case tool == "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
-				if v = answeredReplan(st, s, c, w, auto, g); v.event == "" {
+				if v = answeredPlanQuestion(st, s, c, w, auto, g); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
 							v = answered(st, c, auto, w)
@@ -1312,7 +1320,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			// No other question while a proposal, a review or an approved plan waits on the human: one at a
 			// time. A job's result waits too: the model must put the question first. (A phase agent's
 			// proposal is baton's to put to the human, and holds up nothing in the agent.)
-			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
+			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.PlanQuestion == nil {
 				dl = take(st, c.Now)
 				news = takeNews(st, s)
 				v = contextValves(st, valve.FromEnv(c.Env), w)
@@ -1331,7 +1339,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	if err != nil {
 		return Result{}, ok(err)
 	}
-	v.keep()
+	v.keep(s)
 	h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseExact(s.Agent, tool, dialogKey(c.Input)) })
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
@@ -1488,6 +1496,7 @@ type valveAction struct {
 	also      []event
 	say, tell string
 	record    *state.Record // the record of a plan it replaced, written once the run's lock is let go (keep)
+	approved  *plan.Plan    // a plan the human approved, its text kept for replans then (keep)
 }
 
 // contextValves runs the two mid-phase valves after a tool call of the loop's own: the lead's, or a phase

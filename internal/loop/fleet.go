@@ -110,13 +110,17 @@ func launchable(st state.State, now time.Time) string {
 }
 
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
-// one does): the run must be running, under Max workers of its plan, with a phase that can go ahead.
+// one does): the run must be running, with no replan open, under Max workers of its plan, with a phase
+// that can go ahead.
 // held names what holds a phase that waits back: no room on the machine (r.busy), gates waiting for lanes
 // (r.lanes), landings that keep conflicting, no room under worker_usage_max, or an agent that started
 // less than Ramp ago (state.HoldBusy, HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
 func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
 		return "", why, ""
+	}
+	if st.Replan != nil {
+		return "", decide.ReplanHoldsAgents, "" // its agents at work go on (replanmax.go)
 	}
 	if st.RunBranch == "" {
 		return "", "the plan was attached with no branch checked out", ""

@@ -23,19 +23,23 @@ import (
 // starts a runner for each (hostRunners), and `baton lane-run` runs it to its end.
 
 func init() {
-	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] --notes \"<where the phase stands>\", or the command's words after --", cmdVerify)
-	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] --notes \"<where the phase stands>\", or the command's words after --", cmdAwait)
+	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
+		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace", cmdVerify)
+	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
+		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
 
 func cmdVerify(args []string, io IO) int { return queueJob(args, io, state.JobVerify) }
 func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAwait) }
 
-// queueJob queues a job of kind for the phase in hand.
+// queueJob queues a job of kind for the phase in hand. A phase runs one job of each kind at a time, side by
+// side (state.QueueJob): the same check queued again replaces the one of its kind that runs, and another
+// does only with --replace (state.Clash).
 func queueJob(args []string, io IO, kind string) int {
-	var bools []string
-	usage := " [--qa \"<why a full check now>\"]"
+	bools := []string{"replace"}
+	usage := " [--qa \"<why a full check now>\"] [--replace]"
 	if kind == state.JobVerify {
-		bools, usage = []string{"here"}, " [--here]"+usage
+		bools, usage = append(bools, "here"), " [--here]"+usage
 	}
 	vals := []string{"notes", "qa"}
 	p, err := parseArgs(args, vals, bools)
@@ -48,7 +52,7 @@ func queueJob(args []string, io IO, kind string) int {
 	if err != nil || command == "" {
 		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s", kind, usage, kind, usage, errSuffix(err))
 	}
-	here := p.bools["here"]
+	here, replace := p.bools["here"], p.bools["replace"]
 	isHosted := hosted(io) // read before the run's lock: it reads processes
 	if !isHosted {
 		return fail(io, "not queued — the baton host runs jobs, and this session is not hosted by baton. Run the command yourself.")
@@ -93,7 +97,7 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 	}
 	var queued state.Job
-	var replaced *state.Job
+	var replaced, clash, beside *state.Job
 	st, err = s.Update(func(st *state.State) error {
 		if err := jobRefusal(isHosted, st, notes); err != nil {
 			return err
@@ -101,7 +105,17 @@ func queueJob(args []string, io IO, kind string) int {
 		if st.Current != phase {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
-		queued, replaced, _ = state.QueueJob(st, state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa}, io.Now())
+		j := state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa}
+		if c := st.Clash(j); c != nil && !replace {
+			x := *c
+			clash = &x
+			return refusal{"another check runs", decide.Clash(kind, command, x)}
+		}
+		queued, replaced, _ = state.QueueJob(st, j, io.Now())
+		if b := st.Beside(queued); b != nil {
+			x := *b
+			beside = &x
+		}
 		line := fmt.Sprintf("baton: job %s queued for %s — `%s`, from the working tree", queued.ID, phase, command)
 		switch {
 		case here:
@@ -112,12 +126,19 @@ func queueJob(args []string, io IO, kind string) int {
 		if replaced != nil {
 			line += fmt.Sprintf("; it replaces %s, which baton stops", replaced.ID)
 		}
+		if beside != nil {
+			line += "; " + decide.BesideShort(*beside)
+		}
 		st.Run.Announce = append(st.Run.Announce, line)
 		if qa != "" {
 			st.Run.Announce = append(st.Run.Announce, decide.QAEarly(phase, queued.ID, qa))
 		}
 		return nil
 	})
+	if clash != nil {
+		s.Event("refused", map[string]any{"command": kind, "why": "another check runs", "phase": phase, "running": clash.ID, "asked": command})
+		return fail(io, "%v", err)
+	}
 	if err != nil {
 		return refused(io, s, kind, err)
 	}
@@ -128,6 +149,12 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	if replaced != nil {
 		queuedEvent["replaced"] = replaced.ID
+		if !replaced.Same(queued) {
+			queuedEvent["replace"] = true
+		}
+	}
+	if beside != nil {
+		queuedEvent["beside"] = beside.ID
 	}
 	s.Event("job_queued", queuedEvent)
 	if qa != "" {
@@ -149,7 +176,10 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	fmt.Fprintf(io.Out, "baton: queued %s — `%s` (%s), %s. baton starts it within seconds; its output goes to %s.\n", queued.ID, command, phase, where, s.JobLog(queued.ID))
 	if replaced != nil {
-		fmt.Fprintf(io.Out, "baton: it replaces %s (`%s`), which baton stops: a phase has one job at a time.\n", replaced.ID, replaced.Command)
+		fmt.Fprintln(io.Out, "baton: "+decide.Replaced(*replaced, !replaced.Same(queued)))
+	}
+	if beside != nil {
+		fmt.Fprintln(io.Out, "baton: "+decide.Beside(queued, *beside))
 	}
 	cfg := config.Load(batonRoot(io), io.Env)
 	timeout, _ := cfg.JobTimeout()

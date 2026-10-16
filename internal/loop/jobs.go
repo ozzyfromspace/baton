@@ -315,6 +315,12 @@ func (l *Loop) retook(vd state.Verdict, by string) {
 func verdictLine(vd state.Verdict) string {
 	j := vd.Job
 	switch {
+	case vd.Park == "" && len(vd.Jobs) > 1:
+		var ids []string
+		for _, x := range vd.Jobs {
+			ids = append(ids, x.ID)
+		}
+		return fmt.Sprintf("baton: %s verified (jobs %s passed) → %s done", vd.Phase, strings.Join(ids, " and "), vd.Phase)
 	case vd.Park == "":
 		return fmt.Sprintf("baton: %s verified (job %s passed) → %s done", vd.Phase, j.ID, vd.Phase)
 	case j.ID == "":
@@ -332,7 +338,7 @@ func verdictLine(vd state.Verdict) string {
 // reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	due, mail := st.Due(), st.Mail()
-	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
+	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.PlanQuestion != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {

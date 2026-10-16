@@ -568,7 +568,7 @@ func Reverify(st *State, j Job, now time.Time) (Job, error) {
 	}
 	j.Kind, j.Requeue = JobVerify, true
 	q, _, _ := QueueJob(st, j, now)
-	ps.Status, ps.DoneAt = PhaseVerifying, time.Time{}
+	ps.Status, ps.DoneAt, ps.On = PhaseVerifying, time.Time{}, []string{q.ID}
 	st.Mode, st.Current = ModeRunning, ""
 	st.Run.CompleteNotified = true
 	return q, nil

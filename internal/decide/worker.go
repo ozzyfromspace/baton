@@ -237,12 +237,21 @@ func WorkerBlocked(phase string) string {
 		"Their answer reaches you here. End your turn now.", phase)
 }
 
-// WorkerDone is what a worker hears once phase is finished: baton lands its work. job is the verification
-// still running ("" for none), which has run for ran.
-func WorkerDone(phase, job, ran string) string {
-	if job != "" {
+// WorkerDone is what a worker hears once phase is finished: baton lands its work. jobs are the ones it
+// still verifies on (none, a gate, a wait on something outside, or both).
+func WorkerDone(phase string, jobs []state.Job) string {
+	switch len(jobs) {
+	case 0:
+	case 1:
 		return fmt.Sprintf("%s is finished, and verifying: job %s (%s) is still running. baton lands your work on the run's branch once it passes; "+
-			"if it fails, %s reopens here, and you take it up again from your notes on that job. End your turn now.", phase, job, ran, phase)
+			"if it fails, %s reopens here, and you take it up again from your notes on that job. End your turn now.", phase, jobs[0].ID, Ran(jobs[0]), phase)
+	default:
+		var names []string
+		for _, j := range jobs {
+			names = append(names, fmt.Sprintf("%s (%s)", j.ID, Ran(j)))
+		}
+		return fmt.Sprintf("%s is finished, and verifying: jobs %s are still running. baton lands your work on the run's branch once both pass; "+
+			"if either fails, %s reopens here, and you take it up again from your notes on that job. End your turn now.", phase, andList(names), phase)
 	}
 	return fmt.Sprintf("%s done. baton lands your work on the run's branch: it merges the run's branch into yours if that has moved on, then fast-forwards the run's branch to yours under the lead session. "+
 		"If anything needs you first (a conflict, a red verification), baton tells you here. End your turn now.", phase)

@@ -17,6 +17,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
@@ -264,6 +265,7 @@ func cmdAttach(args []string, io IO) int {
 		return fail(io, "%v", err)
 	}
 	kept := keepRecord(io, s, rec)
+	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
 	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
@@ -428,6 +430,7 @@ func cmdStatus(args []string, io IO) int {
 		k, chain := pl.LongestChain()
 		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
+	printReplans(io, s, st)
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)
 		if st.Blocked.Tried != "" {
@@ -482,29 +485,27 @@ func printEarlier(io IO, s *state.Store) {
 }
 
 // phaseNote says where a phase not done stands, for baton status: how long it has been active, or why it
-// is verifying or set aside, then the job it waits on and how that stands. "" for a phase done or not
+// is verifying or set aside, then the jobs it waits on and how each stands. "" for a phase done or not
 // started.
 func phaseNote(st state.State, id string, now time.Time) string {
 	ps := st.Phases[id]
-	var note, job string
+	var note string
+	var jobs []state.Job
 	switch ps.Status {
 	case state.PhaseActive:
 		note = "active"
 		if !ps.StartedAt.IsZero() {
 			note += " " + decide.Span(now.Sub(ps.StartedAt))
 		}
-		if j := st.CurrentJob(); j != nil && id == st.Current {
-			job = j.ID
+		if id == st.Current {
+			jobs = st.CurrentJobs()
 		}
 	case state.PhaseVerifying:
-		note = "verifying"
-		if j := st.Latest(id); j != nil {
-			job = j.ID
-		}
+		note, jobs = "verifying", st.WaitsOn(id)
 	case state.PhaseParked:
-		note = "parked"
+		note, jobs = "parked", st.WaitsOn(id)
 		if pk := ps.Park; pk != nil {
-			note, job = note+parkWhy[pk.Reason], pk.Job
+			note += parkWhy[pk.Reason]
 		}
 	case state.PhaseWorking:
 		if w := st.WorkerOn(id); w != nil {
@@ -514,8 +515,12 @@ func phaseNote(st state.State, id string, now time.Time) string {
 	default:
 		return ""
 	}
-	if j := st.Job(job); j != nil {
-		note += " — job " + j.ID + " " + jobProgress(*j, now)
+	for i, j := range jobs {
+		sep := "; "
+		if i == 0 {
+			sep = " — "
+		}
+		note += sep + "job " + j.ID + " " + jobProgress(j, now)
 	}
 	return note
 }
@@ -850,7 +855,7 @@ func cmdDone(args []string, io IO) int {
 	var next, startHead string
 	var note *state.Decision
 	var count int
-	var latest *state.Job
+	var standing, reds []state.Job
 	st, err := s.Update(func(st *state.State) error {
 		if err := guard(isHosted, st, "not done", true); err != nil {
 			return err
@@ -864,18 +869,25 @@ func cmdDone(args []string, io IO) int {
 				s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
 			}
 		}
-		if j := st.Latest(id); j != nil {
-			x := *j
-			latest = &x
+		standing, reds = st.Standing(id), nil
+		for _, j := range standing {
+			if j.Red() {
+				reds = append(reds, j)
+			}
 		}
-		red := latest != nil && latest.Red() && despite != ""
+		red := len(reds) > 0 && despite != ""
 		if red {
 			// Finishing a phase over a red verification is a decision without the human, like any note.
 			if st.ReviewDue != "" {
 				return reviewRefusal(st)
 			}
-			d, err := state.NoteOn(st, id, fmt.Sprintf("finished %s despite its red verification (job %s, %s %s): %s", id, latest.ID, decide.Ran(*latest), decide.Outcome(*latest), despite),
-				fmt.Sprintf("reopen %s: fix what job %s found (its log: %s), then verify it again", id, latest.ID, jobLog(s, *latest)), io.Now())
+			var what, logs []string
+			for _, j := range reds {
+				what = append(what, fmt.Sprintf("job %s, %s %s", j.ID, decide.Ran(j), decide.Outcome(j)))
+				logs = append(logs, fmt.Sprintf("job %s found (its log: %s)", j.ID, jobLog(s, j)))
+			}
+			d, err := state.NoteOn(st, id, fmt.Sprintf("finished %s despite its red verification (%s): %s", id, strings.Join(what, "; "), despite),
+				fmt.Sprintf("reopen %s: fix what %s, then verify it again", id, strings.Join(logs, " and what ")), io.Now())
 			if err != nil {
 				return err
 			}
@@ -886,9 +898,10 @@ func cmdDone(args []string, io IO) int {
 		if next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"], DespiteRed: red}); err != nil {
 			return err
 		}
-		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying && latest != nil {
-			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: %s verifying — job %s (`%s`) runs on; %s is done once it passes, and reopens if it fails",
-				id, latest.ID, latest.Command, id))
+		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying {
+			if on := st.WaitsOn(id); len(on) > 0 {
+				st.Run.Announce = append(st.Run.Announce, decide.VerifyingOn(id, on))
+			}
 		}
 		if note != nil {
 			if count = st.Unattended(id); decide.CapReached(count, most) {
@@ -906,18 +919,23 @@ func cmdDone(args []string, io IO) int {
 	}
 	s.AppendHandoff(id, p.vals["notes"])
 	if note != nil {
-		s.Event("note", map[string]any{"id": note.ID, "phase": id, "what": note.What, "undo": note.Undo, "despite_red": latest.ID})
+		s.Event("note", map[string]any{"id": note.ID, "phase": id, "what": note.What, "undo": note.Undo, "despite_red": reds[0].ID})
 		if st.ReviewDue != "" {
 			s.Event("review_due", map[string]any{"phase": id, "decisions": count})
 		}
 	}
 	verifying := st.Phases[id] != nil && st.Phases[id].Status == state.PhaseVerifying
+	on := st.WaitsOn(id)
+	verifying = verifying && len(on) > 0
 	done := map[string]any{"phase": id, "next": next}
 	if len(work.fresh) > 0 {
 		done["keep_dirty"], done["files"] = keep, len(work.fresh)
 	}
 	if verifying {
-		done["job"] = latest.ID
+		done["job"] = on[len(on)-1].ID
+		if len(on) > 1 {
+			done["beside"] = on[0].ID
+		}
 		s.Event("phase_verifying", done)
 	} else {
 		s.Event("phase_done", done)
@@ -932,9 +950,11 @@ func cmdDone(args []string, io IO) int {
 	case despite != "":
 		fmt.Fprintf(io.Out, "baton: note — %s's latest verification is not red, so --despite-red recorded nothing.\n", id)
 	}
-	if latest != nil && latest.Finished() && !latest.Red() && latest.Status != state.JobPassed {
-		fmt.Fprintf(io.Out, "baton: note — %s's latest job, %s (%s), %s, so it checked nothing. Make sure the gate passes, in place if need be.\n",
-			id, latest.ID, decide.Ran(*latest), decide.Outcome(*latest))
+	for _, j := range standing {
+		if j.Finished() && !j.Red() && j.Status != state.JobPassed {
+			fmt.Fprintf(io.Out, "baton: note — %s's latest %s, job %s (%s), %s, so it checked nothing. Make sure it passes, in place if need be.\n",
+				id, strings.TrimPrefix(decide.JobNoun(j.Kind), "a "), j.ID, decide.Ran(j), decide.Outcome(j))
+		}
 	}
 	var mine []state.Decision
 	for _, d := range decide.WithoutHuman(st.Decisions) {
@@ -948,8 +968,7 @@ func cmdDone(args []string, io IO) int {
 	}
 	finished := fmt.Sprintf("baton: %s done.", id)
 	if verifying {
-		finished = fmt.Sprintf("baton: %s is finished, and verifying: job %s (%s) is still running. baton marks %s done when it passes; "+
-			"if it fails, %s reopens, and is taken up again from your notes on that job.", id, latest.ID, decide.Ran(*latest), id, id)
+		finished = decide.FinishedVerifying(id, on)
 	}
 	if st.ReviewDue != "" {
 		fmt.Fprintf(io.Out, "%s That makes as many decisions without the human as baton lets a phase make before they review them: "+
@@ -958,11 +977,11 @@ func cmdDone(args []string, io IO) int {
 	}
 	if s.Worker() != "" {
 		// A worker's plan is its phase: done, its work is the run's to land.
-		job, ran := "", ""
+		var jobs []state.Job
 		if verifying {
-			job, ran = latest.ID, decide.Ran(*latest)
+			jobs = on
 		}
-		fmt.Fprintln(io.Out, "baton: "+decide.WorkerDone(id, job, ran))
+		fmt.Fprintln(io.Out, "baton: "+decide.WorkerDone(id, jobs))
 		return 0
 	}
 	if st.Mode == state.ModeComplete {
@@ -1584,6 +1603,7 @@ func cmdDrop(args []string, io IO) int {
 		return refused(io, s, "drop", err)
 	}
 	kept := keepRecord(io, s, rec)
+	s.KeepReplans(kept) // the dropped plan's replans go with its record
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
 	stopRunners(stopped, io.Now())
 	os.RemoveAll(jobsDir(s))

@@ -487,10 +487,10 @@ func TestBatonsQuestionsAboutTheRunAreAnsweredInSerialMode(t *testing.T) {
 			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: r"), Since: now, Kind: "escalation"})
 		}
 	}
-	replan := func(same bool) func(st *state.State, now time.Time) {
+	planQuestion := func(same bool) func(st *state.State, now time.Time) {
 		return func(st *state.State, now time.Time) {
-			st.Replan = &state.Replan{File: "p.md", Same: same, Question: "baton: which?", Since: now}
-			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: which?"), Since: now, Kind: "replan"})
+			st.PlanQuestion = &state.PlanQuestion{File: "p.md", Same: same, Question: "baton: which?", Since: now}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: which?"), Since: now, Kind: "plan_question"})
 		}
 	}
 	for _, c := range []struct {
@@ -500,8 +500,8 @@ func TestBatonsQuestionsAboutTheRunAreAnsweredInSerialMode(t *testing.T) {
 		typed bool
 	}{
 		{"a stall's question", escalation("stalled"), false, true},
-		{"a revised plan's", replan(true), false, true},
-		{"another plan's", replan(false), false, true},
+		{"a revised plan's", planQuestion(true), false, true},
+		{"another plan's", planQuestion(false), false, true},
 		{"a block's", escalation("blocked"), false, false},
 		{"a review's", func(st *state.State, now time.Time) {
 			st.Run.Escalation = &state.Escalation{Kind: "review", Reason: "r", Since: now, Question: "baton: r", Asked: true}
@@ -554,7 +554,7 @@ func TestAHeldPlanLapsesIntoItsDefault(t *testing.T) {
 		return nil
 	}
 	r.set(func(st *state.State) {
-		st.Replan = &state.Replan{File: "q.md", Question: "baton: which?", Since: r.now.Add(-time.Hour), Held: r.now}
+		st.PlanQuestion = &state.PlanQuestion{File: "q.md", Question: "baton: which?", Since: r.now.Add(-time.Hour), Held: r.now}
 		st.Run.HumanAt = r.now
 	})
 	r.run(DefaultTiming.HoldLapse - time.Minute)

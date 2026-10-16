@@ -171,6 +171,10 @@ func TestAnApprovalReadsBeforeTheLockAndKeepsAfter(t *testing.T) {
 			if err != nil || !strings.Contains(string(b), `"Demo"`) {
 				t.Errorf("kept %s (%v)", b, err)
 			}
+			// The approved text, which replans are compared with, is kept once the lock is let go too.
+			if b, err := os.ReadFile(f.store.ReplanText(0)); err != nil || !strings.Contains(string(b), "The next campaign") || !f.logged("plan_kept", nil) {
+				t.Errorf("approved text %q (%v)", b, err)
+			}
 		})
 	}
 }
@@ -183,17 +187,17 @@ func TestARecordNotKeptIsLogged(t *testing.T) {
 		t.Fatalf("record %v %v", rec, err)
 	}
 	v := valveAction{event: "attached", also: []event{{"phase_started", nil}}, record: rec}
-	v.keep()
+	v.keep(f.store)
 	if len(v.also) != 2 || v.also[0].kind != "plan_archived" || v.also[1].kind != "phase_started" || v.record != nil {
 		t.Fatalf("events %+v", v.also)
 	}
 	os.RemoveAll(f.store.Dir)
 	v = valveAction{event: "attached", record: rec}
-	v.keep()
+	v.keep(f.store)
 	if len(v.also) != 1 || v.also[0].kind != "plan_not_archived" || v.also[0].fields["why"] == "" {
 		t.Fatalf("events %+v", v.also)
 	}
-	(&valveAction{}).keep() // nothing replaced: nothing to keep
+	(&valveAction{}).keep(f.store) // nothing approved: nothing to keep
 }
 
 // Only an answer that starts an approved plan over attaches it, so only then is its ground read.

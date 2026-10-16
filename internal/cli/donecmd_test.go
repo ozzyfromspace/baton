@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,13 +138,50 @@ func TestDespiteRedCountsTowardTheReview(t *testing.T) {
 	}
 }
 
+// A phase stands on its gate and its wait on something outside: done leaves it verifying on both while they
+// run, and is refused on a red wait though a gate passed after it.
+func TestDoneStandsOnTheGateAndTheWait(t *testing.T) {
+	s := afterSession(t)
+	j := s.job(state.JobRunning, 0)
+	s.set(func(x *state.State) {
+		x.Jobs, x.JobSeq = append(x.Jobs, state.Job{ID: "j2", Phase: "P0", Kind: state.JobAwait, Command: "gh run watch 7 --exit-status", Status: state.JobRunning, Started: s.now}), 2
+	})
+	out := s.must("", "done", "P0", "--notes", "the survey is in docs/")
+	if want := "baton: P0 is finished, and verifying: jobs j1 (`make test` on " + j.Commit[:12] + ") and j2 (`gh run watch 7 --exit-status`) are still running. " +
+		"baton marks P0 done when both pass; if either fails, P0 reopens"; !strings.Contains(out, want) {
+		t.Errorf("done says:\n%s\nwant %q", out, want)
+	}
+	st, _ := s.store().Load()
+	if ps := st.Phases["P0"]; ps.Status != state.PhaseVerifying || !slices.Equal(ps.On, []string{"j1", "j2"}) {
+		t.Fatalf("P0 %+v", ps)
+	}
+	if want := "baton: P0 verifying — jobs j1 (`make test`) and j2 (`gh run watch 7 --exit-status`) run on; P0 is done once both pass, and reopens if either fails"; !slices.Contains(st.Run.Announce, want) {
+		t.Errorf("announced %q", st.Run.Announce)
+	}
+	if !s.logged("phase_verifying", map[string]any{"phase": "P0", "job": "j2", "beside": "j1"}) {
+		t.Errorf("events:\n%s", s.events())
+	}
+
+	// A red wait, then a gate that passed: done is refused on the wait.
+	s = afterSession(t)
+	s.job(state.JobPassed, 0)
+	s.set(func(x *state.State) {
+		x.Jobs = append([]state.Job{{ID: "j0", Phase: "P0", Kind: state.JobAwait, Command: "gh run watch 7 --exit-status", Status: state.JobFailed, Exit: 1,
+			Started: s.now.Add(-time.Hour), Ended: s.now.Add(-time.Hour / 2), Delivered: s.now}}, x.Jobs...)
+	})
+	errs := s.fails("done", "P0")
+	if !strings.Contains(errs, "not done — P0's latest wait on something outside, job j0 (`gh run watch 7 --exit-status`), failed (exit 1)") || !strings.Contains(errs, "wait on it again (`baton await`, the same command)") {
+		t.Errorf("refused with:\n%s", errs)
+	}
+}
+
 // --despite-red records nothing when nothing is red, and a job with no verdict lets done through with a
 // reminder that nothing was checked.
 func TestDoneOverAJobWithoutAVerdict(t *testing.T) {
 	s := afterSession(t)
 	s.job(state.JobLaneError, 127)
 	out := s.must("", "done", "P0", "--despite-red", "x")
-	for _, want := range []string{"--despite-red recorded nothing", "baton: note — P0's latest job, j1 (`make test` on", "could not run, so it checked nothing"} {
+	for _, want := range []string{"--despite-red recorded nothing", "baton: note — P0's latest gate, job j1 (`make test` on", "could not run, so it checked nothing"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("done lacks %q:\n%s", want, out)
 		}

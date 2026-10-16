@@ -11,7 +11,7 @@ import (
 // Answers when the human approves a plan while a run has one. Claude Code writes every plan a session
 // makes to the same file, so a plan in the run's own file is a revision of it; one in another file
 // (planned after a /clear) is a new plan, and the current run's document is still there to keep. Each
-// default (ReplanDefault) is third, where the host's 3 lands where baton's mod does not run
+// default (PlanQuestionDefault) is third, where the host's 3 lands where baton's mod does not run
 // (EscalationOptions), and Wait for me holds the approved plan for the human, which lapses into the
 // default like any hold (HoldLapse).
 var (
@@ -27,9 +27,9 @@ var (
 	}
 )
 
-// ReplanQuestion asks the human what to do with a plan they approved while the run of title was at
+// PlanQuestion asks the human what to do with a plan they approved while the run of title was at
 // phase (or paused there). same says the approved plan is a revision of the run's own.
-func ReplanQuestion(title, phase, mode string, same bool) Question {
+func PlanQuestion(title, phase, mode string, same bool) Question {
 	where := "is running"
 	if mode == "paused" {
 		where = "is paused"
@@ -69,10 +69,10 @@ func PhaseCount(n int) string {
 	return fmt.Sprintf("%d %s", n, plural(n, "phase", "phases"))
 }
 
-// ReplanDefault is what baton answers, when nobody has by its deadline, about a plan the human approved
+// PlanQuestionDefault is what baton answers, when nobody has by its deadline, about a plan the human approved
 // mid-run: a revision of the run's own plan is followed (done phases stay done, nothing is lost), and
 // another plan is left aside for /baton run, since starting it would set the current run's progress aside.
-func ReplanDefault(same bool) string {
+func PlanQuestionDefault(same bool) string {
 	if same {
 		return ReviseOptions[2].Label
 	}
@@ -88,36 +88,36 @@ func Chose(auto bool, deadline time.Time) string {
 	return "The human chose"
 }
 
-// ReplanWaits tells the human that the model stopped without asking about the plan they approved, so
+// PlanQuestionWaits tells the human that the model stopped without asking about the plan they approved, so
 // baton answers answer for them at deadline unless they do first.
-func ReplanWaits(answer string, deadline time.Time) string {
+func PlanQuestionWaits(answer string, deadline time.Time) string {
 	return fmt.Sprintf("baton: Claude did not ask you about the plan you approved → baton answers %q at %s unless you do first (/baton run <file> attaches a plan any time)",
 		answer, deadline.Local().Format("15:04"))
 }
 
-// ReplanHolding is what baton says to the human (say) and tells the model (tell) as it holds the plan they
-// approved mid-run (file) at their word (Wait for me): nothing changes until they write, and with no word
-// from them in lapse, baton answers answer (ReplanDefault) for them.
-func ReplanHolding(file, answer string, lapse time.Duration) (say, tell string) {
+// PlanQuestionHolding is what baton says to the human (say) and tells the model (tell) as it holds the
+// plan they approved mid-run (file) at their word (Wait for me): nothing changes until they write, and
+// with no word from them in lapse, baton answers answer (PlanQuestionDefault) for them.
+func PlanQuestionHolding(file, answer string, lapse time.Duration) (say, tell string) {
 	say = fmt.Sprintf("baton: holding the plan you approved for you — write in the session; with no word from you in %s, baton answers %q", Spell(lapse), answer)
 	tell = fmt.Sprintf("[baton] The human chose Wait for me about the plan they approved (%s): change nothing, and end your turn now. "+
 		"The run waits for them, and their answer will reach you here; with no word from them in %s, baton answers %q for them and tells you.", file, Spell(lapse), answer)
 	return say, tell
 }
 
-// ReplanHeldWaits tells the human, when the model stops, that the plan they approved waits for their word
-// (Wait for me) until deadline, when baton answers answer.
-func ReplanHeldWaits(answer string, deadline time.Time) string {
+// PlanQuestionHeldWaits tells the human, when the model stops, that the plan they approved waits for their
+// word (Wait for me) until deadline, when baton answers answer.
+func PlanQuestionHeldWaits(answer string, deadline time.Time) string {
 	return fmt.Sprintf("baton: waiting on you about the plan you approved → baton answers %q at %s unless you write first", answer, deadline.Local().Format("15:04"))
 }
 
-// ReplanHeldTurn is why the model ends its turn while the plan the human approved waits for their word.
-const ReplanHeldTurn = "the human chose Wait for me about the plan they approved, and the run waits for them"
+// PlanQuestionHeldTurn is why the model ends its turn while the plan the human approved waits for their word.
+const PlanQuestionHeldTurn = "the human chose Wait for me about the plan they approved, and the run waits for them"
 
-// ReplanUnsettled tells the model that the human wrote while baton's question about the plan they
+// PlanQuestionUnsettled tells the model that the human wrote while baton's question about the plan they
 // approved (file) was unsettled, unanswered or held for them (held): baton changed nothing, and their
 // message is what to do.
-func ReplanUnsettled(file string, held bool) string {
+func PlanQuestionUnsettled(file string, held bool) string {
 	what := "baton's question about the plan the human approved (" + file + ") went unanswered"
 	if held {
 		what = "the human chose Wait for me on baton's question about the plan they approved (" + file + "), and has now written"

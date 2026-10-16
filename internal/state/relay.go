@@ -176,7 +176,7 @@ func (st *State) RelayDue() *Relay {
 // an escalation, a block, its own proposal, a review of its decisions, the context question, or a plan
 // they approved mid-run.
 func (st *State) OwnQuestion() bool {
-	return st.Run.Escalation != nil || st.Blocked != nil || st.OwnProposal() != nil || st.ReviewDue != "" || st.Run.WarnQuestion != "" || st.Replan != nil
+	return st.Run.Escalation != nil || st.Blocked != nil || st.OwnProposal() != nil || st.ReviewDue != "" || st.Run.WarnQuestion != "" || st.PlanQuestion != nil
 }
 
 // IssueRelay records that r was issued to the mod by host instance as command ask, to put to the human as

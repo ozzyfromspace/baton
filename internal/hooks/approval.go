@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -64,9 +65,9 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 	case state.ModeRunning, state.ModePaused:
 		cur, _ := s.LoadPlan()
 		same := cur.File == file
-		q := decide.ReplanQuestion(cur.Title, st.Current, st.Mode, same)
-		st.Replan = &state.Replan{File: file, Same: same, Question: q.Text, Since: c.Now}
-		return valveAction{event: "replan_asked", fields: map[string]any{"plan": file, "same": same},
+		q := decide.PlanQuestion(cur.Title, st.Current, st.Mode, same)
+		st.PlanQuestion = &state.PlanQuestion{File: file, Same: same, Question: q.Text, Since: c.Now}
+		return valveAction{event: "plan_question_asked", fields: map[string]any{"plan": file, "same": same},
 			say:  fmt.Sprintf("baton: you approved a plan while %q is %s → asking you what to do with it", cur.Title, st.Mode),
 			tell: NudgePrefix + " Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you."}
 	}
@@ -92,7 +93,8 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 			say: "baton: plan approved, but baton could not attach it: " + err.Error()}
 	}
 	first := pl.Phases[0]
-	v := valveAction{event: "attached", fields: attachedFields(pl, g), record: rec}
+	// Its text is what every replan of it is compared with, kept with the record once the lock is let go.
+	v := valveAction{event: "attached", fields: attachedFields(pl, g), record: rec, approved: &pl}
 	branch := g.branch // workers branch off it, and their work lands on it
 	workers := ""
 	if line := g.room.attached(pl); line != "" {
@@ -113,19 +115,26 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	return v
 }
 
-// keep writes the record of the plan v's approval replaced (Store.Record, taken under the run's lock), now
-// that the lock is let go, and logs it first among v's events: plan_archived, or plan_not_archived with
-// why. It does nothing for an action that replaced no plan.
-func (v *valveAction) keep() {
-	if v.record == nil {
-		return
+// keep writes, in s's run, the record of the plan v's approval replaced (Store.Record, taken under the
+// run's lock), now that the lock is let go, and logs it first among v's events: plan_archived, or
+// plan_not_archived with why. Then it keeps the text of the plan approved (replan.KeepApproved), which
+// every replan of it is compared with, its earlier replans going with the record. It does nothing for an
+// action that approved no plan.
+func (v *valveAction) keep(s *state.Store) {
+	var dir string
+	if v.record != nil {
+		var err error
+		dir, err = v.record.Save()
+		e := event{"plan_archived", map[string]any{"generation": v.record.Generation, "dir": dir}}
+		if err != nil {
+			e = event{"plan_not_archived", map[string]any{"generation": v.record.Generation, "why": err.Error()}}
+		}
+		v.also = append([]event{e}, v.also...)
 	}
-	dir, err := v.record.Save()
-	e := event{"plan_archived", map[string]any{"generation": v.record.Generation, "dir": dir}}
-	if err != nil {
-		e = event{"plan_not_archived", map[string]any{"generation": v.record.Generation, "why": err.Error()}}
+	if v.approved != nil {
+		replan.KeepApproved(s, *v.approved, dir)
 	}
-	v.also, v.record = append([]event{e}, v.also...), nil
+	v.record, v.approved = nil, nil
 }
 
 // A ground is what attaching a plan reads of the working tree and the machine. It is read before the
@@ -149,7 +158,7 @@ func readGround(c Context, s *state.Store, origin bool) *ground {
 }
 
 // mayStartOver reports whether an AskUserQuestion call's answers in c include starting an approved plan
-// over from P0, which attaches it (answeredReplan): its ground is then read before the lock.
+// over from P0, which attaches it (answeredPlanQuestion): its ground is then read before the lock.
 func mayStartOver(c Context) bool {
 	resp, _ := c.Input["tool_response"].(map[string]any)
 	answers, _ := resp["answers"].(map[string]any)
@@ -220,11 +229,11 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// answeredReplan acts on the human's answer about a plan they approved while the run had one. auto says
-// baton answered it for them, since nobody had by its deadline (decide.ReplanDefault). g is the ground read
-// before the run's lock for an answer that starts the plan over (mayStartOver), nil otherwise.
-func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, auto bool, g *ground) valveAction {
-	r := st.Replan
+// answeredPlanQuestion acts on the human's answer about a plan they approved while the run had one. auto says
+// baton answered it for them, since nobody had by its deadline (decide.PlanQuestionDefault). g is the
+// ground read before the run's lock for an answer that starts the plan over (mayStartOver), nil otherwise.
+func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.Words, auto bool, g *ground) valveAction {
+	r := st.PlanQuestion
 	if r == nil {
 		return valveAction{}
 	}
@@ -232,23 +241,23 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 	if !found {
 		return valveAction{}
 	}
-	auto = auto && answer == decide.ReplanDefault(r.Same) // baton only ever answers the default
+	auto = auto && answer == decide.PlanQuestionDefault(r.Same) // baton only ever answers the default
 	if answer == "Wait for me" {
 		// Held for the human: nothing changes until they write (userPromptSubmit), and with no word from
 		// them the hold lapses into the default (loop's lapseQuestions).
 		st.Run.HumanAt, r.Held = c.Now, c.Now
-		v := valveAction{event: "replan_held", fields: map[string]any{"plan": r.File, "answer": answer, "by": "human"}}
-		v.say, v.tell = decide.ReplanHolding(r.File, decide.ReplanDefault(r.Same), decide.HoldLapse)
+		v := valveAction{event: "plan_question_held", fields: map[string]any{"plan": r.File, "answer": answer, "by": "human"}}
+		v.say, v.tell = decide.PlanQuestionHolding(r.File, decide.PlanQuestionDefault(r.Same), decide.HoldLapse)
 		return v
 	}
-	st.Replan = nil
+	st.PlanQuestion = nil
 	by, chose := "human", decide.Chose(auto, c.Now)
 	if auto {
 		by = "timeout"
 	} else {
 		st.Run.HumanAt = c.Now
 	}
-	v := valveAction{event: "replan_resolved", fields: map[string]any{"plan": r.File, "answer": answer, "by": by}}
+	v := valveAction{event: "plan_question_resolved", fields: map[string]any{"plan": r.File, "answer": answer, "by": by}}
 	switch answer {
 	case "Continue with the revised plan", "Start the new plan from P0":
 		doc, err := os.ReadFile(r.File)
@@ -271,7 +280,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 			a.event, a.fields = v.event, v.fields
 			if st.Mode == state.ModePaused {
 				state.Resume(st) // the human's answer starts it, paused or not
-				a.also = append(a.also, event{"resumed", map[string]any{"by": "replan"}})
+				a.also = append(a.also, event{"resumed", map[string]any{"by": "plan_question"}})
 			}
 			return a
 		}
@@ -283,7 +292,10 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 			v.say = "baton: could not write the revised plan: " + err.Error()
 			return v
 		}
-		v.record = rec // kept once the run's lock is let go (keep)
+		// The revision is the plan the human approved now: replans are compared with it from here on. Its
+		// text and the record are kept once the run's lock is let go (keep).
+		v.record, v.approved = rec, &pl
+		st.Replan, st.Replans = nil, nil
 		next := state.Revise(st, pl, c.Now)
 		v.also = append(v.also, event{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}})
 		switch {
@@ -329,12 +341,12 @@ func clearedApproval(st *state.State, c Context) (string, bool) {
 	return a.File, true
 }
 
-// replanHold is why tools are held while baton's question about an approved plan waits to be asked.
-func replanHold(r *state.Replan) string {
-	return NudgePrefix + " Not yet: put baton's question about the plan the human approved to them first: " + replanQuestion(r).Call() + ". Until they answer, nothing else runs."
+// planQuestionHold is why tools are held while baton's question about an approved plan waits to be asked.
+func planQuestionHold(r *state.PlanQuestion) string {
+	return NudgePrefix + " Not yet: put baton's question about the plan the human approved to them first: " + planQuestionOf(r).Call() + ". Until they answer, nothing else runs."
 }
 
-func replanQuestion(r *state.Replan) decide.Question {
+func planQuestionOf(r *state.PlanQuestion) decide.Question {
 	if r.Same {
 		return decide.Question{Text: r.Question, Options: decide.ReviseOptions}
 	}
@@ -345,14 +357,21 @@ func replanQuestion(r *state.Replan) decide.Question {
 // keeps every phase still to run is followed; one that loses any is reported, and the run goes on with the
 // plan as attached, since nothing would answer for the human while they are away. Each change is reported once. A run
 // that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
-// took: it starts after the boundary compaction this stop queues.
+// took: it starts after the boundary compaction this stop queues. While a replan is open, the plan file is
+// the replan's to change (package replan), and left alone; a text a replan kept copied back over it undoes
+// that replan and those after it, and is followed as such (replan.Restore).
 func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
-	if pl.File == "" || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
+	if pl.File == "" || st.PlanQuestion != nil || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
 		return "", nil, ""
 	}
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(*st, pl))
 	if !changed {
 		return "", nil, ""
+	}
+	if u, ok := replan.Restore(st, s, pl, now); ok && u.Err == nil {
+		return decide.ReplanRestored(u.N, u.Changes), &event{"replan_undone", u.Fields()}, u.Took
+	} else if ok {
+		err = u.Err
 	}
 	if err == nil {
 		if s.WritePlan(adopted) != nil {

@@ -228,10 +228,10 @@ func TestBatonsOwnQuestionsLapse(t *testing.T) {
 			st.Run.Escalation = &state.Escalation{Kind: "stalled", Reason: "r", Since: now, Question: "baton: r", Asked: true}
 		}, &lapsed{"baton: r", "Continue"}},
 		{"a revised plan", func(st *state.State, now time.Time) {
-			st.Replan = &state.Replan{File: "p.md", Same: true, Question: "baton: which?", Since: now}
+			st.PlanQuestion = &state.PlanQuestion{File: "p.md", Same: true, Question: "baton: which?", Since: now}
 		}, &lapsed{"baton: which?", "Continue with the revised plan"}},
 		{"another plan", func(st *state.State, now time.Time) {
-			st.Replan = &state.Replan{File: "q.md", Question: "baton: which?", Since: now}
+			st.PlanQuestion = &state.PlanQuestion{File: "q.md", Question: "baton: which?", Since: now}
 		}, &lapsed{"baton: which?", "Keep the current run"}},
 		{"a block", func(st *state.State, now time.Time) {
 			st.Run.Escalation = &state.Escalation{Kind: "blocked", Reason: "r", Since: now, Question: "baton: r", Asked: true}

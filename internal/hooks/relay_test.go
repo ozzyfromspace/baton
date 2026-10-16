@@ -193,10 +193,10 @@ func TestBound(t *testing.T) {
 		}
 	}
 	pq := "baton: you approved a plan. Which?"
-	replan := func(same bool) func(*state.State) {
+	planQuestion := func(same bool) func(*state.State) {
 		return func(st *state.State) {
-			st.Replan = &state.Replan{File: "plan.md", Same: same, Question: pq, Since: t0}
-			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(pq), Since: t0, Kind: "replan", Front: t0})
+			st.PlanQuestion = &state.PlanQuestion{File: "plan.md", Same: same, Question: pq, Since: t0}
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(pq), Since: t0, Kind: "plan_question", Front: t0})
 		}
 	}
 	for _, c := range []struct {
@@ -240,8 +240,8 @@ func TestBound(t *testing.T) {
 		}}, eq, 0, time.Hour, Wait{For: 30 * time.Second, Answer: "Look again"}},
 		{"lapsed, the plan paused", []func(*state.State){escalation("blocked"), blocked(30 * time.Minute), func(st *state.State) { st.Mode = state.ModePaused }},
 			eq, 0, time.Hour, Wait{}},
-		{"a revised plan", []func(*state.State){replan(true)}, pq, 0, 10 * time.Minute, Wait{Answer: "Continue with the revised plan"}},
-		{"another plan", []func(*state.State){replan(false)}, pq, 0, 10 * time.Minute, Wait{Answer: "Keep the current run"}},
+		{"a revised plan", []func(*state.State){planQuestion(true)}, pq, 0, 10 * time.Minute, Wait{Answer: "Continue with the revised plan"}},
+		{"another plan", []func(*state.State){planQuestion(false)}, pq, 0, 10 * time.Minute, Wait{Answer: "Keep the current run"}},
 		{"none of baton's", []func(*state.State){timed, front}, "baton: lunch?", 0, time.Hour, Wait{}},
 		{"the plan paused", []func(*state.State){timed, front, func(st *state.State) { st.Mode = state.ModePaused }}, q.Text, 0, time.Hour, Wait{}},
 	} {
@@ -446,13 +446,13 @@ func TestSettle(t *testing.T) {
 	// A plan approved mid-run that nobody answered about: the current run is kept (another file), from the
 	// host's loop, with no dialog on screen (Lapse).
 	f.set(func(st *state.State) {
-		st.Replan = &state.Replan{File: "/plans/other.md", Same: false, Question: "baton: you approved a new plan. Which?", Since: f.now}
+		st.PlanQuestion = &state.PlanQuestion{File: "/plans/other.md", Same: false, Question: "baton: you approved a new plan. Which?", Since: f.now}
 	})
 	if own, err := Lapse(f.store, "baton: you approved a new plan. Which?", "Keep the current run", f.now, f.env(f.inst)); !own || err != nil {
 		t.Fatalf("a plan approved mid-run: %v, %v", own, err)
 	}
-	if st := f.state(); st.Replan != nil || !f.logged("replan_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) {
-		t.Errorf("replan %+v; events:\n%s", st.Replan, f.eventLog())
+	if st := f.state(); st.PlanQuestion != nil || !f.logged("plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) {
+		t.Errorf("plan question %+v; events:\n%s", st.PlanQuestion, f.eventLog())
 	}
 
 	_, lead, _ := newWorker(t)

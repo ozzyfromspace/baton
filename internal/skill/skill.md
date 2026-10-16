@@ -8,6 +8,7 @@ Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
 - `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
 - `/baton start`: hand this session to baton, keeping the conversation. `/baton plan` and `/baton run` do it when they need to.
+- `/baton replan [what to consider]`: restructure the phases of the running plan that have not started, so more of them can run at once, weighing what the user gives. baton checks the result before it follows it, keeps the phases that started as they are, and records the change with its undo.
 - `/baton status`: where the run stands.
 - `/baton board`: the plan step by step: how each phase stands (the lead's, a phase agent's, verifying, landing, waiting), and what the lead is doing. While a plan runs, baton keeps the same in one line above the prompt, and `/baton-board` opens the board while Claude works.
 - `/baton pause`: take the wheel; `/baton run` gives it back.
@@ -90,6 +91,13 @@ Where baton's mod runs, a draft is never in baton's way: baton compacts and give
 5. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "The plan is attached. Do what baton says about its first phase."` and end your turn (see **start**).
 6. Otherwise, do what `baton attach` says. In a conversation that had turns before this one, that is to end your turn: baton compacts the conversation, then starts the first phase with a fresh brief. Otherwise, begin the first phase.
 
+## replan [what to consider]
+
+1. Run `baton replan`, adding what the user gave to consider, if anything, as one argument in single quotes (write a single quote inside it as `'\''`): `baton replan 'the CI phase can wait until the end'`.
+2. Do what it prints, now, in this same turn: it lists the phases not started, the ones that started (never change those), the plan's shape and baton's shape rules, and what this replan may change. Edit only the draft it names, never the plan file, then run `baton replanned --notes "<what changed and why>"`, or `baton replanned --none "<why nothing should change>"` when the plan is right as it is.
+3. If `baton replanned` says what failed, fix the draft and run it again. Once it says the plan is replanned, tell the user in one or two lines what changed, then do what it says next.
+4. If `baton replan` says no replan was opened (no plan runs here, or every phase has started), tell the user what it says in one line.
+
 ## pause
 
 Run `baton pause` and report the result in one line. It hands the session to the human: baton stops compacting, nudging and escalating until `/baton run` gives the session back.
@@ -166,6 +174,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
   - `baton verify "<command>" --notes "<where the phase stands>"` runs the gate on HEAD, in a lane of its own outside the checkout, so commit first; what you change meanwhile cannot disturb it. Use it for gates that take more than about 2 minutes, or that need state of their own (a database, a server, ports). Run quick checks in place.
   - A lane is a separate checkout of the commit: it has none of this checkout's running services, nor its files that are not in git, unless the project's `.baton-lane` script sets them up. When the gate needs this checkout itself and the project has no `.baton-lane`, run `baton verify --here "<command>" --notes "…"`. It runs on HEAD in your own working tree, with no lane, and until it ends baton refuses edits there, starts no other phase there, and lands no phase agent's work in the checkout. Never write a gate that reaches into the checkout from a lane (a `cd` to it, or its path): baton refuses a `verify` whose command names the checkout's path, because landings and edits would change the files under it.
   - `baton await "<command>" --notes "…"` waits the same way on something outside the project, from the working tree (a CI run: `gh run watch --exit-status`). It needs no git.
+  - A phase runs one gate and one wait on something outside at a time, beside each other: a `verify` never stops an `await`, nor the reverse, and `baton done` waits for both, and is refused while either is red. The same command queued again replaces the one of its kind that runs (the gate on a newer commit, or the wait again). Another command of that kind is refused while one runs: add `--replace` to stop the one that runs and run yours, fold both into one command, or queue yours once the result comes.
   - The notes are what the phase resumes from if baton sets it aside while the job runs, so say what is done and what is left.
   - With nothing left to do until the result, commit your work and end your turn: that stop is allowed. If the job runs long (past 5 minutes, unless the human set `switch_after`, or known to take that long) and another phase can go on, baton compacts and starts that phase; the waiting phase resumes from its notes once the job ends. baton never sets a phase aside with its work uncommitted.
   - `baton checkpoint --notes "…"` is also where baton goes back to a phase whose job has ended: it sets the phase in hand aside with your notes (its work committed) and resumes the other.

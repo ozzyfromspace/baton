@@ -23,6 +23,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
@@ -65,6 +66,7 @@ type Timing struct {
 	BlockLook      time.Duration // a block with no word from the human this long: baton lifts it, and the model looks again (block.go; 0: decide.BlockLook)
 	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
 	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
+	ReplanMax      time.Duration // a replan of the phases not started open this long lapses: its draft is dropped, and the plan goes on as it was (replanmax.go; 0: never)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -87,6 +89,7 @@ var DefaultTiming = Timing{
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
+	ReplanMax:         replan.Max,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
@@ -229,6 +232,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	l.jobs(v, st)
 	st = l.settle(v, st)
+	l.lapseReplan(v, st)
 	if st.Mode == state.ModeComplete && len(st.Due()) > 0 {
 		// A verification completed the plan while the session was idle: it is told, and sums the run up.
 		l.why, l.wished = l.gate(v, st), false
