@@ -98,8 +98,12 @@ func TestAPlansShapeWithoutTheShapeCheck(t *testing.T) {
 		}
 	}
 
-	// Dependencies that do not build: asked all the same, with no shape.
+	// Dependencies that do not build: turned back for that first (unbuilt); put again as it is, asked
+	// about the directives all the same, with no shape.
 	broken := strings.Replace(chainDoc(7), "## P1 — Step 1\n", "## P1 — Step 1\nAfter: P4\n", 1)
+	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || !strings.Contains(why, "could not attach this plan as written") {
+		t.Errorf("a plan that does not build: %q\n%s", d, why)
+	}
 	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || why != decide.CompetingDirectives() {
 		t.Errorf("a plan that does not build: %q\n%s", d, why)
 	}

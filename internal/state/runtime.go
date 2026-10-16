@@ -117,6 +117,9 @@ type Runtime struct {
 	// DirectivesAsked lists the plan files whose first ExitPlanMode baton answered with its request to flag
 	// the instructions that compete with the plan (once each).
 	DirectivesAsked []string `json:"directives_asked,omitempty"`
+	// UnbuiltAsked lists the plan texts (a hash of each) whose ExitPlanMode baton turned back because it
+	// could not attach them as written (once each).
+	UnbuiltAsked []string `json:"unbuilt_asked,omitempty"`
 	// DirectivesPending is the plan file asked about whose ExitPlanMode has not come again yet: a stop in
 	// plan mode before it is turned back once, so the plan still reaches the human.
 	DirectivesPending string      `json:"directives_pending,omitempty"`
