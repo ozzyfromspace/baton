@@ -229,8 +229,11 @@ func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
 		return Result{}, ok(err)
 	}
 	pl, _ := s.LoadPlan()
-	text := h.briefed(c, s, st, *b, "rewake")
+	text, replanning := h.briefing(c, s, st, *b, "rewake")
 	line := decide.Compacted(phaseTitle(pl, b.Phase), b.Kind != brief.Checkpoint, b.Kind == brief.Resume)
+	if replanning {
+		line = decide.CompactedReplan(phaseTitle(pl, b.Phase), b.Kind == brief.Resume)
+	}
 	s.Event("rewake", map[string]any{"epoch": st.Run.Compaction.Epoch})
 	if text != "" {
 		line = text + "\n\n" + line
@@ -254,8 +257,28 @@ func takeBriefing(c Context, st *state.State) *state.Briefing {
 }
 
 // briefed writes the brief b owes, as the state st stands, and logs that it was given (via the rewake, a
-// tool call or a prompt), with the job result it carries.
+// tool call or a prompt), with the job result it carries; a replan of baton's own opened at the lead's
+// phase boundary comes before it (briefing).
 func (h *handlers) briefed(c Context, s *state.Store, st state.State, b state.Briefing, via string) string {
+	text, _ := h.briefing(c, s, st, b, via)
+	return text
+}
+
+// briefing is briefed, and whether a replan of baton's own opened at the lead's phase boundary, its brief
+// before the phase's (autoReplan).
+func (h *handlers) briefing(c Context, s *state.Store, st state.State, b state.Briefing, via string) (string, bool) {
+	text := h.phaseBrief(c, s, st, b, via)
+	if text == "" {
+		return "", false
+	}
+	if auto := h.autoReplan(c, s, b); auto != "" {
+		return auto + "\n\n" + text, true
+	}
+	return text, false
+}
+
+// phaseBrief writes the brief b owes, as the state st stands, and logs that it was given.
+func (h *handlers) phaseBrief(c Context, s *state.Store, st state.State, b state.Briefing, via string) string {
 	pl, err := s.LoadPlan()
 	if err != nil {
 		return ""

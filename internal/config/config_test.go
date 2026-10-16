@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -345,6 +346,36 @@ func TestAggregateQA(t *testing.T) {
 		}
 	}
 	if !AggregatesFromEnv(func(string) string { return "" }) || AggregateEnv(false) != "BATON_AGGREGATE_QA=0" {
+		t.Error("the setting as the host passes it")
+	}
+}
+
+// auto_replan is on unless the file or the environment turns it off; the environment wins.
+func TestAutoReplan(t *testing.T) {
+	no, yes := false, true
+	for _, c := range []struct {
+		file *bool
+		env  string
+		want bool
+	}{
+		{nil, "", true}, {&no, "", false}, {&yes, "", true}, {&yes, "0", false}, {&no, "1", true}, {nil, "off", false}, {nil, "nonsense", true},
+	} {
+		got := Config{AutoReplan: c.file}.AutoReplans(func(k string) string {
+			if k == "BATON_AUTO_REPLAN" {
+				return c.env
+			}
+			return ""
+		})
+		if got != c.want {
+			t.Errorf("file %v, env %q: %v, want %v", c.file, c.env, got, c.want)
+		}
+	}
+	var c Config
+	if err := json.Unmarshal([]byte(`{"auto_replan": false}`), &c); err != nil || c.AutoReplans(func(string) string { return "" }) {
+		t.Errorf("the file's auto_replan: false: %+v, %v", c, err)
+	}
+	if !AutoReplansFromEnv(func(string) string { return "" }) || AutoReplansFromEnv(func(string) string { return "0" }) ||
+		AutoReplanEnv(false) != "BATON_AUTO_REPLAN=0" || AutoReplanEnv(true) != "BATON_AUTO_REPLAN=1" {
 		t.Error("the setting as the host passes it")
 	}
 }

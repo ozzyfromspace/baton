@@ -171,7 +171,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// environment, and these must reach the hooks and the status line.
 	batonEnv := append(append(valves.Env(), escalation.Env()...), extraEnv...)
 	batonEnv = append(batonEnv, workerEnv(workers, auto, usageMax)...)
-	batonEnv = append(batonEnv, config.AggregateEnv(cfg.Aggregates(io.Env))) // QA phases run the heavy checks (aggregate_qa)
+	batonEnv = append(batonEnv, config.AggregateEnv(cfg.Aggregates(io.Env)))   // QA phases run the heavy checks (aggregate_qa)
+	batonEnv = append(batonEnv, config.AutoReplanEnv(cfg.AutoReplans(io.Env))) // baton opens its own replans at boundaries (auto_replan)
 	if mode := elevate.PermissionMode(args); mode != "" {
 		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
 	}
@@ -201,7 +202,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io)}
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
-		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Ramp: agentRamp(io), Machine: machineFor(io)}
+		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Ramp: agentRamp(io), Machine: machineFor(io),
+			AutoReplan: cfg.AutoReplans(io.Env), ReplanMax: timing.ReplanMax}
 	}
 	leadEnv := slices.Clip(batonEnv)
 	if why := io.Env("BATON_RECOVER"); why != "" {

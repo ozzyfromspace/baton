@@ -62,3 +62,18 @@ func TestPlanTeachesTheShapeRules(t *testing.T) {
 		}
 	}
 }
+
+// /baton plan teaches the Replan: after line, for a spike or an exploration whose findings should reshape
+// the phases after it.
+func TestPlanTeachesReplanAfter(t *testing.T) {
+	plan := planSection(t)
+	for _, want := range []string{
+		"Give a spike or an exploration",
+		"a line `Replan: after` under its heading",
+		"never dropping work",
+	} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("the plan section lacks %q", want)
+		}
+	}
+}

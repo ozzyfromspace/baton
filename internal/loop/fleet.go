@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -67,6 +69,11 @@ type Fleet struct {
 	// Machine reads the machine (nil: machine.Read): no agent starts while it has no room for another
 	// (room.go).
 	Machine func() machine.Reading
+	// AutoReplan is auto_replan: baton opens replans of its own at the lead's phase boundaries (package
+	// replan's Auto). While the boundary under way owes one, no new agent starts, for at most ReplanMax
+	// (0: replan.Max), as while a replan is open.
+	AutoReplan bool
+	ReplanMax  time.Duration
 	// Go runs the coordinator's work on the agents off the lead's tick (nil: on a goroutine of its own).
 	Go func(fn func())
 
@@ -110,8 +117,8 @@ func launchable(st state.State, now time.Time) string {
 }
 
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
-// one does): the run must be running, with no replan open, under Max workers of its plan, with a phase
-// that can go ahead.
+// one does): the run must be running, with no replan open (nor one of baton's own due at the lead's phase
+// boundary under way), under Max workers of its plan, with a phase that can go ahead.
 // held names what holds a phase that waits back: no room on the machine (r.busy), gates waiting for lanes
 // (r.lanes), landings that keep conflicting, no room under worker_usage_max, or an agent that started
 // less than Ramp ago (state.HoldBusy, HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
@@ -121,6 +128,9 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 	}
 	if st.Replan != nil {
 		return "", decide.ReplanHoldsAgents, "" // its agents at work go on (replanmax.go)
+	}
+	if f.AutoReplan && replan.Owed(st, pl, now, cmp.Or(f.ReplanMax, replan.Max)) {
+		return "", decide.ReplanDueHoldsAgents, "" // an agent would take a phase the replan restructures first
 	}
 	if st.RunBranch == "" {
 		return "", "the plan was attached with no branch checked out", ""

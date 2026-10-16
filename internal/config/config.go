@@ -48,6 +48,11 @@ type Config struct {
 	// work-in-progress state, so one QA phase does the slow work for many. On unless set to false
 	// (BATON_AGGREGATE_QA=0), which has every phase check itself in full as it ends.
 	AggregateQA *bool `json:"aggregate_qa,omitempty"`
+	// AutoReplan has baton open a replan of the phases not started by itself, at the lead's phase
+	// boundaries: once after an upgrade whose planning rules changed, at the start of a QA phase over a
+	// remainder that is mostly one chain, and once a phase marked `Replan: after` is done. On unless set to
+	// false (BATON_AUTO_REPLAN=0); `/baton replan` works either way.
+	AutoReplan *bool `json:"auto_replan,omitempty"`
 	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
@@ -426,6 +431,29 @@ func (c Config) Aggregates(env func(string) string) bool {
 
 // AggregatesFromEnv reads aggregate_qa as the host passed it down (BATON_AGGREGATE_QA); missing, it is on.
 func AggregatesFromEnv(env func(string) string) bool { return Config{}.Aggregates(env) }
+
+// AutoReplans reports auto_replan: the environment's BATON_AUTO_REPLAN (0, false, off; or 1, true, on)
+// wins, then the file, then on.
+func (c Config) AutoReplans(env func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(env("BATON_AUTO_REPLAN"))) {
+	case "0", "false", "off", "no":
+		return false
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return c.AutoReplan == nil || *c.AutoReplan
+}
+
+// AutoReplansFromEnv reads auto_replan as the host passed it down (BATON_AUTO_REPLAN); missing, it is on.
+func AutoReplansFromEnv(env func(string) string) bool { return Config{}.AutoReplans(env) }
+
+// AutoReplanEnv is the setting as the host gives it to the session's hooks.
+func AutoReplanEnv(on bool) string {
+	if on {
+		return "BATON_AUTO_REPLAN=1"
+	}
+	return "BATON_AUTO_REPLAN=0"
+}
 
 // AggregateEnv is the setting as the host gives it to the session's hooks.
 func AggregateEnv(on bool) string {
