@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -17,9 +18,10 @@ import (
 // Every lock baton takes on its files (a run's, the project's, a bridge's) is held for a read-modify-write
 // of a small file and nothing else: commands, process and transcript reads, network calls and copies are
 // done before the lock or after it. So that a hold that breaks this, or a waiter that gives up, can say
-// who held the lock, the holder writes into the lock file, while it holds it, its pid, where it took the
-// lock from and when (best effort, as is all of this). A waiter that times out logs them (lock_timeout),
-// and a holder that kept the lock longer than lockSlow logs where it took it from (lock_slow).
+// who held the lock, the holder writes into the lock file, once it has held it for holderAfter, its pid,
+// where it took the lock from and when (best effort, as is all of this). A waiter that times out logs them
+// (lock_timeout), and a holder that kept the lock longer than lockSlow logs where it took it from
+// (lock_slow).
 
 // lockTimeout bounds how long any process waits for another's update; updates take milliseconds. A test
 // may shorten it.
@@ -27,6 +29,17 @@ var lockTimeout = 5 * time.Second
 
 // lockSlow is how long a hold may last before its holder logs it (lock_slow).
 const lockSlow = time.Second
+
+// holderAfter is how long a lock is held before its holder records itself in the lock file. A hold as
+// short as an update should be writes nothing: v0.8.5 wrote the record and cleared it on every hold, a
+// mere read of a run's state included, and on macOS those two writes took most of the time spent under
+// the lock. A waiter gives up only after lockTimeout, long after a holder that keeps it waiting has
+// recorded itself.
+const holderAfter = 100 * time.Millisecond
+
+// afterHold runs record after d, in a goroutine of its own, unless the returned stop is called first (as
+// time.AfterFunc); a test may take it over.
+var afterHold = func(d time.Duration, record func()) (stop func() bool) { return time.AfterFunc(d, record).Stop }
 
 // lockRetry is how often a waiter tries the lock again.
 const lockRetry = 20 * time.Millisecond
@@ -76,12 +89,49 @@ func withLockFile(path string, w LockWatch, fn func() error) error {
 	}()
 	defer l.Unlock()
 	start := w.now()
-	writeHolder(path, lockHolder{PID: os.Getpid(), Caller: caller, Since: start})
+	h := holdOn(path, lockHolder{PID: os.Getpid(), Caller: caller, Since: start})
 	defer func() {
-		clearHolder(path)
+		h.letGo()
 		held = w.now().Sub(start)
 	}()
 	return fn()
+}
+
+// A holding is a lock's holder, which records itself in the lock file once it has held the lock for
+// holderAfter, and clears its record as it lets the lock go.
+type holding struct {
+	path    string
+	stop    func() bool
+	mu      sync.Mutex
+	gone    bool // the lock was let go: nothing is recorded any more
+	written bool // the record is in the lock file
+}
+
+// holdOn starts the holding of the lock at path by h.
+func holdOn(path string, h lockHolder) *holding {
+	r := &holding{path: path}
+	r.stop = afterHold(holderAfter, func() {
+		defer func() { recover() }() // a goroutine of its own: nothing above it would catch a panic
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if !r.gone {
+			writeHolder(path, h)
+			r.written = true
+		}
+	})
+	return r
+}
+
+// letGo ends the holding, before the lock is let go: no record is written from now on, and one written is
+// cleared.
+func (r *holding) letGo() {
+	r.stop()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gone = true
+	if r.written {
+		clearHolder(r.path)
+	}
 }
 
 // lockTimedOut logs, and returns as an error, that the waiter at caller gave up on the lock at path, naming

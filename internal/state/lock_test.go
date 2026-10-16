@@ -25,18 +25,59 @@ func lockEvents(t *testing.T, s *Store, kind string) []map[string]any {
 	return out
 }
 
+// holdTimers takes afterHold over for a test: a holding records itself only when the test fires its timer.
+type holdTimers struct {
+	t       *testing.T
+	records []func()
+	stopped int
+}
+
+func takeOverHold(t *testing.T) *holdTimers {
+	h := &holdTimers{t: t}
+	old := afterHold
+	afterHold = func(d time.Duration, record func()) func() bool {
+		if d != holderAfter {
+			t.Errorf("a holding records itself after %s, want %s", d, holderAfter)
+		}
+		h.records = append(h.records, record)
+		return func() bool { h.stopped++; return true }
+	}
+	t.Cleanup(func() { afterHold = old })
+	return h
+}
+
+// fire runs every holding's timer, as if each had held its lock for holderAfter.
+func (h *holdTimers) fire() {
+	for _, f := range h.records {
+		f()
+	}
+}
+
+// recordAtOnce makes every holding record itself as it takes its lock.
+func recordAtOnce(t *testing.T) {
+	old := afterHold
+	afterHold = func(_ time.Duration, record func()) func() bool { record(); return func() bool { return false } }
+	t.Cleanup(func() { afterHold = old })
+}
+
 func TestLockHolderRecordedWhileHeld(t *testing.T) {
+	timers := takeOverHold(t)
 	s, err := Open(t.TempDir(), "test", func() time.Time { return t0 })
 	if err != nil {
 		t.Fatal(err)
 	}
 	var during lockHolder
-	var known bool
+	var early, known bool
 	if _, err := s.Update(func(st *State) error {
+		_, early = readHolder(s.path("lock"))
+		timers.fire()
 		during, known = readHolder(s.path("lock"))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if early {
+		t.Fatal("recorded before the lock was held for holderAfter")
 	}
 	if !known || during.PID != os.Getpid() || !during.Since.Equal(t0) ||
 		!strings.Contains(during.Caller, "TestLockHolderRecordedWhileHeld") || !strings.Contains(during.Caller, "lock_test.go:") {
@@ -51,6 +92,79 @@ func TestLockHolderRecordedWhileHeld(t *testing.T) {
 	writeHolder(s.path("lock"), lockHolder{PID: 8, Caller: "short", Since: t0})
 	if h, _ := readHolder(s.path("lock")); h.PID != 8 || h.Caller != "short" {
 		t.Fatalf("after a longer record: %+v", h)
+	}
+}
+
+// A holder that keeps its lock records itself on its own, by the real timer, and clears its record as it
+// lets the lock go.
+func TestALongHoldRecordsItself(t *testing.T) {
+	s, err := Open(t.TempDir(), "test", func() time.Time { return t0 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h lockHolder
+	var known bool
+	s.Update(func(st *State) error {
+		for end := time.Now().Add(10 * time.Second); !known && time.Now().Before(end); {
+			time.Sleep(10 * time.Millisecond)
+			h, known = readHolder(s.path("lock"))
+		}
+		return nil
+	})
+	if !known || h.PID != os.Getpid() || !strings.Contains(h.Caller, "TestALongHoldRecordsItself") {
+		t.Fatalf("while held: %+v (known %v)", h, known)
+	}
+	if h, known := readHolder(s.path("lock")); known {
+		t.Fatalf("after: %+v still recorded", h)
+	}
+}
+
+// A hold shorter than holderAfter, a read of the state or an update, leaves the lock file as it was, and a
+// holding's timer that fires once its lock is let go records nothing.
+func TestAShortHoldWritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hold func(s *Store) error
+	}{
+		{"a read", func(s *Store) error { _, err := s.Load(); return err }},
+		{"an update", func(s *Store) error {
+			_, err := s.Update(func(st *State) error { st.Mode = ModeRunning; return nil })
+			return err
+		}},
+		{"a failed update", func(s *Store) error {
+			s.Update(func(st *State) error { return os.ErrInvalid })
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			timers := takeOverHold(t)
+			s, err := Open(t.TempDir(), "test", func() time.Time { return t0 })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Load(); err != nil { // the lock file is made as the lock is first taken
+				t.Fatal(err)
+			}
+			lock := s.path("lock")
+			old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+			if err := os.Chtimes(lock, old, old); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.hold(s); err != nil {
+				t.Fatal(err)
+			}
+			timers.fire() // too late: every lock was let go
+			fi, err := os.Stat(lock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Size() != 0 || !fi.ModTime().Equal(old) {
+				t.Errorf("lock file written: %d bytes, modified %s", fi.Size(), fi.ModTime())
+			}
+			if timers.stopped != len(timers.records) {
+				t.Errorf("%d holdings, %d timers stopped", len(timers.records), timers.stopped)
+			}
+		})
 	}
 }
 
@@ -103,6 +217,7 @@ func TestLockLetGoOnPanic(t *testing.T) {
 		{"the log of a slow hold", 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			recordAtOnce(t) // so that a recorded holder is there to be cleared
 			path := filepath.Join(t.TempDir(), "lock")
 			calls := 0
 			w := LockWatch{
