@@ -28,6 +28,15 @@ They are not part of baton and are not maintained. They are Python-stdlib-only a
 | `26-bg-sessions/` | Could Claude Code's background sessions (`claude --bg`, `claude attach`) be baton's workers? (2026-10-11; [write-up](../docs/research/workers.md)) |
 | `27-machine/` | What can a static Go binary read about the machine's size and load on macOS and Linux, inside a container too? How does macOS's free-memory level move while a process holds memory? (2026-10-11; [findings](27-machine/README.md)) |
 | `28-leftovers/` | Which processes does a hosted session leave running when its host is killed or its terminal closes, and can a static Go binary find them again by their baton marker and working directory? (2026-10-11, Claude Code 2.1.296; [findings](28-leftovers/README.md)) |
+| `29-rewind/` | What does a rewind (Esc Esc, `/rewind`) leave behind that baton could read deterministically, and how far back can it go? (2026-10-12, Claude Code 2.1.296; [findings](29-rewind/README.md)) |
+| `30-crash-resume/` | When the lead's `claude` dies, can baton bring the same conversation back with `--resume`, and how does a resume that cannot work fail? (2026-10-12, Claude Code 2.1.296; [findings](30-crash-resume/README.md)) |
+| `31-mod-agents/` | Could a phase run as a subagent of the lead session, shown in Claude Code's agent panel, with a mod of baton's driving it and no model judgment? (2026-10-12, Claude Code 2.1.296; [write-up](../docs/research/visible-workers.md)) |
+| `32-phase-agents/` | What baton's design for phase agents assumes: messages to a busy or compacting agent, what `/compact`, `/clear`, Esc, Ctrl-C and a rewind do to agents, what a mod reload keeps. (2026-10-12, Claude Code 2.1.296; [write-up](../docs/research/visible-workers.md)) |
+| `33-board-command/` | Can baton's mod serve `/baton board`, opening its pane at once, when `/baton` is the plugin's own skill? (2026-10-12, Claude Code 2.1.296; [findings](33-board-command/README.md)) |
+| `34-ask-deadline/` | Can baton's mod settle a question of baton's at its deadline without typing a key? (2026-10-12, Claude Code 2.1.296; [findings](34-ask-deadline/README.md)) |
+| `35-mod-drives/` | What can the mod do in place of baton's keys (compact the lead, submit baton's lines), and what do those keys, Ctrl-C above all, do to agents? (2026-10-15, Claude Code 2.1.300 and 2.1.296; [findings](35-mod-drives/README.md)) |
+| `36-agent-dialog/` | Under a phase agent's permission prompt on the lead's screen, does the mod's compaction and a lead turn still run, and how does an agent the human stopped look? (2026-10-15, Claude Code 2.1.300; [findings](36-agent-dialog/README.md)) |
+| `37-compact-at-turn-end/` | Does Claude Code take a compaction the mod calls from the lead's `turn.complete`, where one called as the turn ends is refused? (2026-10-16, Claude Code 2.1.301; [findings](37-compact-at-turn-end/README.md)) |
 
 (Spike 03 was a variant of 02 run in a clean environment; its scripts are the ones in `02-async-rewake/`.)
 
