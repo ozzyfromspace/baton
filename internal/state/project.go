@@ -664,7 +664,7 @@ const sweepAge = 10 * time.Minute
 
 // Sweep removes what no one can use any more: runs that never had a plan, drafts or notes and that no
 // host drives (every hosted session starts one), links to runs (workers' sub-runs among them) that are
-// gone, from sessions and from phase agents, links to hosts that no longer drive their run, the records
+// gone, from sessions and from phase agents (and the records of agents baton let go of: LetGo), links to hosts that no longer drive their run, the records
 // of hosts' processes whose links are gone, and the temporary files interrupted writes left (SweepTemps).
 // Hosts call it when they start.
 func (p *Project) Sweep() {
@@ -674,7 +674,7 @@ func (p *Project) Sweep() {
 
 // Swept is Sweep, saying what it removed, each as its path under the project's .baton directory, with
 // forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>, hosts/<instance>.pid,
-// agents/<agent>). With dry, it removes nothing, and says what Sweep would remove. keep (nil: none) names
+// agents/<agent>, retired/<agent>). With dry, it removes nothing, and says what Sweep would remove. keep (nil: none) names
 // hosts whose links and records stay, though they do not drive their run now.
 func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 	var out []string
@@ -696,7 +696,7 @@ func (p *Project) Swept(dry bool, keep func(instance string) bool) []string {
 			}
 		}
 		unlinked := map[string]bool{} // hosts whose links this sweep removes
-		for _, sub := range []string{sessionsDir, hostsDir, agentsDir} {
+		for _, sub := range []string{sessionsDir, hostsDir, agentsDir, retiredDir} {
 			links, _ := os.ReadDir(p.path(sub))
 			for _, l := range links {
 				if sub == hostsDir && strings.HasSuffix(l.Name(), pidSuffix) {
