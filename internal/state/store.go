@@ -7,6 +7,7 @@
 //	handoff.md    notes the model leaves for the phases after it (a worker's go to its parent run's)
 //	jobs/<id>.log the output of each job (package lane)
 //	gen-<N>/      the record of an earlier plan of the run, kept as it was replaced (Archive)
+//	replan/       the plan's text as approved, each replan's, and an open replan's draft (replan.go)
 //	lock          held (flock) for the duration of every update
 //
 // Hooks, the host and the model-facing CLI are separate processes that touch the same files, so every

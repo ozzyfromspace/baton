@@ -13,6 +13,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -83,6 +84,7 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": err.Error()},
 			say: "baton: plan approved, but baton could not attach it: " + err.Error()}
 	}
+	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	first := pl.Phases[0]
 	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
 	if kept != "" {
@@ -223,6 +225,9 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 		if kept != "" {
 			v.also = append(v.also, archived(*st, kept))
 		}
+		// The revision is the plan the human approved now: replans are compared with it from here on.
+		replan.KeepApproved(s, pl, kept)
+		st.Replan, st.Replans = nil, nil
 		next := state.Revise(st, pl, c.Now)
 		v.also = append(v.also, event{"revised", map[string]any{"plan": pl.File, "phases": len(pl.Phases), "next": next}})
 		switch {
@@ -284,14 +289,21 @@ func planQuestionOf(r *state.PlanQuestion) decide.Question {
 // keeps every phase still to run is followed; one that loses any is reported, and the run goes on with the
 // plan as attached, since nothing would answer for the human while they are away. Each change is reported once. A run
 // that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
-// took: it starts after the boundary compaction this stop queues.
+// took: it starts after the boundary compaction this stop queues. While a replan is open, the plan file is
+// the replan's to change (package replan), and left alone; a text a replan kept copied back over it undoes
+// that replan and those after it, and is followed as such (replan.Restore).
 func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
-	if pl.File == "" || st.PlanQuestion != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
+	if pl.File == "" || st.PlanQuestion != nil || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
 		return "", nil, ""
 	}
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(*st, pl))
 	if !changed {
 		return "", nil, ""
+	}
+	if u, ok := replan.Restore(st, s, pl, now); ok && u.Err == nil {
+		return decide.ReplanRestored(u.N, u.Changes), &event{"replan_undone", u.Fields()}, u.Took
+	} else if ok {
+		err = u.Err
 	}
 	if err == nil {
 		if s.WritePlan(adopted) != nil {

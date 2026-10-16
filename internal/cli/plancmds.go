@@ -17,6 +17,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
 	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 )
@@ -267,6 +268,7 @@ func cmdAttach(args []string, io IO) int {
 	if kept != "" {
 		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
 	}
+	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
 	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
@@ -431,6 +433,7 @@ func cmdStatus(args []string, io IO) int {
 		k, chain := pl.LongestChain()
 		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
+	printReplans(io, s, st)
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)
 		if st.Blocked.Tried != "" {
@@ -1587,6 +1590,7 @@ func cmdDrop(args []string, io IO) int {
 	if kept != "" {
 		s.Event("plan_archived", map[string]any{"generation": gen, "dir": kept})
 	}
+	s.KeepReplans(kept) // the dropped plan's replans go with its record
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.
 	stopRunners(stopped, io.Now())
 	os.RemoveAll(jobsDir(s))

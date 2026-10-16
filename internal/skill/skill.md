@@ -8,6 +8,7 @@ Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
 - `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
 - `/baton start`: hand this session to baton, keeping the conversation. `/baton plan` and `/baton run` do it when they need to.
+- `/baton replan [what to consider]`: restructure the phases of the running plan that have not started, so more of them can run at once, weighing what the user gives. baton checks the result before it follows it, keeps the phases that started as they are, and records the change with its undo.
 - `/baton status`: where the run stands.
 - `/baton board`: the plan step by step: how each phase stands (the lead's, a phase agent's, verifying, landing, waiting), and what the lead is doing. While a plan runs, baton keeps the same in one line above the prompt, and `/baton-board` opens the board while Claude works.
 - `/baton pause`: take the wheel; `/baton run` gives it back.
@@ -89,6 +90,13 @@ Where baton's mod runs, a draft is never in baton's way: baton compacts and give
    If baton reports a problem with an anchor, fix the spec and try again.
 5. If `baton attach` says the session is **not hosted** by baton, nothing would compact automatically, so hand the session to baton instead of starting: run `baton start "The plan is attached. Do what baton says about its first phase."` and end your turn (see **start**).
 6. Otherwise, do what `baton attach` says. In a conversation that had turns before this one, that is to end your turn: baton compacts the conversation, then starts the first phase with a fresh brief. Otherwise, begin the first phase.
+
+## replan [what to consider]
+
+1. Run `baton replan`, adding what the user gave to consider, if anything, as one argument in single quotes (write a single quote inside it as `'\''`): `baton replan 'the CI phase can wait until the end'`.
+2. Do what it prints, now, in this same turn: it lists the phases not started, the ones that started (never change those), the plan's shape and baton's shape rules, and what this replan may change. Edit only the draft it names, never the plan file, then run `baton replanned --notes "<what changed and why>"`, or `baton replanned --none "<why nothing should change>"` when the plan is right as it is.
+3. If `baton replanned` says what failed, fix the draft and run it again. Once it says the plan is replanned, tell the user in one or two lines what changed, then do what it says next.
+4. If `baton replan` says no replan was opened (no plan runs here, or every phase has started), tell the user what it says in one line.
 
 ## pause
 

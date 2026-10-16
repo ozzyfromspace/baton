@@ -149,6 +149,10 @@ type State struct {
 	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
 	// is reported once.
 	PlanDrift string `json:"plan_drift,omitempty"`
+	// Replan is the replan of the phases not started that is open (replan.go), and Replans the replans
+	// baton followed since the human approved the plan, oldest first.
+	Replan  *Replan     `json:"replanning,omitempty"`
+	Replans []Replanned `json:"replans,omitempty"`
 	// RunBranch is the branch checked out when the plan was attached: workers branch off it, and their
 	// work lands on it. Workers, Relay, Landed, Usage and Hold are the run's worker sessions and what they
 	// need of the lead (fleet.go). Conflicts counts the workers' landings in a row that conflicted with the
