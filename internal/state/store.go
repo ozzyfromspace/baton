@@ -15,6 +15,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,30 +155,41 @@ func (s *Store) Load() (State, error) {
 func (s *Store) Peek() (State, error) { return s.read() }
 
 func (s *Store) read() (State, error) {
+	st, _, err := s.readRaw()
+	return st, err
+}
+
+// readRaw reads state.json, returning also the bytes it read: nil for a missing file.
+func (s *Store) readRaw() (State, []byte, error) {
 	b, err := os.ReadFile(s.path("state.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return New(), nil
+		return New(), nil, nil
 	}
 	if err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	var st State
 	if err := json.Unmarshal(b, &st); err != nil {
-		return State{}, fmt.Errorf("state.json: %w", err)
+		return State{}, nil, fmt.Errorf("state.json: %w", err)
 	}
 	if st.Phases == nil {
 		st.Phases = map[string]*PhaseState{}
 	}
-	return st, nil
+	return st, b, nil
 }
 
 // Update applies fn to the current state under the lock and saves the result atomically. If fn
-// returns an error nothing is written.
+// returns an error nothing is written, and neither is a state fn left as it was: an update that
+// changes nothing leaves state.json alone, its modification time included (the time a listing shows
+// as when the run last changed, and by which Abandoned judges a run quiet).
 func (s *Store) Update(fn func(*State) error) (State, error) {
 	var st State
 	err := s.withLock(func() error {
-		var err error
-		if st, err = s.read(); err != nil {
+		var (
+			old []byte
+			err error
+		)
+		if st, old, err = s.readRaw(); err != nil {
 			return err
 		}
 		if err := fn(&st); err != nil {
@@ -187,7 +199,10 @@ func (s *Store) Update(fn func(*State) error) (State, error) {
 		if err != nil {
 			return err
 		}
-		return writeAtomic(s.path("state.json"), append(b, '\n'))
+		if b = append(b, '\n'); old != nil && bytes.Equal(b, old) {
+			return nil
+		}
+		return writeAtomic(s.path("state.json"), b)
 	})
 	return st, err
 }
