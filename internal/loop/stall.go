@@ -1,13 +1,14 @@
 package loop
 
 import (
-	"os"
+	"maps"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/board"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -24,8 +25,10 @@ import (
 //     start or end, the human taking part, a compaction over, a phase done, a job ended; in the lead's, a
 //     landing, and a worker changing how it stands.
 //   - Busy, so no alarm: a tool call in flight; the model's own background work, younger than
-//     Timing.BackgroundIdle; a job running whose runner beats and whose log still grows (one whose log has
-//     not grown for StallAfter is a hung gate, and named so).
+//     Timing.BackgroundIdle; a job running whose runner beats: an await (it waits on something outside
+//     that ends by itself, bounded by verify_timeout), a gate waiting for a lane, and a gate whose log grew
+//     within StallAfter or whose process tree used CPU since the alarm's last look. A gate quiet in both
+//     (or in its log, where its processes cannot be read) is a hung gate, and named so.
 //   - Never: a run not running, or with nothing left to do; the account's usage limit; a dialog open (the
 //     human is told of it already). The quiet is counted from the machine's last wake (Loop.wokeAt), and
 //     from the moment a usage limit lifts.
@@ -33,10 +36,14 @@ import (
 // stallEvery is how often the coordinator looks at whether the run has stopped moving.
 const stallEvery = time.Minute
 
-// logSeen is the size of a running job's log as the stall alarm last read it, and when it last grew.
+// logSeen is what the stall alarm saw of a running gate at its last look: its log (logMark, as the hung
+// check reads it) and since when it has not moved, and the process group it runs with the CPU its tree
+// had used (nil: not read, or no reading).
 type logSeen struct {
-	size int64
+	log  logMark
 	grew time.Time
+	pgid int
+	cpu  procs.Usage
 }
 
 // stalls pushes the human one notice when the run st, in s, has stopped moving (see above), and re-arms
@@ -56,7 +63,7 @@ func (c *Coordinator) stalls(v host.View, s *state.Store, st state.State) {
 	for _, r := range subs {
 		loops = append(loops, r.State)
 	}
-	quiet := c.readLogs(v.Now, loops)
+	quiet := c.readJobs(v.Now, loops)
 	since := latest(movedAt(st), c.Lead.wokeAt, c.Lead.limited(st))
 	for _, r := range subs {
 		since = latest(since, movedAt(r.State))
@@ -142,39 +149,58 @@ func movedAt(st state.State) time.Time {
 	return t
 }
 
-// readLogs reads the log of each job running in loops (the lead's run and its live sub-runs), and returns
-// those whose log has not grown for Timing.StallAfter, by job, with how long. A log is taken to grow when
-// the alarm first sees it: a host that has just started knows nothing of before.
-func (c *Coordinator) readLogs(now time.Time, loops []state.State) map[string]time.Duration {
+// readJobs looks at each gate running in loops (the lead's run and its live sub-runs), and returns those
+// that look hung, by job, with how long their log has not moved: a log quiet for Timing.StallAfter, and a
+// process tree that used no CPU since the last look (or that cannot be read: the log alone decides). A
+// log is taken to move when the alarm first sees it: a host that has just started knows nothing of
+// before. The tree is read only while the log stands still, so at most once a look (a minute) per job.
+// An await is never hung here, whatever its log does, nor is a gate waiting for a lane: each waits on
+// something that ends by itself, and counts as busy while its runner beats.
+func (c *Coordinator) readJobs(now time.Time, loops []state.State) map[string]time.Duration {
 	seen := map[string]logSeen{}
 	quiet := map[string]time.Duration{}
 	for _, st := range loops {
 		for _, j := range st.Jobs {
-			if j.Status != state.JobRunning {
+			if j.Status != state.JobRunning || j.Kind == state.JobAwait || !j.LaneWait.IsZero() {
 				continue
 			}
-			size := int64(-1)
-			if fi, err := os.Stat(j.Log); j.Log != "" && err == nil {
-				size = fi.Size()
-			}
 			was, ok := c.logs[j.ID]
-			if !ok || was.size != size {
-				was = logSeen{size: size, grew: now}
+			at := logSeen{log: markOf(j.Log), grew: now, pgid: j.PGID}
+			if ok && was.log == at.log {
+				at.grew = was.grew
+				at.cpu = c.cpuOf(j.PGID)
 			}
-			seen[j.ID] = was
-			if d := now.Sub(was.grew); d >= c.Lead.Timing.StallAfter {
-				quiet[j.ID] = d
+			seen[j.ID] = at
+			d := now.Sub(at.grew)
+			if d < c.Lead.Timing.StallAfter {
+				continue
 			}
+			if at.cpu != nil && (was.cpu == nil || was.pgid != at.pgid || !maps.Equal(was.cpu, at.cpu)) {
+				continue // its processes worked since the last look (or are read for the first time)
+			}
+			quiet[j.ID] = d
 		}
 	}
 	c.logs = seen // a job that ended is forgotten
 	return quiet
 }
 
+// cpuOf reads the CPU time the process tree of group pgid has used so far, or nil without a reading (no
+// group yet, no runners, a system that cannot read it, or no process running).
+func (c *Coordinator) cpuOf(pgid int) procs.Usage {
+	if pgid == 0 || c.Lead.Runners == nil {
+		return nil
+	}
+	if u, err := c.Lead.Runners.Usage(pgid); err == nil && len(u) > 0 {
+		return u
+	}
+	return nil
+}
+
 // stillWhy says why the run st cannot be stalled now ("" when it can): it is not running, has nothing
 // left to do, waits on the account's usage limit or on a dialog (a phase agent's too, named by its phase:
-// the human is told of it already), or something in one of its loops is busy (quiet: the running jobs
-// whose logs stopped growing).
+// the human is told of it already), or something in one of its loops is busy (quiet: the running gates
+// that look hung, readJobs).
 func (c *Coordinator) stillWhy(now time.Time, st state.State, pl plan.Plan, loops []state.State, quiet map[string]time.Duration) string {
 	switch {
 	case st.Mode != state.ModeRunning:
