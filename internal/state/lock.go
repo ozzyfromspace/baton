@@ -66,8 +66,8 @@ func withLockFile(path string, w LockWatch, fn func() error) error {
 	if ok, err := l.TryLockContext(ctx, lockRetry); err != nil || !ok {
 		return lockTimedOut(path, w, caller, err)
 	}
-	start := w.now()
-	writeHolder(path, lockHolder{PID: os.Getpid(), Caller: caller, Since: start})
+	// The lock is let go however this ends, a panic in the clock or the log included: deferred before
+	// anything else runs under it.
 	var held time.Duration
 	defer func() {
 		if held >= lockSlow { // logged once the lock is let go
@@ -75,9 +75,11 @@ func withLockFile(path string, w LockWatch, fn func() error) error {
 		}
 	}()
 	defer l.Unlock()
+	start := w.now()
+	writeHolder(path, lockHolder{PID: os.Getpid(), Caller: caller, Since: start})
 	defer func() {
-		held = w.now().Sub(start)
 		clearHolder(path)
+		held = w.now().Sub(start)
 	}()
 	return fn()
 }

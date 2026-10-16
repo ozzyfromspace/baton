@@ -88,6 +88,57 @@ func TestLockSlowHoldLogged(t *testing.T) {
 	}
 }
 
+// A panic under the lock, in the work or in the clock or the log the lock keeps, lets the lock go and leaves
+// no holder recorded: a hook that fails open, or a host that recovers, takes the lock again at once.
+func TestLockLetGoOnPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		panicAt int  // the clock's call that panics (1: as the lock is taken, 2: as it is let go), 0 for none
+		work    bool // the work panics
+		log     bool // the log panics (on a slow hold)
+	}{
+		{"the clock as the lock is taken", 1, false, false},
+		{"the work", 0, true, false},
+		{"the clock as the lock is let go", 2, false, false},
+		{"the log of a slow hold", 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "lock")
+			calls := 0
+			w := LockWatch{
+				Now: func() time.Time {
+					if calls++; calls == tc.panicAt {
+						panic("boom")
+					}
+					return t0.Add(time.Duration(calls) * time.Second)
+				},
+				Event: func(string, map[string]any) {
+					if tc.log {
+						panic("boom")
+					}
+				},
+			}
+			func() {
+				defer func() { recover() }()
+				withLockFile(path, w, func() error {
+					if tc.work {
+						panic("boom")
+					}
+					return nil
+				})
+			}()
+			other := flock.New(path)
+			if ok, err := other.TryLock(); !ok || err != nil {
+				t.Fatalf("the lock was kept: %v %v", ok, err)
+			}
+			other.Unlock()
+			if h, known := readHolder(path); known {
+				t.Errorf("still recorded: %+v", h)
+			}
+		})
+	}
+}
+
 func TestLockTimeoutNamesHolder(t *testing.T) {
 	defer func(d time.Duration) { lockTimeout = d }(lockTimeout)
 	lockTimeout = 60 * time.Millisecond
