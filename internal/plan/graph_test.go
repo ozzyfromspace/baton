@@ -68,7 +68,8 @@ func TestParseHead(t *testing.T) {
 		{"unknown type", "## P3 — X\nType: release", after{}, "", `Type: "release" is not a kind of phase baton knows`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			a, typ, err := parseHead(c.section)
+			h, err := parseHead(c.section)
+			a, typ := h.after, h.typ
 			if c.err != "" {
 				if err == nil || !strings.Contains(err.Error(), c.err) {
 					t.Fatalf("err = %v, want %q", err, c.err)

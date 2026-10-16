@@ -32,6 +32,8 @@ type Phase struct {
 	After []string `json:"after"`
 	// Type is the kind of phase, from its section's Type: line: TypeQA, or "" for one that builds.
 	Type string `json:"type,omitempty"`
+	// Replan is its section's Replan: line: ReplanAfter, or "" for none.
+	Replan string `json:"replan,omitempty"`
 }
 
 // TypeQA marks a QA phase: where the plan runs its full test suites, lints and end-to-end checks, and fixes
@@ -41,6 +43,14 @@ const TypeQA = "qa"
 
 // QA reports a QA phase.
 func (ph Phase) QA() bool { return ph.Type == TypeQA }
+
+// ReplanAfter marks a phase whose findings should reshape the phases after it, such as a spike or an
+// exploration (`Replan: after` under its heading): once it is done, baton has the lead replan the phases
+// not started with what it found (package replan).
+const ReplanAfter = "after"
+
+// Marked reports a phase marked `Replan: after`.
+func (ph Phase) Marked() bool { return ph.Replan == ReplanAfter }
 
 // NextQA is the first QA phase after phase id in the plan, or nil: where the heavy checks of what id
 // builds run.

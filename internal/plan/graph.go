@@ -28,40 +28,71 @@ type after struct {
 }
 
 // parseAfter reads the After: line of a phase's section: one of the first non-empty lines after the
-// phase's own heading, beside its Type: line. It accepts `After:` and `**After:**`, ids separated by
-// commas, spaces or "and", `none` and `all`.
+// phase's own heading, beside its Type: and Replan: lines. It accepts `After:` and `**After:**`, ids
+// separated by commas, spaces or "and", `none` and `all`.
 func parseAfter(section string) (after, error) {
-	a, _, err := parseHead(section)
-	return a, err
+	h, err := parseHead(section)
+	return h.after, err
 }
 
-// parseHead reads the lines that open a phase's section, right under its heading, in either order: its
-// After: line and its Type: line (`Type: qa` for a QA phase).
-func parseHead(section string) (a after, typ string, err error) {
+// headLines is how many non-empty lines right under a phase's heading may say what kind of phase it is:
+// its After:, Type: and Replan: lines.
+const headLines = 3
+
+// head is what the lines right under a phase's heading say of it.
+type head struct {
+	after  after
+	typ    string // TypeQA, or ""
+	replan string // ReplanAfter, or ""
+}
+
+// parseHead reads the lines that open a phase's section, right under its heading, in any order: its
+// After: line, its Type: line (`Type: qa` for a QA phase) and its Replan: line (`Replan: after` for a
+// phase whose findings should reshape the phases after it).
+func parseHead(section string) (h head, err error) {
 	lines := strings.Split(section, "\n")
 	seen := 0
 	for _, l := range lines[1:] { // the first line is the phase's own heading
 		if l = strings.TrimSpace(l); l == "" {
 			continue
 		}
-		if seen++; seen > 2 {
+		if seen++; seen > headLines {
 			break
 		}
 		if t, ok, terr := parseTypeLine(l); ok {
 			if terr != nil {
-				return a, "", terr
+				return h, terr
 			}
-			typ = t
+			h.typ = t
 			continue
 		}
-		if a.found {
+		if r, ok, rerr := parseReplanLine(l); ok {
+			if rerr != nil {
+				return h, rerr
+			}
+			h.replan = r
+			continue
+		}
+		if h.after.found {
 			break
 		}
-		if a, err = parseAfterLine(l); err != nil || !a.found {
+		if h.after, err = parseAfterLine(l); err != nil || !h.after.found {
 			break
 		}
 	}
-	return a, typ, err
+	return h, err
+}
+
+// parseReplanLine reads a `Replan:` line (`**Replan:**` too): ok says it is one.
+func parseReplanLine(line string) (replan string, ok bool, err error) {
+	label, rest, found := strings.Cut(line, ":")
+	if !found || !strings.EqualFold(strings.Trim(label, "*_` \t"), "replan") {
+		return "", false, nil
+	}
+	if v := strings.ToLower(strings.TrimSuffix(strings.Trim(rest, "*` \t"), ".")); v == ReplanAfter {
+		return ReplanAfter, true, nil
+	}
+	return "", true, fmt.Errorf("Replan: %q is not something baton knows: write `Replan: after` for a phase whose findings should reshape the phases not started once it is done, or leave the line out", strings.TrimSpace(rest))
 }
 
 // parseTypeLine reads a `Type:` line (`**Type:**` too): ok says it is one.
@@ -121,19 +152,20 @@ func (p *Plan) derive(text string, redo func(i int) bool) []error {
 			continue
 		}
 		ph := &p.Phases[i]
-		ph.After, ph.Type = nil, ""
+		ph.After, ph.Type, ph.Replan = nil, "", ""
 		where := fmt.Sprintf("phase %d (%q)", i+1, ph.ID)
 		sec, err := p.section(text, i)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			continue
 		}
-		a, typ, err := parseHead(sec)
+		h, err := parseHead(sec)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			continue
 		}
-		ph.Type = typ
+		ph.Type, ph.Replan = h.typ, h.replan
+		a := h.after
 		var at []int
 		switch {
 		case !a.found && i > 0:
@@ -322,6 +354,12 @@ const (
 	ShapeMinPhases  = 6
 	ShapeChainShare = 0.6
 )
+
+// RulesVersion numbers the planning rules of this baton: the shape rules its /baton plan teaches and its
+// replans check a plan against. A release that changes the planning guidance bumps it, and a run whose
+// plan was made under older rules (state.State.RulesVersion) is replanned once by the newer ones, at its
+// next phase boundary (package replan). 1: the shape rules of v0.8.5.
+const RulesVersion = 1
 
 // Shape sums up how much of a plan can be worked on at once.
 type Shape struct {

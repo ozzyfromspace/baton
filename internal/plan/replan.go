@@ -122,7 +122,7 @@ func Rebuild(p Plan, was, doc []byte) (Plan, error) {
 		inDocumentOrder(text, spec.Phases)
 	}
 	for i := range spec.Phases {
-		spec.Phases[i].After, spec.Phases[i].Type = nil, "" // the text says them
+		spec.Phases[i].After, spec.Phases[i].Type, spec.Phases[i].Replan = nil, "", "" // the text says them
 	}
 	if was != nil && sug.Title != "" && sug.Title != Suggest(was).Title {
 		spec.Title = sug.Title
@@ -276,7 +276,9 @@ func movedPhases(old, p Plan) map[string]bool {
 }
 
 // Body is a phase's section without its After: line, which a change of structure edits, and with each
-// run of blank lines read as one, so that adding or removing the line changes nothing else.
+// run of blank lines read as one, so that adding or removing the line changes nothing else. The After:
+// line is the one parseHead reads: among the lines that open the section, beside its Type: and Replan:
+// lines.
 func Body(section string) string {
 	lines := strings.Split(section, "\n")
 	seen := 0
@@ -285,12 +287,17 @@ func Body(section string) string {
 		if l == "" {
 			continue
 		}
-		if seen++; seen > 2 {
+		if seen++; seen > headLines {
 			break
 		}
 		if a, _ := parseAfterLine(l); a.found {
 			lines = slices.Delete(lines, k, k+1)
 			break
+		}
+		_, typ, _ := parseTypeLine(l)
+		_, replan, _ := parseReplanLine(l)
+		if !typ && !replan {
+			break // the section's text starts: an After: line below it is text
 		}
 	}
 	var out []string
