@@ -41,8 +41,9 @@ func approvedFile(in map[string]any) string {
 }
 
 // approved acts on a plan the human approved. fresh says the context is already clear (a "clear context"
-// approval): the first phase then starts at once, with no compaction.
-func approved(st *state.State, s *state.Store, c Context, file string, fresh bool, w decide.Words) valveAction {
+// approval): the first phase then starts at once, with no compaction. g is the ground read for it before
+// the run's lock (readGround).
+func approved(st *state.State, s *state.Store, c Context, file string, fresh bool, w decide.Words, g *ground) valveAction {
 	doc, err := os.ReadFile(file)
 	if err != nil {
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": file, "why": err.Error()},
@@ -70,13 +71,20 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 			say:  fmt.Sprintf("baton: you approved a plan while %q is %s → asking you what to do with it", cur.Title, st.Mode),
 			tell: NudgePrefix + " Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you."}
 	}
-	return attach(st, s, c, pl, fresh, w)
+	return attach(st, s, c, pl, fresh, w, g)
 }
 
-// attach makes pl the run's plan, from its first phase, keeping the record of the plan it replaces
-// (Store.Archive).
-func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool, w decide.Words) valveAction {
-	kept, err := s.Archive(*st)
+// attach makes pl the run's plan, from its first phase, keeping the record of the plan it replaces (the
+// action's record, which keep writes once the run's lock is let go). What it needs of git and the machine
+// is g, read before the lock (readGround).
+func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool, w decide.Words, g *ground) valveAction {
+	if g == nil || fresh && g.origin == nil {
+		// Never so: every caller reads the ground whenever it may attach. Better unattached than attached on
+		// a working tree it did not read.
+		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": "the working tree was not read"},
+			say: "baton: plan approved, but baton could not attach it (/baton run attaches it)"}
+	}
+	rec, err := s.Record(*st)
 	if err == nil {
 		err = s.WritePlan(pl)
 	}
@@ -84,19 +92,16 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": err.Error()},
 			say: "baton: plan approved, but baton could not attach it: " + err.Error()}
 	}
-	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	first := pl.Phases[0]
-	v := valveAction{event: "attached", fields: attachedFields(pl, s.Root)}
-	if kept != "" {
-		v.also = append(v.also, archived(*st, kept))
-	}
-	branch := gitx.Branch(s.Root) // workers branch off it, and their work lands on it
+	// Its text is what every replan of it is compared with, kept with the record once the lock is let go.
+	v := valveAction{event: "attached", fields: attachedFields(pl, g), record: rec, approved: &pl}
+	branch := g.branch // workers branch off it, and their work lands on it
 	workers := ""
-	if line := workersAttached(c, s.Checkout, pl); line != "" {
+	if line := g.room.attached(pl); line != "" {
 		workers = "\nbaton: " + line
 	}
 	if fresh {
-		*st = state.Reattach(*st, pl, c.Now, state.OriginOf(s.Root))
+		*st = state.Reattach(*st, pl, c.Now, *g.origin)
 		st.RunBranch = branch
 		v.say = fmt.Sprintf("baton: attached %q (%s; %s) → %s starts now", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
@@ -110,35 +115,97 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	return v
 }
 
-// archived is the event of the record of the plan st runs, kept in dir as another replaces it.
-func archived(st state.State, dir string) event {
-	return event{"plan_archived", map[string]any{"generation": st.Generation, "dir": dir}}
+// keep writes, in s's run, the record of the plan v's approval replaced (Store.Record, taken under the
+// run's lock), now that the lock is let go, and logs it first among v's events: plan_archived, or
+// plan_not_archived with why. Then it keeps the text of the plan approved (replan.KeepApproved), which
+// every replan of it is compared with, its earlier replans going with the record. It does nothing for an
+// action that approved no plan.
+func (v *valveAction) keep(s *state.Store) {
+	var dir string
+	if v.record != nil {
+		var err error
+		dir, err = v.record.Save()
+		e := event{"plan_archived", map[string]any{"generation": v.record.Generation, "dir": dir}}
+		if err != nil {
+			e = event{"plan_not_archived", map[string]any{"generation": v.record.Generation, "why": err.Error()}}
+		}
+		v.also = append([]event{e}, v.also...)
+	}
+	if v.approved != nil {
+		replan.KeepApproved(s, *v.approved, dir)
+	}
+	v.record, v.approved = nil, nil
 }
 
-// workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
-// and warns when they would stop at permission prompts (decide.WorkersAttached). "" with no workers.
-func workersAttached(c Context, checkout string, pl plan.Plan) string {
-	if len(pl.Phases) < 2 {
-		return "" // nothing could go ahead beside a plan's one phase
+// A ground is what attaching a plan reads of the working tree and the machine. It is read before the
+// run's lock is taken (readGround), since no git command, and no reading of the machine, runs under it.
+type ground struct {
+	git    bool          // git is usable in the run's working tree
+	branch string        // the branch checked out there: workers branch off it, and their work lands on it
+	origin *state.Origin // where the repository stands, for a first phase that starts at once (nil: not read)
+	room   workerRoom
+}
+
+// readGround reads the ground for attaching a plan in s's run; origin says to read where the repository
+// stands as well, for a "clear context" approval, whose first phase starts at once.
+func readGround(c Context, s *state.Store, origin bool) *ground {
+	g := &ground{git: gitx.Usable(s.Root), branch: gitx.Branch(s.Root), room: readWorkerRoom(c, s.Checkout)}
+	if origin {
+		o := state.OriginOf(s.Root)
+		g.origin = &o
 	}
+	return g
+}
+
+// mayStartOver reports whether an AskUserQuestion call's answers in c include starting an approved plan
+// over from P0, which attaches it (answeredPlanQuestion): its ground is then read before the lock.
+func mayStartOver(c Context) bool {
+	resp, _ := c.Input["tool_response"].(map[string]any)
+	answers, _ := resp["answers"].(map[string]any)
+	for _, a := range answers {
+		if s, _ := a.(string); strings.TrimSpace(s) == "Start the new plan from P0" {
+			return true
+		}
+	}
+	return false
+}
+
+// A workerRoom is how many workers the settings and the machine allow beside the session (config's
+// WorkerCap) and the permission mode they would work in, read for a plan's attach (readGround).
+type workerRoom struct {
+	n        int
+	auto, ok bool
+	mode     string
+}
+
+// readWorkerRoom reads the room for workers of a run in checkout.
+func readWorkerRoom(c Context, checkout string) workerRoom {
 	read := c.Machine
 	if read == nil {
 		read = machine.Read
 	}
 	n, auto, err := config.Load(config.Root(c.Env), c.Env).WorkerCap(read)
 	if err != nil {
-		return ""
+		return workerRoom{}
 	}
-	mode := config.WorkerMode(c.Env, checkout)
-	return decide.WorkersAttached(n, auto, pl.Width(), mode)
+	return workerRoom{n: n, auto: auto, ok: true, mode: config.WorkerMode(c.Env, checkout)}
 }
 
-// attachedFields are the fields of the "attached" event for a plan the human approved.
-func attachedFields(pl plan.Plan, root string) map[string]any {
+// attached says, as plan pl is attached, how many workers will work beside the session, and warns when
+// they would stop at permission prompts (decide.WorkersAttached). "" with no workers.
+func (r workerRoom) attached(pl plan.Plan) string {
+	if len(pl.Phases) < 2 || !r.ok {
+		return "" // nothing could go ahead beside a plan's one phase
+	}
+	return decide.WorkersAttached(r.n, r.auto, pl.Width(), r.mode)
+}
+
+// attachedFields are the fields of the "attached" event for a plan the human approved, on ground g.
+func attachedFields(pl plan.Plan, g *ground) map[string]any {
 	k, _ := pl.LongestChain()
-	f := map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": k, "git": gitx.Usable(root), "by": "approval"}
-	if b := gitx.Branch(root); b != "" {
-		f["branch"] = b
+	f := map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": k, "git": g.git, "by": "approval"}
+	if g.branch != "" {
+		f["branch"] = g.branch
 	}
 	return f
 }
@@ -163,8 +230,9 @@ func plural(n int, one, many string) string {
 }
 
 // answeredPlanQuestion acts on the human's answer about a plan they approved while the run had one. auto says
-// baton answered it for them, since nobody had by its deadline (decide.PlanQuestionDefault).
-func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.Words, auto bool) valveAction {
+// baton answered it for them, since nobody had by its deadline (decide.PlanQuestionDefault). g is the
+// ground read before the run's lock for an answer that starts the plan over (mayStartOver), nil otherwise.
+func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.Words, auto bool, g *ground) valveAction {
 	r := st.PlanQuestion
 	if r == nil {
 		return valveAction{}
@@ -205,16 +273,18 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 			return v
 		}
 		if answer == "Start the new plan from P0" {
-			a := attach(st, s, c, pl, false, w)
+			a := attach(st, s, c, pl, false, w, g)
+			if a.event == "attached" {
+				a.also = append([]event{{"attached", a.fields}}, a.also...)
+			}
 			a.event, a.fields = v.event, v.fields
-			a.also = append([]event{{"attached", attachedFields(pl, s.Root)}}, a.also...)
 			if st.Mode == state.ModePaused {
 				state.Resume(st) // the human's answer starts it, paused or not
 				a.also = append(a.also, event{"resumed", map[string]any{"by": "plan_question"}})
 			}
 			return a
 		}
-		kept, err := s.Archive(*st)
+		rec, err := s.Record(*st)
 		if err == nil {
 			err = s.WritePlan(pl)
 		}
@@ -222,11 +292,9 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 			v.say = "baton: could not write the revised plan: " + err.Error()
 			return v
 		}
-		if kept != "" {
-			v.also = append(v.also, archived(*st, kept))
-		}
-		// The revision is the plan the human approved now: replans are compared with it from here on.
-		replan.KeepApproved(s, pl, kept)
+		// The revision is the plan the human approved now: replans are compared with it from here on. Its
+		// text and the record are kept once the run's lock is let go (keep).
+		v.record, v.approved = rec, &pl
 		st.Replan, st.Replans = nil, nil
 		st.RulesVersion = plan.RulesVersion // made by the planning rules of the baton running it
 		next := state.Revise(st, pl, c.Now)

@@ -135,13 +135,34 @@ type handlers struct{ d Deps }
 // otherwise (the same conversation resumed in another terminal while the first still runs it) the hook is
 // dormant. Only a session's main agent says what the session is (its id, its permission mode) and where its
 // transcript stands (state.Remark): a subagent's hook, a phase agent's among them, carries the lead's
-// session and transcript, and a compaction hook may be any loop's.
+// session and transcript, and a compaction hook may be any loop's. What it reads of the transcript, it reads
+// before the run's lock is taken, from the state a moment before (Store.Peek): nothing slow runs under the
+// lock.
 func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
+	return h.updateRead(c, nil, fn)
+}
+
+// updateRead is update, with read run first, before the run's lock is taken, given the run's store and its
+// state a moment before (Store.Peek): what fn needs of git, the machine or a transcript, read there.
+func (h *handlers) updateRead(c Context, read func(s *state.Store, peek state.State), fn func(st *state.State, s *state.Store) error) (*state.Store, state.State, error) {
 	s, err := h.d.Open(c)
 	if err != nil {
 		return nil, state.State{}, err
 	}
 	main := str(c.Input, "agent_id") == ""
+	var remark state.Remarked
+	var look *rewindLook
+	if peek, err := s.Peek(); err == nil {
+		if peek.IsOwner(s.Instance, c.Now) { // a dormant session's hook reads no transcript
+			if main && !compactionHook(c) {
+				remark = state.Remarks(peek, str(c.Input, "transcript_path"), c.Now)
+			}
+			look = lookRewind(c, peek)
+		}
+		if read != nil {
+			read(s, peek)
+		}
+	}
 	var owner bool
 	var rewind []event
 	st, err := s.Update(func(st *state.State) error {
@@ -156,11 +177,9 @@ func (h *handlers) update(c Context, fn func(st *state.State, s *state.Store) er
 			if pm := str(c.Input, "permission_mode"); pm != "" {
 				st.Run.PermissionMode = pm
 			}
-			if !compactionHook(c) {
-				state.Remark(st, str(c.Input, "transcript_path"), c.Now)
-			}
+			remark.Apply(st)
 		}
-		rewind = noticeRewind(c, st, s)
+		rewind = noticeRewind(c, st, s, look)
 		return fn(st, s)
 	})
 	if err == errNotOwner {
@@ -1250,7 +1269,16 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var owed *state.Briefing
 	var bgTell string // background work the call started, told as it starts (background.go)
 	var bg bgStart
-	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
+	var g *ground // what an approval attaching a plan reads of git and the machine, before the lock
+	attaching := func(s *state.Store, peek state.State) {
+		if c.Event != "PostToolUse" || c.Agent != "" || s.Worker() != "" {
+			return
+		}
+		if cleared := peek.Run.ClearedPlan != nil; cleared || tool == "ExitPlanMode" || tool == "AskUserQuestion" && mayStartOver(c) {
+			g = readGround(c, s, cleared)
+		}
+	}
+	s, st, err := h.updateRead(c, attaching, func(st *state.State, s *state.Store) error {
 		st.Run.ToolEnded(str(c.Input, "tool_use_id"), c.Agent, tool)
 		closed, _ := st.Run.Dialogs.CloseExact(c.Agent, tool, dialogKey(c.Input))
 		if c.Event == "PostToolUse" {
@@ -1273,10 +1301,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			case tool == "ExitPlanMode" && s.Worker() != "":
 				v = workerPlan(s.Worker(), approvedFile(c.Input))
 			case tool == "ExitPlanMode":
-				v = approved(st, s, c, approvedFile(c.Input), false, w)
+				v = approved(st, s, c, approvedFile(c.Input), false, w, g)
 			case tool == "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
-				if v = answeredPlanQuestion(st, s, c, w, auto); v.event == "" {
+				if v = answeredPlanQuestion(st, s, c, w, auto, g); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
 							v = answered(st, c, auto, w)
@@ -1284,8 +1312,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 					}
 				}
 			}
-			if file, ok := clearedApproval(st, c); ok && v.event == "" && s.Worker() == "" {
-				v = approved(st, s, c, file, true, w)
+			if g != nil && g.origin != nil { // an approval on record a moment ago: one made since waits for the next call
+				if file, ok := clearedApproval(st, c); ok && v.event == "" && s.Worker() == "" {
+					v = approved(st, s, c, file, true, w, g)
+				}
 			}
 			// No other question while a proposal, a review or an approved plan waits on the human: one at a
 			// time. A job's result waits too: the model must put the question first. (A phase agent's
@@ -1309,6 +1339,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	if err != nil {
 		return Result{}, ok(err)
 	}
+	v.keep(s)
 	h.onScreen(c, s, func(st *state.State) { st.Run.Dialogs.CloseExact(s.Agent, tool, dialogKey(c.Input)) })
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
@@ -1464,6 +1495,8 @@ type valveAction struct {
 	fields    map[string]any
 	also      []event
 	say, tell string
+	record    *state.Record // the record of a plan it replaced, written once the run's lock is let go (keep)
+	approved  *plan.Plan    // a plan the human approved, its text kept for replans then (keep)
 }
 
 // contextValves runs the two mid-phase valves after a tool call of the loop's own: the lead's, or a phase

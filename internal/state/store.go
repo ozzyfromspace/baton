@@ -8,14 +8,13 @@
 //	jobs/<id>.log the output of each job (package lane)
 //	gen-<N>/      the record of an earlier plan of the run, kept as it was replaced (Archive)
 //	replan/       the plan's text as approved, each replan's, and an open replan's draft (replan.go)
-//	lock          held (flock) for the duration of every update
+//	lock          held (flock) for the duration of every update, and naming its holder meanwhile (lock.go)
 //
 // Hooks, the host and the model-facing CLI are separate processes that touch the same files, so every
 // read-modify-write goes through Update, which holds an exclusive lock and replaces state.json atomically.
 package state
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/flock"
 	"github.com/ozzyfromspace/baton/internal/plan"
 )
 
@@ -134,22 +132,10 @@ func (s *Store) HandoffPath() string {
 // JobLog is where job id's output goes.
 func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", id+".log") }
 
-// lockTimeout bounds how long any process waits for another's update; updates take milliseconds.
-const lockTimeout = 5 * time.Second
-
-func (s *Store) withLock(fn func() error) error { return withLockFile(s.path("lock"), fn) }
-
-// withLockFile runs fn holding an exclusive lock on path.
-func withLockFile(path string, fn func() error) error {
-	l := flock.New(path)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
-	defer cancel()
-	ok, err := l.TryLockContext(ctx, 20*time.Millisecond)
-	if err != nil || !ok {
-		return fmt.Errorf("baton state is locked by another process (%v)", err)
-	}
-	defer l.Unlock()
-	return fn()
+// withLock runs fn holding the run's lock (see withLockFile), logging what the lock tells it in the run's
+// events.
+func (s *Store) withLock(fn func() error) error {
+	return withLockFile(s.path("lock"), LockWatch{Now: s.Now, Event: func(kind string, fields map[string]any) { s.Event(kind, fields) }}, fn)
 }
 
 // Load reads state.json; a missing file is an empty, idle state.

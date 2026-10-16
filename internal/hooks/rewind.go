@@ -55,15 +55,40 @@ func forkAt(m state.Mark) (f transcript.Fork, err error) {
 	return readFork(m.Path, transcript.Mark{Offset: m.Offset, Leaf: m.Leaf})
 }
 
+// A rewindLook is what the transcript shows of the prompt after the mark on record (forkAt), read before the
+// run's lock is taken (lookRewind) for noticeRewind to act on under it.
+type rewindLook struct {
+	mark state.Mark // the mark it read at
+	fork transcript.Fork
+	err  error
+}
+
+// lookRewind reads the transcript for noticeRewind, at a hook of the main agent's turn that looks at its
+// prompt (checksRewind), at the mark peek (the run's state a moment before the lock) holds, in the
+// conversation it was taken in: nil when there is nothing to read.
+func lookRewind(c Context, peek state.State) *rewindLook {
+	m := peek.Run.Mark
+	if m == nil || !checksRewind[c.Event] || str(c.Input, "agent_id") != "" || str(c.Input, "transcript_path") != m.Path {
+		return nil
+	}
+	f, err := forkAt(*m)
+	return &rewindLook{mark: *m, fork: f, err: err}
+}
+
 // noticeRewind looks, at a hook of the main agent's turn (checksRewind), at the prompt the mark on record
 // was taken for, under the run's lock and before the hook does anything else, so that what it leaves for
-// the model reaches it at this hook if it can. Once the prompt is in the transcript, or the turn has ended,
-// the mark is cleared; a prompt that went on from a rewind is handled then, once (rewound). It returns
-// the events to log. Whatever goes wrong in it, even a panic, clears the mark and logs nothing.
-func noticeRewind(c Context, st *state.State, s *state.Store) (events []event) {
+// the model reaches it at this hook if it can. What the transcript shows of it was read before the lock
+// (look, lookRewind); a mark set since it was read is left for a later hook of the turn. Once the prompt
+// is in the transcript, or the turn has ended, the mark is cleared; a prompt that went on from a rewind is
+// handled then, once (rewound). It returns the events to log. Whatever goes wrong in it, even a panic,
+// clears the mark and logs nothing.
+func noticeRewind(c Context, st *state.State, s *state.Store, look *rewindLook) (events []event) {
 	m := st.Run.Mark
 	if m == nil || !checksRewind[c.Event] || str(c.Input, "agent_id") != "" {
 		return nil
+	}
+	if str(c.Input, "transcript_path") == m.Path && (look == nil || look.mark != *m) {
+		return nil // marked since it was read: a later hook of the turn looks at it
 	}
 	st.Run.Mark = nil
 	defer func() {
@@ -74,7 +99,7 @@ func noticeRewind(c Context, st *state.State, s *state.Store) (events []event) {
 	if str(c.Input, "transcript_path") != m.Path {
 		return nil // not the conversation it was taken in
 	}
-	f, err := forkAt(*m)
+	f, err := look.fork, look.err
 	if err == nil && !f.Prompt && c.Event != "Stop" && c.Event != "StopFailure" {
 		st.Run.Mark = m // not written yet: a later hook of the turn looks again
 		return nil

@@ -21,6 +21,7 @@ import (
 // up so starts after a boundary its stop queues, as after any done. Otherwise done is refused, saying how
 // to finish the phase. git is only read here: nothing is merged or moved.
 func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes string, followed bool) int {
+	isHosted := hosted(io) // read before the run's lock: it reads processes
 	e := cur.WorkerOn(id)
 	if e == nil {
 		return refused(io, s, "done", fmt.Errorf("phase %s is a worker's: baton marks it done once its work lands", id))
@@ -56,7 +57,7 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 	var note state.Decision
 	var count int
 	st, err := s.Update(func(st *state.State) error {
-		if err := guard(io, st, "not done", true); err != nil {
+		if err := guard(isHosted, st, "not done", true); err != nil {
 			return err
 		}
 		if st.ReviewDue != "" {

@@ -367,6 +367,10 @@ func (x *cleanRig) fingerprint() string {
 			if d.IsDir() && d.Name() == ".git" {
 				return fs.SkipDir
 			}
+			if !d.IsDir() && d.Name() == "lock" { // taking a lock records its holder in the file (package state)
+				fmt.Fprintf(&b, "%s\n", path)
+				return nil
+			}
 			fi, _ := d.Info()
 			if d.IsDir() && runtime.GOOS == "windows" { // NTFS updates a directory's time in its listing lazily
 				fmt.Fprintf(&b, "%s/\n", path)

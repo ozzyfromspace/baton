@@ -397,7 +397,7 @@ func TestTheRewindCheckFailsOpen(t *testing.T) {
 	st.Mode = state.ModeRunning
 	st.Run.Mark = &state.Mark{Path: "t.jsonl", Leaf: "s4"}
 	c := Context{Event: "PostToolUse", Input: map[string]any{"transcript_path": "t.jsonl"}, Env: func(string) string { return "" }}
-	if ev := noticeRewind(c, &st, nil); ev != nil || st.Run.Mark != nil || len(st.Inbox) != 0 {
+	if ev := noticeRewind(c, &st, nil, lookRewind(c, st)); ev != nil || st.Run.Mark != nil || len(st.Inbox) != 0 {
 		t.Errorf("events %v, mark %+v, inbox %+v", ev, st.Run.Mark, st.Inbox)
 	}
 }

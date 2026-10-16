@@ -53,7 +53,8 @@ func queueJob(args []string, io IO, kind string) int {
 		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s", kind, usage, kind, usage, errSuffix(err))
 	}
 	here, replace := p.bools["here"], p.bools["replace"]
-	if !hosted(io) {
+	isHosted := hosted(io) // read before the run's lock: it reads processes
+	if !isHosted {
 		return fail(io, "not queued — the baton host runs jobs, and this session is not hosted by baton. Run the command yourself.")
 	}
 	s, pl, ok := storeAndPlan(io)
@@ -65,7 +66,7 @@ func queueJob(args []string, io IO, kind string) int {
 	if err != nil {
 		return fail(io, "%v", err)
 	}
-	if err := jobRefusal(io, &st, notes); err != nil {
+	if err := jobRefusal(isHosted, &st, notes); err != nil {
 		return refused(io, s, kind, err)
 	}
 	phase := st.Current
@@ -98,7 +99,7 @@ func queueJob(args []string, io IO, kind string) int {
 	var queued state.Job
 	var replaced, clash, beside *state.Job
 	st, err = s.Update(func(st *state.State) error {
-		if err := jobRefusal(io, st, notes); err != nil {
+		if err := jobRefusal(isHosted, st, notes); err != nil {
 			return err
 		}
 		if st.Current != phase {
@@ -226,8 +227,8 @@ func qaAhead(io IO, pl plan.Plan, phase string) string {
 
 // jobRefusal turns down a job when there is no phase in hand to run it for, or no notes to resume the
 // phase from.
-func jobRefusal(io IO, st *state.State, notes string) error {
-	if err := guard(io, st, "not queued", true); err != nil {
+func jobRefusal(isHosted bool, st *state.State, notes string) error {
+	if err := guard(isHosted, st, "not queued", true); err != nil {
 		return err
 	}
 	switch {
