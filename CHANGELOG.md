@@ -114,6 +114,10 @@ did not change (`plan.RulesVersion` stays 1), so no run is replanned for this up
 - **"No room on the machine" no longer flaps.** The log line followed every load reading, and could change every
   second; it now changes only when the kind of room the machine lacks (busy, swapping, memory) changes, and has
   held for 30 seconds.
+- **A stop is no longer refused over another loop's background work.** Claude Code lists every background task
+  of the session at each stop, whoever started it, so the lead's stop was refused over its phase agents'
+  commands, and an agent's over the lead's or another agent's. Each loop now waits on, and is told of, its own
+  background work only.
 
 ## [0.8.5] - 2026-10-16
 
