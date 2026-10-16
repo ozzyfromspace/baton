@@ -61,9 +61,11 @@ func TestAnOutwardProposalIsLeftAtItsDeadline(t *testing.T) {
 			if first(ev, is("notified", "notice", "not_now")) < 0 {
 				t.Errorf("the Not now was not pushed:\n%s", eventLog(s))
 			}
-			// A Not now is no decision made without the human: the plan completes with none.
-			if i := first(ev, kind("plan_complete")); ev[i]["decisions"] != nil && ev[i]["decisions"] != 0.0 {
-				t.Errorf("the Not now counted as a decision: %v", ev[i])
+			// A Not now is no decision made without the human: the plan completes with none but the notes
+			// the model took itself (Haiku may note that it left the push).
+			notes := count(ev, kind("note"))
+			if i := first(ev, kind("plan_complete")); ev[i]["decisions"] != nil && ev[i]["decisions"] != float64(notes) {
+				t.Errorf("the Not now counted as a decision (beside %d notes of the model's):\n%s", notes, eventLog(s))
 			}
 			none(t, s, "review_due", "controller_panic")
 		})
