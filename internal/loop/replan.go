@@ -26,8 +26,9 @@ import (
 var errPassed = errors.New("passed on already")
 
 // replan passes the run's plan pl (the lead's, as st has it) on to its workers' sub-runs whose plan is an
-// older one. The plan file is read once, and only while it is the text pl was made from: one changed again
-// since is the lead's to follow first, which may refuse it.
+// older one, or its file where it was before baton moved it out of Claude Code's way (state.Aside): their
+// briefs read it there. The plan file is read once, and only while it is the text pl was made from: one
+// changed again since is the lead's to follow first, which may refuse it.
 func (c *Coordinator) replan(now time.Time, s *state.Store, st state.State, pl plan.Plan) {
 	if pl.SHA256 == "" || pl.File == "" {
 		return
@@ -41,7 +42,7 @@ func (c *Coordinator) replan(now time.Time, s *state.Store, st state.State, pl p
 		if err != nil {
 			continue
 		}
-		if have, err := sub.LoadPlan(); err != nil || have.SHA256 == pl.SHA256 {
+		if have, err := sub.LoadPlan(); err != nil || have.SHA256 == pl.SHA256 && have.File == pl.File {
 			continue
 		}
 		if doc == nil {
@@ -67,7 +68,7 @@ func (c *Coordinator) passOn(now time.Time, s, sub *state.Store, phase string, o
 	var rules, section string
 	var told bool
 	_, err := sub.Update(func(st *state.State) error {
-		if have, err := sub.LoadPlan(); err == nil && have.SHA256 == only.SHA256 {
+		if have, err := sub.LoadPlan(); err == nil && have.SHA256 == only.SHA256 && have.File == only.File {
 			return errPassed
 		}
 		if err := sub.WritePlan(only); err != nil {

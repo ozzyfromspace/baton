@@ -66,22 +66,43 @@ func short(commit string) string {
 	return commit
 }
 
-// JobResult is a finished job's result for the model: what ran and how it ended, the end of its log, and
-// what to do about it. others are the phases red now (state.Red); those of other phases are named, so the
-// model leaves failures in their area to them. qa is the QA phase ahead of the job's phase while the plan
-// aggregates its heavy checks there (plan.QAAhead, aggregate_qa), "" otherwise: a red result then may be
-// other phases' work in progress, which only the QA phase need make whole.
-func JobResult(j state.Job, log, tail string, others []state.Job, qa string) string {
+// A Log is what a result shows of a job's log (lane.ReadExcerpt): where it is, its end, and the lines
+// before that end that report a failure, with how many more there are past those.
+type Log struct {
+	Path     string
+	Tail     string
+	Failures []string
+	More     int
+}
+
+// JobResult is a finished job's result for the model: what ran and how it ended, the lines of its log that
+// report a failure before its end, the end of its log, and what to do about it. others are the phases red
+// now (state.Red); those of other phases are named, so the model leaves failures in their area to them,
+// and the job's own phase's red gate is named when a gate of another command passed, since that does not
+// clear it. qa is the QA phase ahead of the job's phase while the plan aggregates its heavy checks there
+// (plan.QAAhead, aggregate_qa), "" otherwise: a red result then may be other phases' work in progress,
+// which only the QA phase need make whole.
+func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
-	if tail = strings.TrimSpace(tail); tail != "" {
-		fmt.Fprintf(&b, "The end of its log (%s):\n\n%s\n\n", log, tail)
-	} else if log != "" {
-		fmt.Fprintf(&b, "Its log: %s\n", log)
+	if len(log.Failures) > 0 && j.Status != state.JobPassed {
+		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))
+		if log.More > 0 {
+			fmt.Fprintf(&b, "(and %d more such %s: search the log for them)\n", log.More, plural(log.More, "line", "lines"))
+		}
+		b.WriteString("\n")
+	}
+	if tail := strings.TrimSpace(log.Tail); tail != "" {
+		fmt.Fprintf(&b, "The end of its log (%s):\n\n%s\n\n", log.Path, tail)
+	} else if log.Path != "" {
+		fmt.Fprintf(&b, "Its log: %s\n", log.Path)
 	}
 	switch {
 	case j.Status == state.JobPassed && j.Kind == state.JobVerify:
 		fmt.Fprintf(&b, "It checked %s: what you committed after it is not in this result.", short(j.Commit))
+		if g := ownRedGate(others, j); g != nil {
+			b.WriteString(" " + NotCleared(*g))
+		}
 	case j.Status == state.JobPassed:
 		b.WriteString("Carry on.")
 	case j.Status == state.JobLaneError && j.Here:
@@ -101,8 +122,8 @@ func JobResult(j state.Job, log, tail string, others []state.Job, qa string) str
 		if j.Status == state.JobTimeout {
 			b.WriteString("It ran past verify_timeout, so baton stopped it: that counts as a failure. ")
 		}
-		fmt.Fprintf(&b, "Fix what failed, commit, and verify again (`baton verify`), or run a quick gate in place. "+
-			"`baton done %s` is refused while its latest verification is red.", j.Phase)
+		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and verify again with the same command, `%s`: %s "+
+			"`baton done %s` is refused until then.", j.Command, gateRule(j.Phase), j.Phase)
 	}
 	if j.Red() && qa != "" {
 		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))
@@ -234,17 +255,81 @@ func VerifiedComplete(ds []state.Decision) string {
 	return "[baton] That verification was the last thing the plan waited for: the plan is complete. " + PlanComplete(ds)
 }
 
-// RedRefusal turns down done for a phase that stands on a red job j (its latest gate, or its latest wait
-// on something outside), and gives the ways forward.
-func RedRefusal(j state.Job) string {
-	what, again := "verification", "verify again (`baton verify`)"
+// RedRefusal turns down done for a phase that stands on a red job j (its gate, or its latest wait on
+// something outside), and gives the ways forward. after are the checks of j's kind queued since, none of
+// which cleared it (state.After): for a gate, those of another command, or of its own that checked nothing.
+func RedRefusal(j state.Job, after []state.Job) string {
+	despite := fmt.Sprintf("If the failure is not %s's to fix, finish it anyway with `baton done %s --despite-red \"<why>\"`: "+
+		"that is a decision without the human, and they are told.", j.Phase, j.Phase)
 	if j.Kind == state.JobAwait {
-		what, again = "wait on something outside", "wait on it again (`baton await`, the same command)"
+		return fmt.Sprintf("not done — %s's latest wait on something outside, job %s (%s), %s. "+
+			"Fix what failed, commit, and wait on it again (`baton await`, the same command); `baton done %s` then waits for it. %s",
+			j.Phase, j.ID, Ran(j), Outcome(j), j.Phase, despite)
 	}
-	return fmt.Sprintf("not done — %s's latest %s, job %s (%s), %s. "+
-		"Fix what failed, commit, and %s; `baton done %s` then waits for it. "+
-		"If the failure is not %s's to fix, finish it anyway with `baton done %s --despite-red \"<why>\"`: "+
-		"that is a decision without the human, and they are told.", j.Phase, what, j.ID, Ran(j), Outcome(j), again, j.Phase, j.Phase, j.Phase)
+	var b strings.Builder
+	fmt.Fprintf(&b, "not done — %s's gate, job %s (%s), %s.", j.Phase, j.ID, Ran(j), Outcome(j))
+	if len(after) > 0 {
+		var since []string
+		for _, o := range after {
+			how := "runs now"
+			if o.Finished() {
+				how = Outcome(o)
+			}
+			since = append(since, fmt.Sprintf("job %s (%s) %s", o.ID, Ran(o), how))
+		}
+		fmt.Fprintf(&b, " Since then, %s; that does not clear it.", strings.Join(since, "; "))
+	}
+	rule := gateRule(j.Phase)
+	fmt.Fprintf(&b, " %s%s Fix what failed, commit, and verify again with `%s`; `baton done %s` then waits for it. %s",
+		strings.ToUpper(rule[:1]), rule[1:], j.Command, j.Phase, despite)
+	return b.String()
+}
+
+// gateRule is how a red gate of phase is cleared.
+func gateRule(phase string) string {
+	return fmt.Sprintf("a red gate stands until the same command passes, and a narrower check that passes does not clear it "+
+		"(to make another command %s's gate instead, verify it with --replace: a decision without the human, and they are told).", phase)
+}
+
+// ownRedGate is the red gate j's phase stands on, among red (state.Red), when it is not j: a gate of
+// another command than j's, which j's passing did not clear. nil when there is none.
+func ownRedGate(red []state.Job, j state.Job) *state.Job {
+	for i := range red {
+		if g := &red[i]; g.Phase == j.Phase && g.Kind != state.JobAwait && g.ID != j.ID {
+			return g
+		}
+	}
+	return nil
+}
+
+// NotCleared says that red gate g of its phase stands although a check of another command passed.
+func NotCleared(g state.Job) string {
+	return fmt.Sprintf("It does not clear %s's gate, job %s (`%s`), which is red: %s",
+		g.Phase, g.ID, g.Command, gateRule(g.Phase))
+}
+
+// RedGateStands is what the model is told as it queues gate j for a phase whose gate, red, runs another
+// command: j does not clear it, whatever its result.
+func RedGateStands(red, j state.Job) string {
+	return fmt.Sprintf("note — %s's gate, job %s (`%s`), is red, and %s runs another command, so it does not clear it, whatever its result: %s",
+		red.Phase, red.ID, red.Command, j.ID, gateRule(red.Phase))
+}
+
+// GateReplaced is the decision, and its undo, of making gate j its phase's gate in place of red, a red gate
+// of another command (--replace).
+func GateReplaced(red, j state.Job) (what, undo string) {
+	return fmt.Sprintf("made `%s` (job %s) %s's gate in place of job %s (`%s`), which is red", j.Command, j.ID, j.Phase, red.ID, red.Command),
+		fmt.Sprintf("verify %s again with `%s` and fix what it finds: that is %s's gate again", j.Phase, red.Command, j.Phase)
+}
+
+// GateReplacedSay tells the model that gate j is its phase's gate now, in place of red; d is the decision
+// recorded, "" for none (the run is paused: the human is at the wheel).
+func GateReplacedSay(d string, red, j state.Job) string {
+	now := fmt.Sprintf("`%s` is %s's gate now, in place of job %s (`%s`), which is red", j.Command, j.Phase, red.ID, red.Command)
+	if d == "" {
+		return now + "."
+	}
+	return fmt.Sprintf("noted (%s): %s; the human will be told.", d, now)
 }
 
 func plural(n int, one, many string) string {

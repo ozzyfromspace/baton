@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -396,5 +397,55 @@ func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 	x.tick(time.Second)
 	if st := x.state(); x.worker("P1").Status != state.WorkerLanded || st.Conflicts != 0 || st.Hold != nil || !slices.Contains(x.spawned(), "P2") {
 		t.Fatalf("after P1 landed: %d conflicts, hold %+v, workers on %v\n%s", st.Conflicts, st.Hold, x.spawned(), x.events())
+	}
+}
+
+// The host's log of the room on the machine follows the kind of room it lacks (busy, swapping, memory),
+// once that has held for RoomSettle: not every load figure, nor a change that turns back sooner. What a
+// step decides follows every reading all the same (noRoom).
+func TestTheRoomLogFollowsItsKind(t *testing.T) {
+	const gib = 1 << 30
+	load := func(l float64) machine.Reading { m := roomy; m.Load1 = l; return m }
+	critical, linuxLow, swapping := roomy, machine.Reading{CPUs: 8, MemTotal: 16 * gib, MemAvailablePct: 9, Load1: 2, Known: true}, roomy
+	critical.Pressure = machine.PressureCritical
+	swapping.Pressure, swapping.SwapUsed = machine.PressureWarn, 3*gib/2
+	const none, again = "", "loop: workers: the machine has room again"
+	full := func(why string) string { return "loop: workers: no room on the machine: " + why }
+	var logged []string
+	now, m := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), roomy
+	x := &Coordinator{Lead: &Loop{Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }},
+		Fleet: &Fleet{Machine: func() machine.Reading { return m }}}
+	for _, c := range []struct {
+		name  string
+		after time.Duration // since the step before
+		m     machine.Reading
+		log   string // what the step logs
+	}{
+		{"roomy", 0, roomy, none},
+		{"busy", 10 * time.Second, load(15), none},
+		{"another figure", 10 * time.Second, load(15.3), none},
+		{"and another", 10 * time.Second, load(14.9), none},
+		{"busy for 30 seconds", 10 * time.Second, load(16.2), full("the machine is busy (load 16.2 on 14 CPUs)")},
+		{"busier", 10 * time.Second, load(17), none},
+		{"a minute on", time.Minute, load(15.1), none},
+		{"room for a moment", 10 * time.Second, roomy, none},
+		{"busy again before it held", 20 * time.Second, load(15), none},
+		{"room again", 10 * time.Second, roomy, none},
+		{"room for 30 seconds", RoomSettle, roomy, again},
+		{"memory pressure", 10 * time.Second, critical, none},
+		{"memory for 30 seconds", RoomSettle, critical, full("memory pressure is critical")},
+		{"memory short another way", 10 * time.Second, linuxLow, none},
+		{"a minute on, still short", time.Minute, linuxLow, none},
+		{"swapping", 10 * time.Second, swapping, none},
+		{"swapping for 30 seconds", RoomSettle, swapping, full("the machine is swapping (1.5 GiB in the last minute)")},
+	} {
+		now, m, logged = now.Add(c.after), c.m, nil
+		x.look(now)
+		if got := strings.Join(logged, "\n"); got != c.log {
+			t.Errorf("%s: logged %q, want %q", c.name, got, c.log)
+		}
+		if (x.noRoom == "") != (c.m == roomy) {
+			t.Errorf("%s: no room because %q", c.name, x.noRoom)
+		}
 	}
 }

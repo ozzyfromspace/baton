@@ -119,6 +119,9 @@ type State struct {
 	// JobSeq numbers jobs. It outlives the jobs, and the plan they ran for, so a runner still winding
 	// down can never take a later job for its own.
 	JobSeq int `json:"job_seq,omitempty"`
+	// KeptLogs are the ids of the red jobs dropped from the record (MaxJobs): their logs stay with the
+	// plan's, and go with its record when it is replaced or dropped (Store.Record).
+	KeptLogs []string `json:"kept_logs,omitempty"`
 	// BoundaryOwed: a phase finished and a compaction is owed before the next phase starts.
 	BoundaryOwed bool `json:"boundary_owed,omitempty"`
 	// CheckpointOwed: the model asked for a mid-phase compaction at a safe point.
@@ -153,6 +156,10 @@ type State struct {
 	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
 	// is reported once.
 	PlanDrift string `json:"plan_drift,omitempty"`
+	// PlanLooked is set once baton has looked at moving the run's plan file out of Claude Code's way
+	// (Aside): as it attached the plan, or, for a plan attached before baton did so, at the lead's next
+	// phase boundary. Whether it moved is the plan's Origin.
+	PlanLooked bool `json:"plan_looked,omitempty"`
 	// Replan is the replan of the phases not started that is open (replan.go), and Replans the replans
 	// baton followed since the human approved the plan, oldest first.
 	Replan  *Replan     `json:"replanning,omitempty"`
@@ -189,8 +196,8 @@ type State struct {
 }
 
 // PlanQuestion is baton's question about a plan the human approved while the run had one. Same says it is
-// in the run's own plan file: Claude Code writes every plan a session makes to the same file, so that is a
-// revision of the plan.
+// in the run's own plan file, or in the one baton moved that from (plan.Plan.Origin): Claude Code writes
+// every plan a session makes to the same file, so that is a revision of the plan.
 type PlanQuestion struct {
 	File     string    `json:"file"`
 	Same     bool      `json:"same"`
@@ -199,6 +206,9 @@ type PlanQuestion struct {
 	// Held is when the human answered Wait for me: nothing changes until they write, or until the hold
 	// lapses (loop's Timing.HoldLapse) and baton answers its default.
 	Held time.Time `json:"held,omitzero"`
+	// Origin is the file the plan was approved in, when baton moved it out of Claude Code's way as it was
+	// approved (a revision of a plan moved before): a plan the answer runs keeps it as its Origin.
+	Origin string `json:"origin,omitempty"`
 }
 
 // New is the state of a project with no plan attached.
@@ -336,11 +346,15 @@ var ErrNoPlan = errors.New("no plan is attached (run /baton plan or /baton run f
 // DoneOpts are what `baton done` may override.
 type DoneOpts struct {
 	Force      bool // finish a phase other than the one in hand
-	DespiteRed bool // finish it although its latest verification is red
+	DespiteRed bool // finish it although its verification is red
 }
 
-// RedError turns down done for a phase whose latest verification is red.
-type RedError struct{ Job Job }
+// RedError turns down done for a phase whose verification stands on a red job (Standing): Job, and After,
+// the checks of its kind queued since that did not clear it.
+type RedError struct {
+	Job   Job
+	After []Job
+}
 
 func (e RedError) Error() string {
 	return fmt.Sprintf("phase %s's verification, job %s (`%s`), is red (%s)", e.Job.Phase, e.Job.ID, e.Job.Command, e.Job.Status)
@@ -379,7 +393,7 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 	}
 	for _, j := range st.Standing(id) {
 		if j.Red() && !o.DespiteRed {
-			return "", RedError{j}
+			return "", RedError{j, st.After(j)}
 		}
 	}
 	if running := st.Running(id); len(running) > 0 {

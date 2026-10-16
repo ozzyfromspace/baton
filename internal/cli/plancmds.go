@@ -15,7 +15,6 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
-	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -237,7 +236,9 @@ func cmdAttach(args []string, io IO) int {
 	}
 	origin, branch := state.OriginOf(root), gitx.Branch(root) // read before the lock, as is whether it is hosted
 	inSession, isHosted := io.Env("CLAUDE_CODE_SESSION_ID") != "", hosted(io)
-	var boundary bool
+	aside := lookAside(io, s, cur, file)
+	var boundary, moved bool
+	var unmoved error
 	var rec *state.Record
 	st, err := s.Update(func(st *state.State) error {
 		// The plan this replaces keeps its record (its state, plan and notes) as it was before anything
@@ -246,7 +247,13 @@ func cmdAttach(args []string, io IO) int {
 		if rec, err = s.Record(*st); err != nil {
 			return fmt.Errorf("could not keep the record of the plan this replaces: %w", err)
 		}
+		// The session's plan-mode file moves out of Claude Code's way first, and the plan follows it.
+		moved, unmoved = aside.Move(&pl)
 		if err := s.WritePlan(pl); err != nil {
+			if moved {
+				state.Unmove(&pl)
+				moved = false
+			}
 			return err
 		}
 		// The first phase starts from a brief, after a compaction, unless there is nothing before it to
@@ -259,6 +266,7 @@ func cmdAttach(args []string, io IO) int {
 			*st = state.Reattach(*st, pl, io.Now(), origin)
 		}
 		st.RunBranch = branch // workers branch off it, and their work lands on it
+		st.PlanLooked = true
 		return nil
 	})
 	if err != nil {
@@ -268,7 +276,7 @@ func cmdAttach(args []string, io IO) int {
 	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
-	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
+	attached := map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
 	if branch != "" {
 		attached["branch"] = branch
 	}
@@ -276,6 +284,7 @@ func cmdAttach(args []string, io IO) int {
 		attached["paused"] = true
 	}
 	s.Event("attached", attached)
+	movedAside(io, s, pl, aside, file, moved, unmoved)
 	first := pl.Phases[0]
 	fmt.Fprintf(io.Out, "baton: attached %q — %s (%s). ", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies())
 	switch {
@@ -795,7 +804,7 @@ func contextLine(cu state.ContextUse, io IO) string {
 	vs := valve.FromEnv(io.Env)
 	if !hosted(io) {
 		cfg := config.Load(batonRoot(io), io.Env)
-		vs = valve.Settings{CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
+		vs = valve.Settings{NoticePct: *cfg.NoticePct, CheckpointPct: *cfg.CheckpointPct, WarnPct: *cfg.WarnPct}
 	}
 	if vs.Cap == 0 {
 		vs.Cap = cu.Limit
@@ -805,6 +814,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 		return fmt.Sprintf("%.0f%% of the window", cu.UsedPct)
 	}
 	parts := []string{valve.Tokens(cu.Used()) + " of " + valve.Tokens(l.Window)}
+	if l.Notice > 0 {
+		parts = append(parts, "heads-up at "+valve.Tokens(l.Notice))
+	}
 	if l.Checkpoint > 0 {
 		parts = append(parts, "checkpoint at "+valve.Tokens(l.Checkpoint))
 	}
@@ -912,7 +924,7 @@ func cmdDone(args []string, io IO) int {
 	})
 	var re state.RedError
 	if errors.As(err, &re) {
-		return refusedRed(io, s, pl, re.Job)
+		return refusedRed(io, s, pl, re.Job, re.After)
 	}
 	if err != nil {
 		return refused(io, s, "done", err)
@@ -948,7 +960,7 @@ func cmdDone(args []string, io IO) int {
 	case note != nil:
 		fmt.Fprintf(io.Out, "baton: noted (%s): %s finished despite its red verification; the human will be told.\n", note.ID, id)
 	case despite != "":
-		fmt.Fprintf(io.Out, "baton: note — %s's latest verification is not red, so --despite-red recorded nothing.\n", id)
+		fmt.Fprintf(io.Out, "baton: note — %s's verification is not red, so --despite-red recorded nothing.\n", id)
 	}
 	for _, j := range standing {
 		if j.Finished() && !j.Red() && j.Status != state.JobPassed {
@@ -1006,9 +1018,9 @@ func cmdDone(args []string, io IO) int {
 	return 0
 }
 
-// refusedRed turns down done for a phase whose latest verification is red. A result the model has not
-// been given yet comes with it, and counts as given.
-func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job) int {
+// refusedRed turns down done for a phase whose verification stands on red job j, naming the checks after
+// it that did not clear it. A result the model has not been given yet comes with it, and counts as given.
+func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job, after []state.Job) int {
 	var fresh bool
 	s.Update(func(st *state.State) error {
 		if x := st.Job(j.ID); x != nil && x.Delivered.IsZero() {
@@ -1018,10 +1030,9 @@ func refusedRed(io IO, s *state.Store, pl plan.Plan, j state.Job) int {
 	})
 	s.Event("refused", map[string]any{"command": "done", "phase": j.Phase, "why": "red", "job": j.ID})
 	if fresh {
-		tail, _ := lane.Tail(jobLog(s, j), 80, 6<<10)
-		fmt.Fprintln(io.Err, decide.JobResult(j, jobLog(s, j), tail, nil, qaAhead(io, pl, j.Phase)))
+		fmt.Fprintln(io.Err, decide.JobResult(j, hooks.JobLog(s, j), nil, qaAhead(io, pl, j.Phase)))
 	}
-	return fail(io, "%s", decide.RedRefusal(j))
+	return fail(io, "%s", decide.RedRefusal(j, after))
 }
 
 // jobLog is where job j's output is.
@@ -1292,7 +1303,7 @@ func cmdRun(args []string, io IO) int {
 		}
 		return attach("no plan is underway in this session")
 	}
-	same := file == "" || file == pl.File
+	same := file == "" || file == pl.File || file == pl.Origin && gone(file) // named by the path baton moved it from
 	switch {
 	case st.Mode == state.ModeComplete && !same:
 		return attach(fmt.Sprintf("%q, this session's last plan, is complete", pl.Title))

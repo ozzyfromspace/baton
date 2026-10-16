@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"cmp"
 	"fmt"
 	"time"
 
@@ -28,25 +29,40 @@ const (
 	swapGrowth = 256 << 20
 )
 
+// The kinds of room a machine lacks for another session (lack): what the host's log of the room follows
+// (look), rather than every figure of a reading.
+const (
+	lackLoad   = "busy"
+	lackSwap   = "swapping"
+	lackMemory = "memory"
+)
+
 // busy says why the machine m leaves no room for another session ("" if it has any), with its swap grown
-// by grew over the last minute. Its load must stay under its CPUs. For memory, on macOS (m.Pressure set)
-// the kernel's pressure must be under critical, and at warn swap must not be growing fast: macOS holds its
-// free share near 36% by swapping, so that share says little. On Linux, at least memFloor percent must be
-// available. A machine with no live readings has room.
+// by grew over the last minute (lack).
 func busy(m machine.Reading, grew uint64) string {
+	why, _ := lack(m, grew)
+	return why
+}
+
+// lack says why the machine m leaves no room for another session, and the kind of room it lacks ("" for
+// both if it has any), with its swap grown by grew over the last minute. Its load must stay under its
+// CPUs. For memory, on macOS (m.Pressure set) the kernel's pressure must be under critical, and at warn
+// swap must not be growing fast: macOS holds its free share near 36% by swapping, so that share says
+// little. On Linux, at least memFloor percent must be available. A machine with no live readings has room.
+func lack(m machine.Reading, grew uint64) (why, kind string) {
 	switch {
 	case !m.Known:
-		return ""
+		return "", ""
 	case m.Load1 >= float64(max(m.CPUs, 1)):
-		return fmt.Sprintf("the machine is busy (load %.1f on %d CPUs)", m.Load1, m.CPUs)
+		return fmt.Sprintf("the machine is busy (load %.1f on %d CPUs)", m.Load1, m.CPUs), lackLoad
 	case m.Pressure >= machine.PressureCritical:
-		return "memory pressure is critical"
+		return "memory pressure is critical", lackMemory
 	case m.Pressure == machine.PressureWarn && grew > swapGrowth:
-		return fmt.Sprintf("the machine is swapping (%s in the last minute)", bytesShown(grew))
+		return fmt.Sprintf("the machine is swapping (%s in the last minute)", bytesShown(grew)), lackSwap
 	case m.Pressure == 0 && m.MemAvailablePct < memFloor:
-		return fmt.Sprintf("memory is low (%d%% free)", m.MemAvailablePct)
+		return fmt.Sprintf("memory is low (%d%% free)", m.MemAvailablePct), lackMemory
 	}
-	return ""
+	return "", ""
 }
 
 // laneBacklog is how long a gate may wait for a lane, every lane being in use, before new workers wait.
@@ -92,9 +108,15 @@ type swapAt struct {
 	used uint64
 }
 
+// RoomSettle is how long the kind of room the machine lacks (lack) must hold before the host's log follows
+// it (look): a load hovering at the CPUs, or swap growing in fits, would otherwise log at every step.
+const RoomSettle = 30 * time.Second
+
 // look reads the machine for a step (Fleet.Machine), and says whether it has room for another session
-// (Coordinator.noRoom). It keeps the last minute of swap readings, and the newest one at least a minute
-// old: how fast swap grows tells a machine short of memory on macOS.
+// (Coordinator.noRoom), as of this reading. It keeps the last minute of swap readings, and the newest one
+// at least a minute old: how fast swap grows tells a machine short of memory on macOS. The log follows the
+// kind of room the machine lacks, not its figures: a change is logged once the new kind has held for
+// Fleet.RoomSettle, and one that turns back before then is not.
 func (c *Coordinator) look(now time.Time) {
 	read := c.Fleet.Machine
 	if read == nil {
@@ -109,13 +131,19 @@ func (c *Coordinator) look(now time.Time) {
 	if m.SwapUsed > c.swaps[0].used {
 		grew = m.SwapUsed - c.swaps[0].used
 	}
-	was := c.noRoom
-	if c.noRoom = busy(m, grew); c.noRoom != was {
-		if c.noRoom == "" {
-			c.Lead.logf("loop: workers: the machine has room again")
-		} else {
-			c.Lead.logf("loop: workers: no room on the machine: %s", c.noRoom)
-		}
+	var kind string
+	c.noRoom, kind = lack(m, grew)
+	if kind != c.roomKind {
+		c.roomKind, c.roomSince = kind, now
+	}
+	if kind == c.roomSaid || now.Sub(c.roomSince) < cmp.Or(c.Fleet.RoomSettle, RoomSettle) {
+		return
+	}
+	c.roomSaid = kind
+	if kind == "" {
+		c.Lead.logf("loop: workers: the machine has room again")
+	} else {
+		c.Lead.logf("loop: workers: no room on the machine: %s", c.noRoom)
 	}
 }
 

@@ -206,9 +206,12 @@ func (w Words) BackgroundStarted(what string, monitor bool) string {
 }
 
 // meanwhile is what the model does while its background work runs: wakes says how the work wakes it, and
-// end how its turn ends when nothing is left to do until then.
+// end how its turn ends when nothing is left to do until then. Since the work wakes it, nothing else
+// need wait for it: a loop or another background task started only to poll it (a sleep, a Monitor, an
+// agent) spends turns and tasks on nothing.
 func (w Words) meanwhile(wakes, until, end string) string {
-	s := "Keep working on what does not depend on it: " + wakes + ". "
+	s := "Keep working on what does not depend on it: " + wakes + ". " +
+		"Never start a loop or another background task only to wait for it. "
 	if w.Git {
 		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then " + w.jobCall("verify", "<command>") + " runs it on that commit, and baton gives you the result. "
 	}

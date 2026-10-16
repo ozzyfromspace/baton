@@ -120,6 +120,9 @@ func contextSummary(flag string, vs valve.Settings) string {
 	}
 	l := vs.Limits(1_000_000)
 	var parts []string
+	if l.Notice > 0 {
+		parts = append(parts, fmt.Sprintf("tells the model where its context stands at %s", valve.Tokens(l.Notice)))
+	}
 	if l.Checkpoint > 0 {
 		parts = append(parts, fmt.Sprintf("asks the model to checkpoint at %s", valve.Tokens(l.Checkpoint)))
 	}
@@ -127,9 +130,13 @@ func contextSummary(flag string, vs valve.Settings) string {
 		parts = append(parts, fmt.Sprintf("asks you (AskUserQuestion) at %s", valve.Tokens(l.Warn)))
 	}
 	if len(parts) == 0 {
-		parts = []string{"leaves the context alone (checkpoint_pct and warn_pct are 0)"}
+		parts = []string{"leaves the context alone (notice_pct, checkpoint_pct and warn_pct are 0)"}
 	}
-	s += fmt.Sprintf(". On a 1M-token model baton %s; Claude Code compacts on its own at about %s", strings.Join(parts, " and "), valve.Tokens(l.AutoAt))
+	said := parts[len(parts)-1]
+	if n := len(parts); n > 1 {
+		said = strings.Join(parts[:n-1], ", ") + " and " + said
+	}
+	s += fmt.Sprintf(". On a 1M-token model baton %s; Claude Code compacts on its own at about %s", said, valve.Tokens(l.AutoAt))
 	if vs.Cap == 0 {
 		s += " (if its own setting does not compact sooner)"
 	}

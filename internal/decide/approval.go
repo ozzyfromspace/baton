@@ -10,19 +10,21 @@ import (
 
 // Answers when the human approves a plan while a run has one. Claude Code writes every plan a session
 // makes to the same file, so a plan in the run's own file is a revision of it; one in another file
-// (planned after a /clear) is a new plan, and the current run's document is still there to keep. Each
-// default (PlanQuestionDefault) is third, where the host's 3 lands where baton's mod does not run
-// (EscalationOptions), and Wait for me holds the approved plan for the human, which lapses into the
-// default like any hold (HoldLapse).
+// (planned after a /clear) is a new plan, and the current run's document is still there to keep. Wait for
+// me comes first, where the selection starts, so a stray Enter (a second press of the one that approved
+// the plan) holds the approved plan for the human, which lapses into the default like any hold
+// (HoldLapse), and never sets the run's progress aside: Start the new plan from P0, which does, takes a
+// choice. The default (PlanQuestionDefault) is third, as in every question of baton's that has one
+// (EscalationOptions).
 var (
 	ReviseOptions = []Option{
-		{"Start the new plan from P0", "Drop this run's progress and run the approved plan from the beginning"},
 		{"Wait for me", "Change nothing yet; I'll write in the session, or the revised plan goes on after " + Spell(HoldLapse) + " with no word"},
+		{"Start the new plan from P0", "Drop this run's progress and run the approved plan from the beginning"},
 		{"Continue with the revised plan", "Phases already done stay done; the run goes on from the first one left"},
 	}
 	ReplaceOptions = []Option{
-		{"Start the new plan from P0", "Stop the current run and run the plan you just approved"},
 		{"Wait for me", "Change nothing yet; I'll write in the session, or the current run goes on after " + Spell(HoldLapse) + " with no word"},
+		{"Start the new plan from P0", "Stop the current run and run the plan you just approved"},
 		{"Keep the current run", "Leave the approved plan aside; the current run goes on"},
 	}
 )

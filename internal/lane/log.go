@@ -1,6 +1,7 @@
 package lane
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // A job's log keeps the start of its output and a rolling tail, so a gate that prints without end never
@@ -148,16 +150,23 @@ func Tail(path string, lines, maxBytes int) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	tail, _, err := tailOf(f, lines, maxBytes)
+	return tail, err
+}
+
+// tailOf is the last lines of f (Tail), and where they start in it.
+func tailOf(f *os.File, lines, maxBytes int) (string, int64, error) {
 	fi, err := f.Stat()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	from := max(fi.Size()-int64(maxBytes), 0)
 	buf := make([]byte, fi.Size()-from)
 	if _, err := f.ReadAt(buf, from); err != nil && err != io.EOF {
-		return "", err
+		return "", 0, err
 	}
-	text := strings.TrimRight(string(buf), "\n")
+	whole := strings.TrimRight(string(buf), "\n")
+	text := whole
 	if from > 0 {
 		if i := strings.IndexByte(text, '\n'); i >= 0 {
 			text = text[i+1:]
@@ -167,5 +176,83 @@ func Tail(path string, lines, maxBytes int) (string, error) {
 	if len(all) > lines {
 		all = all[len(all)-lines:]
 	}
-	return strings.Join(all, "\n"), nil
+	tail := strings.Join(all, "\n")
+	return tail, from + int64(len(whole)-len(tail)), nil // the tail ends where whole does
+}
+
+// An Excerpt is what a job's result shows of its log: its last lines, and the lines before those that
+// report a failure, so that a failure early in a long log is never lost behind its end.
+type Excerpt struct {
+	Tail     string
+	Failures []string // in order, at most the max asked for, each clipped
+	More     int      // the lines that report a failure past Failures
+}
+
+// ReadExcerpt reads the Excerpt of the log at path: its last lines (Tail, with lines and maxBytes), and at
+// most fails of the lines before them that report a failure (Failure), each clipped to clip bytes.
+func ReadExcerpt(path string, lines, maxBytes, fails, clip int) (Excerpt, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Excerpt{}, err
+	}
+	defer f.Close()
+	var e Excerpt
+	var start int64
+	if e.Tail, start, err = tailOf(f, lines, maxBytes); err != nil {
+		return e, err
+	}
+	r := bufio.NewReaderSize(io.NewSectionReader(f, 0, start), 64<<10)
+	for {
+		line, long, err := r.ReadLine()
+		if text := string(line); Failure(text) {
+			if len(e.Failures) < fails {
+				e.Failures = append(e.Failures, clipLine(strings.TrimRight(text, " \t\r"), clip))
+			} else {
+				e.More++
+			}
+		}
+		for long && err == nil { // the rest of a line longer than the reader's buffer
+			_, long, err = r.ReadLine()
+		}
+		if err != nil {
+			return e, nil
+		}
+	}
+}
+
+// Failure reports whether line, from a command's output, reports a failure in a way common test runners
+// and build tools do: Go's `--- FAIL`, `FAIL<tab>package` and `panic:`, the word FAILED (pytest, cargo
+// and others), or a cross (✗, ✘).
+func Failure(line string) bool {
+	t := strings.TrimLeft(line, " \t")
+	switch {
+	case strings.HasPrefix(t, "--- FAIL"), strings.HasPrefix(t, "panic: "),
+		strings.HasPrefix(line, "FAIL\t"), strings.HasPrefix(line, "FAIL "), strings.TrimRight(line, " \r") == "FAIL",
+		strings.ContainsAny(line, "✗✘"):
+		return true
+	}
+	for i := 0; ; {
+		k := strings.Index(line[i:], "FAILED")
+		if k < 0 {
+			return false
+		}
+		at, end := i+k, i+k+len("FAILED")
+		if (at == 0 || !letter(line[at-1])) && (end == len(line) || !letter(line[end])) {
+			return true
+		}
+		i = end
+	}
+}
+
+func letter(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || c == '_' }
+
+// clipLine cuts line to at most n bytes, at a character's start, marking the cut with an ellipsis.
+func clipLine(line string, n int) string {
+	if len(line) <= n {
+		return line
+	}
+	for n > 0 && !utf8.RuneStart(line[n]) {
+		n--
+	}
+	return line[:n] + "…"
 }

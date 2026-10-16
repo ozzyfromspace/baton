@@ -1,0 +1,7 @@
+{"type":"mode","mode":"normal","sessionId":"s"}
+{"parentUuid":null,"isSidechain":false,"type":"attachment","attachment":{"type":"plan_mode","reminderType":"full","isSubAgent":false,"planFilePath":"/plans/dynamic-jingling-kay.md","planExists":false},"uuid":"m1","timestamp":"2026-10-16T15:52:08.479Z","slug":"dynamic-jingling-kay"}
+{"parentUuid":"m1","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Plan this."},"uuid":"p1","timestamp":"2026-10-16T15:52:09.000Z","slug":"dynamic-jingling-kay"}
+{"parentUuid":null,"logicalParentUuid":"p1","isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":1200,"postTokens":300},"uuid":"b1","timestamp":"2026-10-16T16:33:32.555Z","slug":"harmonic-mapping-candy"}
+{"parentUuid":"b1","isSidechain":false,"type":"attachment","attachment":{"type":"plan_file_reference","planFilePath":"/plans/harmonic-mapping-candy.md","planContent":"# Plan"},"uuid":"r1","timestamp":"2026-10-16T16:33:32.700Z","slug":"harmonic-mapping-candy"}
+{"type":"last-prompt","lastPrompt":"","sessionId":"s"}
+{"parentUuid":"r1","isSidechain":true,"type":"user","message":{"role":"user","content":"An agent's task."},"uuid":"x1","timestamp":"2026-10-16T16:34:00.000Z","slug":"some-agent-slug"}

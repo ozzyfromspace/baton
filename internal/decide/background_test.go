@@ -52,3 +52,27 @@ func TestBackgroundStarted(t *testing.T) {
 		t.Errorf("the stop and the start differ:\n%s\n%s", stop, start)
 	}
 }
+
+// Background work wakes the model when it ends, so nothing else need wait for it: what it is told as the
+// work starts, and at a stop on it, says never to start a loop or another task only to wait for it, for a
+// command, a Monitor and a phase agent's work alike.
+func TestBackgroundWorkIsNeverPolled(t *testing.T) {
+	const never = "Never start a loop or another background task only to wait for it."
+	lead, agent, plain := Words{Git: true, Timeout: time.Minute}, Words{Git: true, Worker: true, Timeout: time.Minute}, Words{Timeout: time.Minute}
+	for _, c := range []struct {
+		name, got string
+	}{
+		{"started, the lead", lead.BackgroundStarted("npm test", false)},
+		{"started, a phase agent", agent.BackgroundStarted("npm test", false)},
+		{"started, without git", plain.BackgroundStarted("npm test", false)},
+		{"a Monitor", lead.BackgroundStarted("tail -F app.log", true)},
+		{"a stop on it", lead.BackgroundStop("npm test")},
+	} {
+		if strings.Count(c.got, never) != 1 {
+			t.Errorf("%s: lacks %q:\n%s", c.name, never, c.got)
+		}
+		if wakes := strings.Index(c.got, "wakes you"); wakes < 0 || wakes > strings.Index(c.got, never) {
+			t.Errorf("%s: says it before what wakes the model:\n%s", c.name, c.got)
+		}
+	}
+}

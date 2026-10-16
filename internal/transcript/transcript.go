@@ -40,6 +40,9 @@ type Entry struct {
 	// Context is the context an assistant entry's request had, in tokens (Context), or what a compact
 	// boundary left; 0 for any other entry.
 	Context int
+	// Slug is the session's plan slug the entry was written under (Slug): its plan-mode file is
+	// <plansDirectory>/<slug>.md. "" on entries that carry none.
+	Slug string
 }
 
 // Tool is a tool call the model made.
@@ -208,6 +211,7 @@ type line struct {
 	RefusalCategory   string          `json:"apiRefusalCategory"`
 	RefusalWhy        string          `json:"apiRefusalExplanation"`
 	Timestamp         string          `json:"timestamp"`
+	Slug              string          `json:"slug"`
 	CompactMetadata   compactMetadata `json:"compactMetadata"`
 	Attachment        json.RawMessage `json:"attachment"`
 	Message           json.RawMessage `json:"message"`
@@ -260,7 +264,7 @@ func parse(raw []byte) (Entry, bool) {
 	if json.Unmarshal(raw, &l) != nil || l.Type == "" {
 		return Entry{}, false
 	}
-	e := Entry{Type: l.Type, Subtype: l.Subtype, Trigger: l.CompactMetadata.Trigger, UUID: l.UUID, Parent: l.ParentUUID, Source: l.PromptSource, Meta: l.IsMeta, Sidechain: l.IsSidechain}
+	e := Entry{Type: l.Type, Subtype: l.Subtype, Trigger: l.CompactMetadata.Trigger, UUID: l.UUID, Parent: l.ParentUUID, Source: l.PromptSource, Meta: l.IsMeta, Sidechain: l.IsSidechain, Slug: l.Slug}
 	if e.Parent == "" {
 		e.Parent = l.LogicalParentUUID
 	}

@@ -57,7 +57,7 @@ func TestAResultReachesTheModelMidTurn(t *testing.T) {
 	}
 	out := bash("")
 	ctx := feedback(out)
-	for _, want := range []string{resultHead, "--- FAIL: TestRanking\nFAIL", "Fix what failed, commit, and verify again"} {
+	for _, want := range []string{resultHead, "--- FAIL: TestRanking\nFAIL", "Fix what failed (quick checks in place help), commit, and verify again with the same command, `make test`"} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("result lacks %q:\n%s", want, ctx)
 		}

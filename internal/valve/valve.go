@@ -7,10 +7,15 @@
 //   - the compaction window is the model's window, or the cap when that is smaller;
 //   - Claude Code compacts on its own 33k tokens below it (up to 20k reserved for output, plus a 13k
 //     buffer), so an 810k cap compacts at about 777k;
+//   - baton tells the model where its context stands, asking nothing, at NoticePct of the compaction
+//     window;
 //   - baton asks the model to checkpoint at CheckpointPct of the compaction window;
 //   - baton asks the human, through AskUserQuestion, at WarnPct of the compaction window or 200k
-//     tokens, whichever is larger. When that line would come after Claude Code has already compacted
-//     (a small window), it moves to WarnPct of the point where Claude Code compacts, so it still fires.
+//     tokens, whichever is larger.
+//
+// When any of these lines would come after Claude Code has already compacted (a small window, or a
+// percentage near 100), every line is that percentage of the point where Claude Code compacts instead,
+// so each still fires, and in order.
 package valve
 
 import (
@@ -30,6 +35,7 @@ const WarnFloor = 200_000
 // Settings are the inputs that do not change during a session.
 type Settings struct {
 	Cap           int     // the --autocompact cap in tokens; 0 when off, "auto", or unknown
+	NoticePct     float64 // 0: never tell
 	CheckpointPct float64 // 0: never nudge
 	WarnPct       float64 // 0: never warn
 	WarnTokens    int     // a fixed warning line that replaces the computed one (tests)
@@ -45,6 +51,7 @@ const DefaultWarnTimeout = 10 * time.Minute
 type Limits struct {
 	Window     int // the compaction window
 	AutoAt     int // where Claude Code compacts on its own
+	Notice     int // where baton tells the model where its context stands, asking nothing
 	Checkpoint int // where baton asks the model to checkpoint at its next safe point
 	Warn       int // where baton asks the human
 }
@@ -58,20 +65,40 @@ func (s Settings) Limits(modelWindow int) Limits {
 	if w <= 0 {
 		return Limits{}
 	}
-	l := Limits{Window: w, AutoAt: w - AutoCompactMargin}
+	at := w - AutoCompactMargin
+	l := Limits{Window: w, AutoAt: at}
+	// The lines are percentages of the window, the warning at least WarnFloor, unless one of them would
+	// come at or after Claude Code's own compaction: then all are percentages of where it compacts.
+	base, moved := w, false
+	for _, line := range []int{pct(w, s.NoticePct), pct(w, s.CheckpointPct), s.warnLine(w)} {
+		if line > 0 && line >= at {
+			base, moved = at, true
+		}
+	}
+	if s.NoticePct > 0 {
+		l.Notice = pct(base, s.NoticePct)
+	}
 	if s.CheckpointPct > 0 {
-		l.Checkpoint = pct(w, s.CheckpointPct)
+		l.Checkpoint = pct(base, s.CheckpointPct)
 	}
 	switch {
 	case s.WarnTokens > 0:
 		l.Warn = s.WarnTokens
+	case s.WarnPct > 0 && moved:
+		l.Warn = pct(at, s.WarnPct)
 	case s.WarnPct > 0:
-		l.Warn = max(pct(w, s.WarnPct), WarnFloor)
-		if l.Warn >= l.AutoAt {
-			l.Warn = pct(l.AutoAt, s.WarnPct)
-		}
+		l.Warn = s.warnLine(w)
 	}
 	return l
+}
+
+// warnLine is where the warning comes on a window of w tokens, before any move: WarnPct of it, and at least
+// WarnFloor. A fixed line (WarnTokens) never moves, and is none.
+func (s Settings) warnLine(w int) int {
+	if s.WarnTokens > 0 || s.WarnPct <= 0 {
+		return 0
+	}
+	return max(pct(w, s.WarnPct), WarnFloor)
 }
 
 func pct(n int, p float64) int { return int(float64(n) * p / 100) }
@@ -81,6 +108,7 @@ func pct(n int, p float64) int { return int(float64(n) * p / 100) }
 func (s Settings) Env() []string {
 	env := []string{
 		"BATON_COMPACT_CAP=" + strconv.Itoa(s.Cap),
+		fmt.Sprintf("BATON_NOTICE_PCT=%g", s.NoticePct),
 		fmt.Sprintf("BATON_CHECKPOINT_PCT=%g", s.CheckpointPct),
 		fmt.Sprintf("BATON_WARN_PCT=%g", s.WarnPct),
 	}
@@ -95,9 +123,12 @@ func (s Settings) Env() []string {
 
 // FromEnv reads the settings the host passed down; anything missing takes its default.
 func FromEnv(env func(string) string) Settings {
-	s := Settings{CheckpointPct: config.DefaultCheckpointPct, WarnPct: config.DefaultWarnPct}
+	s := Settings{NoticePct: config.DefaultNoticePct, CheckpointPct: config.DefaultCheckpointPct, WarnPct: config.DefaultWarnPct}
 	if n, err := strconv.Atoi(env("BATON_COMPACT_CAP")); err == nil && n > 0 {
 		s.Cap = n
+	}
+	if f, err := strconv.ParseFloat(env("BATON_NOTICE_PCT"), 64); err == nil {
+		s.NoticePct = f
 	}
 	if f, err := strconv.ParseFloat(env("BATON_CHECKPOINT_PCT"), 64); err == nil {
 		s.CheckpointPct = f

@@ -478,6 +478,7 @@ type RunInfo struct {
 	Pending  bool     // attached outside any session; the next session started here takes it
 	Title    string   // the attached plan's title, "" without one
 	File     string   // the attached plan's file, "" without one
+	Origin   string   // the file it was attached from, when baton moved it out of Claude Code's way (plan.Plan.Origin)
 	State    State
 	Updated  time.Time // when its state last changed
 }
@@ -552,11 +553,12 @@ func (p *Project) info(ref, dir string, sessions map[string][]string) RunInfo {
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "plan.json")); err == nil {
 		var pl struct {
-			Title string `json:"title"`
-			File  string `json:"plan_file"`
+			Title  string `json:"title"`
+			File   string `json:"plan_file"`
+			Origin string `json:"plan_origin"`
 		}
 		json.Unmarshal(b, &pl)
-		info.Title, info.File = pl.Title, pl.File
+		info.Title, info.File, info.Origin = pl.Title, pl.File, pl.Origin
 	}
 	return info
 }
@@ -662,9 +664,13 @@ const sweepAge = 10 * time.Minute
 
 // Sweep removes what no one can use any more: runs that never had a plan, drafts or notes and that no
 // host drives (every hosted session starts one), links to runs (workers' sub-runs among them) that are
-// gone, from sessions and from phase agents, links to hosts that no longer drive their run, and the
-// records of hosts' processes whose links are gone. Hosts call it when they start.
-func (p *Project) Sweep() { p.Swept(false, nil) }
+// gone, from sessions and from phase agents, links to hosts that no longer drive their run, the records
+// of hosts' processes whose links are gone, and the temporary files interrupted writes left (SweepTemps).
+// Hosts call it when they start.
+func (p *Project) Sweep() {
+	p.Swept(false, nil)
+	p.SweepTemps()
+}
 
 // Swept is Sweep, saying what it removed, each as its path under the project's .baton directory, with
 // forward slashes on every platform (runs/<run>, sessions/<session>, hosts/<instance>, hosts/<instance>.pid,

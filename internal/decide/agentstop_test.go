@@ -71,10 +71,11 @@ func TestAgentQuestions(t *testing.T) {
 			[]string{"baton: you stopped the agent on P3 (Stopped agents). Restart it? Unless you answer by 12:10, baton restarts it, or lets it go if its work is done."},
 			[]string{RestartIt, LeaveStopped, "Pause baton"}, "Let baton decide"},
 		{"second", state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2},
-			[]string{"baton: you stopped the agent on P3 again. Restart it? Unless you answer by 12:10, baton takes it down", "with no deadline"},
+			[]string{"baton: you stopped the agent on P3 again. Restart it? Unless you answer by 12:10, baton takes it down", "asks you what to do with it while the rest of the run goes on"},
 			[]string{RestartIt, LeaveStopped, "Pause baton"}, "Let baton decide"},
 		{"taken down", state.Relay{Phase: "P3", Kind: state.RelayStopped, Count: 2, Persist: AgentPersistent},
-			[]string{"What should become of P3?", "baton will not choose for you", "P3 and the phases that need it wait for your answer"},
+			[]string{"What should become of P3?", "While the rest of the run can go on, baton will not choose for you", "P3 and the phases that need it wait for your answer",
+				"Once nothing else can move, baton takes P3 back from its agent, not before 12:10, and Claude does it in this session"},
 			[]string{RestartIt, LeaveStopped, "Pause baton"}, "Ask me later"},
 		{"restarted", state.Relay{Phase: "P3", Kind: state.RelayRestarted},
 			[]string{"so baton restarted it", "Keep it going? Unless you answer by 12:10, it carries on."},
@@ -97,8 +98,8 @@ func TestAgentQuestions(t *testing.T) {
 			if got := RelayDefault(c.r); got != c.def {
 				t.Errorf("default %q, want %q", got, c.def)
 			}
-			if c.r.Persistent() && strings.Contains(q.Text, "12:10") {
-				t.Errorf("the question with no deadline names one: %s", q.Text)
+			if c.r.Persistent() && strings.Contains(q.Text, "Unless you answer by") {
+				t.Errorf("the question with no deadline names one for the human's answer: %s", q.Text)
 			}
 		})
 	}
@@ -119,5 +120,52 @@ func TestAgentStoppedStand(t *testing.T) {
 		if got := AgentStoppedStand(c.w, c.asking); got != c.want {
 			t.Errorf("AgentStoppedStand(%+v, %v) = %q, want %q", c.w, c.asking, got, c.want)
 		}
+	}
+}
+
+// A twice-stopped phase baton took back for the lead: the human hears where its agent's work is, the
+// decision says so with /baton pause as its undo, and the lead's brief says why the phase is its own and
+// how to carry on from the agent's commits, by a merge.
+func TestStoppedTaken(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		t     Taken
+		said  []string // in what the human is told, and in the decision
+		brief []string // in the lead's brief
+	}{
+		{"commits and a snapshot", Taken{ID: "d4", Phase: "P3", Branch: "baton/run/P3", Unlanded: 2, Snapshot: "refs/baton/snapshots/P3-1"},
+			[]string{"its agent's 2 commits stay on branch baton/run/P3", "what it had not committed is saved as refs/baton/snapshots/P3-1"},
+			[]string{"Its 2 commits are on branch baton/run/P3, not on the run's branch: to carry on from them, merge that branch into the run's branch (git merge, never a rebase).",
+				"git show refs/baton/snapshots/P3-1 shows it."}},
+		{"one commit, its worktree kept", Taken{ID: "d4", Phase: "P3", Branch: "baton/run/P3", Unlanded: 1, Worktree: "/w/P3", Kept: "it is not a git worktree"},
+			[]string{"its agent's 1 commit stays on branch baton/run/P3", "its worktree stays at /w/P3, as it is not a git worktree"},
+			[]string{"Its 1 commit is on branch baton/run/P3", "to carry on from it", "Its worktree stays at /w/P3"}},
+		{"nothing of its own", Taken{ID: "d4", Phase: "P3"}, nil, []string{"It left no commits that the run's branch lacks."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			said := StoppedTaken(c.t)
+			what, undo := StoppedTakenDecision(c.t)
+			if !strings.HasPrefix(said, "baton: noted (d4) — nobody answered about the agent you stopped twice on P3") ||
+				!strings.HasPrefix(what, "took P3 back from its agent for Claude to do in the lead's session") || !strings.HasPrefix(undo, "/baton pause") {
+				t.Errorf("told %q\ndecision %q, undo %q", said, what, undo)
+			}
+			for _, w := range c.said {
+				if !strings.Contains(said, w) || !strings.Contains(what, w) {
+					t.Errorf("told %q, decision %q: lacks %q", said, what, w)
+				}
+			}
+			b := StoppedTakenBrief(c.t)
+			if !strings.HasPrefix(b, "[baton] The human stopped the phase agent on P3 twice") {
+				t.Errorf("brief %q", b)
+			}
+			for _, w := range c.brief {
+				if !strings.Contains(b, w) {
+					t.Errorf("brief %q lacks %q", b, w)
+				}
+			}
+		})
+	}
+	if got := StoppedTaken(Taken{Phase: "P3"}); !strings.HasPrefix(got, "baton: nobody answered") {
+		t.Errorf("with no decision recorded: %q", got)
 	}
 }

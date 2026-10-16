@@ -61,6 +61,11 @@ type Relay struct {
 	// baton, none) put on a proposal's phase, or a block's: it lifted it, as nobody had answered for loop's
 	// Timing.HoldLapse (a block's, Timing.BlockLook) since, or found it settled already.
 	Lapsed time.Time `json:"lapsed,omitzero"`
+	// Stuck, on the question with no deadline about a twice-stopped phase (Persistent), is since when the
+	// host has seen nothing else in the run able to move while it waited (State.Moves), or zero while
+	// something can: escalation_timeout from then, baton takes the phase back for the lead (TakeUpAt,
+	// loop/stopped.go).
+	Stuck time.Time `json:"stuck,omitzero"`
 }
 
 // Relay kinds. A stopped or a restarted one is about the run's roster, not the agent's sub-run: the human

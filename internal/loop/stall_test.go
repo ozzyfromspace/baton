@@ -10,6 +10,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -87,11 +88,17 @@ func (x *still) told() []string {
 	return out
 }
 
-// running gives the sub-run a gate that runs, its runner beating at at, its log of size bytes.
+// running gives the sub-run a gate that runs, its runner beating at at, its log of size bytes (written,
+// so its modification time moves, only when its size changes).
 func (x *still) running(at time.Time, size int) {
+	x.runningAs(state.Job{Phase: "P1", Kind: state.JobVerify, Command: "make test"}, at, size)
+}
+
+// runningAs is running, for a job like j.
+func (x *still) runningAs(j state.Job, at time.Time, size int) {
 	x.sub.Update(func(st *state.State) error {
 		if len(st.Jobs) == 0 {
-			q, _, _ := state.QueueJob(st, state.Job{Phase: "P1", Kind: state.JobVerify, Command: "make test"}, x.t0)
+			q, _, _ := state.QueueJob(st, j, x.t0)
 			j := st.Job(q.ID)
 			j.Status, j.Started, j.Log = state.JobRunning, x.t0, x.log
 			st.Phases["P1"].Status = state.PhaseVerifying
@@ -100,7 +107,9 @@ func (x *still) running(at time.Time, size int) {
 		st.Jobs[0].Heartbeat = at
 		return nil
 	})
-	os.WriteFile(x.log, []byte(strings.Repeat("x", size)), 0o644)
+	if fi, err := os.Stat(x.log); err != nil || fi.Size() != int64(size) {
+		os.WriteFile(x.log, []byte(strings.Repeat("x", size)), 0o644)
+	}
 }
 
 func (x *still) setLead(fn func(st *state.State)) {
@@ -300,5 +309,71 @@ func TestTheStallAlarmIsToldOnceAndReArmed(t *testing.T) {
 	x.look(moved.Add(after + time.Minute))
 	if told := x.told(); len(told) != 2 {
 		t.Errorf("the next stretch: told %q", told)
+	}
+}
+
+// A gate whose log has stopped growing is hung only if its processes stopped working too: one whose tree
+// still uses CPU keeps the run busy, and where the tree cannot be read the log alone decides. An await,
+// and a gate waiting for a lane, wait on something that ends by itself: each keeps the run busy while its
+// runner beats, whatever its log does.
+func TestAQuietGateIsHungOnlyIfItsProcessesAreIdle(t *testing.T) {
+	after := DefaultTiming.StallAfter
+	const pgid = 4242
+	gate := state.Job{Phase: "P1", Kind: state.JobVerify, Command: "make test", PGID: pgid}
+	await := state.Job{Phase: "P1", Kind: state.JobAwait, Command: "gh run watch 7", PGID: pgid}
+	waits := gate
+	waits.LaneWait = time.Date(2026, 10, 13, 9, 1, 0, 0, time.UTC)
+	idle := func(int) procs.Usage { return procs.Usage{pgid: 5} }
+	hung := "P1: verifying " + decide.Span(after+time.Minute) + " (job P1.j1), " + decide.LogQuiet(after)
+	for _, c := range []struct {
+		name   string
+		job    state.Job
+		cpu    func(m int) procs.Usage // the tree's reading at minute m (nil: none)
+		cpuErr error
+		silent bool   // the runner stops beating once the job runs
+		touch  bool   // the log is written each minute, its size the same
+		told   string // what the notice names ("": no notice)
+		not    string // what the notice must not name
+	}{
+		{"a quiet log, a busy tree", gate, func(m int) procs.Usage { return procs.Usage{pgid: uint64(100 * m), pgid + 1: 3} }, nil, false, false, "", ""},
+		{"a quiet log, a tree that stopped working", gate, func(m int) procs.Usage { return procs.Usage{pgid: uint64(100 * min(m, 3))} }, nil, false, false, hung, ""},
+		{"a quiet log, an idle tree", gate, idle, nil, false, false, hung, ""},
+		{"a quiet log, a tree that cannot be read", gate, nil, procs.ErrUnsupported, false, false, hung, ""},
+		{"a quiet log, no process running", gate, func(int) procs.Usage { return procs.Usage{} }, nil, false, false, hung, ""},
+		{"a log written over at the same size, an idle tree", gate, idle, nil, false, true, "", ""},
+		{"a quiet await, its runner beating", await, idle, nil, false, false, "", ""},
+		{"an await whose runner went silent", await, idle, nil, true, false, "the run has not moved", "log has not grown"},
+		{"a gate waiting for a lane", waits, idle, nil, false, false, "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newStill(t)
+			r := &runners{cpu: map[int]procs.Usage{}, cpuErr: c.cpuErr}
+			x.c.Lead.Runners = r
+			beat := x.t0.Add(time.Minute)
+			for m := 1; m <= int((after+time.Minute)/time.Minute); m++ {
+				at := x.t0.Add(time.Duration(m) * time.Minute)
+				if c.cpu != nil {
+					r.cpu[pgid] = c.cpu(m)
+				}
+				if !c.silent {
+					beat = at
+				}
+				x.runningAs(c.job, beat, 100)
+				if c.touch {
+					os.Chtimes(x.log, at, at)
+				}
+				x.look(at)
+			}
+			told := x.told()
+			if c.told == "" {
+				if len(told) != 0 {
+					t.Errorf("told %q", told)
+				}
+				return
+			}
+			if len(told) != 1 || !strings.Contains(told[0], c.told) || c.not != "" && strings.Contains(told[0], c.not) {
+				t.Errorf("told %q, want %q", told, c.told)
+			}
+		})
 	}
 }
