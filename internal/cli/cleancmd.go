@@ -49,7 +49,6 @@ func init() {
 
 const (
 	cleanWhy    = "baton clean" // why, on the record of what it ends
-	tempAge     = 10 * time.Minute
 	elevateAge  = 24 * time.Hour
 	stopGrace   = 5 * time.Second
 	cleanGitCap = 30 * time.Second
@@ -835,17 +834,7 @@ func (c *cleaner) records() {
 		c.add(&cleanAction{what: "records of runs and sessions that are gone (" + strings.Join(swept, ", ") + ")", plan: "would remove " + them(len(swept)),
 			do: func() string { c.proj.Swept(false, keep); return "removed" }})
 	}
-	var temps []string
-	filepath.WalkDir(c.proj.Dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasPrefix(d.Name(), ".") || !strings.Contains(d.Name(), ".tmp-") {
-			return nil
-		}
-		if fi, err := d.Info(); err == nil && c.now.Sub(fi.ModTime()) >= tempAge {
-			temps = append(temps, path)
-		}
-		return nil
-	})
-	if len(temps) > 0 {
+	if temps := state.StaleTemps(c.proj.Dir, c.now); len(temps) > 0 {
 		c.add(&cleanAction{what: count(len(temps), "temporary file", "temporary files") + " that interrupted writes left in " + c.proj.Dir, plan: "would remove " + them(len(temps)),
 			do: func() string { return removeAll(temps) }})
 	}
