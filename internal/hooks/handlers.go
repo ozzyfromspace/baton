@@ -1188,6 +1188,8 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var dl delivery
 	var news news
 	var owed *state.Briefing
+	var bgTell string // background work the call started, told as it starts (background.go)
+	var bg bgStart
 	s, st, err := h.update(c, func(st *state.State, s *state.Store) error {
 		st.Run.ToolEnded(str(c.Input, "tool_use_id"), c.Agent, tool)
 		closed, _ := st.Run.Dialogs.CloseExact(c.Agent, tool, dialogKey(c.Input))
@@ -1206,6 +1208,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		if c.Event == "PostToolUse" {
 			owed = takeBriefing(c, st) // a compaction's brief the conversation went on without
 			w := words(c, s)
+			bgTell, bg = tellBackground(st, c.Input, w)
 			switch {
 			case tool == "ExitPlanMode" && s.Worker() != "":
 				v = workerPlan(s.Worker(), approvedFile(c.Input))
@@ -1250,7 +1253,10 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil && waits == "" {
+	if bgTell != "" {
+		s.Event("background_told", map[string]any{"phase": st.Current, "task": bg.id, "tool": bg.tool, "via": "start"})
+	}
+	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil && waits == "" && bgTell == "" {
 		return Result{}, nil
 	}
 	tell := v.tell
@@ -1274,6 +1280,11 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	out := map[string]any{}
 	if msg := lines(ann, notes, dl.says(), v.say, waitsSay); msg != "" {
 		out["systemMessage"] = msg
+	}
+	if bgTell != "" {
+		// Advice, not a request: nothing waits on the model heeding it, as the work wakes it either way, so it
+		// goes as context (docs/research/workers.md) and shows no hook error under every backgrounded call.
+		out["hookSpecificOutput"] = map[string]any{"hookEventName": "PostToolUse", "additionalContext": bgTell}
 	}
 	if v.event != "" {
 		s.Event(v.event, v.fields)

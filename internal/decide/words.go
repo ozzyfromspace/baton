@@ -188,14 +188,31 @@ func (w Words) NoStatus(id, title string) string {
 		"%s (you are waiting on something outside you, such as a CI run or a deploy: baton runs it and gives you the result).", title, id, finished, w.proposeThen(), w.jobCall("await", "<a command that ends when it is ready>"))
 }
 
-// BackgroundStop is why baton refuses the first stop while background work of the model's own runs:
-// what names the work. Nothing is wrong with the stop itself, so the next one on the same work is allowed.
+// BackgroundStop is why baton refuses the first stop while background work of the model's own runs whose
+// start baton did not see (BackgroundStarted): what names the work. Nothing is wrong with the stop itself,
+// so the next one on the same work is allowed.
 func (w Words) BackgroundStop(what string) string {
-	s := "[baton] You stopped while your background work runs (" + what + "). Keep working on what does not depend on it: Claude Code wakes you when it ends. "
+	return "[baton] You stopped while your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn again")
+}
+
+// BackgroundStarted is what baton tells the model with the result of a tool call that started background
+// work of its own (what names it; monitor: a Monitor, which wakes it with what it reports): what
+// BackgroundStop would tell it at its stop, told as the work starts, so that stop is allowed.
+func (w Words) BackgroundStarted(what string, monitor bool) string {
+	if monitor {
+		return "[baton] Your monitor runs (" + what + "). " + w.meanwhile("Claude Code wakes you with what it reports", "it reports", "end your turn")
+	}
+	return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn")
+}
+
+// meanwhile is what the model does while its background work runs: wakes says how the work wakes it, and
+// end how its turn ends when nothing is left to do until then.
+func (w Words) meanwhile(wakes, until, end string) string {
+	s := "Keep working on what does not depend on it: " + wakes + ". "
 	if w.Git {
 		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then " + w.jobCall("verify", "<command>") + " runs it on that commit, and baton gives you the result. "
 	}
-	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until the work ends, end your turn again."
+	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until " + until + ", " + end + "."
 }
 
 // QuestionRefused is why a question of the model's own is refused while a plan runs, and what to do
