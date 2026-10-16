@@ -258,6 +258,41 @@ func TestAnUntakenCommandIsTakenBack(t *testing.T) {
 	}
 }
 
+// baton asks for a compaction once the lead's Stop hook has run, a moment before the turn is over by Claude
+// Code's account, which refuses a compaction until then. The mod holds such a compaction and runs it at the
+// lead's turn.complete, up to its bound (plugin/hooks/baton.js, HOLD_MS), so its ack can come that late:
+// meanwhile baton neither takes the command back nor asks again, and once taken up the compaction is under
+// way, with nothing declined or retried.
+func TestACompactionHeldForTheLeadsTurnEndIsWaitedFor(t *testing.T) {
+	const modHold = 30 * time.Second // HOLD_MS in plugin/hooks/baton.js
+	if modHold+5*time.Second > modAckWait {
+		t.Fatalf("modAckWait %s leaves the mod's hold of %s, its poll and its report no room", modAckWait, modHold)
+	}
+	r := modRig(t)
+	r.tick(0)
+	o := r.open()[0]
+	r.run(modHold + 5*time.Second)
+	if open := r.open(); len(open) != 1 || open[0].ID != o.ID {
+		t.Fatalf("asked again while the mod held it: %+v", open)
+	}
+	if comp := r.state().Run.Compaction; comp.Status != state.CompactTyped || comp.Command != o.ID {
+		t.Fatalf("while held: %+v", comp)
+	}
+	r.ack(o, true, "")
+	r.tick(time.Second)
+	if comp := r.state().Run.Compaction; comp.Status != state.CompactActive || comp.Tries != 1 || comp.Declined != nil {
+		t.Fatalf("taken up at the turn's end: %+v", comp)
+	}
+	for _, kind := range []string{"compact_declined", "compact_retry", "mod_voided"} {
+		if strings.Contains(r.events(), `"kind":"`+kind+`"`) {
+			t.Errorf("%s logged:\n%s", kind, r.events())
+		}
+	}
+	if len(r.in.text) != 0 {
+		t.Errorf("typed %q", r.in.text)
+	}
+}
+
 // Ctrl-C is how baton clears a draft where it types, and one Ctrl-C at the prompt stops every agent of the
 // session for good (spike 35): baton never sends it while a phase agent is on the roster or the model's own
 // background agent may be at work. The draft holds baton then; with a phase agent at work, baton tells the
