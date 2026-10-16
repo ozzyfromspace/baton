@@ -41,6 +41,35 @@ func TestAnApprovedPlanRunsByItself(t *testing.T) {
 	)
 }
 
+// A plan with one phase heading is a plan baton runs: approved, it is attached, the planning conversation
+// is compacted away, and its one phase runs to the plan's end.
+func TestAnApprovedOnePhasePlanRunsByItself(t *testing.T) {
+	dir := NewProject(t)
+	s := Start(t, dir, "--model", "haiku")
+	s.RemovePlansAfter()
+	s.Trust()
+	s.WaitQuiet(3*time.Second, 40*time.Second)
+	if !s.PlanMode() {
+		t.Fatal("could not switch to plan mode")
+	}
+	s.AutoApprove()
+	s.Type(`Plan this tiny task. Write the plan to your plan file with exactly this one heading and nothing else as a heading: ` +
+		`"## P0 — Say hello" (step: run echo hello). Do not explore the repository. Then call ExitPlanMode.`)
+	waitSequence(t, s, 8*time.Minute,
+		kind("directives_asked"),
+		func(e map[string]any) bool {
+			return e["kind"] == "attached" && e["by"] == "approval" && e["phases"] == 1.0
+		},
+		func(e map[string]any) bool {
+			return e["kind"] == "compact_queued" && e["reason"] == "boundary" && e["next"] == "P0"
+		},
+		func(e map[string]any) bool { return e["kind"] == "phase_started" && e["phase"] == "P0" },
+		func(e map[string]any) bool { return e["kind"] == "phase_done" && e["phase"] == "P0" },
+		kind("plan_complete"),
+	)
+	none(t, s, "plan_not_attached")
+}
+
 // Two baton terminals in one project each run a plan of their own, at the same time.
 func TestTwoTerminalsRunTwoPlans(t *testing.T) {
 	dir := NewProject(t)

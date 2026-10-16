@@ -10,7 +10,9 @@ import (
 
 // The heart of baton: a two-phase plan runs to completion with one compaction at the boundary and no
 // keystrokes from anyone. Every step is asserted from the run's events.jsonl. The plan has no After:
-// lines, so each phase follows the one before it, and nothing is verified, set aside or switched.
+// lines, so each phase follows the one before it, and nothing is verified, set aside or switched. baton
+// asks for the compaction as the lead's turn ends: the mod holds it to the turn's end, so Claude Code
+// never declines it (compact_declined).
 func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, twoPhasePlan)
@@ -53,7 +55,7 @@ func TestPhaseBoundaryCompactsAndResumes(t *testing.T) {
 		t.Fatalf("stopped before %q; events: %s", steps[next].kind, strings.Join(kinds, " → "))
 	}
 	for _, e := range s.Events() {
-		if e["kind"] == "escalated" || e["kind"] == "compact_failed" || e["kind"] == "stop_refused" {
+		if e["kind"] == "escalated" || e["kind"] == "compact_failed" || e["kind"] == "compact_declined" || e["kind"] == "stop_refused" {
 			t.Errorf("unexpected %v", e)
 		}
 	}

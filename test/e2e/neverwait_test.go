@@ -241,6 +241,62 @@ func TestAQuickGateIsDeliveredInPlace(t *testing.T) {
 	none(t, s, "phase_switched", "phase_parked", "switch_cancelled", "phase_resumed")
 }
 
+// besidePlan's P0 hands baton its gate and a wait on something outside, one after the other, and reports
+// the phase done while both run.
+const besidePlan = `# Beside plan
+
+## P0 — Mark the work
+After: none
+
+1. Write the single word ok into a new file named marker, and commit it: git add marker, then git commit -m 'feat: the marker'.
+2. Hand the project's gate to baton, exactly: baton verify --notes 'marker committed; the gate runs' -- sh gate.sh
+3. Hand baton this wait on something outside, exactly: baton await --notes 'marker committed; the wait runs beside the gate' -- sh hold.sh
+4. Report P0 done, exactly: baton done P0 --notes 'marker committed; the gate and the wait run'
+5. End your turn. Do not run the gate or the wait yourself, and do not check on them: baton gives you their results.
+
+## P1 — Say goodbye
+After: P0
+
+Run echo goodbye, then report P1 done.
+`
+
+// A phase's gate and its wait on something outside run side by side: the wait queued second stops nothing,
+// and the phase, reported done while both run, is done only once both have passed (the wait ends last).
+func TestAGateAndAWaitRunSideBySide(t *testing.T) {
+	dir := NewGateProject(t, 20)
+	writeFile(t, dir, "hold.sh", "#!/bin/sh\necho 'hold: waiting'\nsleep 50\necho 'hold: released'\n")
+	Git(t, dir, "add", "hold.sh")
+	Git(t, dir, "commit", "-q", "-m", "chore: the wait")
+	Attach(t, dir, besidePlan)
+	s := StartEnv(t, dir, []string{"BATON_SWITCH_AFTER=5m"}, "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.")
+	s.Trust()
+	waitSequence(t, s, 6*time.Minute,
+		is("job_queued", "phase", "P0", "type", "verify"),
+		is("job_queued", "phase", "P0", "type", "await"),
+		is("phase_verifying", "phase", "P0"),
+		is("phase_done", "phase", "P0", "by", "verification"),
+		kind("plan_complete"),
+	)
+	evs := s.Events()
+	gate, wait := evs[first(evs, is("job_queued", "type", "verify"))], evs[first(evs, is("job_queued", "type", "await"))]
+	if wait["beside"] != gate["job"] || wait["replaced"] != nil {
+		t.Errorf("the wait was queued %v, beside the gate %v", wait, gate)
+	}
+	if v := evs[first(evs, is("phase_verifying", "phase", "P0"))]; v["beside"] == nil {
+		t.Errorf("P0 verifying on one job: %v", v)
+	}
+	// Each passed, the gate first, and P0 was done only once the wait had passed too.
+	g := first(evs, is("job_finished", "job", fmt.Sprint(gate["job"]), "status", "passed"))
+	w := first(evs, is("job_finished", "job", fmt.Sprint(wait["job"]), "status", "passed"))
+	if done := first(evs, is("phase_done", "phase", "P0")); g < 0 || w < g || done < w {
+		t.Errorf("the gate ended at %d, the wait at %d, P0 done at %d:\n%s", g, w, done, eventLog(s))
+	}
+	if i := first(evs, is("refused", "why", "another check runs")); i >= 0 {
+		t.Errorf("refused: %v", evs[i])
+	}
+	none(t, s, "phase_parked")
+}
+
 // slowPlan's P0 cannot be finished before its command ends: only the command's output says what to write.
 const slowPlan = `# Slow plan
 
@@ -253,9 +309,9 @@ Run echo goodbye.
 `
 
 // foreground_max: a long command, run in the foreground, moves to the background after a few seconds
-// (CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, which baton sets) rather than holding the session. The model's
-// first stop on it is refused once, its next allowed, and the command's end wakes the model, which
-// finishes P0 from its output.
+// (CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, which baton sets) rather than holding the session. baton tells
+// the model of it with the call's result (background_told), so its stop on it is allowed, not refused, and
+// the command's end wakes the model, which finishes P0 from its output.
 func TestALongCommandMovesToTheBackground(t *testing.T) {
 	dir := NewProject(t)
 	os.WriteFile(filepath.Join(dir, "slow.sh"), []byte("#!/bin/sh\necho 'slow: working'\nsleep 40\necho 'slow: the word is pelican'\n"), 0o755)
@@ -265,11 +321,12 @@ func TestALongCommandMovesToTheBackground(t *testing.T) {
 	s := StartEnv(t, dir, []string{"BATON_FOREGROUND_MAX=5s"}, "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.")
 	s.Trust()
 	waitSequence(t, s, 5*time.Minute,
-		is("stop_refused", "why", "background work"),
+		is("background_told", "via", "start", "tool", "Bash"),
 		is("idle_on_background", "phase", "P0"),
 		is("turn_started", "by", "system"),
 		is("phase_done", "phase", "P0"),
 	)
+	none(t, s, "stop_refused")
 	if b, _ := os.ReadFile(filepath.Join(dir, "answer")); !strings.Contains(string(b), "pelican") {
 		t.Errorf("answer: %q", b)
 	}
