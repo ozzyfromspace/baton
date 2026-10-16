@@ -53,6 +53,11 @@ const (
 	// Submit submits a line of baton's to the lead's model as a prompt of its own, read as one typed; the
 	// draft in the input box stays. One submitted while a turn runs waits for the turn's end.
 	Submit = "submit"
+	// Empty empties the lead's input box of the prompt in Text, if the box still holds exactly that: a
+	// prompt the human wrote to a phase's agent (@P23 <words>), which the lead's UserPromptSubmit hook
+	// blocked, and which Claude Code keeps in the box after a block, for a second Enter to send again
+	// (spike 40). A draft the human started since is left as it is.
+	Empty = "empty"
 	// Moved tells the mod that its host drives another run now (its session carried a run on, or the human
 	// switched conversations): the mod says hello again, which gives it that run's bridge, and acks
 	// nothing here. Its host takes it back if it drives this run again (Retract).
@@ -97,7 +102,8 @@ type Command struct {
 	Question string   `json:"question,omitempty"`
 	Options  []string `json:"options,omitempty"`
 	Header   string   `json:"header,omitempty"`
-	// Compact: the compaction it is for (state.Compaction.Epoch). Submit: the line, in Text.
+	// Compact: the compaction it is for (state.Compaction.Epoch). Submit: the line, in Text. Empty: the
+	// prompt, in Text.
 	Epoch int `json:"epoch,omitempty"`
 }
 
@@ -453,6 +459,10 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 				return ErrUnknownAgent
 			}
 		case Ask, Submit, Moved:
+		case Empty:
+			if c.Text == "" {
+				return fmt.Errorf("an empty names no prompt")
+			}
 		case Compact:
 			if c.Epoch <= 0 {
 				return fmt.Errorf("a compact names no compaction")

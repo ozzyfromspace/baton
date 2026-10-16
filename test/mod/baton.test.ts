@@ -60,6 +60,8 @@ function world(on: any, o: Opts = {}) {
     panes: [] as any[], // the panes open
     commands: [] as string[], // the slash commands the mod registered
     submitted: [] as any[], // the prompts the mod submitted itself
+    box: '', // the lead's prompt box
+    fills: [] as any[], // what the mod put in it
   }
   mock.env(on, o.env ?? HOSTED)
   mock.store(on, o.store ?? {})
@@ -126,6 +128,12 @@ function world(on: any, o: Opts = {}) {
       if (o.submit) return o.submit($, e)
     }
     return { text: e.text, origin: e.origin }
+  })
+  on('prompt.read', async () => ({ value: { text: w.box, cursor: w.box.length } }))
+  on('prompt.fill', async ($: any, e: any) => {
+    w.fills.push({ text: e.text, mode: e.mode })
+    w.box = e.mode === 'replace' ? e.text : w.box + e.text
+    return { isFilled: true }
   })
   on('turn.start', async ($: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async ($: any, e: any) => {
@@ -777,4 +785,19 @@ test('reloaded after calling a held compaction again, the mod acks it as interru
   w.seen = 2
   await start($, w)
   expect(kinds(w)).toEqual(['ack 3 interrupted'])
+})
+
+test('the prompt box is emptied of a prompt baton sent on to a phase agent, and a draft typed since is left', async ($, on) => {
+  const w = world(on, { files: command({ id: 1, kind: 'empty', text: '@P1 write the file\n' }) })
+  w.box = '@P1 write the file' // Claude Code keeps a prompt a hook blocked in the box
+  await start($, w)
+  expect(w.box).toBe('')
+  expect(w.fills).toEqual([{ text: '', mode: 'replace' }])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ kind: 'ack', command: 1, ok: true, result: 'emptied' }))
+  w.box = 'a draft of my own'
+  Object.assign(w.files, command({ id: 2, kind: 'empty', text: '@P2 something else' }))
+  await w.clock.advance(1000)
+  expect(w.box).toBe('a draft of my own')
+  expect(w.fills).toHaveLength(1)
+  expect(w.reports[1]).toEqual(expect.objectContaining({ kind: 'ack', command: 2, ok: true, result: 'left' }))
 })

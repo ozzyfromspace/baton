@@ -1,7 +1,8 @@
 // baton's mod: what only something inside the lead's claude can do, on baton's say-so. It starts and
 // messages phase agents, asks the human, keeps phase agents' reports from the lead's model, compacts the
 // lead's conversation and submits baton's lines to it (so that baton types nothing into the session, and
-// the human's draft stays in the input box: spike 35), and reports what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge). It does
+// the human's draft stays in the input box: spike 35), empties the box of a prompt baton sent on to a
+// phase agent (spike 40), and reports what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge). It does
 // nothing unless baton hosts this session and answers its hello, and every hook lets its event through
 // when anything goes wrong.
 //
@@ -395,12 +396,24 @@ async function run($, c) {
         return await compact($, c)
       case 'submit':
         return await started($, $.prompt.submit({ text: c.text, asUser: true }), () => null, (err) => ({ kind: 'failed', command: c.id, error: cut(String(err), CUT) }), 'submitted')
+      case 'empty':
+        return await empty($, c)
       default:
         return { ok: false, error: 'no such command: ' + c.kind }
     }
   } catch (err) {
     return { ok: false, error: cut(String(err), CUT) }
   }
+}
+
+// empty runs baton's empty command c: the prompt box is emptied of the prompt the human wrote to a phase's
+// agent, which baton kept from the lead's model and Claude Code keeps in the box (a second Enter would
+// send it again), only while the box still holds that prompt: a draft the human started since stays.
+async function empty($, c) {
+  const box = await $.prompt.read()
+  if (String((box && box.text) || '').trim() !== String(c.text || '').trim()) return { ok: true, result: 'left' }
+  const f = await $.prompt.fill({ text: '', mode: 'replace' })
+  return f && f.isFilled ? { ok: true, result: 'emptied' } : { ok: false, error: String((f && f.refusal) || 'the box was not emptied') }
 }
 
 // started acks a call the poll does not wait for: a compaction runs for seconds or minutes, and a line

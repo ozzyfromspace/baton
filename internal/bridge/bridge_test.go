@@ -561,6 +561,24 @@ func TestTheLeadsCompactionAndLines(t *testing.T) {
 	}
 }
 
+// An empty names the prompt the lead's input box is to be emptied of, whole: one naming none is refused.
+func TestAnEmptyNamesItsPrompt(t *testing.T) {
+	r := newRig(t)
+	r.hello("inst")
+	if _, err := r.b.Issue(Command{Kind: Empty, Instance: "inst"}); err == nil {
+		t.Error("an empty naming no prompt was issued")
+	}
+	prompt := "@P3 also write notes.md\nand the README"
+	c := r.issue(Command{Kind: Empty, Text: prompt})
+	var got Command
+	if data, err := os.ReadFile(r.b.CommandPath(c.ID)); err != nil || json.Unmarshal(data, &got) != nil || got.Kind != Empty || got.Text != prompt {
+		t.Fatalf("the empty as written: %s (%v)", data, err)
+	}
+	if a, err := r.b.Accept(Report{Seq: 1, Kind: Ack, Instance: "inst", Command: c.ID, OK: true, Result: "emptied"}); err != nil || a.Acked == nil || a.Acked.Kind != Empty {
+		t.Errorf("its ack: %+v %v", a, err)
+	}
+}
+
 // The host takes the inbox on every tick: taking an empty one leaves the record's file as it was, while a
 // change, or a bridge with no record yet, writes it.
 func TestAnUpdateThatChangesNothingWritesNothing(t *testing.T) {
