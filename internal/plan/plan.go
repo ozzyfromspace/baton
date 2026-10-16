@@ -310,11 +310,13 @@ func Load(path string) (Plan, error) {
 	return p, nil
 }
 
-// Shaped reports whether a suggested spec is a plan baton can attach without help: at least two phases,
-// each starting at a heading of its own (## P0 — Title). baton attaches such a plan the moment the human
-// approves it; anything else needs the model to check the spec (`baton attach --suggest`).
+// Shaped reports whether a suggested spec is a plan baton can attach without help: at least one phase,
+// each starting at a heading of its own (## P0 — Title), so a small task can be a plan of one phase.
+// baton attaches such a plan the moment the human approves it. A plan with no phase headings is not
+// baton's (ordinary plan-mode work), and phases in another notation (bold bullets, table rows) need the
+// model to check the spec (`baton attach --suggest`).
 func Shaped(spec Spec) bool {
-	if len(spec.Phases) < 2 {
+	if len(spec.Phases) == 0 {
 		return false
 	}
 	for _, ph := range spec.Phases {

@@ -278,7 +278,7 @@ func cmdAttach(args []string, io IO) int {
 	}
 	s.Event("attached", attached)
 	first := pl.Phases[0]
-	fmt.Fprintf(io.Out, "baton: attached %q — %d phases (%s). ", pl.Title, len(pl.Phases), pl.Dependencies())
+	fmt.Fprintf(io.Out, "baton: attached %q — %s (%s). ", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies())
 	switch {
 	case paused:
 		fmt.Fprintln(io.Out, decide.AttachedPaused(first.ID+" ("+first.Title+")"))
@@ -311,6 +311,9 @@ func shown(s *state.Store, path string) string {
 // workersAttached says, as plan pl is attached in checkout, how many workers will work beside the session,
 // and warns when they would stop at permission prompts. "" with no workers.
 func workersAttached(io IO, checkout string, pl plan.Plan) string {
+	if len(pl.Phases) < 2 {
+		return "" // nothing could go ahead beside a plan's one phase
+	}
 	n, auto, err := config.Load(batonRoot(io), io.Env).WorkerCap(io.reading)
 	if err != nil {
 		return ""
@@ -420,9 +423,11 @@ func cmdStatus(args []string, io IO) int {
 			fmt.Fprintf(io.Out, "%13snotes: %s\n", "", clipLine(ps.Park.Notes, 100))
 		}
 	}
-	if seq {
+	switch {
+	case len(pl.Phases) == 1: // one phase depends on nothing
+	case seq:
 		fmt.Fprintln(io.Out, "dependencies: each phase follows the one before it")
-	} else {
+	default:
 		k, chain := pl.LongestChain()
 		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
