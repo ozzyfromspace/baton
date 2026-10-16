@@ -54,6 +54,10 @@ type Coordinator struct {
 	retryAt    time.Time
 	claimed    bool
 	landAt     map[string]time.Time // by a worker's sub-run: when the merge queue tries to land it again
+	// The prompts for phases' agents the lead's input box is to be emptied of, and those kept for it
+	// already, by when they were written (words.go).
+	empties []toEmpty
+	emptied map[int64]bool
 	// Whether baton's mod has said hello in the lead's claude, and since when the host has waited for it
 	// while a plan runs (mod.go), for the run a step last looked at (stepRun: claimed, off and these are
 	// that run's). Only a step touches them.
@@ -140,6 +144,10 @@ type worker struct {
 	stop     int
 	sending  int
 	sentAt   time.Time
+	// words names the human's words (state.HumanWords.At) the message wordsCmd gives its agent, until
+	// the mod has acked it (words.go).
+	words    time.Time
+	wordsCmd int
 	session  string // the lead's session its agent lives in: a /clear of the lead's ends it
 	stray    string // its agent, started in a plain worktree baton made for it: that goes once it has ended
 	// erred is when the API error a fresh agent avoids, last found to end its agent's turn, ended it

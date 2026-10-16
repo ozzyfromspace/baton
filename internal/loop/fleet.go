@@ -278,6 +278,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 			c.retire(now, s, e, why)
 		}
 		c.retireLanded(now, s, st)
+		c.toAgents(now, s, c.bridge(s)) // no agent works in this host: the human's words go to the lead
 		return
 	}
 	if s.Ref != c.stepRun {
@@ -295,6 +296,7 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 	}
 	c.usage(now, s, st)
 	c.look(now)
+	c.toAgents(now, s, b) // the human's words go before anything else baton has for an agent
 	for _, w := range c.launched() {
 		c.watch(now, s, b, st, pl, w)
 	}
@@ -791,6 +793,7 @@ func (c *Coordinator) respawn(now time.Time, s *state.Store, b *bridge.Bridge, e
 	}
 	if e.AgentID != "" {
 		b.Forget(e.AgentID) // a message would only start it again
+		c.letGo(e.Ref, e.AgentID)
 	}
 	pl, _ := s.LoadPlan()
 	e.Status, e.Since, e.AgentID, e.Resume = state.WorkerStarting, now, "", ""
@@ -832,9 +835,22 @@ func (c *Coordinator) afresh(now time.Time, s *state.Store, b *bridge.Bridge, w 
 	if agent := c.agentOf(s, w); agent != "" {
 		b.Issue(bridge.Command{Kind: bridge.Stop, Instance: s.Instance, Phase: w.phase, Agent: agent})
 		b.Forget(agent)
+		c.letGo(w.entry.Ref, agent)
 	}
 	c.Lead.logf("loop: %s: a fresh agent takes it up: %s", w.phase, e.Why)
 	s.Event("worker_ended", map[string]any{"phase": w.phase, "why": e.Why, "suspended": true})
+}
+
+// letGo records that baton let go of agent, the phase agent of worker ref, for good (state.Project.LetGo):
+// a fresh agent takes its phase up, and if the human wakes it from its own view, it is refused every tool
+// call (hooks).
+func (c *Coordinator) letGo(ref, agent string) {
+	if c.Project == nil || agent == "" {
+		return
+	}
+	if err := c.Project.LetGo(ref, agent); err != nil {
+		c.Lead.logf("loop: recording agent %s as let go: %v", agent, err)
+	}
 }
 
 // retireLanded retires the workers of run st whose work landed that nobody retires yet, and on which no

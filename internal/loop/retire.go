@@ -32,7 +32,8 @@ import (
 //     the same id carries on from it. A worker retired while its plan stands keeps its branch's name, and
 //     the phase's next worker carries on from its commits;
 //  5. its agent is none of baton's any more (bridge.Forget): nothing is ever sent to it again (a message
-//     would start it again), and the phase's next agent may start;
+//     would start it again), and the phase's next agent may start; and it is recorded as let go of
+//     (state.Project.LetGo), so that if the human wakes it all the same, it is refused every tool call;
 //  6. its phase goes back to the run, guarded by the mark: the run's own host takes it back as it always
 //     has (state.Unassign), and anyone else only frees it (state.ReleaseWorker), so the run's next host
 //     takes it up;
@@ -99,11 +100,16 @@ func RetireWorker(r Retirement) Retired {
 	return x.out
 }
 
-// forget makes the worker's agent none of baton's agents: it has ended.
+// forget makes the worker's agent none of baton's agents: it has ended. It is recorded as let go of for
+// good (state.Project.LetGo): if the human wakes it from its own view, it is refused every tool call
+// (hooks).
 func (x *retirement) forget() {
 	if id := x.entry.AgentID; id != "" {
 		if err := bridge.Open(x.Run.Dir, x.Run.Now, nil).Forget(id); err != nil {
 			x.Logf("loop: %s: forgetting its agent %s: %v", x.entry.Phase, id, err)
+		}
+		if err := x.Project.LetGo(x.entry.Ref, id); err != nil {
+			x.Logf("loop: %s: recording its agent %s as let go: %v", x.entry.Phase, id, err)
 		}
 	}
 }

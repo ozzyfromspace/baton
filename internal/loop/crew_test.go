@@ -49,6 +49,7 @@ type crew struct {
 	sent     []sent
 	resumes  []string
 	asks     []bridge.Command // the questions it was told to ask, in order
+	emptied  []string         // the prompts it emptied the lead's input box of, in order
 	modOff   bool             // it runs nothing: no spawn is acked
 	ackless  bool             // it runs a spawn, whose agent starts, but its ack never comes
 	unplaced bool             // a call of the model's own to the Agent tool starts as the spawn's does: baton cannot tell their worktrees apart
@@ -179,6 +180,9 @@ func (x *crew) runMod() {
 		case bridge.Ask:
 			x.asks = append(x.asks, c)
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true, Result: "queued"})
+		case bridge.Empty:
+			x.emptied = append(x.emptied, c.Text)
+			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true, Result: "emptied"})
 		default:
 			x.report(bridge.Report{Kind: bridge.Ack, Command: c.ID, OK: true})
 		}

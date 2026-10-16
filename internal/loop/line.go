@@ -13,7 +13,8 @@ import (
 // round, whether it runs a command, compacts or idles, and which starts an idle agent again (spike 32). Its
 // loop (Agent) reaches it through a line as the lead's reaches the lead through the keyboard: the line
 // that wakes it for its results or baton's messages, which its hooks then hand over, once each; the
-// watchdog's reminders; a retry after an API error. One message to an agent is open at a time: the next
+// watchdog's reminders; a retry after an API error. The human's words for it come the same way (words.go).
+// One message to an agent is open at a time: the next
 // waits until the mod has acked it, and one not acked within sendWait is taken back (bridge.Void), so that
 // the loop sends again when it is due.
 
@@ -40,6 +41,11 @@ func (line) Quit() error { return nil }
 
 // send gives text to w's agent, in a message of its own.
 func (c *Coordinator) send(s *state.Store, w *worker, text string) error {
+	return c.sendWith(s, w, text, "baton")
+}
+
+// sendWith is send, with summary for the message's label in the lead's transcript.
+func (c *Coordinator) sendWith(s *state.Store, w *worker, text, summary string) error {
 	now := s.Now()
 	b := c.bridge(s)
 	if w.sending != 0 {
@@ -47,9 +53,12 @@ func (c *Coordinator) send(s *state.Store, w *worker, text string) error {
 			return errSendOpen
 		}
 		b.Void(s.Instance, w.sending) // the mod never ran it: what it said is sent again when it is due
+		if w.wordsCmd == w.sending {
+			w.words, w.wordsCmd = time.Time{}, 0 // the human's words too (toAgents)
+		}
 		w.sending = 0
 	}
-	cmd, err := b.Issue(bridge.Command{Kind: bridge.Send, Instance: s.Instance, Phase: w.phase, Agent: c.agentOf(s, w), Text: text, Summary: "baton"})
+	cmd, err := b.Issue(bridge.Command{Kind: bridge.Send, Instance: s.Instance, Phase: w.phase, Agent: c.agentOf(s, w), Text: text, Summary: summary})
 	if err != nil {
 		return err
 	}
@@ -62,6 +71,9 @@ func (c *Coordinator) send(s *state.Store, w *worker, text string) error {
 // and to one that is gone for good (after /clear), which a fresh agent replaces in its worktree (afresh).
 func (c *Coordinator) sendAcked(s *state.Store, w *worker, r bridge.Report) {
 	w.sending = 0
+	if w.wordsCmd != 0 && r.Command == w.wordsCmd {
+		c.wordsAcked(s, w, r) // the human's words (words.go); a refusal says the same of the agent as any
+	}
 	if r.OK || r.Interrupted {
 		return // an interrupted one may or may not have gone: the loop sends again while it is due
 	}
