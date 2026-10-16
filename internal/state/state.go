@@ -153,6 +153,10 @@ type State struct {
 	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
 	// is reported once.
 	PlanDrift string `json:"plan_drift,omitempty"`
+	// PlanLooked is set once baton has looked at moving the run's plan file out of Claude Code's way
+	// (Aside): as it attached the plan, or, for a plan attached before baton did so, at the lead's next
+	// phase boundary. Whether it moved is the plan's Origin.
+	PlanLooked bool `json:"plan_looked,omitempty"`
 	// Replan is the replan of the phases not started that is open (replan.go), and Replans the replans
 	// baton followed since the human approved the plan, oldest first.
 	Replan  *Replan     `json:"replanning,omitempty"`
@@ -189,8 +193,8 @@ type State struct {
 }
 
 // PlanQuestion is baton's question about a plan the human approved while the run had one. Same says it is
-// in the run's own plan file: Claude Code writes every plan a session makes to the same file, so that is a
-// revision of the plan.
+// in the run's own plan file, or in the one baton moved that from (plan.Plan.Origin): Claude Code writes
+// every plan a session makes to the same file, so that is a revision of the plan.
 type PlanQuestion struct {
 	File     string    `json:"file"`
 	Same     bool      `json:"same"`
@@ -199,6 +203,9 @@ type PlanQuestion struct {
 	// Held is when the human answered Wait for me: nothing changes until they write, or until the hold
 	// lapses (loop's Timing.HoldLapse) and baton answers its default.
 	Held time.Time `json:"held,omitzero"`
+	// Origin is the file the plan was approved in, when baton moved it out of Claude Code's way as it was
+	// approved (a revision of a plan moved before): a plan the answer runs keeps it as its Origin.
+	Origin string `json:"origin,omitempty"`
 }
 
 // New is the state of a project with no plan attached.

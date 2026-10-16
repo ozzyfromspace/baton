@@ -1276,6 +1276,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		}
 		if cleared := peek.Run.ClearedPlan != nil; cleared || tool == "ExitPlanMode" || tool == "AskUserQuestion" && mayStartOver(c) {
 			g = readGround(c, s, cleared)
+			g.aside = lookAside(c, s, peek)
 		}
 	}
 	s, st, err := h.updateRead(c, attaching, func(st *state.State, s *state.Store) error {

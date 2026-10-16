@@ -263,6 +263,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 			l.restartOn(v, st, in)
 			return
 		}
+		l.moveAside(st) // before the compaction would add the plan-mode file to the context once more
 		l.typeCompact(v, st, in)
 	case state.CompactTyped:
 		if comp.Command != 0 {

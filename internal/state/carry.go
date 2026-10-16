@@ -12,7 +12,8 @@ import (
 // plan again from its first phase.
 
 // Orphans lists the runs other than except that have plan file attached and unfinished, and that no live
-// host owns: those a session with no plan of its own may carry on (Carry).
+// host owns: those a session with no plan of its own may carry on (Carry). A plan baton moved out of
+// Claude Code's way is found by the file it was moved from too (RunInfo.Origin).
 func (p *Project) Orphans(file, except string) []RunInfo {
 	if file == "" {
 		return nil
@@ -21,7 +22,7 @@ func (p *Project) Orphans(file, except string) []RunInfo {
 	now := p.Now()
 	var out []RunInfo
 	for _, r := range p.Runs() {
-		if r.ID != except && r.File != "" && planPath(r.File) == file && r.HasPlan() && r.State.Mode != ModeComplete && !r.Live(now) {
+		if r.ID != except && r.planIs(file) && r.HasPlan() && r.State.Mode != ModeComplete && !r.Live(now) {
 			out = append(out, r)
 		}
 	}
@@ -51,7 +52,7 @@ func (p *Project) Carry(session, run, file string) error {
 			}
 		}
 		r := p.info(run, p.refDir(run, ""), nil)
-		if r.File == "" || planPath(r.File) != file || !r.HasPlan() || r.State.Mode == ModeComplete || r.Live(p.Now()) {
+		if !r.planIs(file) || !r.HasPlan() || r.State.Mode == ModeComplete || r.Live(p.Now()) {
 			return fmt.Errorf("run %s is not one of %s to carry on (%s, owned: %v)", run, file, r.State.Mode, r.Live(p.Now()))
 		}
 		return p.writeLink(run, sessionsDir, session)
@@ -69,6 +70,12 @@ func planPath(file string) string {
 		return real
 	}
 	return file
+}
+
+// planIs reports whether run r's plan is file, a path as planPath gives it: its plan file, or the file
+// baton moved that from (Origin).
+func (r RunInfo) planIs(file string) bool {
+	return r.File != "" && planPath(r.File) == file || r.Origin != "" && planPath(r.Origin) == file
 }
 
 // Left is the sessions that belonged to run r before session: those that left it.

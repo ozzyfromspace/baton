@@ -237,7 +237,9 @@ func cmdAttach(args []string, io IO) int {
 	}
 	origin, branch := state.OriginOf(root), gitx.Branch(root) // read before the lock, as is whether it is hosted
 	inSession, isHosted := io.Env("CLAUDE_CODE_SESSION_ID") != "", hosted(io)
-	var boundary bool
+	aside := lookAside(io, s, cur, file)
+	var boundary, moved bool
+	var unmoved error
 	var rec *state.Record
 	st, err := s.Update(func(st *state.State) error {
 		// The plan this replaces keeps its record (its state, plan and notes) as it was before anything
@@ -246,7 +248,13 @@ func cmdAttach(args []string, io IO) int {
 		if rec, err = s.Record(*st); err != nil {
 			return fmt.Errorf("could not keep the record of the plan this replaces: %w", err)
 		}
+		// The session's plan-mode file moves out of Claude Code's way first, and the plan follows it.
+		moved, unmoved = aside.Move(&pl)
 		if err := s.WritePlan(pl); err != nil {
+			if moved {
+				state.Unmove(&pl)
+				moved = false
+			}
 			return err
 		}
 		// The first phase starts from a brief, after a compaction, unless there is nothing before it to
@@ -259,6 +267,7 @@ func cmdAttach(args []string, io IO) int {
 			*st = state.Reattach(*st, pl, io.Now(), origin)
 		}
 		st.RunBranch = branch // workers branch off it, and their work lands on it
+		st.PlanLooked = true
 		return nil
 	})
 	if err != nil {
@@ -268,7 +277,7 @@ func cmdAttach(args []string, io IO) int {
 	replan.KeepApproved(s, pl, kept) // what every replan of it is compared with
 	paused := st.Mode == state.ModePaused
 	chain, _ := pl.LongestChain()
-	attached := map[string]any{"plan": file, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
+	attached := map[string]any{"plan": pl.File, "phases": len(pl.Phases), "longest_chain": chain, "git": gitx.Usable(root), "compact_first": boundary}
 	if branch != "" {
 		attached["branch"] = branch
 	}
@@ -276,6 +285,7 @@ func cmdAttach(args []string, io IO) int {
 		attached["paused"] = true
 	}
 	s.Event("attached", attached)
+	movedAside(io, s, pl, aside, file, moved, unmoved)
 	first := pl.Phases[0]
 	fmt.Fprintf(io.Out, "baton: attached %q — %s (%s). ", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies())
 	switch {
@@ -1292,7 +1302,7 @@ func cmdRun(args []string, io IO) int {
 		}
 		return attach("no plan is underway in this session")
 	}
-	same := file == "" || file == pl.File
+	same := file == "" || file == pl.File || file == pl.Origin && gone(file) // named by the path baton moved it from
 	switch {
 	case st.Mode == state.ModeComplete && !same:
 		return attach(fmt.Sprintf("%q, this session's last plan, is complete", pl.Title))
