@@ -499,3 +499,47 @@ func TestCleanWithoutAProcessTable(t *testing.T) {
 		t.Errorf("the report:\n%s", out.String())
 	}
 }
+
+// A process that carries a gone session's variables is the session's leftover only where the session
+// worked: in the project, its worktrees and lanes, or baton's home. One elsewhere (a gpg-agent or
+// ssh-agent a hosted shell started, in / or the home directory), or where it cannot be told, is the
+// human's own: baton clean neither stops nor lists it, nor what shares its process group.
+func TestCleanLeavesTheHumansDaemonsAlone(t *testing.T) {
+	x := newCleanRig(t)
+	gone := map[string]string{"BATON_DIR": x.proj.Dir, "BATON_INSTANCE": "host-a"}
+	lanes := lane.Pool{Home: x.home, Root: x.repo}.Dir()
+	cases := []struct {
+		name string
+		proc procs.Proc
+		want string // "stopped", "listed", or "" for neither
+	}{
+		{"a gpg-agent in /", procs.Proc{PID: 5101, PPID: 1, PGID: 5101, Comm: "gpg-agent", Cwd: "/", Env: gone}, ""},
+		{"what shares the gpg-agent's group, its environment hidden", procs.Proc{PID: 5102, PPID: 5101, PGID: 5101, Comm: "scdaemon", Cwd: "/"}, ""},
+		{"an ssh-agent in the directory above the project", procs.Proc{PID: 5103, PPID: 1, PGID: 5103, Comm: "ssh-agent", Cwd: filepath.Dir(x.repo), Env: gone}, ""},
+		{"one beside the project, whose name starts the same", procs.Proc{PID: 5104, PPID: 1, PGID: 5104, Comm: "node", Cwd: x.repo + "-other", Env: gone}, ""},
+		{"one whose working directory cannot be read", procs.Proc{PID: 5105, PPID: 1, PGID: 5105, Comm: "node", Env: gone}, ""},
+		{"a dev server in the project", procs.Proc{PID: 5106, PPID: 1, PGID: 5106, Comm: "node", Cwd: filepath.Join(x.repo, "web"), Env: gone}, "listed"},
+		{"one in the model's own worktree", procs.Proc{PID: 5107, PPID: 1, PGID: 5107, Comm: "node", Cwd: filepath.Join(x.repo, ".claude", "worktrees", "w1"), Env: gone}, "listed"},
+		{"one under baton's home", procs.Proc{PID: 5108, PPID: 1, PGID: 5108, Comm: "node", Cwd: filepath.Join(x.home, "worktrees", "elsewhere"), Env: gone}, "stopped"},
+		{"one in the lanes", procs.Proc{PID: 5109, PPID: 1, PGID: 5109, Comm: "node", Cwd: lanes, Env: gone}, "stopped"},
+	}
+	for _, c := range cases {
+		x.table = append(x.table, c.proc)
+	}
+	out, _ := x.clean(false)
+	for _, c := range cases {
+		pid := c.proc.PID
+		var got string
+		switch named, stopped := strings.Contains(out, fmt.Sprintf("process %d (", pid)), slices.Contains(x.stopped, pid); {
+		case stopped && strings.Contains(out, fmt.Sprintf("process %d (%s) in %s: stopped", pid, c.proc.Comm, c.proc.Cwd)):
+			got = "stopped"
+		case !stopped && strings.Contains(out, fmt.Sprintf("process %d (%s) in %s, left by a session that is gone: kill %d", pid, c.proc.Comm, c.proc.Cwd, pid)):
+			got = "listed"
+		case named || stopped:
+			got = fmt.Sprintf("named (%v) or stopped (%v)", named, stopped)
+		}
+		if got != c.want {
+			t.Errorf("%s: %q, want %q\n%s", c.name, got, c.want, out)
+		}
+	}
+}
