@@ -11,8 +11,10 @@ import (
 // A phase agent the human stopped is theirs to decide on, and only theirs: baton asks them whether to
 // restart it, on the lead's screen, and if nobody answers it decides from the record (AgentStopAction).
 // A first stop's agent is restarted unless its work is done; after a second, baton takes the agent down,
-// and a phase whose work is not done waits for the human's answer with no deadline. These are the words
-// of all that, for the human, the board, and the fresh agent.
+// and a phase whose work is not done waits for the human's answer while the rest of the run can go on.
+// Once nothing else can move, baton takes the phase back from its agent, escalation_timeout later, and
+// the lead does it in its session (Taken). These are the words of all that, for the human, the board,
+// the fresh agent and the lead.
 
 // The answers to a question about a stopped agent (state.RelayStopped), and about one baton restarted
 // (state.RelayRestarted), as the human picks them.
@@ -117,11 +119,12 @@ func agentQuestion(r state.Relay, deadline time.Time) string {
 			"in its worktree. Keep it going? Unless you answer by %s, it carries on.", name, r.Phase, by)
 	case r.Persistent():
 		return fmt.Sprintf("baton: you stopped the agent on %s twice, and nobody answered, so baton took it down with %s not done. What should become of %s? "+
-			"baton will not choose for you: %s and the phases that need it wait for your answer, and the rest of the run goes on. "+
-			"If you are away, this question steps aside and comes back when you next write here.", name, r.Phase, r.Phase, r.Phase)
+			"While the rest of the run can go on, baton will not choose for you: %s and the phases that need it wait for your answer. "+
+			"Once nothing else can move, baton takes %s back from its agent, not before %s, and Claude does it in this session. "+
+			"If you are away, this question steps aside and comes back when you next write here.", name, r.Phase, r.Phase, r.Phase, r.Phase, by)
 	case r.Count >= 2:
 		return fmt.Sprintf("baton: you stopped the agent on %s again. Restart it? Unless you answer by %s, baton takes it down, and if %s is not done, "+
-			"asks you what to do with it, with no deadline.", name, by, r.Phase)
+			"asks you what to do with it while the rest of the run goes on.", name, by, r.Phase)
 	}
 	return fmt.Sprintf("baton: you stopped the agent on %s. Restart it? Unless you answer by %s, baton restarts it, or lets it go if its work is done.", name, by)
 }
@@ -193,10 +196,12 @@ func AgentWorkReopened(phase string) string {
 }
 
 // AgentTakenDown tells the human that nobody answered about the agent they stopped twice on phase, whose
-// work is not done: baton took it down, and phase waits for their answer, with no deadline.
-func AgentTakenDown(phase string) string {
+// work is not done: baton took it down, and phase waits for their answer while the rest of the run can go
+// on; once nothing else can move, baton takes it back wait (escalation_timeout) later, for the lead.
+func AgentTakenDown(phase string, wait time.Duration) string {
 	return fmt.Sprintf("baton: nobody answered about the agent you stopped twice on %s, and %s is not done: baton took the agent down, its work kept in its worktree. "+
-		"%s waits for your answer, with no deadline; only %s and the phases that need it wait", phase, phase, phase, phase)
+		"%s and the phases that need it wait for your answer while the rest of the run goes on; once nothing else can move, baton waits %s more, "+
+		"then takes %s back, and Claude does it in this session", phase, phase, phase, Spell(wait), phase)
 }
 
 // AgentTakenDownNotice is pushed to the human as phase waits for their answer (AgentTakenDown).
@@ -248,4 +253,108 @@ func AgentStoppedStand(w state.Worker, asking bool) string {
 		return NeedsAgentAsked
 	}
 	return NeedsAgentStopped
+}
+
+// A twice-stopped phase the run cannot go on without: with nothing else able to move, baton takes it back
+// from its agent escalation_timeout later (loop/stopped.go), and the lead takes it up at a boundary.
+
+// StoppedTakenAnswer closes the question about a twice-stopped phase that baton took back for the lead
+// (state.Relay.Answered, by timeout). Nobody picks it.
+const StoppedTakenAnswer = "Taken back for the lead"
+
+// StoppedTakenWhy is why the worker of a twice-stopped phase that baton took back for the lead ended
+// (Worker.Why).
+const StoppedTakenWhy = "the human stopped its agent twice and did not answer, and nothing else in the run could move: the lead takes its phase up"
+
+// Taken is a twice-stopped phase baton took back for the lead: the decision that records it (ID), the
+// branch its agent's Unlanded commits stay on ("" for none), the snapshot of what it had not committed
+// ("" for none), and its worktree, left in place for the reason Kept gives ("" when it was removed).
+type Taken struct {
+	ID, Phase      string
+	Branch         string
+	Unlanded       int
+	Snapshot       string
+	Worktree, Kept string
+}
+
+// kept says where t's agent's work stays, as clauses that follow a sentence ("; its agent's 3 commits stay
+// on branch b"), or "" when nothing of it stays.
+func (t Taken) kept() string {
+	s := ""
+	if t.Branch != "" && t.Unlanded > 0 {
+		s += fmt.Sprintf("; its agent's %d %s %s on branch %s", t.Unlanded, plural(t.Unlanded, "commit", "commits"), plural(t.Unlanded, "stays", "stay"), t.Branch)
+	}
+	if t.Snapshot != "" {
+		s += "; what it had not committed is saved as " + t.Snapshot
+	}
+	if t.Kept != "" {
+		s += fmt.Sprintf("; its worktree stays at %s, as %s", t.Worktree, t.Kept)
+	}
+	return s
+}
+
+// StoppedTaken tells the human, in the lead's session, that baton took t.Phase back from the agent they
+// stopped twice, as decision t.ID ("" when none could be recorded): nobody answered, and nothing else in
+// the run could move.
+func StoppedTaken(t Taken) string {
+	noted := "baton: "
+	if t.ID != "" {
+		noted = "baton: noted (" + t.ID + ") — "
+	}
+	return fmt.Sprintf("%snobody answered about the agent you stopped twice on %s, and nothing else in the run could move, "+
+		"so baton took %s back from it: Claude takes %s up in this session after a compaction%s. /baton pause stops it",
+		noted, t.Phase, t.Phase, t.Phase, t.kept())
+}
+
+// StoppedTakenNotice is what the human is pushed when baton took phase back from the agent they stopped
+// twice.
+func StoppedTakenNotice(phase string) string {
+	return "nobody answered about the agent you stopped twice on " + phase + ", and the run could go on no other way, so Claude takes " +
+		phase + " up in the lead's session"
+}
+
+// StoppedTakenDecision is the decision baton records as it takes t.Phase back from the agent the human
+// stopped twice: what it did, and how to undo it.
+func StoppedTakenDecision(t Taken) (what, undo string) {
+	what = fmt.Sprintf("took %s back from its agent for Claude to do in the lead's session: the human stopped the agent twice and did not answer "+
+		"what should become of %s, and nothing else in the run could move%s", t.Phase, t.Phase, t.kept())
+	undo = fmt.Sprintf("/baton pause stops the run before Claude goes further with %s; then say what should become of it", t.Phase)
+	return what, undo
+}
+
+// StoppedTakenBrief is the note on t.Phase that the lead's brief quotes as it takes the phase up: why it
+// is the lead's now, and where its agent's work is.
+func StoppedTakenBrief(t Taken) string {
+	s := fmt.Sprintf("[baton] The human stopped the phase agent on %s twice and did not answer baton's question about it, and nothing else in the run could move, "+
+		"so baton took %s back from its agent: you do %s here, in the lead's session. The human gave no reason, so look at what the agent did before you build on it.",
+		t.Phase, t.Phase, t.Phase)
+	if t.Branch != "" && t.Unlanded > 0 {
+		s += fmt.Sprintf(" Its %d %s %s on branch %s, not on the run's branch: to carry on from %s, merge that branch into the run's branch (git merge, never a rebase).",
+			t.Unlanded, plural(t.Unlanded, "commit", "commits"), plural(t.Unlanded, "is", "are"), t.Branch, plural(t.Unlanded, "it", "them"))
+	} else {
+		s += " It left no commits that the run's branch lacks."
+	}
+	if t.Snapshot != "" {
+		s += fmt.Sprintf(" What it had not committed is saved as %s: git show %s shows it.", t.Snapshot, t.Snapshot)
+	}
+	if t.Kept != "" {
+		s += fmt.Sprintf(" Its worktree stays at %s, as %s.", t.Worktree, t.Kept)
+	}
+	return s
+}
+
+// StoppedRunWaits is the lead's stop line with no phase in hand when the run waits on nothing but the
+// human's answer about the agent they stopped twice on phase: unless they answer, baton takes phase back
+// at at, for the lead.
+func StoppedRunWaits(phase string, at time.Time) string {
+	return fmt.Sprintf("baton: no phase can start yet: the run waits on your answer about the agent you stopped twice on %s — unless you answer, "+
+		"baton takes %s back from it at %s, and Claude does it here", phase, phase, at.Local().Format("15:04"))
+}
+
+// StoppedPhaseWaits is added to the lead's stop line with no phase in hand when phase waits on the human's
+// answer about the agent they stopped twice on it, and something else in the run can still move: once
+// nothing can, baton takes phase back wait (escalation_timeout) later, for the lead.
+func StoppedPhaseWaits(phase string, wait time.Duration) string {
+	return fmt.Sprintf("baton: %s waits on your answer about the agent you stopped twice on it; once nothing else in the run can move, baton waits %s more, "+
+		"then takes %s back, and Claude does it here", phase, Spell(wait), phase)
 }
