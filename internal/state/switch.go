@@ -75,7 +75,7 @@ func Switchable(st State) bool {
 		return false
 	case comp.InFlight() || comp.Status == CompactFailed || comp.Status == CompactDone && comp.ByBaton && !st.Run.TurnStarted.After(comp.Finished):
 		return false
-	case st.Blocked != nil || st.Run.Escalation != nil || st.ReviewDue != "" || st.Replan != nil || st.PendingProposal() != nil:
+	case st.Blocked != nil || st.Run.Escalation != nil || st.ReviewDue != "" || st.PlanQuestion != nil || st.PendingProposal() != nil:
 		return false
 	case st.HereGate() != nil:
 		return false

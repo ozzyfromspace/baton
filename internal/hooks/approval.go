@@ -63,9 +63,9 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 	case state.ModeRunning, state.ModePaused:
 		cur, _ := s.LoadPlan()
 		same := cur.File == file
-		q := decide.ReplanQuestion(cur.Title, st.Current, st.Mode, same)
-		st.Replan = &state.Replan{File: file, Same: same, Question: q.Text, Since: c.Now}
-		return valveAction{event: "replan_asked", fields: map[string]any{"plan": file, "same": same},
+		q := decide.PlanQuestion(cur.Title, st.Current, st.Mode, same)
+		st.PlanQuestion = &state.PlanQuestion{File: file, Same: same, Question: q.Text, Since: c.Now}
+		return valveAction{event: "plan_question_asked", fields: map[string]any{"plan": file, "same": same},
 			say:  fmt.Sprintf("baton: you approved a plan while %q is %s → asking you what to do with it", cur.Title, st.Mode),
 			tell: NudgePrefix + " Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you."}
 	}
@@ -160,10 +160,10 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// answeredReplan acts on the human's answer about a plan they approved while the run had one. auto says
-// baton answered it for them, since nobody had by its deadline (decide.ReplanDefault).
-func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, auto bool) valveAction {
-	r := st.Replan
+// answeredPlanQuestion acts on the human's answer about a plan they approved while the run had one. auto says
+// baton answered it for them, since nobody had by its deadline (decide.PlanQuestionDefault).
+func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.Words, auto bool) valveAction {
+	r := st.PlanQuestion
 	if r == nil {
 		return valveAction{}
 	}
@@ -171,23 +171,23 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 	if !found {
 		return valveAction{}
 	}
-	auto = auto && answer == decide.ReplanDefault(r.Same) // baton only ever answers the default
+	auto = auto && answer == decide.PlanQuestionDefault(r.Same) // baton only ever answers the default
 	if answer == "Wait for me" {
 		// Held for the human: nothing changes until they write (userPromptSubmit), and with no word from
 		// them the hold lapses into the default (loop's lapseQuestions).
 		st.Run.HumanAt, r.Held = c.Now, c.Now
-		v := valveAction{event: "replan_held", fields: map[string]any{"plan": r.File, "answer": answer, "by": "human"}}
-		v.say, v.tell = decide.ReplanHolding(r.File, decide.ReplanDefault(r.Same), decide.HoldLapse)
+		v := valveAction{event: "plan_question_held", fields: map[string]any{"plan": r.File, "answer": answer, "by": "human"}}
+		v.say, v.tell = decide.PlanQuestionHolding(r.File, decide.PlanQuestionDefault(r.Same), decide.HoldLapse)
 		return v
 	}
-	st.Replan = nil
+	st.PlanQuestion = nil
 	by, chose := "human", decide.Chose(auto, c.Now)
 	if auto {
 		by = "timeout"
 	} else {
 		st.Run.HumanAt = c.Now
 	}
-	v := valveAction{event: "replan_resolved", fields: map[string]any{"plan": r.File, "answer": answer, "by": by}}
+	v := valveAction{event: "plan_question_resolved", fields: map[string]any{"plan": r.File, "answer": answer, "by": by}}
 	switch answer {
 	case "Continue with the revised plan", "Start the new plan from P0":
 		doc, err := os.ReadFile(r.File)
@@ -208,7 +208,7 @@ func answeredReplan(st *state.State, s *state.Store, c Context, w decide.Words, 
 			a.also = append([]event{{"attached", attachedFields(pl, s.Root)}}, a.also...)
 			if st.Mode == state.ModePaused {
 				state.Resume(st) // the human's answer starts it, paused or not
-				a.also = append(a.also, event{"resumed", map[string]any{"by": "replan"}})
+				a.also = append(a.also, event{"resumed", map[string]any{"by": "plan_question"}})
 			}
 			return a
 		}
@@ -268,12 +268,12 @@ func clearedApproval(st *state.State, c Context) (string, bool) {
 	return a.File, true
 }
 
-// replanHold is why tools are held while baton's question about an approved plan waits to be asked.
-func replanHold(r *state.Replan) string {
-	return NudgePrefix + " Not yet: put baton's question about the plan the human approved to them first: " + replanQuestion(r).Call() + ". Until they answer, nothing else runs."
+// planQuestionHold is why tools are held while baton's question about an approved plan waits to be asked.
+func planQuestionHold(r *state.PlanQuestion) string {
+	return NudgePrefix + " Not yet: put baton's question about the plan the human approved to them first: " + planQuestionOf(r).Call() + ". Until they answer, nothing else runs."
 }
 
-func replanQuestion(r *state.Replan) decide.Question {
+func planQuestionOf(r *state.PlanQuestion) decide.Question {
 	if r.Same {
 		return decide.Question{Text: r.Question, Options: decide.ReviseOptions}
 	}
@@ -286,7 +286,7 @@ func replanQuestion(r *state.Replan) decide.Question {
 // that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
 // took: it starts after the boundary compaction this stop queues.
 func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
-	if pl.File == "" || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
+	if pl.File == "" || st.PlanQuestion != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
 		return "", nil, ""
 	}
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(*st, pl))

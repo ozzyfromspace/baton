@@ -332,7 +332,7 @@ func verdictLine(vd state.Verdict) string {
 // reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	due, mail := st.Due(), st.Mail()
-	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.Replan != nil || st.OwnProposal() != nil {
+	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.PlanQuestion != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {

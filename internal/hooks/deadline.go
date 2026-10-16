@@ -89,16 +89,16 @@ func bound(st *state.State, call []bridge.Asked, asked, now time.Time, warnTimeo
 		if !front {
 			return Wait{For: min(max(due.Sub(now), time.Second), recheck), Answer: answer}
 		}
-	case "escalation", "replan":
+	case "escalation", "plan_question":
 		// baton's own question about the run: the plan goes on (Continue), or a plan the human approved
-		// mid-run gets its default (decide.ReplanDefault). A block is the model's own choice to wait, and is
+		// mid-run gets its default (decide.PlanQuestionDefault). A block is the model's own choice to wait, and is
 		// never answered Continue for the human: once the host's loop finds nobody has answered it for its
 		// BlockLook (State.LookDue), it is answered Look again, and until then the mod asks again.
 		answer = "Continue"
 		e := st.Run.Escalation
 		switch {
-		case iq.kind == "replan":
-			answer = decide.ReplanDefault(st.Replan.Same)
+		case iq.kind == "plan_question":
+			answer = decide.PlanQuestionDefault(st.PlanQuestion.Same)
 		case e == nil:
 			return Wait{}
 		case e.Kind == "blocked":
@@ -248,8 +248,8 @@ func settle(s *state.Store, question, answer string, now time.Time, env func(str
 			return nil
 		}
 		switch {
-		case iq.kind == "replan":
-			v = answeredReplan(st, s, c, w, true)
+		case iq.kind == "plan_question":
+			v = answeredPlanQuestion(st, s, c, w, true)
 		default:
 			if v = answeredProposal(st, c, true); v.event == "" {
 				v = answered(st, c, true, w)

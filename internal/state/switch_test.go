@@ -71,7 +71,7 @@ func TestSwitchable(t *testing.T) {
 		{"blocked", func(st *State) { SetBlocked(st, "x", t0) }, false},
 		{"escalated", func(st *State) { st.Run.Escalation = &Escalation{Kind: "stalled"} }, false},
 		{"a review due", func(st *State) { st.ReviewDue = "P0" }, false},
-		{"a replan waits", func(st *State) { st.Replan = &Replan{File: "x"} }, false},
+		{"a plan question waits", func(st *State) { st.PlanQuestion = &PlanQuestion{File: "x"} }, false},
 		{"a proposal pending", func(st *State) { AddProposal(st, Decision{What: "x"}, t0) }, false},
 		{"background work of the session's own", func(st *State) { st.Run.Background = []Task{{ID: "b1", Type: "shell"}} }, false},
 		{"its gate runs in the working tree", func(st *State) { st.Jobs[0].Here = true }, false},

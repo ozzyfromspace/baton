@@ -63,7 +63,7 @@ func TestRelayDue(t *testing.T) {
 		{"the lead's own proposal", func(st *State) { AddProposal(st, Decision{What: "x"}, t0) }, false},
 		{"the lead's review", func(st *State) { st.ReviewDue = "P1" }, false},
 		{"the context question", func(st *State) { st.Run.WarnQuestion = "baton: context" }, false},
-		{"a plan approved mid-run", func(st *State) { st.Replan = &Replan{File: "p.md"} }, false},
+		{"a plan approved mid-run", func(st *State) { st.PlanQuestion = &PlanQuestion{File: "p.md"} }, false},
 		{"a worker's proposal of the run's own", func(st *State) { AddProposal(st, Decision{What: "x", Relayed: true}, t0) }, true},
 	} {
 		st := running()

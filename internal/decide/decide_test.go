@@ -59,8 +59,8 @@ func TestEachDefaultIsThird(t *testing.T) {
 		dflt string
 	}{
 		{"escalation", EscalationOptions, "Continue"},
-		{"revised plan", ReviseOptions, ReplanDefault(true)},
-		{"another plan", ReplaceOptions, ReplanDefault(false)},
+		{"revised plan", ReviseOptions, PlanQuestionDefault(true)},
+		{"another plan", ReplaceOptions, PlanQuestionDefault(false)},
 		{"context", WarnOptions, "Keep going"},
 		{"proposal", ProposalOptions, "Go ahead"},
 	} {
@@ -73,8 +73,8 @@ func TestEachDefaultIsThird(t *testing.T) {
 			t.Errorf("options %+v: Wait for me is not second", opts)
 		}
 	}
-	if ReplanDefault(true) != "Continue with the revised plan" || ReplanDefault(false) != "Keep the current run" {
-		t.Errorf("replan defaults %q, %q", ReplanDefault(true), ReplanDefault(false))
+	if PlanQuestionDefault(true) != "Continue with the revised plan" || PlanQuestionDefault(false) != "Keep the current run" {
+		t.Errorf("plan question defaults %q, %q", PlanQuestionDefault(true), PlanQuestionDefault(false))
 	}
 }
 

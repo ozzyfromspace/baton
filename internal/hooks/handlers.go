@@ -403,10 +403,10 @@ func holdCall(st *state.State, own bool, w decide.Words) string {
 		return endTurn(st.ReviewDue + " has made as many decisions without the human as baton allows before they review them, and baton stops for that review")
 	case p != nil && !p.Asked:
 		return NudgePrefix + " Not yet: " + decide.AskFirst(*p) + ". Until the human has it, nothing else runs."
-	case st.Replan != nil && !st.Replan.Held.IsZero():
-		return endTurn(decide.ReplanHeldTurn)
-	case st.Replan != nil:
-		return replanHold(st.Replan)
+	case st.PlanQuestion != nil && !st.PlanQuestion.Held.IsZero():
+		return endTurn(decide.PlanQuestionHeldTurn)
+	case st.PlanQuestion != nil:
+		return planQuestionHold(st.PlanQuestion)
 	}
 	return ""
 }
@@ -1051,12 +1051,12 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 			if told, record = tellDecisions(st, s.WorkerDecisions(*st)); record != "" {
 				tell = strings.TrimSpace(tell + "\n\n" + record)
 			}
-			if r := st.Replan; r != nil {
+			if r := st.PlanQuestion; r != nil {
 				// The question about the plan they approved went unanswered, or they chose Wait for me, and
 				// they wrote.
-				st.Replan = nil
-				events = append(events, event{"replan_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
-				tell = strings.TrimSpace(tell + "\n\n" + decide.ReplanUnsettled(r.File, !r.Held.IsZero()))
+				st.PlanQuestion = nil
+				events = append(events, event{"plan_question_resolved", map[string]any{"plan": r.File, "answer": "", "by": "prompt"}})
+				tell = strings.TrimSpace(tell + "\n\n" + decide.PlanQuestionUnsettled(r.File, !r.Held.IsZero()))
 			}
 			st.Run.Progress()
 			st.Run.Escalation = nil
@@ -1262,7 +1262,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				v = approved(st, s, c, approvedFile(c.Input), false, w)
 			case tool == "AskUserQuestion":
 				auto := !closed.AutoAnswered.IsZero() // the host typed its default's key (loop's answerOwnQuestion)
-				if v = answeredReplan(st, s, c, w, auto); v.event == "" {
+				if v = answeredPlanQuestion(st, s, c, w, auto); v.event == "" {
 					if v = answeredProposal(st, c, auto); v.event == "" {
 						if v = answeredReview(st, c); v.event == "" {
 							v = answered(st, c, auto, w)
@@ -1276,7 +1276,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 			// No other question while a proposal, a review or an approved plan waits on the human: one at a
 			// time. A job's result waits too: the model must put the question first. (A phase agent's
 			// proposal is baton's to put to the human, and holds up nothing in the agent.)
-			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.Replan == nil {
+			if v.event == "" && st.OwnProposal() == nil && st.ReviewDue == "" && st.PlanQuestion == nil {
 				dl = take(st, c.Now)
 				news = takeNews(st, s)
 				v = contextValves(st, valve.FromEnv(c.Env), w)

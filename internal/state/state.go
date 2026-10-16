@@ -144,8 +144,8 @@ type State struct {
 	// ReviewAt is when it became due.
 	ReviewDue string    `json:"review_due,omitempty"`
 	ReviewAt  time.Time `json:"review_at,omitzero"`
-	// Replan is a plan the human approved while this run had one, until they say what to do with it.
-	Replan *Replan `json:"replan,omitempty"`
+	// PlanQuestion is a plan the human approved while this run had one, until they say what to do with it.
+	PlanQuestion *PlanQuestion `json:"plan_question,omitempty"`
 	// PlanDrift is the hash of a plan document baton found changed and has already reported, so a change
 	// is reported once.
 	PlanDrift string `json:"plan_drift,omitempty"`
@@ -175,9 +175,10 @@ type State struct {
 	Run Runtime `json:"run"`
 }
 
-// Replan is a plan the human approved while the run had one. Same says it is in the run's own plan file:
-// Claude Code writes every plan a session makes to the same file, so that is a revision of the plan.
-type Replan struct {
+// PlanQuestion is baton's question about a plan the human approved while the run had one. Same says it is
+// in the run's own plan file: Claude Code writes every plan a session makes to the same file, so that is a
+// revision of the plan.
+type PlanQuestion struct {
 	File     string    `json:"file"`
 	Same     bool      `json:"same"`
 	Question string    `json:"question"` // the question baton issued, exactly as issued
