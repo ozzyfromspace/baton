@@ -36,9 +36,17 @@ change during a session's life: in a real lead's transcript (this plan's own run
 changed at a compaction, after which the plan file of the old slug was no longer attached, and the new slug's file was
 attached at each of the six compactions after the next planning wrote it (27,884 to 32,851 characters each).
 
-The session was not hosted: the attachment is Claude Code's own, and what it reads (the slug and the folder) is the
-same under baton. A hosted run, where baton moves the plan as it attaches it and the mod compacts the lead at the
-phase boundary, is the e2e scenario of P11.
+That session was not hosted: the attachment is Claude Code's own, and what it reads (the slug and the folder) is the
+same under baton.
+
+**Hosted, with baton moving the plan** (`hosted.py <workroot> <baton>`, after the change below): a dev build of baton
+hosts claude with this repository's plugin (baton's mod with it) and a scratch `BATON_HOME`, in a fresh repo with
+`plansDirectory` set; the script plays the human as the e2e harness does (plan mode, a two-phase plan, Enter on each
+dialog baton logs). baton turned back the first `ExitPlanMode` (`directives_asked`), the model resubmitted, the human
+approved; baton attached the plan and moved `plans/plan-this-tiny-task-staged-ullman.md` to
+`plans/spike-thirty-eight.md` (`plan_moved`, by approval, announced on screen), and the mod compacted the lead at the
+boundary (`compact_asked`). After that boundary, 21 attachments and **no `plan_file_reference`**; P0's brief named the
+plan at its new path, and P0 ran and was reported done.
 
 ## What it means for baton (v0.8.6)
 
