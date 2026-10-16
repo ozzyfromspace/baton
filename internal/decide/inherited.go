@@ -28,8 +28,8 @@ func RunCarried(title, from string, done, all int, at string) string {
 	if at != "" {
 		where = "at " + at
 	}
-	return fmt.Sprintf("baton: carried on the run of %q that session %s left with no baton host: %d of %d phases done, %s. "+
-		"This session goes on where it stood, with its notes and decisions.", title, from, done, all, where)
+	return fmt.Sprintf("baton: carried on the run of %q that session %s left with no baton host: %d of %s done, %s. "+
+		"This session goes on where it stood, with its notes and decisions.", title, from, done, PhaseCount(all), where)
 }
 
 // CarriedOn tells the model what to do once its session carried a run on that has nothing to resume:

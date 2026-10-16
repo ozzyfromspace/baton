@@ -83,6 +83,23 @@ func TestListsKeepTheNewest(t *testing.T) {
 // A proposal answered Not now, by baton or by the human, is left for the human unless the model did it as
 // the safe kind and noted it: baton status lists it, and the plan's end names it, to the human and to the
 // model that sums the run up.
+// A plan of one phase reads as one: "1 phase", never "1 phases".
+func TestOnePhaseIsCountedAsOne(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{PhaseCount(1), "1 phase"},
+		{PhaseCount(12), "12 phases"},
+		{PlanDone(1, 0, 0), "its 1 phase done"},
+		{PlanDone(1, 1, 0), "its 1 phase done · 1 decision made without you — /baton status"},
+		{AttachedAtBoundary("T", 1, "/p.md", "P0"), `[baton] baton attached the plan the human just approved: "T", 1 phase (/p.md).`},
+		{Words{}.AttachedNow("T", 1, "/p.md", "P0", "Fix it"), `[baton] baton attached the plan you were just given: "T", 1 phase (/p.md),`},
+		{RunCarried("T", "s1", 0, 1, "P0"), `baton: carried on the run of "T" that session s1 left with no baton host: 0 of 1 phase done, at P0.`},
+	} {
+		if !strings.HasPrefix(c.got, c.want) {
+			t.Errorf("%q, want it to start %q", c.got, c.want)
+		}
+	}
+}
+
 func TestProposalsAnsweredNotNowAreLeftForTheHuman(t *testing.T) {
 	deadline := time.Date(2026, 10, 15, 13, 40, 0, 0, time.Local)
 	ds := []state.Decision{

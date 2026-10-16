@@ -6,6 +6,7 @@ import (
 	"fmt"
 	goio "io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,7 +36,8 @@ import (
 //  4. the unfinished jobs of abandoned runs: marked interrupted, and each runner still running told to stop;
 //  5. the lanes nobody holds (lane.Pool.Sweep);
 //  6. processes that sessions which are gone left running (spike 28): those working under baton's home
-//     are stopped, the others listed with the command to stop each;
+//     are stopped, those in the project listed with the command to stop each; one working elsewhere (a
+//     gpg-agent a hosted shell started) is the human's own, and left out;
 //  7. records of runs and sessions that are gone, and temporary files that interrupted writes left;
 //  8. elevation records older than a day.
 //
@@ -704,6 +706,12 @@ func (c *cleaner) processes() {
 		trees = append(trees, filepath.Clean(t), resolved(t))
 	}
 	project := resolved(c.proj.Dir)
+	// Where a session's leftovers work: the project (with the model's own worktrees), the worktrees on
+	// record, the lanes and baton's home. A process working elsewhere, or where it cannot be told (a
+	// gpg-agent or ssh-agent a hosted shell started, in / or the home directory), is the human's own,
+	// though it carries a gone session's variables.
+	where := append([]string{filepath.Clean(c.proj.Root), resolved(c.proj.Root)}, homes...)
+	where = append(append(where, ours...), slices.Collect(maps.Keys(l.named))...)
 	mine := c.ancestors()
 	skip := func(p procs.Proc) bool {
 		return l.jobPIDs[p.PID] || l.jobGroups[p.PGID] || mine[p.PID] || c.group > 1 && p.PGID == c.group
@@ -712,7 +720,7 @@ func (c *cleaner) processes() {
 	var stopped []procs.Proc
 	for _, p := range l.table {
 		inst := p.Env["BATON_INSTANCE"]
-		if skip(p) || p.Hidden() || inst == "" || l.protected[inst] || resolved(p.Env["BATON_DIR"]) != project {
+		if skip(p) || p.Hidden() || inst == "" || l.protected[inst] || resolved(p.Env["BATON_DIR"]) != project || !under(p.Cwd, where) {
 			continue
 		}
 		groups[p.PGID] = p.PID

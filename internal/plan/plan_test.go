@@ -183,13 +183,131 @@ func TestShaped(t *testing.T) {
 	}{
 		{"# T\n\n## P0 — A\nx\n\n## P1 — B\ny\n", true},
 		{"# T\n\n### Phase 1: A\nx\n\n### Phase 2: B\ny\n", true},
-		{"# T\n\n## P0 — Only one\nx\n", false},
-		{"# T\n\n- **P0 A:** x\n- **P1 B:** y\n", false},
-		{"# Fix the login bug\n\nChange the check in auth.go.\n", false},
+		{"# T\n\n## P0 — Only one\nx\n", true}, // a small task can be one phase
+		{"# T\n\n## Standing rules\nr\n\n## P0 — Only one\nx\n\n## Verification\nv\n", true},
+		{"# T\n\n### Phase 1: Only one\nx\n", true},
+		{"# T\n\n- **P0 A:** x\n- **P1 B:** y\n", false}, // phases, but not at headings of their own
+		{"# T\n\n- **P0 Only one:** x\n", false},
+		{"# T\n\n| P0 | A | x |\n| P1 | B | y |\n", false},
+		{"# Fix the login bug\n\nChange the check in auth.go.\n", false}, // no phase at all: not baton's
+		{"", false},
 	} {
 		if got := Shaped(Suggest([]byte(c.doc))); got != c.want {
 			t.Errorf("%q: %v, want %v", c.doc, got, c.want)
 		}
+	}
+}
+
+// A small task can be a plan of one phase: it builds, its section and rules read as in any plan, its
+// graph is one step wide, and a phase the human adds later joins it.
+func TestOnePhasePlan(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "plan.md")
+	doc := "# Fix the login bug\n\n## Standing rules\nr\n\n## P0 — Fix it\n\nAfter: none\n\nChange the check.\n\n## Verification\nv\n"
+	os.WriteFile(file, []byte(doc), 0o644)
+	spec := Suggest([]byte(doc))
+	if !Shaped(spec) || spec.RulesAnchor != "## Standing rules" || spec.EndAnchor != "## Verification" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	p, err := Build(file, []byte(doc), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Phases) != 1 || len(p.Deps("P0")) != 0 || p.Width() != 1 || !p.Sequential() {
+		t.Errorf("graph: %s, width %d", graphOf(p), p.Width())
+	}
+	if k, chain := p.LongestChain(); k != 1 || chain[0] != "P0" {
+		t.Errorf("LongestChain = %d %v", k, chain)
+	}
+	if steps := p.Steps(); len(steps) != 1 || len(steps[0]) != 1 {
+		t.Errorf("Steps = %v", steps)
+	}
+	if p.NextQA("P0") != nil || p.QAAhead("P0") != "" || len(p.SinceQA("P0")) != 0 {
+		t.Error("a one-phase plan has no QA phase ahead")
+	}
+	if sec, err := p.Section([]byte(doc), 0); err != nil || sec != "## P0 — Fix it\n\nAfter: none\n\nChange the check." {
+		t.Errorf("Section = %q, %v", sec, err)
+	}
+	if got := p.Rules([]byte(doc)); got != "## Standing rules\nr" {
+		t.Errorf("Rules = %q", got)
+	}
+	if only, err := p.Only("P0"); err != nil || len(only.Phases) != 1 {
+		t.Errorf("Only = %+v, %v", only, err)
+	}
+	os.WriteFile(file, []byte(doc+"\n## P1 — Follow up\nmore\n"), 0o644)
+	adopted, changed, err := Recheck(p, nil)
+	if err != nil || !changed || len(adopted.Phases) != 2 || adopted.Phases[1].ID != "P1" {
+		t.Errorf("Recheck = %s, %v, %v", graphOf(adopted), changed, err)
+	}
+}
+
+// A plan may quote its own headings: in its text, at a line's end, or in an example. Each anchor baton
+// suggests still occurs once, at the heading itself, so the plan attaches as it is.
+func TestAPlanThatQuotesItsOwnHeadingsAttaches(t *testing.T) {
+	doc := "# T\n\n## Decisions\n\nThe goal sections (`## Standing rules`, `## Verification`) stay; `## P1 — Second` waits.\n" +
+		"A phase's text runs up to ## Verification\n\n" +
+		"```markdown\n## Standing rules\n## P0 — Example\n## P9 — Not a phase\n```\n\n" +
+		"## Standing rules\n\nBe careful.\n\n## P0 — First\n\nAfter: none\n\nDo a.\n\n## P1 — Second\n\nAfter: P0\n\nDo b.\n\n" +
+		"## Verification\n\nAll green.\n"
+	spec := Suggest([]byte(doc))
+	if !Shaped(spec) || len(spec.Phases) != 2 {
+		t.Fatalf("spec = %+v", spec)
+	}
+	for _, c := range []struct{ name, anchor, want string }{
+		{"rules", spec.RulesAnchor, "## Standing rules\n\nBe careful."},
+		{"P0", spec.Phases[0].Anchor, "## P0 — First"},
+		{"P1", spec.Phases[1].Anchor, "## P1 — Second\n"},
+		{"end", spec.EndAnchor, "## Verification\n\nAll green."},
+	} {
+		if c.anchor != c.want {
+			t.Errorf("%s anchor = %q, want %q", c.name, c.anchor, c.want)
+		}
+	}
+	p, err := Build("plan.md", []byte(doc), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Rules([]byte(doc)); got != "## Standing rules\n\nBe careful." {
+		t.Errorf("Rules = %q", got)
+	}
+	if sec, _ := p.Section([]byte(doc), 1); sec != "## P1 — Second\n\nAfter: P0\n\nDo b." {
+		t.Errorf("P1 section = %q", sec)
+	}
+	if graphOf(p) != "P0[] P1[P0]" {
+		t.Errorf("graph %s", graphOf(p))
+	}
+	// A phase added later beside a quote of its heading joins with an anchor of its own.
+	edited := doc + "\n## P2 — Third\n\nDo c.\n\nNote: `## P2 — Third` is new.\n"
+	if added := Added(p, []byte(edited)); len(added) != 1 || added[0].Anchor != "## P2 — Third\n" {
+		t.Errorf("Added = %+v", added)
+	}
+	// A heading written twice is two headings: no anchor reaches into the next one to tell them apart.
+	twice := doc + "\n## P2 — Third\n\n## P2 — Third\n"
+	if added := Added(p, []byte(twice)); len(added) != 1 || added[0].Anchor != "## P2 — Third" {
+		t.Errorf("Added twice = %+v", added)
+	}
+}
+
+// Headings in a fenced code block are an example, not the plan's: they are neither phases nor its title.
+func TestFencedHeadingsAreNotThePlans(t *testing.T) {
+	for _, c := range []struct {
+		name, doc, title string
+		phases           int
+	}{
+		{"backticks", "```sh\n# run it\n```\n# Real\n\n## P0 — A\nx\n", "Real", 1},
+		{"tildes", "# Real\n\n~~~\n## P0 — Example\n~~~\n\n## P0 — A\nx\n\n## P1 — B\ny\n", "Real", 2},
+		{"a longer fence holds a shorter one", "# Real\n\n````\n```\n## P5 — Example\n```\n````\n\n## P0 — A\nx\n", "Real", 1},
+		{"only an example", "# Real\n\n```\n## P0 — Example\n```\n", "Real", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			spec := Suggest([]byte(c.doc))
+			if spec.Title != c.title || len(spec.Phases) != c.phases {
+				t.Errorf("spec = %+v", spec)
+			}
+			if _, err := Build("p.md", []byte(c.doc), spec); c.phases > 0 && err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }
 

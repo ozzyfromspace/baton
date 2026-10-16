@@ -200,3 +200,26 @@ func TestUntoldBackgroundWork(t *testing.T) {
 		}
 	}
 }
+
+// Work told about at its start is told once, and forgotten when no Stop reports it any more; a Monitor's
+// told id goes with it.
+func TestToldBackgroundWorkIsForgottenWhenItEnds(t *testing.T) {
+	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	var r Runtime
+	if !r.Tell("b1") || r.Tell("b1") || r.Tell("") || !r.Tell("m1") {
+		t.Fatalf("told %v", r.BackgroundTold)
+	}
+	r.Watch("m1")
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}}, t0)
+	if r.Untold(r.BusyBackground()) || len(r.BackgroundTold) != 2 {
+		t.Fatalf("told %v", r.BackgroundTold)
+	}
+	r.SetBackground([]Task{{ID: "b1", Type: "shell"}}, t0.Add(time.Minute))
+	if len(r.BackgroundTold) != 1 || r.BackgroundTold[0] != "b1" || len(r.Monitors) != 0 {
+		t.Fatalf("after the monitor ended: told %v, monitors %v", r.BackgroundTold, r.Monitors)
+	}
+	r.SetBackground(nil, t0.Add(2*time.Minute))
+	if len(r.BackgroundTold) != 0 {
+		t.Fatalf("after the work ended: told %v", r.BackgroundTold)
+	}
+}

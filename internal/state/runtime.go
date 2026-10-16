@@ -43,8 +43,10 @@ type Runtime struct {
 	Subagents int `json:"subagents"`
 	// Background is the in-flight background work Claude Code reported at the last Stop.
 	Background []Task `json:"background,omitempty"`
-	// BackgroundTold are the ids of the background work a stop was last refused over, so the model has
-	// been told to keep working meanwhile: another stop on that work is allowed.
+	// BackgroundTold are the ids of the background work the model has been told to keep working beside:
+	// with the result of the tool call that started it (Tell), or by a stop refused over work whose start
+	// baton did not see. A stop on that work is allowed. The ids of work no Stop reports any more are
+	// forgotten (SetBackground).
 	BackgroundTold []string `json:"background_told,omitempty"`
 	// Monitors are the task ids of the Monitor watchers the session armed (PostToolUse(Monitor)
 	// tool_response.taskId), while they still run. Claude Code reports a Monitor at Stop as type "shell",
@@ -117,6 +119,9 @@ type Runtime struct {
 	// DirectivesAsked lists the plan files whose first ExitPlanMode baton answered with its request to flag
 	// the instructions that compete with the plan (once each).
 	DirectivesAsked []string `json:"directives_asked,omitempty"`
+	// UnbuiltAsked lists the plan texts (a hash of each) whose ExitPlanMode baton turned back because it
+	// could not attach them as written (once each).
+	UnbuiltAsked []string `json:"unbuilt_asked,omitempty"`
 	// DirectivesPending is the plan file asked about whose ExitPlanMode has not come again yet: a stop in
 	// plan mode before it is turned back once, so the plan still reaches the human.
 	DirectivesPending string      `json:"directives_pending,omitempty"`
@@ -555,10 +560,20 @@ func (r Runtime) PhaseAgents() []Task {
 	return out
 }
 
-// Untold reports whether bg holds work the model has not been told about at a stop: work that started
-// since the last stop refused over background work.
+// Untold reports whether bg holds work the model has not been told about: work whose start baton did not
+// see (a subagent of its model's started it, or the call's result named no task) and that no stop was
+// refused over since.
 func (r Runtime) Untold(bg []Task) bool {
 	return slices.ContainsFunc(bg, func(t Task) bool { return !slices.Contains(r.BackgroundTold, t.ID) })
+}
+
+// Tell records that the model has been told of background work id, and reports whether that was news.
+func (r *Runtime) Tell(id string) bool {
+	if id == "" || slices.Contains(r.BackgroundTold, id) {
+		return false
+	}
+	r.BackgroundTold = append(r.BackgroundTold, id)
+	return true
 }
 
 // Oldest is when the longest-running of tasks was first reported (zero for none).
@@ -592,8 +607,8 @@ func (r *Runtime) Watch(id string) {
 }
 
 // SetBackground records the background work a Stop reported at now, keeping when each task was first
-// reported, and forgets the Monitors that have ended: a Monitor's PostToolUse always comes before the
-// Stop of its turn, so one missing from the list is gone.
+// reported, and forgets the Monitors and the work told about that have ended: the PostToolUse of the call
+// that started a task always comes before the Stop of its turn, so one missing from the list is gone.
 func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 	for i := range tasks {
 		tasks[i].Since = now
@@ -602,9 +617,9 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 		}
 	}
 	r.Background = tasks
-	r.Monitors = slices.DeleteFunc(r.Monitors, func(id string) bool {
-		return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id })
-	})
+	gone := func(id string) bool { return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id }) }
+	r.Monitors = slices.DeleteFunc(r.Monitors, gone)
+	r.BackgroundTold = slices.DeleteFunc(r.BackgroundTold, gone)
 }
 
 // Spawning is the call baton's mod makes in the lead's session to start the phase agent on Phase: the Agent

@@ -52,16 +52,21 @@ func ReplanQuestion(title, phase, mode string, same bool) Question {
 // AttachedAtBoundary tells the model baton attached the plan just approved and will compact before its
 // first phase, so the turn must end now.
 func AttachedAtBoundary(title string, phases int, file, first string) string {
-	return fmt.Sprintf("[baton] baton attached the plan the human just approved: %q, %d phases (%s). Do not start %s in this turn: end your turn now. "+
+	return fmt.Sprintf("[baton] baton attached the plan the human just approved: %q, %s (%s). Do not start %s in this turn: end your turn now. "+
 		"baton compacts the planning conversation away and starts %s with a fresh brief: the phase's instructions, the standing rules and your notes.",
-		title, phases, file, first, first)
+		title, PhaseCount(phases), file, first, first)
 }
 
 // AttachedNow tells the model baton attached the plan it was just handed after a "clear context"
 // approval: the context is fresh already, so the first phase starts at once.
 func (w Words) AttachedNow(title string, phases int, file, first, firstTitle string) string {
-	return fmt.Sprintf("[baton] baton attached the plan you were just given: %q, %d phases (%s), and runs it phase by phase, compacting the context between phases. "+
-		"Work on %s (%s) only. %s", title, phases, file, first, firstTitle, w.Reporting())
+	return fmt.Sprintf("[baton] baton attached the plan you were just given: %q, %s (%s), and runs it phase by phase, compacting the context between phases. "+
+		"Work on %s (%s) only. %s", title, PhaseCount(phases), file, first, firstTitle, w.Reporting())
+}
+
+// PhaseCount says how many phases a plan has: "1 phase", "12 phases".
+func PhaseCount(n int) string {
+	return fmt.Sprintf("%d %s", n, plural(n, "phase", "phases"))
 }
 
 // ReplanDefault is what baton answers, when nobody has by its deadline, about a plan the human approved
