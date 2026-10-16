@@ -48,13 +48,16 @@ func LeftForYou(ds []state.Decision) []state.Decision {
 	return out
 }
 
-// PlanDone says a plan is complete: how many phases it had, how many decisions the run (its workers too)
-// made without the human, and how many of its proposals were answered Not now (left for them), which
-// baton status lists.
-func PlanDone(phases, decided, left int) string {
+// PlanDone says a plan is complete: how many phases it had, what phase agents saved it (Saved), how many
+// decisions the run (its workers too) made without the human, and how many of its proposals were
+// answered Not now (left for them), which baton status lists.
+func PlanDone(phases, decided, left int, saving state.Saving) string {
 	s := fmt.Sprintf("all %d phases done", phases)
 	if phases == 1 {
 		s = "its 1 phase done"
+	}
+	if saved := Saved(saving); saved != "" {
+		s += " · " + saved
 	}
 	if decided > 0 {
 		s += " · " + Tally(decided)
@@ -66,6 +69,29 @@ func PlanDone(phases, decided, left int) string {
 		s += " — /baton status"
 	}
 	return s
+}
+
+// Saved says what phase agents saved a complete plan (state.Saving), for the human: "phase agents saved
+// about 3h20m: 8h29m of phase work in 5h09m". Each figure is to the minute (to the second under one), and
+// what was saved is the difference of the two shown, so that a line in minutes adds up. "" for a plan no
+// phase agent worked on.
+func Saved(s state.Saving) string {
+	if s.Agents == 0 {
+		return ""
+	}
+	work, wall := roundSpan(s.Work), roundSpan(s.Wall)
+	if saved := work - wall; saved > 0 {
+		return fmt.Sprintf("phase agents saved about %s: %s of phase work in %s", Span(saved), Span(work), Span(wall))
+	}
+	return fmt.Sprintf("phase agents saved no time: %s of phase work in %s", Span(work), Span(wall))
+}
+
+// roundSpan is d rounded for Span, which cuts what it does not show: to the minute, or under one to the second.
+func roundSpan(d time.Duration) time.Duration {
+	if d = d.Round(time.Second); d >= time.Minute {
+		return d.Round(time.Minute)
+	}
+	return d
 }
 
 // Happened says what a decision made without the human did: a note, or a proposal baton went ahead with,

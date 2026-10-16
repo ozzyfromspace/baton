@@ -88,8 +88,8 @@ func TestOnePhaseIsCountedAsOne(t *testing.T) {
 	for _, c := range []struct{ got, want string }{
 		{PhaseCount(1), "1 phase"},
 		{PhaseCount(12), "12 phases"},
-		{PlanDone(1, 0, 0), "its 1 phase done"},
-		{PlanDone(1, 1, 0), "its 1 phase done · 1 decision made without you — /baton status"},
+		{PlanDone(1, 0, 0, state.Saving{}), "its 1 phase done"},
+		{PlanDone(1, 1, 0, state.Saving{}), "its 1 phase done · 1 decision made without you — /baton status"},
 		{AttachedAtBoundary("T", 1, "/p.md", "P0"), `[baton] baton attached the plan the human just approved: "T", 1 phase (/p.md).`},
 		{Words{}.AttachedNow("T", 1, "/p.md", "P0", "Fix it"), `[baton] baton attached the plan you were just given: "T", 1 phase (/p.md),`},
 		{RunCarried("T", "s1", 0, 1, "P0"), `baton: carried on the run of "T" that session s1 left with no baton host: 0 of 1 phase done, at P0.`},
@@ -139,7 +139,7 @@ func TestProposalsAnsweredNotNowAreLeftForTheHuman(t *testing.T) {
 		{0, 1, "all 4 phases done · 1 proposal left for you — /baton status"},
 		{1, 2, "all 4 phases done · 1 decision made without you · 2 proposals left for you — /baton status"},
 	} {
-		if got := PlanDone(4, c.decided, c.left); got != c.want {
+		if got := PlanDone(4, c.decided, c.left, state.Saving{}); got != c.want {
 			t.Errorf("plan done (%d, %d): %q, want %q", c.decided, c.left, got, c.want)
 		}
 	}
@@ -157,5 +157,41 @@ func TestProposalsAnsweredNotNowAreLeftForTheHuman(t *testing.T) {
 	}
 	if got := VerifiedComplete(nil); !strings.HasSuffix(got, "the plan is complete. Summarize the results for the human, and end your turn.") {
 		t.Errorf("verified complete: %q", got)
+	}
+}
+
+// The plan's end says what phase agents saved it, in figures that add up, and nothing of it for a plan no
+// phase agent worked on.
+func TestPlanDoneSaysWhatPhaseAgentsSaved(t *testing.T) {
+	h, m, s := time.Hour, time.Minute, time.Second
+	for _, c := range []struct {
+		name   string
+		saving state.Saving
+		want   string
+	}{
+		{"a figure", state.Saving{Work: 8*h + 29*m, Wall: 5*h + 9*m, Agents: 3}, "phase agents saved about 3h20m: 8h29m of phase work in 5h09m"},
+		{"to the minute, adding up", state.Saving{Work: 8*h + 29*m + 40*s, Wall: 5*h + 9*m + 20*s, Agents: 3}, "phase agents saved about 3h21m: 8h30m of phase work in 5h09m"},
+		{"under an hour", state.Saving{Work: 50 * m, Wall: 30*m + 10*s, Agents: 1}, "phase agents saved about 20m: 50m of phase work in 30m"},
+		{"under a minute", state.Saving{Work: 50 * s, Wall: 20 * s, Agents: 1}, "phase agents saved about 30s: 50s of phase work in 20s"},
+		{"nothing saved", state.Saving{Work: h, Wall: 10 * h, Agents: 1}, "phase agents saved no time: 1h00m of phase work in 10h00m"},
+		{"less than a minute saved", state.Saving{Work: h + 20*s, Wall: h, Agents: 1}, "phase agents saved no time: 1h00m of phase work in 1h00m"},
+		{"no agents", state.Saving{Work: 3 * h, Wall: 2 * h}, ""},
+	} {
+		if got := Saved(c.saving); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		decided int
+		saving  state.Saving
+		want    string
+	}{
+		{0, state.Saving{Work: 8*h + 29*m, Wall: 5*h + 9*m, Agents: 3}, "all 4 phases done · phase agents saved about 3h20m: 8h29m of phase work in 5h09m"},
+		{2, state.Saving{Work: 8*h + 29*m, Wall: 5*h + 9*m, Agents: 3}, "all 4 phases done · phase agents saved about 3h20m: 8h29m of phase work in 5h09m · 2 decisions made without you — /baton status"},
+		{2, state.Saving{Work: 3 * h, Wall: 2 * h}, "all 4 phases done · 2 decisions made without you — /baton status"},
+	} {
+		if got := PlanDone(4, c.decided, 0, c.saving); got != c.want {
+			t.Errorf("plan done (%d, %+v): %q, want %q", c.decided, c.saving, got, c.want)
+		}
 	}
 }

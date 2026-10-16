@@ -118,7 +118,7 @@ func (c *Coordinator) merge(now time.Time, s *state.Store) {
 			continue
 		}
 		if sub, err := w.store.Load(); err == nil && sub.Mode == state.ModeComplete {
-			c.queue(now, s, w, *e)
+			c.queue(now, s, w, *e, finishedAt(sub, e.Phase, now))
 		}
 	}
 	if st, err = s.Load(); err != nil || st.Mode != state.ModeRunning {
@@ -147,13 +147,22 @@ func (c *Coordinator) session(e state.Worker) *worker {
 	return nil
 }
 
-// queue puts worker e, whose phase is finished, in the merge queue.
-func (c *Coordinator) queue(now time.Time, s *state.Store, w *worker, e state.Worker) {
+// queue puts worker e, whose phase its sub-run finished at finished, in the merge queue.
+func (c *Coordinator) queue(now time.Time, s *state.Store, w *worker, e state.Worker, finished time.Time) {
 	c.setEntry(s, e, func(x *state.Worker) {
-		x.Status, x.Since, x.Merge = state.WorkerLanding, now, &state.Merge{Queued: now}
+		x.Status, x.Since, x.Merge, x.Finished = state.WorkerLanding, now, &state.Merge{Queued: now}, finished
 	})
 	s.Event("land_queued", map[string]any{"phase": e.Phase, "branch": e.Branch})
 	c.announce(s, fmt.Sprintf("baton: %s is finished → its work waits to land on the run's branch", e.Phase))
+}
+
+// finishedAt is when sub-run sub, complete, finished phase: its done on record, or now for none (or one
+// ahead of now's clock).
+func finishedAt(sub state.State, phase string, now time.Time) time.Time {
+	if ps := sub.Phases[phase]; ps != nil && !ps.DoneAt.IsZero() && !ps.DoneAt.After(now) {
+		return ps.DoneAt
+	}
+	return now
 }
 
 // land works on landing worker e, whose session this host runs as w, in the run whose state is st. It
@@ -486,6 +495,7 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 	var next string
 	var complete bool
 	var done string
+	var saving state.Saving
 	before, _ := s.Load()
 	workers := s.WorkerDecisions(before) // read before the run's lock is taken: no code holds two
 	_, err := s.Update(func(st *state.State) error {
@@ -496,8 +506,9 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		if complete = st.Mode == state.ModeComplete && !st.Run.CompleteNotified; complete {
 			// The lead holds no phase, so no stop of its own reports the plan complete.
 			st.Run.CompleteNotified = true
+			saving = state.SavingOf(*st)
 			done = decide.PlanDone(len(pl.Phases), len(decide.WithoutHuman(st.Decisions))+len(decide.WithoutHuman(workers)),
-				len(decide.LeftForYou(st.Decisions))+len(decide.LeftForYou(workers)))
+				len(decide.LeftForYou(st.Decisions))+len(decide.LeftForYou(workers)), saving)
 			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "plan_complete", Text: pl.Title + ": " + done, At: now})
 		}
 		return nil
@@ -528,7 +539,7 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		s.Event("compact_queued", map[string]any{"reason": "boundary", "next": next, "by": "landed"})
 		c.announce(s, fmt.Sprintf("baton: %s can start → compacting, then %s starts", next, next))
 	case complete:
-		s.Event("plan_complete", map[string]any{"by": "landed"})
+		s.Event("plan_complete", saving.Log(map[string]any{"by": "landed"}))
 		c.announce(s, "baton: plan complete — "+done)
 	}
 	if w := c.session(e); w != nil {

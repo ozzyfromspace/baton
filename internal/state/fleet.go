@@ -55,11 +55,13 @@ type Worker struct {
 	Status string `json:"status"`
 	Why    string `json:"why,omitempty"` // why it is suspended or failed
 	// Assigned is when it was given its phase, Since when it took its status, Started when its first agent
-	// started, and Ended when its agent last ended.
+	// started, and Ended when its agent last ended. Finished is when its sub-run last finished the phase,
+	// as the merge queue took it: its agents' work ends there, not at its landing (SavingOf).
 	Assigned time.Time `json:"assigned"`
 	Since    time.Time `json:"since"`
 	Started  time.Time `json:"started,omitzero"`
 	Ended    time.Time `json:"ended,omitzero"`
+	Finished time.Time `json:"finished,omitzero"`
 	// Generation is the run's generation it was assigned under (State.Generation).
 	Generation int `json:"generation,omitempty"`
 	// Retiring is when Retirer (a host's instance, or a command) began to retire it (loop.RetireWorker).
