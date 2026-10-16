@@ -21,19 +21,21 @@ After that message, run echo hello, and report the phase done.
 Run echo goodbye.
 `
 
-// The watchdog: the model starts background work that outlives its turn and stops on it. baton refuses
-// that stop once, then lets the next one through. Background work keeps reminders away only so long (20s
-// here, an hour for real): then baton types one, and the model continues and reports.
+// The watchdog: the model starts background work that outlives its turn and stops on it. baton tells it
+// of that work with the result of the call that started it (background_told), so the stop is allowed, not
+// refused. Background work keeps reminders away only so long (20s here, an hour for real): then baton
+// types one, and the model continues and reports.
 func TestWatchdogLooksInOnLongBackgroundWork(t *testing.T) {
 	dir := NewProject(t)
 	Attach(t, dir, backgroundPlan)
 	s := StartEnv(t, dir, []string{"BATON_IDLE_NUDGE=10s", "BATON_BACKGROUND_IDLE=20s"}, "--model", "haiku", "Run the plan's phase P0 now.")
 	s.Trust()
 	waitSequence(t, s, 4*time.Minute,
-		func(e map[string]any) bool { return e["kind"] == "stop_refused" && e["why"] == "background work" },
+		is("background_told", "via", "start", "tool", "Bash"),
 		kind("idle_on_background"),
 		kind("idle_nudge"),
 		func(e map[string]any) bool { return e["kind"] == "turn_started" && e["by"] == "baton" },
 		func(e map[string]any) bool { return e["kind"] == "phase_done" && e["phase"] == "P0" },
 	)
+	none(t, s, "stop_refused")
 }
