@@ -129,7 +129,7 @@ func Rebuild(p Plan, was, doc []byte) (Plan, error) {
 	}
 	spec.RulesAnchor = keptAnchor(text, p.RulesAnchor, sug.RulesAnchor)
 	spec.EndAnchor = keptAnchor(text, p.EndAnchor, sug.EndAnchor)
-	return Build(p.File, doc, spec)
+	return build(p.File, doc, spec, idSet(p)) // p's own ids pass as they are: a started phase's never changes
 }
 
 // keptAnchor is anchor have where text still has it once, else the suggested one.

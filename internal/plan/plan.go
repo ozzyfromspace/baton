@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -119,14 +118,17 @@ type Spec struct {
 	EndAnchor   string  `json:"end_anchor,omitempty"`
 }
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
-
 // Build validates spec against the plan document's text and returns the plan to store, with each phase's
 // dependencies derived from the text. Every error names the exact problem so the model can fix its spec
-// (or the plan) and retry.
+// (or the plan) and retry. Each phase's id names its agent (names.go).
 func Build(file string, doc []byte, spec Spec) (Plan, error) {
+	return build(file, doc, spec, nil)
+}
+
+// build is Build, where the ids of kept pass as they are (checkIDs).
+func build(file string, doc []byte, spec Spec, kept map[string]bool) (Plan, error) {
 	text := string(doc)
-	if errs := validate(text, spec); len(errs) > 0 {
+	if errs := append(checkIDs(spec.Phases, kept), validate(text, spec)...); len(errs) > 0 {
 		return Plan{}, errors.Join(errs...)
 	}
 	sum := sha256.Sum256(doc)
@@ -152,23 +154,15 @@ func Build(file string, doc []byte, spec Spec) (Plan, error) {
 	return p, nil
 }
 
-// validate checks a spec's ids, titles and anchors against the plan text.
+// validate checks a spec's titles and anchors against the plan text (its ids: checkIDs).
 func validate(text string, spec Spec) []error {
 	var errs []error
 	if len(spec.Phases) == 0 {
 		errs = append(errs, errors.New("the spec has no phases"))
 	}
-	seen := map[string]bool{}
 	prev := -1
 	for i, ph := range spec.Phases {
 		where := fmt.Sprintf("phase %d (%q)", i+1, ph.ID)
-		if !idPattern.MatchString(ph.ID) {
-			errs = append(errs, fmt.Errorf("%s: id must be 1–32 letters, digits, '.', '_' or '-', starting with a letter or digit", where))
-		}
-		if seen[ph.ID] {
-			errs = append(errs, fmt.Errorf("%s: duplicate id", where))
-		}
-		seen[ph.ID] = true
 		if strings.TrimSpace(ph.Title) == "" {
 			errs = append(errs, fmt.Errorf("%s: title is empty", where))
 		}
@@ -391,7 +385,8 @@ func Follow(p Plan, doc []byte, remaining []string) (adopted Plan, changed bool,
 			spec.EndAnchor = ""
 		}
 	}
-	if errs := validate(text, spec); len(errs) > 0 {
+	// A phase the text adds names its agent too, apart from every phase of the plan; the plan's own pass.
+	if errs := append(checkIDs(phases, idSet(p)), validate(text, spec)...); len(errs) > 0 {
 		return p, true, errors.Join(errs...)
 	}
 	adopted.EndAnchor = spec.EndAnchor
