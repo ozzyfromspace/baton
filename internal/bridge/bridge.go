@@ -46,7 +46,8 @@ const (
 	Stop  = "stop"  // end a running agent (TaskStop)
 	Ask   = "ask"   // ask the human in Claude Code's own question dialog
 	// Compact compacts the lead's conversation, between turns, as /compact would; the mod acks it as it
-	// starts it, and reports it compacted (or not) when it is over. Claude Code refuses it while a turn runs.
+	// starts it, and reports it compacted (or not) when it is over. Claude Code refuses it while a turn runs:
+	// one refused while the lead's turn runs the mod holds, and starts at that turn's end, up to 30 s.
 	Compact = "compact"
 	// Submit submits a line of baton's to the lead's model as a prompt of its own, read as one typed; the
 	// draft in the input box stays. One submitted while a turn runs waits for the turn's end.

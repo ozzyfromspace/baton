@@ -337,14 +337,14 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
 	case len(st.Run.BusyBackground()) > 0:
 		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.
-		// The first stop on new work is refused once, since there is usually something to do meanwhile.
-		// After that the stop is allowed: the work wakes the session when it ends, and the watchdog looks
-		// in if it runs long.
+		// The model is told to keep working meanwhile as the work starts, with the result of the call that
+		// started it (tellBackground); the first stop on work whose start baton did not see is refused once
+		// to tell it then. After that the stop is allowed: the work wakes the session when it ends, and the
+		// watchdog looks in if it runs long.
 		bg := st.Run.BusyBackground()
 		if st.Run.Untold(bg) {
-			st.Run.BackgroundTold = nil
 			for _, t := range bg {
-				st.Run.BackgroundTold = append(st.Run.BackgroundTold, t.ID)
+				st.Run.Tell(t.ID)
 			}
 			d.refuse(w.BackgroundStop(backgroundWhat(bg)))
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "background work", "tasks": len(bg)})

@@ -31,6 +31,24 @@ func TestSanitize(t *testing.T) {
 }
 
 // The deadline a question names is never earlier than the timeout, and baton never goes ahead before it.
+// A plan that would not attach is turned back with each problem on a line of its own, at most ten.
+func TestPlanUnbuiltListsItsProblems(t *testing.T) {
+	got := PlanUnbuilt([]string{"phase 2 (\"P0\"): duplicate id"})
+	if !strings.Contains(got, "as written, so the human's approval would not start it:\n\n- phase 2 (\"P0\"): duplicate id\n\nFix the plan") {
+		t.Errorf("one problem: %q", got)
+	}
+	var many []string
+	for range 13 {
+		many = append(many, "a problem")
+	}
+	if got := PlanUnbuilt(many); strings.Count(got, "\n- a problem") != 10 || !strings.Contains(got, "\n- and 3 more\n") {
+		t.Errorf("thirteen problems: %q", got)
+	}
+	if got := PlanUnbuiltSaid("x"); got != "baton: the plan would not attach as written (x) → Claude fixes it before you see it" {
+		t.Errorf("said %q", got)
+	}
+}
+
 func TestDeadlineRoundsUpToTheMinute(t *testing.T) {
 	at := func(s string) time.Time { tm, _ := time.Parse(time.TimeOnly, s); return tm }
 	for _, c := range []struct {
