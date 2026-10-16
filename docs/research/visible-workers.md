@@ -388,7 +388,9 @@ which a mod may not make. baton can draw the same grouping in its own band or pa
 - **Compaction hooks without `agent_id`.** Answered for baton by the transcripts (spike 32), but worth reporting to
   Claude Code: a settings hook cannot tell whose compaction it is.
 - **A deadline on baton's question** with no key typed: answered by spike 34, where baton's mod runs. Where it
-  does not (serial mode), v0.7's typed answer stays, guarded by baton's question being the only dialog open.
+  does not (serial mode), v0.7's typed answer stayed, guarded by baton's question being the only dialog open, until
+  v0.8.6 replaced its `3` with an Esc that picks no option anywhere
+  ([spike 39](../../spikes/39-escape-answers/README.md)).
 - **Not yet seen:** phases that run for hours, and a real usage limit (spike 32 injected one).
 - **One process.** Every phase agent lives in the lead's claude: one crash takes them all down (and v0.7 brings them
   back), and they share its memory and its rate limits.

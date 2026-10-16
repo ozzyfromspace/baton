@@ -45,7 +45,9 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
   anchor is a verbatim snippet checked to occur once in the plan file, so baton needs no heading parser. Every write
   is locked and atomic, and a lock is held for that write alone: commands, process and transcript reads and the
   network come before it or after it. A hold over a second, or a waiter that gives up after 5, names the holder in
-  the log. A run follows its conversation through `--resume` and `/clear`.
+  the log. An update that changes nothing writes nothing, and on macOS a write is synced with a plain `fsync`,
+  not the `F_FULLFSYNC` that stalls for seconds on a busy disk; a temporary file an interrupted write left is
+  swept as the host starts. A run follows its conversation through `--resume` and `/clear`.
 - **Handing a session over.** `/baton start` records the session. Once its turn ends, the plugin's Stop hook ends
   claude, and the `baton init` shell hook relaunches the same conversation under baton. A host that finds a newer
   compatible baton installed restarts its session on it in place, resuming the same conversation.
@@ -89,6 +91,14 @@ own headings, and fenced code is passed over, so the anchor occurs once.
   A stop in plan mode before the plan reaches the human is turned back once too.
 - **The shape line.** As the plan goes to the human, they see its shape in one line: `baton: 12 phases · longest
   chain 5 (P1 → P7 → P8 → P9 → P11) · up to 7 at once`.
+- **Out of Claude Code's way.** After every compaction, Claude Code adds the session's plan-mode file
+  (`<plansDirectory>/<slug>.md`) to the conversation in full, for as long as that file exists, on top of baton's
+  brief, which already quotes the phase, the standing rules and the notes. In a real run that was about 32k tokens
+  of every phase's starting context, and no setting turns it off. So when baton attaches a plan from that file, it
+  renames it in its folder to a name from the plan's title, follows it there, and says so; renamed, it is attached
+  no more ([spike 38](../spikes/38-plan-file-reference/README.md)). Claude Code writes the session's next plan at
+  the old path, so an approval there is a revision of the run's plan, moved aside in its turn. A run attached
+  before baton did this has its plan moved before the compaction that starts the lead's next phase.
 
 ### Replans
 
@@ -107,10 +117,11 @@ how; the host decides when, and whether the result stands.**
   next phase's, and the lead replans, runs `baton replanned`, then begins the phase. `auto_replan: false` turns them
   off.
 - **A draft, checked.** `baton replan` copies the plan file to a draft and prints the brief: the phases not started
-  and those that started, the shape now, the shape rules, the human's words, and what this replan may change. The
-  model edits only the draft, and ends with `baton replanned --notes "<what changed and why>"`, or `--none "<why>"`.
-  baton checks the draft before the plan file is touched: one that fails is refused with each thing it may not
-  change, and the model fixes it.
+  and those that started, the shape now, the shape rules, the human's words, and what this replan may change. It
+  also names, as information, the phases not started that could run at once and whose sections name the same
+  file: they collide when they land. The model edits only the draft, and ends with `baton replanned --notes "<what
+  changed and why>"`, or `--none "<why>"`. baton checks the draft before the plan file is touched: one that fails is
+  refused with each thing it may not change, and the model fixes it.
 - **What each kind may change.** Phases that started or are done never change, and the order and `After:` lines of
   the rest always may.
   - After an upgrade or at a QA phase, that is all: every other byte of each phase stays as approved, so however
@@ -138,8 +149,9 @@ how; the host decides when, and whether the result stands.**
    baton), and names the way forward. After three refusals in a row, it escalates.
    The model hears of its own background work (a command run in or moved to the background, a Monitor, a
    background agent) with the result of the call that starts it: the work wakes it when it ends, so it keeps working
-   on what does not depend on that, and with nothing left, ends its turn. Its stop over that work is then allowed;
-   the refusal that says the same is left for work whose start baton did not see.
+   on what does not depend on that, starts no loop or other background task only to wait for it, and with nothing
+   left, ends its turn. Its stop over that work is then allowed; the refusal that says the same is left for work
+   whose start baton did not see.
    The boundary that the model's own `done` owes holds the rest of its turn, and its stop queues the compaction; so
    does the lead's `done` of a worker's phase (below).
 2. The host asks the mod to compact the lead once nothing is in the way: no turn, no dialog, none of the lead's own
@@ -169,18 +181,35 @@ with a call's result, that the next phase comes after this turn and not to start
 for the turn's stop. A boundary that does hold a turn says what comes next: the phase begins, resumes, or reopens
 after its verification failed.
 
-**Mid-phase valves.** The status line gives the exact context size. At 60% of the limit (the model's window, or the
-`--autocompact` cap if smaller), the model is asked to checkpoint at its next safe point, which goes through the same
-loop. At 90%, but never under 200k tokens, the human is asked whether to checkpoint now; unanswered for 10 minutes,
-baton keeps going. Claude Code's own compaction, 33k tokens below the limit, is the backstop.
+**Mid-phase valves.** The status line gives the exact context size. Three lines are percentages of the limit (the
+model's window, or the `--autocompact` cap if smaller):
+- at 60% (`notice_pct`), a heads-up: the model is told where its context stands, that nothing is asked of it now,
+  and to make the room last (a line range or a grep rather than a whole file, short command output);
+- at 80% (`checkpoint_pct`), the model is asked to checkpoint at its next safe point, which goes through the same
+  loop, and asked again at every further tenth;
+- at 90% (`warn_pct`), but never under 200k tokens, the human is asked whether to checkpoint now; unanswered at
+  `escalation_timeout`, baton keeps going.
+
+Phase agents get the first two (for them a checkpoint is a fresh agent from their notes). With an 810k cap the lines
+are 486k, 648k and 729k, and Claude Code's own compaction, 33k tokens below the limit (777k), is the backstop; where a
+small window would put a line at or after that, every line is its percentage of where Claude Code compacts instead.
+The checkpoint came at 60% until v0.8.6. Every compaction restarts the lead at about 180k tokens (about 32k of it was
+the plan file, before baton moved it out of the way), so a stretch had about 300k tokens of room, and in a real run
+the lead checkpointed 9 times mid-phase against 7 phase boundaries. At 80% a stretch has about 470k; the 129k left
+before Claude Code compacts is about 14 minutes at that run's pace, where models acted within 1 to 10 minutes of the
+ask, and Claude Code itself starts precomputing its summary near 80% of its window.
 
 **The watchdog** catches a run that has gone quiet: idle turns, stale gates, unanswered prompts, usage limits and API
 errors. Everything baton waits on either clears by itself or expires into action, except an open permission prompt.
 Each loop's watchdog stays quiet while it waits on something that ends by itself, so **the stall alarm** looks at the
-run as a whole, about once a minute: with the plan running and phases left, nothing busy (a tool call, the model's
-own background work, a gate whose log still grows), and nothing in the lead's run or any phase agent's sub-run moved
-for 20 minutes, it pushes the human one notice naming what each phase waits on. It holds nothing, and the run moving
-arms it again. A usage limit, an open dialog and a machine just woken are never a stall.
+run as a whole, about once a minute: with the plan running and phases left, nothing busy, and nothing in the lead's
+run or any phase agent's sub-run moved for 20 minutes, it pushes the human one notice naming what each phase waits
+on. Busy is a tool call, the model's own background work, a wait on something outside (`await`) or a gate waiting
+for a lane while its runner beats, and a gate whose log grows or, with its log still, whose processes used CPU since
+the alarm's last look, as the check that stops a hung gate reads it: in a real run, a QA gate whose tests printed
+nothing for an hour while they worked raised a false alarm. Where the CPU can't be read, the log decides. The alarm
+holds nothing, and the run moving arms it again. A usage limit, an open dialog and a machine just woken are never a
+stall.
 
 ## Gates
 
@@ -202,6 +231,16 @@ queued again replaces the one that runs (the gate on a newer commit, or the wait
 naming the job that runs: the model stops it with `--replace`, folds both into one command, or queues its own once
 the result comes. The phase stands on its latest job of each kind: it is done once both passed, and reopens on the
 first red.
+
+**A red gate stands until the same check passes.** v0.8.4 shipped a regression its own full end-to-end gate had
+caught: the result showed the log's tail, which held only the last failure, the model gated again with a one-test
+`-run`, baton let that narrower gate stand in for the red one, and the log was later pruned. Now a gate that passes
+clears a red one only if it runs the same command (in a lane or `--here`); another command's pass leaves the phase
+red, and the model is told so as it queues it and when it passes. `baton verify --replace` makes another command the
+phase's gate, recorded as a decision the human is told of, and `baton done --despite-red` stays for what is not the
+phase's to fix. A result lists the lines that report a failure anywhere in the log (`--- FAIL`, `FAILED`, `panic:`,
+`✗` and the like, at most 20) before its tail, and the log of every red job is kept, and goes with the plan's record
+when another plan replaces it.
 
 A gate that hangs in silence is stopped: a `verify` job whose log has not grown and whose processes used no CPU for 20
 minutes ends unverified, with the reason, and the model is told. Log silence alone never stops one, so where the CPU
@@ -225,7 +264,10 @@ Each other phase that can start runs as a **phase agent**: a background agent of
 - **The bridge** is files and the CLI:
   - host to mod: numbered command files under `.baton/runs/<run>/mod/`, each addressed to one host instance,
     idempotent, and retried until acked;
-  - mod to host: `baton mod report`, with each report recorded once, under the run's lock.
+  - mod to host: `baton mod report`, with each report recorded once, under the run's lock. A report of the lead's
+    compaction is counted in the run's state before the bridge records it, so a report process killed between the
+    two (the mod gives it 15 seconds, above two lock waits) loses nothing: the mod sends it again, and it counts
+    once.
 - **Placing.** The mod spawns one agent at a time, and baton's `WorktreeCreate` hook makes its worktree (under
   `~/.baton/worktrees/`, on the branch `baton/<run>/<phase>`). A model's own isolated subagent gets a plain worktree,
   as Claude Code would make it.
@@ -247,9 +289,14 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   - An agent the human stopped from the agent panel is asked about in the lead's terminal: Restart it · Leave it
     stopped · Pause baton. Unanswered at `escalation_timeout`, baton decides from its record: an agent whose work is
     done (its phase done and not red, or landed) is let go and its work lands; otherwise the first stop restarts it
-    and tells the human, and a second takes it down and asks the human what to do with the phase, with no deadline,
-    since they are the one in the way. That question steps aside after `escalation_timeout` and comes back when they
-    next write; only that phase and those that need it wait. Leave it stopped, and `/baton run` starts a fresh agent.
+    and tells the human, and a second takes it down and asks the human what to do with the phase, with no deadline
+    while the rest of the run can go on, since they are the one in the way. That question steps aside after
+    `escalation_timeout` and comes back when they next write; only that phase and those that need it wait. Once
+    nothing else can move (no phase can start, no other agent is at work, and the lead is idle), baton waits
+    `escalation_timeout` more, then takes the phase back from the agent, and the lead does it in its session,
+    merging the agent's branch if it builds on it, never rebasing. That is a decision without the human, with
+    `/baton pause` as its undo; before it, the lead's stop line says when it comes, and an answer from the human
+    wins. Leave it stopped, and `/baton run` starts a fresh agent.
   - An agent's permission prompt holds that agent alone where the mod runs: the lead's compaction, its deliveries and
     its switching go on under it, and the prompt survives them ([spike 36](../spikes/36-agent-dialog/)). In serial
     mode any dialog holds the lead, since a typed key would answer the agent's prompt.
@@ -272,6 +319,11 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   the lead's `baton done <phase>` records it landed, as a decision without the human with its undo, and the host
   retires the agent, saving what it had not committed as a snapshot first. Otherwise the refusal says how to finish
   the phase: its agent's own `done`, or a merge into the run's branch first.
+- **What they saved.** As the plan completes, baton says what phase agents saved: the phases' working time (a phase
+  the lead did, from its start to its done; an agent's, from its agent's start to its finish, not to its landing,
+  which waits on the merge queue and the lead) against the wall clock from the first phase's start, as in "phase
+  agents saved about 3h20m: 8h29m of phase work in 5h09m". The wall clock runs through every wait, so the figure is
+  never more than the work done side by side, and never below zero. `baton status` shows it for a complete plan.
 - **Serial mode.** With no hello from the mod, there are no phase agents: the lead works the phases in turn, as
   `workers: 0` does.
 
@@ -296,12 +348,13 @@ interface had made *notify* and *halt* the same operation.
   action and must make progress, the replay finished the plan 4 times in 4.
 - **Every refusal names the way forward,** from one playbook: commit degraded rather than lose work, take a
   worse-but-working path, propose a way around a rule. `blocked` needs `--tried`.
-- **Nothing waits on the human for what baton can decide** (v0.8.3, v0.8.4). With no deadline, baton waits on them
-  only where they chose it (Pause baton, `/baton pause`, a `max_auto_decisions` they set, a phase agent they stopped
-  twice whose work is not done) or where nothing in baton can answer (a permission prompt, the usage limit, a login
-  or billing error, a refusal, which is never retried). Every other wait has a deadline, and the deadline picks the
-  model's side: the human said they would rather correct an assumption later than find a run idle for hours, and
-  that nothing should wait more than a few minutes, 20 at most. Only a block waits longer, 30 minutes, as below.
+- **Nothing waits on the human for what baton can decide** (v0.8.3, v0.8.4, v0.8.6). With no deadline, baton waits
+  on them only where they chose it (Pause baton, `/baton pause`, a `max_auto_decisions` they set, a phase agent they
+  stopped twice whose work is not done, while the rest of the run can go on) or where nothing in baton can answer
+  (a permission prompt, the usage limit, a login or billing error, a refusal, which is never retried). Every other
+  wait has a deadline, and the deadline picks the model's side: the human said they would rather correct an
+  assumption later than find a run idle for hours, and that nothing should wait more than a few minutes, 20 at most.
+  Only a block waits longer, 30 minutes, as below.
 - **Wait for me lapses.** A hold the human chose (Wait for me, on a proposal or on one of baton's questions) lasts
   until they write, or for 20 minutes with no word from them. Then it lapses into the question's default, and the
   model is told.

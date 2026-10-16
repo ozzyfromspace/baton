@@ -3,9 +3,10 @@
 **In short:** which Claude Code behaviours could stall or loop an unattended run, and the "nothing waits forever"
 rework they led to: every gate baton waits on expires (a stale turn, a screen that keeps redrawing, background work, a
 draft), escalations clear themselves or are pushed again, a failed compaction is retried, API errors are classified,
-and the 90% context question goes ahead with "Keep going" after 20 minutes. Its "only `SessionStart(compact)` proves
-a compaction" became v0.8's proof ([`visible-workers.md`](visible-workers.md)), and its declared waits became v0.4's
-jobs ([`parallel.md`](parallel.md)).
+and the 90% context question goes ahead with "Keep going" when nobody answers it (after 20 minutes then; since v0.8.3
+at `escalation_timeout`, 10 minutes by default). Its "only `SessionStart(compact)` proves a compaction" became v0.8's
+proof ([`visible-workers.md`](visible-workers.md)), and its declared waits became v0.4's jobs
+([`parallel.md`](parallel.md)).
 
 Measured and read on 2026-10-04 against Claude Code 2.1.289 (macOS, arm64), with [`spikes/15-gates-and-signals`](../../spikes/15-gates-and-signals) and the 2.1.289 binary. This is the evidence behind the "nothing waits forever" rework of the host loop and hooks.
 
@@ -49,6 +50,7 @@ The question was which non-deterministic behaviors could stall an unattended run
 
 - **The 90% context question times out.** After 20 minutes unanswered, the host answers "Keep going" itself. In a probe, a digit selected that option of a single-question dialog at once, with no review step (`spikes/15-gates-and-signals/ask_keys.py`), and a digit doesn't depend on where the highlight is. The answer arrives through the usual `PostToolUse` hook.
   - *Revised for v0.2* (`docs/research/escalation.md`). v0.1.1 typed `2`, into the dialog it recorded last. Dialogs form a queue, and a background subagent's permission prompt can be on screen in front of the question; there `2` means "Yes, and always allow". So the options became `Checkpoint now` · `Pause baton` · `Keep going`, the default third, and the host types `3`, which in a Bash permission prompt means "No".
+  - *Revised since.* Since v0.8.3 the question waits `escalation_timeout` (10 minutes by default, at most 20), as every question of baton's does. Since v0.8 baton's mod settles it at that deadline where the mod runs, with no key typed. Since v0.8.6, where it does not, the host dismisses it with Esc and records Keep going itself: on Claude Code 2.1.30x a Bash prompt's `3` is "Yes, and switch to auto mode" ([`escalation.md`](escalation.md), spike 39).
   - The host types only when its question is the **only** dialog open, and only into an entry the hooks marked as baton's own question. The clock starts when the question is first alone, and any key the human presses starts it over. A draft in the input box no longer holds it: keys go to the dialog.
 - **Questions the model asks on its own are refused while a plan runs**, unless the human started the turn. The refusal tells the model to decide, note its assumption, or run `baton blocked`, which notifies the human.
   - *Revised for v0.2.* baton's own questions are allowed only exactly as issued: the same text (whitespace aside), the same options in the same order, single-select. v0.1 let through anything that started with `baton:`. A question that starts with `baton:` while baton has one waiting must be that one, word for word, even in a turn the human started. In an end-to-end run, Haiku dropped the context question's last sentence; the host did not recognize the dialog and never answered it. Refused with the exact call, the model asks it again as issued.

@@ -4,6 +4,117 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-10-16
+
+A read-only review of a real run's last 15½ hours (a 57-phase plan, hosted by v0.8.4 and then v0.8.5) found
+nothing that threatened to derail it, but a list of lost time and a few latent bugs, and v0.8.5's own release
+and its records showed more. The lead checkpointed 9 times mid-phase against 7 phase boundaries: baton asked for
+a checkpoint at 60% of the limit (486k of 810k), and every compaction restarted the lead at about 180k, about
+32k of it the plan file, which Claude Code attaches in full again after every compaction. A false stall alarm
+was pushed for a QA gate whose tests printed nothing for an hour while they worked. The run had 6 lock timeouts
+and a failed host heartbeat, and left 7 stray temporary state files, and in v0.8.5 the loop tests got slower on
+every system (Linux 18 s to 20 s, macOS 81 s to 116 s, Windows about 8 to 11 minutes). v0.8.4 shipped a regression
+its own full end-to-end gate had caught, because a narrower gate that passed stood in for the red one. A stray
+key could misanswer two of baton's questions, and a phase agent you stopped twice could stall a run for good.
+So the model now gets a heads-up at 60% and the checkpoint ask at 80%, baton moves the plan file out of Claude
+Code's way, and each of the rest is fixed.
+
+A session on v0.8.x moves to v0.8.6 by itself at its next restart point; `baton update` updates baton's host
+and its mod together. A run attached before v0.8.6 from the session's plan-mode file has that file moved before
+the compaction that starts the lead's next phase. A `checkpoint_pct` you set keeps its value. The planning rules
+did not change (`plan.RulesVersion` stays 1), so no run is replanned for this upgrade.
+
+### Added
+- **A heads-up at 60% of the context.** At `notice_pct` (60 by default, `0` off; `BATON_NOTICE_PCT`) the model
+  is told where its context stands, that nothing is asked of it now, and to make the room last (a line range or
+  a grep rather than a whole file, short command output), beside a tool result and never as a block, once a
+  stretch (`context_notice`). The lead and phase agents get it, and `baton setup` and `baton status` show its
+  line.
+- **The plan moved out of Claude Code's way.** After every compaction Claude Code attaches the session's
+  plan-mode file (`<plansDirectory>/<slug>.md`) to the conversation in full while it exists
+  (`plan_file_reference`), on top of baton's brief; no setting turns it off. Spike 38 found that renaming the
+  file stops it, and that a later planning simply writes a fresh one. So when baton attaches a plan from that
+  file, and no other live run uses it, it renames it in its folder to a name from the plan's title (never over
+  another file), follows it there, and tells you the new path (`plan_moved`, or `plan_not_moved` with why;
+  `plan.json` keeps the old path as `plan_origin`). An approval at the old path is a revision of the run's plan,
+  as one of its own file was, and is moved aside in its turn.
+- **What phase agents saved.** When a plan completes, baton says it: "phase agents saved about 3h20m: 8h29m of
+  phase work in 5h09m". The work counts each agent's phase from its start to its finish (`Worker.Finished`), not
+  to its landing, and the wall clock runs from the first phase's start. `plan_complete` logs `agent_phases`,
+  `work_seconds`, `wall_seconds` and `saved_seconds`, and `baton status` shows the line for a complete plan.
+- **A replan's brief names phases that share files.** It lists the phases not started that could run at once and
+  whose sections name the same file, as information: they collide when they land (`replan_opened` logs
+  `shared`). What a replan may change is the same.
+
+### Changed
+- **The checkpoint is asked at 80% of the context,** not 60% (`checkpoint_pct`). With an 810k cap: the
+  heads-up at 486k, the checkpoint at 648k, your question at 729k (`warn_pct`, unchanged), Claude Code's own
+  compaction at 777k. A stretch from a 180k floor has about 470k tokens of room instead of about 300k, so about a
+  third fewer mid-phase checkpoints; the 129k left before Claude Code compacts was about 14 minutes at the real
+  run's pace, where models acted within 1 to 10 minutes of the ask. Where a small window would put any line at or
+  after Claude Code's own compaction, every line is its percentage of where Claude Code compacts.
+- **A red gate stands until the same check passes.** After a phase's `verify` goes red, a passing `verify` of
+  another command (one test of a red suite) no longer clears it: the model is told so as it queues it
+  (`red_gate` on `job_queued`) and when it passes, and `baton done` names the command that must pass. `baton
+  verify --replace` makes another command the phase's gate, recorded as a decision you're told of
+  (`replaces_gate`); `--despite-red` is unchanged.
+- **A result lists failures from the whole log.** Before the log's end, a job's result lists the lines that
+  report a failure anywhere in it (`--- FAIL`, `FAIL`, `FAILED`, `panic:`, `✗`; at most 20, each clipped), so a
+  failure early in a long log is no longer lost behind its tail. The log of every red job is kept, and goes with
+  the plan's record into `gen-<N>/jobs/` when another plan replaces it.
+- **Wait for me comes first on the mid-run plan question.** Its options were Start the new plan from P0, Wait
+  for me, then the default, so a second Enter set the run's progress aside. Now they are Wait for me, Start the
+  new plan from P0, then the default (Continue with the revised plan, or Keep the current run): a stray Enter
+  holds the run, and lapses into the default.
+- **Serial mode answers its own question by Esc, never a digit.** Where baton's mod doesn't run, the host typed
+  `3` into its own unanswered question, on the premise that `3` is "No" in a permission prompt should one be in
+  front of it. On Claude Code 2.1.30x it is "Yes, and switch to auto mode" (spike 39). The host now dismisses the
+  question with Esc, which picks no option in any dialog (it rejects a permission prompt, and leaves a draft and
+  background agents alone), and records the question's default itself, since no hook reports a dismissal
+  (`auto_answered` with `key: esc`). It still acts only while its question is the only dialog open.
+- **Unchanged state is not rewritten, and macOS syncs with a plain `fsync`.** Every update rewrote and synced
+  `state.json` even when nothing changed, and on macOS Go's sync is `F_FULLFSYNC`, which stalls for seconds on a
+  busy disk (per 6 KB write under load: 21 to 40 ms, against 13 to 15 for `fsync`). An update that changes
+  nothing now writes nothing, a bridge's too (1,899 of 4,435 bridge writes in the loop tests changed nothing),
+  and the write's rename stays atomic.
+- **Background work is never polled.** baton's reminders of the model's background work, and the skill, now say
+  never to start a loop or another background task only to wait for one: Claude Code wakes the model when it
+  ends. The real run's lead had started such loops.
+- `compact_reported`, `compact_declined` and `compact_started` are now logged before the `mod_*` event of the
+  report that carries them, and `baton clean` takes a stray temporary file once it is a minute old, not ten.
+
+### Fixed
+- **The loop tests are fast again.** Lock holds and `state.json` writes per test were the same at v0.8.4 and
+  v0.8.5 (75,316 against 75,443 holds; 12,193 against 12,226 writes). The slowdown was v0.8.5's record of a
+  lock's holder: two writes of the lock file on every hold, reads included, 150,886 more writes in the loop
+  tests, and on a loaded Mac a lock and unlock went from 0.09 ms to 3.8 ms. A holder now records itself only
+  once it has held the lock for 100 ms: 22 such writes. The loop tests' per-test minimum times add up to 122.7 s,
+  against 263.1 s at v0.8.5 and 229.6 s at v0.8.4.
+- **No false stall alarm for a gate that works in silence.** The stall alarm called a gate whose log had not
+  grown for 20 minutes hung, though the check that stops hung gates rightly also wants its processes idle. A
+  quiet gate now counts as busy while its process tree uses CPU (where it can't be read, the log decides), and a
+  wait on something outside (`await`), or a gate waiting for a lane, while its runner beats.
+- **No compaction report is lost to a killed report process.** The mod gave `baton mod report` 5 seconds, while
+  one report may wait on two locks of up to 5 seconds each, and a report killed after the bridge recorded it but
+  before the run's state did was lost for good (its resend was a duplicate). A report of the lead's compaction is
+  now counted in the run's state first, once, so its resend is counted, and the mod gives a report, and `baton
+  board`, 15 seconds.
+- **Stray temporary files are swept.** Temporary files that interrupted writes left under `.baton/` are removed
+  once a minute old, as the host starts and by `baton clean`.
+- **A phase agent you stopped twice no longer stalls the run for good.** Taken down with its work not done, its
+  phase waited on your answer with no deadline, and when every phase left needed it, the run stopped, while the
+  lead's stop line said baton would take the next phase up as soon as one could. While the rest of the run can
+  go on, that is unchanged; once nothing else can move, baton waits `escalation_timeout` more, then takes the
+  phase back from the agent, and the lead does it in its session, its brief saying why and where the agent's
+  work is (merge its branch, never rebase). It is a decision with its undo (`/baton pause`), announced, pushed
+  and logged (`stopped_phase_taken`); until then the lead's stop line names the phase and when
+  (`stopped_phase_waits`), and your answer wins.
+- **A phase agent's loop no longer logs "typing anyway".** It types nothing (its lines go through the mod), so
+  it no longer waits for a quiet screen.
+- **"No room on the machine" no longer flaps.** The log line followed every load reading, and could change every
+  second; it now changes only when the kind of room the machine lacks (busy, swapping, memory) changes, and has
+  held for 30 seconds.
+
 ## [0.8.5] - 2026-10-16
 
 A read-only look at a long real run found baton itself healthy: no questions, blocks or deadline answers in 13
@@ -1128,7 +1239,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...v0.8.3
