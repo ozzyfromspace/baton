@@ -725,59 +725,51 @@ func bigFile(n int) string {
 	return b.String()
 }
 
-// compactPlan: P1's agent reads enough to compact (under a small window) once the test signals; P2's agent
-// runs a command nobody allowed, whose permission prompt holds the lead's compaction; the lead's P0 waits
-// for that prompt, then finishes, and owes a compaction before P3.
+// compactPlan: the lead reports P0 done and waits in one command, so its turn goes on with its boundary
+// owed (after `baton done` baton lets no other call of the lead's through); P1's agent reads enough to
+// compact (under a small window) once the test signals.
 const compactPlan = `# Compact plan
 
 ## P0 — Say zero
 After: none
 
-1. Run exactly this command with the Bash tool: sh wait.sh asked — it waits a while, then says so.
-2. Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
+1. Run echo zero.
+2. Run exactly this one command with the Bash tool, as it is, with its timeout set to 600000 ms: baton done P0 --notes 'said zero' && sh wait.sh asked — it reports P0 done, then waits a while and says so. Then end your turn.
 
 ## P1 — Read a lot
 After: none
 
-1. Run exactly this command with the Bash tool: sh wait.sh read — it waits a while, then says so.
+1. Run exactly this command with the Bash tool, with its timeout set to 600000 ms: sh wait.sh read — it waits a while, then says so.
 2. Use the Read tool to read the files big1.txt to big16.txt in order, one file per Read call, one call at a time, each in full.
 3. Write the single word read into a new file named read.txt. Commit it: git add read.txt, then git commit -m 'feat: read'. Then report P1 done: baton done P1 --notes 'read them'
 
-## P2 — Count
-After: none
-
-1. Run exactly this command with the Bash tool, and nothing else in its place: python3 -c "print(1 + 1)"
-2. Write what it printed into a new file named count.txt. Commit it: git add count.txt, then git commit -m 'feat: count'. Then report P2 done: baton done P2 --notes 'counted'
-
-## P3 — Say three
+## P2 — Say two
 After: P0
 
-Run echo three, then report P3 done: baton done P3 --notes 'said three'
+Run echo two, then report P2 done: baton done P2 --notes 'said two'
 `
 
-// A phase agent compacts by itself while the lead owes a compaction at its boundary (held: a permission
-// prompt of another agent's is open). The agent's compaction hooks look like the lead's (no agent_id, the
-// lead's transcript), and change nothing of the lead's: its compaction is still owed, and P3 does not
-// start. Only the agent's own transcript proves its compaction, and the agent is briefed again. Once the
-// prompt is answered, the lead compacts, proven by its own transcript, and P3 starts.
+// A phase agent compacts by itself while the lead owes a compaction at its boundary, its turn still going
+// on. (Since v0.8.4 another agent's permission prompt no longer holds the lead where the mod runs, so the
+// lead's own turn holds it.) The agent's compaction hooks look like the lead's (no agent_id, the lead's
+// transcript), and change nothing of the lead's: its compaction is still owed, and P2 does not start. Only
+// the agent's own transcript proves its compaction, and the agent is briefed again. Once the lead's turn
+// ends, the lead compacts, proven by its own transcript, and P2 starts.
 func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
-	files := map[string]string{"wait.sh": signalScript}
+	files := map[string]string{"wait.sh": startedWait}
 	for i := 1; i <= 16; i++ {
 		files[fmt.Sprintf("big%d.txt", i)] = bigFile(i)
 	}
 	dir := projectWith(t, files)
 	Attach(t, dir, compactPlan)
-	// Claude Code compacts the agent at 100k tokens, and baton's checkpoint does not come first.
-	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_CHECKPOINT_PCT=99"}, "--autocompact", "100k", "--permission-mode", "acceptEdits",
+	// Claude Code compacts the agent at 100k tokens, and baton's checkpoint does not come first. The waits
+	// stay in the foreground.
+	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_CHECKPOINT_PCT=99", "BATON_FOREGROUND_MAX=10m"}, "--autocompact", "100k", "--permission-mode", "acceptEdits",
 		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Bash(sh wait.sh asked)", "Bash(sh wait.sh read)", "Read")
 
-	if !s.Until("P2's permission prompt", 6*time.Minute, func() bool { return first(s.Events(), is("dialog_open", "tool", "Bash", "phase", "P2")) >= 0 }) {
-		t.Fatalf("no permission prompt of P2's:\n%s", eventLog(s))
-	}
-	signal(t, dir, "asked")
-	queued := s.WaitEvent("compact_queued", 4*time.Minute)
-	if queued == nil || queued["next"] != "P3" {
-		t.Fatalf("the lead owes no compaction before P3: %v", queued)
+	waitStarted(t, s, dir, "asked", 6*time.Minute)
+	if i := first(s.Events(), is("phase_done", "phase", "P0")); i < 0 || s.Events()[i]["next"] != "P2" {
+		t.Fatalf("the lead's P0 is not done with P2 next:\n%s", eventLog(s))
 	}
 	signal(t, dir, "read")
 	if !s.Until("P1's agent to compact", 8*time.Minute, func() bool { return first(s.WorkerEvents("P1"), is("agent_compacted", "proof", "transcript")) >= 0 }) {
@@ -788,7 +780,7 @@ func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
 	if first(ev, is("compact_seen", "hook", "SessionStart")) < 0 {
 		t.Error("the agent's compaction fired none of the lead's hooks")
 	}
-	if first(ev, is("compact_finished")) >= 0 || first(ev, is("phase_started", "phase", "P3")) >= 0 || first(ev, is("rewake")) >= 0 {
+	if first(ev, is("compact_finished")) >= 0 || first(ev, is("phase_started", "phase", "P2")) >= 0 || first(ev, is("rewake")) >= 0 {
 		t.Fatalf("the agent's compaction was taken for the lead's:\n%s", eventLog(s))
 	}
 	var st struct {
@@ -799,10 +791,10 @@ func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
 		t.Errorf("the lead's boundary is no longer owed (%d runs)", len(runs))
 	}
 
-	s.Key("\r") // the human allows P2's command
+	signal(t, dir, "asked") // the lead's turn ends
 	waitSequence(t, s, 6*time.Minute,
 		is("compact_finished", "proof", "transcript"),
-		is("phase_started", "phase", "P3"),
+		is("phase_started", "phase", "P2"),
 		kind("plan_complete"),
 	)
 	w := s.WorkerEvents("P1")
