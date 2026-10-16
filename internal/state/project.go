@@ -67,6 +67,17 @@ func OpenProject(dir string, now func() time.Time) (*Project, error) {
 	return p, nil
 }
 
+// ProjectOf is the project run s belongs to, as it stands. Unlike OpenProject it moves no run kept the old
+// way (migrate, which takes the project's lock), so that an Update of s may list the project's runs
+// through it without taking a second lock.
+func (s *Store) ProjectOf() *Project {
+	now := s.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Project{Dir: s.Project, Root: filepath.Dir(s.Project), Now: now}
+}
+
 func (p *Project) path(parts ...string) string {
 	return filepath.Join(append([]string{p.Dir}, parts...)...)
 }

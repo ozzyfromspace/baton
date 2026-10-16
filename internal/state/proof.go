@@ -405,11 +405,23 @@ const recentBoundary = time.Minute
 // about to count, nor past a line still being written. A transcript baton has no mark in yet (a session
 // started, a /clear, a compaction the mod's report proved) is marked at its end; one not written yet at
 // its start; one baton cannot read is left as it was.
-func Remark(st *State, path string, now time.Time) {
+func Remark(st *State, path string, now time.Time) { Remarks(*st, path, now).Apply(st) }
+
+// A Remarked is what Remark sets, read from the transcript before the run's lock is taken (Remarks) and
+// set under it (Apply): no transcript is read under the lock.
+type Remarked struct {
+	was, mark *Mark // the mark it read from, and the one to set
+	set       bool
+}
+
+// Remarks reads the lead's transcript at path as Remark does, from the mark st holds (the run's state a
+// moment before the lock, as Store.Peek gives it), and returns what Remark would set.
+func Remarks(st State, path string, now time.Time) Remarked {
 	if path == "" {
-		return
+		return Remarked{}
 	}
-	m := st.Run.Proven
+	r := Remarked{was: st.Run.Proven, set: true}
+	m := r.was
 	if m != nil && m.Path != path {
 		m = nil
 	}
@@ -424,11 +436,24 @@ func Remark(st *State, path string, now time.Time) {
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		st.Run.Proven = &Mark{Path: path}
+		r.mark = &Mark{Path: path}
 	case err != nil:
+		return Remarked{}
 	case m != nil && b != nil && now.Sub(b.Time) < recentBoundary:
-		st.Run.Proven = &Mark{Path: path, Offset: b.Start}
+		r.mark = &Mark{Path: path, Offset: b.Start}
 	default:
-		st.Run.Proven = &Mark{Path: path, Offset: next}
+		r.mark = &Mark{Path: path, Offset: next}
+	}
+	return r
+}
+
+// Apply sets in st the mark r read, if st's mark is still the one it read from: a mark that moved meanwhile
+// (another hook's Remark, a proof counted) stays as it was moved, and the lead's next hook marks the
+// transcript again.
+func (r Remarked) Apply(st *State) {
+	if r.set && sameMark(st.Run.Proven, r.was) {
+		st.Run.Proven = r.mark
 	}
 }
+
+func sameMark(a, b *Mark) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }

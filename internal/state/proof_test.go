@@ -68,6 +68,47 @@ func TestRemark(t *testing.T) {
 	}
 }
 
+// The transcript is read before the run's lock (Remarks), and the mark set under it (Apply) only over the
+// mark it was read from: one another hook moved or cleared meanwhile stays as that hook left it.
+func TestRemarkedAppliesOverTheMarkItRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	text := userLine + userLine
+	os.WriteFile(path, []byte(text), 0o644)
+	read := &Mark{Path: path, Offset: int64(len(userLine))}
+	moved := &Mark{Path: path, Offset: 1}
+	end := &Mark{Path: path, Offset: int64(len(text))}
+	for _, c := range []struct {
+		name       string
+		from, then *Mark // the mark read from, and the one on record under the lock
+		want       *Mark
+	}{
+		{"unchanged", read, &Mark{Path: path, Offset: int64(len(userLine))}, end},
+		{"moved meanwhile", read, moved, moved},
+		{"cleared meanwhile (a proof the mod reported)", read, nil, nil},
+		{"none, still none", nil, nil, end},
+		{"none, then one", nil, moved, moved},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			peek := New()
+			peek.Run.Proven = c.from
+			r := Remarks(peek, path, t0)
+			st := New()
+			st.Run.Proven = c.then
+			r.Apply(&st)
+			if !sameMark(st.Run.Proven, c.want) {
+				t.Errorf("marked %+v, want %+v", st.Run.Proven, c.want)
+			}
+		})
+	}
+	// A transcript that cannot be read sets nothing.
+	st := New()
+	st.Run.Proven = moved
+	Remarks(New(), t.TempDir(), t0).Apply(&st)
+	if st.Run.Proven != moved {
+		t.Errorf("marked %+v", st.Run.Proven)
+	}
+}
+
 // A boundary proves a compaction only past baton's mark in the same transcript, and only once.
 func TestABoundaryProvesItOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.jsonl")

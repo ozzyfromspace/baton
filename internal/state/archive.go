@@ -20,40 +20,80 @@ const archivePrefix = "gen-"
 // Archive keeps the record of the plan st runs before something replaces it (an attach over it, a
 // revision, a drop): st as state.json, and the run's plan.json and handoff.md as they are now, copied into
 // gen-<N>/ in the run's directory, N being st's generation (gen-<N>.2 and on for another record of the
-// same one). It takes no lock, so an Update may call it with the state it holds before changing it. A run
-// with no plan attached, or a worker's sub-run, keeps nothing (""). It returns the folder.
+// same one). It returns the folder, "" for a run that keeps nothing (Record). It writes the folder at
+// once: from inside an Update, take the Record there and Save it once the lock is let go.
 func (s *Store) Archive(st State) (string, error) {
-	if s.Parent != "" || st.Mode == ModeIdle {
-		return "", nil
-	}
-	if _, err := os.Stat(s.PlanPath()); err != nil {
-		return "", nil
-	}
-	name := archivePrefix + strconv.Itoa(st.Generation)
-	dir := s.path(name)
-	for n := 2; exists(dir); n++ {
-		dir = s.path(fmt.Sprintf("%s.%d", name, n))
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	b, err := json.MarshalIndent(st, "", "  ")
+	r, err := s.Record(st)
 	if err != nil {
 		return "", err
 	}
-	if err := writeAtomic(filepath.Join(dir, "state.json"), append(b, '\n')); err != nil {
-		return "", err
+	return r.Save()
+}
+
+// A Record is what Archive keeps of a plan, read into memory: an Update that replaces the plan takes it
+// (Store.Record) with the state it holds before changing it, and writes it (Save) once its lock is let go,
+// so that nothing is copied under the lock.
+type Record struct {
+	Generation int
+	dir        string            // the run's directory
+	files      map[string][]byte // what its folder holds, by name
+}
+
+// recordFiles are the files of a Record, in the order Save writes them.
+var recordFiles = []string{"state.json", "plan.json", "handoff.md"}
+
+// Record reads what Archive keeps of the plan st runs: st, and the run's plan.json and handoff.md as they
+// are now. It takes no lock, so an Update may call it. A run with no plan attached, or a worker's sub-run,
+// keeps nothing (nil).
+func (s *Store) Record(st State) (*Record, error) {
+	if s.Parent != "" || st.Mode == ModeIdle {
+		return nil, nil
 	}
+	if _, err := os.Stat(s.PlanPath()); err != nil {
+		return nil, nil
+	}
+	b, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	r := &Record{Generation: st.Generation, dir: s.Dir, files: map[string][]byte{"state.json": append(b, '\n')}}
 	for _, f := range []string{s.PlanPath(), s.HandoffPath()} {
 		data, err := os.ReadFile(f)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return dir, err
+			return nil, err
 		}
-		if err := writeAtomic(filepath.Join(dir, filepath.Base(f)), data); err != nil {
-			return dir, err
+		r.files[filepath.Base(f)] = data
+	}
+	return r, nil
+}
+
+// Save writes r into its folder, gen-<N>/ in the run's directory (gen-<N>.2 and on when that one is there
+// already), and returns the folder; a nil Record keeps nothing (""). Two processes saving records of one
+// generation at once each get a folder of their own.
+func (r *Record) Save() (string, error) {
+	if r == nil {
+		return "", nil
+	}
+	name := archivePrefix + strconv.Itoa(r.Generation)
+	dir := filepath.Join(r.dir, name)
+	for n := 2; ; n++ {
+		err := os.Mkdir(dir, 0o755)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+		dir = filepath.Join(r.dir, fmt.Sprintf("%s.%d", name, n))
+	}
+	for _, f := range recordFiles {
+		if data, ok := r.files[f]; ok {
+			if err := writeAtomic(filepath.Join(dir, f), data); err != nil {
+				return dir, err
+			}
 		}
 	}
 	return dir, nil

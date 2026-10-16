@@ -454,34 +454,26 @@ func (s *Store) Decisions(st State) []Decision {
 }
 
 // WorkerDecisions is the decisions of the sub-runs of run st's workers, kept in s: none for a sub-run.
-// They are read without the sub-runs' locks.
+// They are read without the sub-runs' locks, or the project's, so an Update of s may call it.
 func (s *Store) WorkerDecisions(st State) []Decision {
 	if s.Parent != "" || len(st.Workers) == 0 {
 		return nil
 	}
-	p, err := OpenProject(s.Project, s.Now)
-	if err != nil {
-		return nil
-	}
 	var out []Decision
-	for _, w := range p.Workers(s.Ref) {
+	for _, w := range s.ProjectOf().Workers(s.Ref) {
 		out = append(out, w.State.Decisions...)
 	}
 	return out
 }
 
 // WorkerJobs is the jobs of the sub-runs of run st's workers, kept in s: none for a sub-run. They are read
-// without the sub-runs' locks.
+// without the sub-runs' locks, or the project's, so an Update of s may call it.
 func (s *Store) WorkerJobs(st State) []Job {
 	if s.Parent != "" || len(st.Workers) == 0 {
 		return nil
 	}
-	p, err := OpenProject(s.Project, s.Now)
-	if err != nil {
-		return nil
-	}
 	var out []Job
-	for _, w := range p.Workers(s.Ref) {
+	for _, w := range s.ProjectOf().Workers(s.Ref) {
 		out = append(out, w.State.Jobs...)
 	}
 	return out
