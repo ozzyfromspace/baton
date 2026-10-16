@@ -127,6 +127,7 @@ function world(on: any, o: Opts = {}) {
     }
     return { text: e.text, origin: e.origin }
   })
+  on('turn.start', async ($: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async ($: any, e: any) => {
     w.beneath.push('turn ' + (e.agentId ?? 'lead'))
     return { text: e.answer }
@@ -653,4 +654,127 @@ test('a line Claude Code fails at once is acked as failed, and one failing later
   expect(w.reports[0].error).toContain('HooksError')
   expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true, result: 'submitted' }))
   expect(w.reports[2].error).toContain('HooksError')
+})
+
+// busy is Claude Code's compaction while a turn of the lead's runs (turn names it, '' for none): refused
+// at once, between turns it compacts (spike 35). A hook's error reaches the mod in the kit's own words.
+function busy(turn: () => string, compaction: () => any = () => ({ messages: SUMMARY, tokensBefore: 9, tokensAfter: 1 })) {
+  return () => {
+    if (turn()) throw new Error(`a turn is running (${turn()}); the conversation compacts between turns, so call it from turn.complete or later`)
+    return compaction()
+  }
+}
+
+const LEAD_TURN = { reason: 'answer', answer: 'P1 is done.', durationMs: 5, isAborted: false, turnId: 't1' } as any
+
+test("a compaction asked for as the lead's turn ends is held, and runs at its turn.complete, with no refusal acked", async ($, on) => {
+  let turn = ''
+  const compacted = later()
+  const w = world(on, { compact: busy(() => turn, () => compacted.p) })
+  await start($, w, 0)
+  turn = 't1'
+  await $.turn.start({ text: 'Begin P1.', turnId: 't1' } as any)
+  w.files[cmdPath(1)] = JSON.stringify({ instance: 'inst', id: 1, kind: 'compact', epoch: 4 }) // as the lead's Stop hook runs
+  await steps(w, 3000)
+  expect(kinds(w)).toEqual([]) // held: neither acked nor refused
+  turn = ''
+  await $.turn.complete(LEAD_TURN)
+  await steps(w, 1000)
+  expect(w.beneath).toEqual(['compact lead after 0 compacting reports', 'turn lead', 'compact lead after 0 compacting reports'])
+  expect(kinds(w)).toEqual(['ack 1'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: true, result: 'compacting' }))
+  compacted.settle({ messages: SUMMARY, tokensBefore: 9, tokensAfter: 1 })
+  await w.clock.advance(1000)
+  expect(kinds(w)).toEqual(['ack 1', 'compacted 1'])
+  expect(w.reports[1]).toEqual(expect.objectContaining({ epoch: 4, skipped: false }))
+  expect(w.reports.filter((r: any) => r.kind === 'compacting' || (r.kind === 'compacted' && !r.command))).toEqual([]) // its own call, reported by the command alone
+  await $.turn.complete({ ...LEAD_TURN, turnId: 't2' })
+  await steps(w, 1000)
+  expect(w.beneath.filter((b) => b.startsWith('compact'))).toHaveLength(2) // run once
+})
+
+test('a compaction held past its bound is acked with its refusal, and the turn ending later runs nothing', async ($, on) => {
+  let turn = ''
+  const w = world(on, { compact: busy(() => turn) })
+  await start($, w, 0)
+  turn = 't1'
+  await $.turn.start({ text: 'Begin P1.', turnId: 't1' } as any)
+  w.files[cmdPath(1)] = JSON.stringify({ instance: 'inst', id: 1, kind: 'compact', epoch: 4 })
+  await steps(w, 3000) // held at its first poll, 1.5 s in
+  await w.clock.advance(26_000)
+  expect(kinds(w)).toEqual([])
+  await w.clock.advance(3000)
+  expect(kinds(w)).toEqual(['ack 1'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false }))
+  expect(w.reports[0].error).toContain('HooksError') // the host asks again once the turn is over (loop.redo)
+  turn = ''
+  await $.turn.complete(LEAD_TURN)
+  await steps(w, 1000)
+  expect(w.beneath.filter((b) => b.startsWith('compact'))).toHaveLength(1)
+  expect(kinds(w)).toEqual(['ack 1'])
+})
+
+test("only the lead's turn holds a compaction, and only its end runs it", async ($, on) => {
+  let turn = ''
+  const w = world(on, { compact: busy(() => turn) })
+  await start($, w, 0)
+  // An agent at work, the lead idle: a refusal is acked at once, as before.
+  await $.turn.start({ text: 'Begin P2.', turnId: 'a1-t', agentId: 'a1' } as any)
+  turn = 'other'
+  w.files[cmdPath(1)] = JSON.stringify({ instance: 'inst', id: 1, kind: 'compact', epoch: 4 })
+  await steps(w, 3000)
+  expect(kinds(w)).toEqual(['ack 1'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false }))
+  // The lead at work: held through an agent's turn's end, run at the lead's.
+  turn = 't1'
+  await $.turn.start({ text: 'Begin P1.', turnId: 't1' } as any)
+  w.files[cmdPath(2)] = JSON.stringify({ instance: 'inst', id: 2, kind: 'compact', epoch: 5 })
+  await steps(w, 1000)
+  await $.turn.complete({ ...LEAD_TURN, agentId: 'a1', turnId: 'a1-t' })
+  await steps(w, 1000)
+  expect(kinds(w)).toEqual(['ack 1'])
+  turn = ''
+  await $.turn.complete(LEAD_TURN)
+  await steps(w, 1000)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'compacted 2'])
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true, result: 'compacting' }))
+})
+
+test("a lead's turn ending while its compaction is refused leaves nothing to hold for: it is called again at once", async ($, on) => {
+  let turn = 't1'
+  let n = 0
+  const w = world(on, {
+    compact: async () => {
+      if (++n === 1) {
+        // The turn ends just as Claude Code refuses the call.
+        turn = ''
+        await $.turn.complete(LEAD_TURN)
+        throw new Error('a turn is running (t1); the conversation compacts between turns, so call it from turn.complete or later')
+      }
+      return busy(() => turn)()
+    },
+  })
+  await start($, w, 0)
+  await $.turn.start({ text: 'Begin P1.', turnId: 't1' } as any)
+  w.files[cmdPath(1)] = JSON.stringify({ instance: 'inst', id: 1, kind: 'compact', epoch: 4 })
+  await steps(w, 2000)
+  expect(n).toBe(2)
+  expect(kinds(w)).toEqual(['ack 1', 'compacted 1'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: true, result: 'compacting' }))
+})
+
+test('reloaded while holding a compaction, the mod acks it with its refusal', async ($, on) => {
+  const w = world(on, { store: { 'baton:inst': { last: 3, running: 0, seq: 2, outbox: [], held: { id: 3, error: 'HooksError: a turn is running (t1)' }, at: 1_000_000 } } })
+  w.seen = 2
+  await start($, w)
+  expect(kinds(w)).toEqual(['ack 3'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false, error: 'HooksError: a turn is running (t1)' }))
+  expect(w.beneath.filter((b) => b.startsWith('compact'))).toEqual([])
+})
+
+test('reloaded after calling a held compaction again, the mod acks it as interrupted', async ($, on) => {
+  const w = world(on, { store: { 'baton:inst': { last: 3, running: 0, seq: 2, outbox: [], held: { id: 3, called: true }, at: 1_000_000 } } })
+  w.seen = 2
+  await start($, w)
+  expect(kinds(w)).toEqual(['ack 3 interrupted'])
 })

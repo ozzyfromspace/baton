@@ -188,14 +188,31 @@ func (w Words) NoStatus(id, title string) string {
 		"%s (you are waiting on something outside you, such as a CI run or a deploy: baton runs it and gives you the result).", title, id, finished, w.proposeThen(), w.jobCall("await", "<a command that ends when it is ready>"))
 }
 
-// BackgroundStop is why baton refuses the first stop while background work of the model's own runs:
-// what names the work. Nothing is wrong with the stop itself, so the next one on the same work is allowed.
+// BackgroundStop is why baton refuses the first stop while background work of the model's own runs whose
+// start baton did not see (BackgroundStarted): what names the work. Nothing is wrong with the stop itself,
+// so the next one on the same work is allowed.
 func (w Words) BackgroundStop(what string) string {
-	s := "[baton] You stopped while your background work runs (" + what + "). Keep working on what does not depend on it: Claude Code wakes you when it ends. "
+	return "[baton] You stopped while your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn again")
+}
+
+// BackgroundStarted is what baton tells the model with the result of a tool call that started background
+// work of its own (what names it; monitor: a Monitor, which wakes it with what it reports): what
+// BackgroundStop would tell it at its stop, told as the work starts, so that stop is allowed.
+func (w Words) BackgroundStarted(what string, monitor bool) string {
+	if monitor {
+		return "[baton] Your monitor runs (" + what + "). " + w.meanwhile("Claude Code wakes you with what it reports", "it reports", "end your turn")
+	}
+	return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn")
+}
+
+// meanwhile is what the model does while its background work runs: wakes says how the work wakes it, and
+// end how its turn ends when nothing is left to do until then.
+func (w Words) meanwhile(wakes, until, end string) string {
+	s := "Keep working on what does not depend on it: " + wakes + ". "
 	if w.Git {
 		s += "A gate running in the checkout is invalidated by your own edits, so a long or stateful gate goes to baton instead: commit, then " + w.jobCall("verify", "<command>") + " runs it on that commit, and baton gives you the result. "
 	}
-	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until the work ends, end your turn again."
+	return s + "If the phase is " + w.complete() + ", report it with `baton done`; if nothing is left to do until " + until + ", " + end + "."
 }
 
 // QuestionRefused is why a question of the model's own is refused while a plan runs, and what to do
@@ -291,8 +308,30 @@ func CompetingDirectives() string {
 		"Then call ExitPlanMode again; baton asks this once per plan."
 }
 
-// ExitPlanAgain sends a model that stopped after baton's request about competing directives back to put
-// its plan to the human: nobody would see it otherwise.
+// ExitPlanAgain sends a model that stopped after baton turned its plan back (competing directives, or a
+// plan baton could not attach) back to put its plan to the human: nobody would see it otherwise.
 func ExitPlanAgain() string {
-	return "[baton] You stopped before putting the plan to the human. Address the competing directives in the plan if you have not, then call ExitPlanMode now, so they can approve it."
+	return "[baton] You stopped before putting the plan to the human. Make the changes baton asked for in the plan if you have not, then call ExitPlanMode now, so they can approve it."
+}
+
+// maxUnbuilt bounds how many of a plan's problems PlanUnbuilt lists.
+const maxUnbuilt = 10
+
+// PlanUnbuilt turns back a plan baton could not attach as written (why, what plan.Build found, one
+// problem a line), before the human approves it: the model fixes the plan and puts it again. The same
+// text again goes to the human as it is.
+func PlanUnbuilt(why []string) string {
+	if len(why) > maxUnbuilt {
+		why = append(why[:maxUnbuilt:maxUnbuilt], fmt.Sprintf("and %d more", len(why)-maxUnbuilt))
+	}
+	return "[baton] baton could not attach this plan as written, so the human's approval would not start it:\n\n- " + strings.Join(why, "\n- ") +
+		"\n\nFix the plan: each phase a heading of its own (`## P0 — Title`) with an id no other phase has, and each `After:` line naming only " +
+		"earlier phases of this plan (or `none`, or `all`). Then call ExitPlanMode again. baton turns a plan back for this once per text: " +
+		"the same plan again goes to the human as it is, and its approval says it was not attached."
+}
+
+// PlanUnbuiltSaid tells the human why Claude takes the plan back before they see it: baton could not
+// attach it as written (first, its first problem).
+func PlanUnbuiltSaid(first string) string {
+	return "baton: the plan would not attach as written (" + first + ") → Claude fixes it before you see it"
 }

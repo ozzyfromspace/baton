@@ -89,7 +89,9 @@ const (
 	modWaiting        // a mod said hello in this run before, and the one in this claude may yet: baton waits
 )
 
-// modAckWait is how long the mod has to ack one of the lead's commands before baton takes it back.
+// modAckWait is how long the mod has to ack one of the lead's commands before baton takes it back. It is
+// longer than the mod holds a compaction for the end of the lead's turn (HOLD_MS in plugin/hooks/baton.js,
+// 30 s), which it acks once it runs it.
 const modAckWait = time.Minute
 
 // modEvery spaces out looks at the bridge for a hello while none has come.
@@ -220,7 +222,10 @@ func (l *Loop) asked(v host.View, st state.State) {
 
 // redo asks again for a compaction a try did not make (why): one Claude Code refused because a turn was
 // running is asked again once the turn is over, as if it never had been; any other try counts, and after
-// MaxTries the round has failed.
+// MaxTries the round has failed. baton asks as the lead's Stop hook runs, a moment before Claude Code counts
+// the turn over, and the mod holds a compaction refused then for the turn's end (plugin/hooks/baton.js), so
+// a refusal for a running turn reaches here only as the fallback: a turn that outlasts the hold, one the
+// mod did not see begin, or a new turn that began before the held compaction ran.
 func (l *Loop) redo(v host.View, comp state.Compaction, why string) {
 	busy := turnRunning(why)
 	if !busy && comp.Tries >= MaxTries {

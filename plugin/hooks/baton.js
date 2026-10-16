@@ -9,7 +9,14 @@
 // mod runs those of its own claude's host, in order, one at a time, from its poll timer. It reports by
 // running `baton mod report` with one numbered report on stdin, and keeps each report until the host has
 // recorded it. In the store it keeps, per host instance, the last command it ran, the one it is running,
-// and the reports not recorded yet, so that once reloaded it neither repeats nor skips one.
+// the compaction it holds for the lead's turn's end, and the reports not recorded yet, so that once
+// reloaded it neither repeats nor skips one.
+//
+// Claude Code compacts between turns only, and refuses a compaction asked for while the lead's turn runs:
+// the host asks for one once the lead's Stop hook has run, and the turn ends a moment later. A refusal
+// while the lead's turn runs, by the mod's own account of its turn.start and turn.complete, is not acked:
+// the command is held, and run from that turn's turn.complete, once, for up to HOLD_MS; past that its ack
+// carries the refusal, and the host asks again after the turn. This is timing, not a choice.
 //
 // It draws baton's view of the run (internal/board) as the host words it: every second it reads `baton
 // board --band` for the band above the prompt, and, while the /baton board pane is open, `baton board`
@@ -31,6 +38,7 @@ const REPORT_TIMEOUT_MS = 5000
 const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused this long
 const CUT = 1000 // the most of an agent's last words a turn report carries
 const AT_ONCE_MS = 250 // how long a compaction or a line is watched for a refusal at once (a turn running), which its ack carries
+const HOLD_MS = 30000 // how long a compaction refused while the lead's turn runs waits for that turn's end (within the host's modAckWait)
 const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
 const VIEW_TIMEOUT_MS = 5000
 const ASK_RETRY_MS = 5000 // how soon the host is asked about a question again when it gave no answer
@@ -69,6 +77,9 @@ const M = {
   asks: [], // the host's questions waiting for the band to ask them, oldest first
   asking: null, // the question on the human's screen now
   settled: {}, // the questions the mod answered at their deadlines, by text
+  held: null, // baton's compaction held for the end of the lead's turn: { c, error, timer }
+  turn: '', // the lead's turn running, by its turn.start and turn.complete ('' for none)
+  own: false, // the mod's own compaction, called from its turn.complete hook, runs (its session.compact hook sees it)
 }
 
 // env reads what the baton host set for this claude ($.env.get takes literal names only).
@@ -108,6 +119,7 @@ async function call($, report) {
 
 // load reads what the store keeps for this claude's host instance, and acks as interrupted a command the
 // mod was running when it was reloaded: it may or may not have happened, and the host decides what next.
+// A compaction it held for the lead's turn's end, and had not called again, is acked with its refusal.
 async function load($) {
   const e = await env($)
   M.key = 'baton:' + e.instance
@@ -119,6 +131,11 @@ async function load($) {
     M.keep.last = id
     M.keep.running = 0
     await report($, { kind: 'ack', command: id, interrupted: true })
+  }
+  const h = M.keep.held
+  M.keep.held = null
+  if (h && typeof h === 'object') {
+    await report($, h.called ? { kind: 'ack', command: h.id, interrupted: true } : { kind: 'ack', command: h.id, ok: false, error: String(h.error || '') })
   }
   await save($)
 }
@@ -167,6 +184,7 @@ async function hello($) {
       M.keep.last = 0
       M.keep.running = 0
       M.keep.outbox = []
+      forsake()
     }
     M.keep.run = run
     if (M.keep.seq < (r.seen || 0)) M.keep.seq = r.seen
@@ -338,10 +356,11 @@ async function poll($) {
       }
       M.keep.running = id
       await save($)
-      const { later, ...result } = await run($, c)
+      const { later, held, ...result } = await run($, c)
       M.keep.last = id
       M.keep.running = 0
       await save($)
+      if (held) continue // acked once it runs at the lead's turn's end, or with its refusal past HOLD_MS
       if (c.kind === 'spawn' && result.agent) M.agents[result.agent] = { phase: c.phase, drop: c.drop } // until the host lists it
       await report($, { kind: 'ack', command: id, ...result })
       if (c.kind === 'ask') queueAsk($, c)
@@ -371,7 +390,7 @@ async function run($, c) {
       case 'ask':
         return { ok: true, result: 'queued' } // the band asks it once the ack is kept
       case 'compact':
-        return await started($, $.session.compact({}), (r) => vetoed({ kind: 'compacted', command: c.id, epoch: c.epoch }, r), (err) => ({ kind: 'compacted', command: c.id, epoch: c.epoch, error: cut(String(err), CUT) }), 'compacting')
+        return await compact($, c)
       case 'submit':
         return await started($, $.prompt.submit({ text: c.text, asUser: true }), () => null, (err) => ({ kind: 'failed', command: c.id, error: cut(String(err), CUT) }), 'submitted')
       default:
@@ -401,6 +420,104 @@ async function started($, call, done, failed, as) {
 function vetoed(rep, r) {
   if (!(r && r.skip)) return { ...rep, skipped: false }
   return { ...rep, skipped: true, result: cut(String(r.skip), CUT) }
+}
+
+// compact runs baton's compact command c from the poll. One Claude Code refuses while the lead's turn runs
+// is held for that turn's end (hold), and resolves { held: true }: it is acked then. If the lead's turn
+// ended while the call was refused, there is nothing to wait for: it is called again at once instead.
+async function compact($, c) {
+  const turn = M.turn
+  const r = await compactWith($, c, $.session.compact({}))
+  if (r.ok) return r
+  if (M.turn) {
+    hold($, c, r.error)
+    return { held: true }
+  }
+  return turn ? await compactWith($, c, $.session.compact({})) : r
+}
+
+// compactWith is what compaction, one call of $.session.compact for c, comes to (started): its ack, and
+// what is reported once it is over.
+function compactWith($, c, compaction) {
+  return started($, compaction, (r) => vetoed({ kind: 'compacted', command: c.id, epoch: c.epoch }, r), (err) => ({ kind: 'compacted', command: c.id, epoch: c.epoch, error: cut(String(err), CUT) }), 'compacting')
+}
+
+// hold keeps compaction c, refused for error, for the lead's turn's end (unhold), and in the store, until
+// HOLD_MS has passed (release). It is set at once, with nothing awaited, so that a turn.complete coming
+// any time after the refusal finds it.
+function hold($, c, error) {
+  if (M.held) release($)
+  const h = { c, error, timer: null }
+  h.timer = $.clock.after(HOLD_MS, () => {
+    if (M.held !== h) return
+    h.timer = null // fired: nothing to cancel
+    release($)
+  })
+  M.held = h
+  M.keep.held = { id: c.id, error }
+}
+
+// unset cancels the bound of hold h, if it has not passed.
+function unset(h) {
+  try {
+    if (h.timer) h.timer.cancel()
+  } catch (err) {
+    // it fired meanwhile, and found the hold gone
+  }
+  h.timer = null
+}
+
+// release acks the compaction held, past HOLD_MS, with the refusal it had: the host asks again after the
+// turn, as it did before any hold.
+function release($) {
+  const h = M.held
+  if (!h) return
+  M.held = null
+  unset(h)
+  M.keep.held = null
+  report($, { kind: 'ack', command: h.c.id, ok: false, error: h.error }).catch(() => {})
+}
+
+// forsake drops a compaction held for another run's bridge, unacked: the host that asked for it drives
+// another run now, and takes it back (bridge.Void).
+function forsake() {
+  if (M.held) unset(M.held)
+  M.held = null
+  M.keep.held = null
+}
+
+// unhold runs the compaction held, from the lead's turn.complete hook once the turn has ended: Claude
+// Code takes a compaction called there ("call it from turn.complete or later"). The call is made in the
+// hook, so its own session.compact hook sees it (own); the hook does not wait on it. Whatever comes of it
+// is acked as the poll would have, a refusal too: the host asks again after that.
+async function unhold($) {
+  const h = M.held
+  M.held = null
+  unset(h)
+  M.keep.held = { id: h.c.id, called: true } // reloaded from here on, it may or may not have run
+  try {
+    await save($)
+  } catch (err) {
+    // kept in memory: the next save writes it
+  }
+  M.own = true
+  let compaction
+  try {
+    compaction = $.session.compact({})
+  } catch (err) {
+    compaction = Promise.reject(err)
+  }
+  const own = () => {
+    M.own = false
+  }
+  Promise.resolve(compaction).then(own, own)
+  compactWith($, h.c, compaction)
+    .then(async ({ later, ...result }) => {
+      M.keep.held = null
+      await report($, { kind: 'ack', command: h.c.id, ...result })
+      if (later) afterwards($, later)
+    })
+    .catch(() => {})
 }
 
 // afterwards reports what a call the poll did not wait for came to, once its ack is kept.
@@ -602,9 +719,18 @@ async function start($, e, next) {
   return started
 }
 
+// A turn of the lead's began: the mod notes it, for a compaction Claude Code refuses meanwhile (compact).
+async function begun($, e, next) {
+  if (!e.agentId) M.turn = String(e.turnId || '?')
+  return next(e)
+}
+
 // A turn of one of baton's agents ended: the host hears how (an aborted or failed turn has no SubagentStop).
+// A turn of the lead's ended: the compaction held for it runs now (unhold).
 async function turned($, e, next) {
+  if (!e.agentId) M.turn = ''
   const r = await next(e)
+  if (!e.agentId && M.held) await unhold($)
   if (live() && e.agentId && M.agents[e.agentId]) {
     const rep = { kind: 'turn', agent: e.agentId, reason: e.reason, ms: e.durationMs, text: cut(e.answer, CUT) }
     if (e.reason === 'refusal' && e.refusal) rep.refusal = e.refusal.category || ''
@@ -633,10 +759,11 @@ async function prompted($, e, next) {
 
 // The lead's conversation compacting, before and after: what proves to baton that the compaction is the
 // lead's. A phase agent's is proven by its own transcript, which the mod never reports for. (The mod's own
-// call, for baton's compact command, does not come here: Claude Code runs it through every hook but the
-// caller's, and the command's reports say how it went.)
+// call, for baton's compact command, is not reported here either: the command's reports say how it went.
+// Called from the poll, it does not come here, as Claude Code runs it through every hook but the caller's;
+// called from the turn.complete hook, it does, while own says so.)
 async function compacting($, e, next) {
-  if (!live() || e.agentId) return next(e)
+  if (!live() || e.agentId || M.own) return next(e)
   await report($, { kind: 'compacting', trigger: e.trigger })
   const r = await next(e)
   await report($, { kind: 'compacted', trigger: e.trigger, skipped: !!(r && r.skip) })
@@ -679,6 +806,7 @@ async function boardCommand($, e, next) {
 
 export function register(on) {
   on('session.start', start).catch(letThrough)
+  on('turn.start', begun).catch(letThrough)
   on('turn.complete', turned).catch(letThrough)
   on('prompt.submit', prompted).catch(letThrough)
   on('session.compact', compacting).catch(letThrough)
