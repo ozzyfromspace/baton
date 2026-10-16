@@ -207,11 +207,7 @@ func sharedCheckout(s *state.Store) []state.RunInfo {
 	if s.Worker() != "" {
 		return nil
 	}
-	p, err := state.OpenProject(s.Project, s.Now)
-	if err != nil {
-		return nil
-	}
-	return p.Others(s.Ref)
+	return s.ProjectOf().Others(s.Ref) // under the run's lock: no project lock (state.Store.ProjectOf)
 }
 
 // gitRefusal is why a sweeping git command is refused while others work in the same checkout.

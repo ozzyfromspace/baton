@@ -236,6 +236,10 @@ func settle(s *state.Store, question, answer string, now time.Time, env func(str
 	c := Context{Event: "PostToolUse", Now: now, Env: env, Input: map[string]any{"tool_name": "AskUserQuestion",
 		"tool_response": map[string]any{"answers": map[string]any{question: answer}}}}
 	w := words(c, s)
+	var g *ground // an answer that starts an approved plan over attaches it: what it reads, read before the lock
+	if mayStartOver(c) {
+		g = readGround(c, s, false)
+	}
 	var v valveAction
 	var own bool
 	_, err := s.Update(func(st *state.State) error {
@@ -249,7 +253,7 @@ func settle(s *state.Store, question, answer string, now time.Time, env func(str
 		}
 		switch {
 		case iq.kind == "replan":
-			v = answeredReplan(st, s, c, w, true)
+			v = answeredReplan(st, s, c, w, true, g)
 		default:
 			if v = answeredProposal(st, c, true); v.event == "" {
 				v = answered(st, c, true, w)
@@ -266,6 +270,7 @@ func settle(s *state.Store, question, answer string, now time.Time, env func(str
 	if err != nil || v.event == "" {
 		return own, err
 	}
+	v.keep()
 	fields := map[string]any{"via": via}
 	for k, x := range v.fields {
 		fields[k] = x
