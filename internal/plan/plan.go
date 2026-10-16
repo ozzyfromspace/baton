@@ -310,11 +310,13 @@ func Load(path string) (Plan, error) {
 	return p, nil
 }
 
-// Shaped reports whether a suggested spec is a plan baton can attach without help: at least two phases,
-// each starting at a heading of its own (## P0 — Title). baton attaches such a plan the moment the human
-// approves it; anything else needs the model to check the spec (`baton attach --suggest`).
+// Shaped reports whether a suggested spec is a plan baton can attach without help: at least one phase,
+// each starting at a heading of its own (## P0 — Title), so a small task can be a plan of one phase.
+// baton attaches such a plan the moment the human approves it. A plan with no phase headings is not
+// baton's (ordinary plan-mode work), and phases in another notation (bold bullets, table rows) need the
+// model to check the spec (`baton attach --suggest`).
 func Shaped(spec Spec) bool {
-	if len(spec.Phases) < 2 {
+	if len(spec.Phases) == 0 {
 		return false
 	}
 	for _, ph := range spec.Phases {
@@ -379,29 +381,31 @@ func Recheck(p Plan, remaining []string) (adopted Plan, changed bool, err error)
 	return adopted, true, nil
 }
 
-// Added returns the phases doc has that p lacks, in document order: headings in the notation and at the
-// level of p's own phase headings (## P3 — Title), with ids p does not have. It is how a phase the human
+// Added returns the phases doc has that p lacks, in document order: headings outside code blocks, in the
+// notation and at the level of p's own phase headings (## P3 — Title), with ids p does not have. It is how a phase the human
 // adds to the plan file joins the run. A plan whose phases are not all such headings gets none: its
 // phases were named by the model, and a line that merely looks like a phase is not one.
 func Added(p Plan, doc []byte) []Phase {
 	level := 0
 	have := map[string]bool{}
 	for _, ph := range p.Phases {
-		_, _, l, n := matchPhase(ph.Anchor)
+		_, _, l, n := matchPhase(heading(ph.Anchor))
 		if n != notationHeading || level != 0 && l != level {
 			return nil
 		}
 		level, have[ph.ID] = l, true
 	}
 	var out []Phase
-	for _, raw := range strings.Split(string(doc), "\n") {
-		line := strings.TrimSpace(raw)
-		id, title, l, n := matchPhase(line)
-		if id == "" || n != notationHeading || l != level || have[id] {
+	text := string(doc)
+	lines := strings.Split(text, "\n")
+	code, offs := fenced(lines), lineOffsets(lines)
+	for i, raw := range lines {
+		id, title, l, n := matchPhase(strings.TrimSpace(raw))
+		if id == "" || n != notationHeading || l != level || have[id] || code[i] {
 			continue
 		}
 		have[id] = true
-		out = append(out, Phase{ID: id, Title: title, Anchor: line})
+		out = append(out, Phase{ID: id, Title: title, Anchor: once(text, lines, offs, i)})
 	}
 	return out
 }

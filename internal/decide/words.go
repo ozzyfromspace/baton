@@ -308,8 +308,30 @@ func CompetingDirectives() string {
 		"Then call ExitPlanMode again; baton asks this once per plan."
 }
 
-// ExitPlanAgain sends a model that stopped after baton's request about competing directives back to put
-// its plan to the human: nobody would see it otherwise.
+// ExitPlanAgain sends a model that stopped after baton turned its plan back (competing directives, or a
+// plan baton could not attach) back to put its plan to the human: nobody would see it otherwise.
 func ExitPlanAgain() string {
-	return "[baton] You stopped before putting the plan to the human. Address the competing directives in the plan if you have not, then call ExitPlanMode now, so they can approve it."
+	return "[baton] You stopped before putting the plan to the human. Make the changes baton asked for in the plan if you have not, then call ExitPlanMode now, so they can approve it."
+}
+
+// maxUnbuilt bounds how many of a plan's problems PlanUnbuilt lists.
+const maxUnbuilt = 10
+
+// PlanUnbuilt turns back a plan baton could not attach as written (why, what plan.Build found, one
+// problem a line), before the human approves it: the model fixes the plan and puts it again. The same
+// text again goes to the human as it is.
+func PlanUnbuilt(why []string) string {
+	if len(why) > maxUnbuilt {
+		why = append(why[:maxUnbuilt:maxUnbuilt], fmt.Sprintf("and %d more", len(why)-maxUnbuilt))
+	}
+	return "[baton] baton could not attach this plan as written, so the human's approval would not start it:\n\n- " + strings.Join(why, "\n- ") +
+		"\n\nFix the plan: each phase a heading of its own (`## P0 — Title`) with an id no other phase has, and each `After:` line naming only " +
+		"earlier phases of this plan (or `none`, or `all`). Then call ExitPlanMode again. baton turns a plan back for this once per text: " +
+		"the same plan again goes to the human as it is, and its approval says it was not attached."
+}
+
+// PlanUnbuiltSaid tells the human why Claude takes the plan back before they see it: baton could not
+// attach it as written (first, its first problem).
+func PlanUnbuiltSaid(first string) string {
+	return "baton: the plan would not attach as written (" + first + ") → Claude fixes it before you see it"
 }

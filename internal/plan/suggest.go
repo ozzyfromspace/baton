@@ -20,17 +20,26 @@ import (
 // spike results whose rows start with S1, S2, … ahead of the phase headings) are not phases.
 //
 // When the suggestion builds, each phase carries the dependencies the text gives it (After).
+//
+// Lines in fenced code blocks are passed over: a heading quoted in an example is not the plan's. Each
+// anchor is made to occur once in the document (once), so a plan that quotes its own headings in its
+// text ("`## Standing rules`") still attaches.
 func Suggest(doc []byte) Spec {
-	lines := strings.Split(string(doc), "\n")
+	text := string(doc)
+	lines := strings.Split(text, "\n")
+	code, offs := fenced(lines), lineOffsets(lines)
 	best := notationNone
-	for _, raw := range lines {
-		if id, _, _, n := matchPhase(strings.TrimRight(raw, " \t\r")); id != "" && n < best {
+	for i, raw := range lines {
+		if id, _, _, n := matchPhase(strings.TrimRight(raw, " \t\r")); id != "" && n < best && !code[i] {
 			best = n
 		}
 	}
 	var spec Spec
 	lastPhaseLine, lastPhaseLevel := -1, 0
 	for i, raw := range lines {
+		if code[i] {
+			continue
+		}
 		line := strings.TrimRight(raw, " \t\r")
 		if spec.Title == "" {
 			if m := reTitle.FindStringSubmatch(line); m != nil {
@@ -39,14 +48,14 @@ func Suggest(doc []byte) Spec {
 			}
 		}
 		if spec.RulesAnchor == "" && reRules.MatchString(line) {
-			spec.RulesAnchor = strings.TrimSpace(line)
+			spec.RulesAnchor = once(text, lines, offs, i)
 			continue
 		}
 		id, title, level, notation := matchPhase(line)
 		if id == "" || notation != best {
 			if lastPhaseLine >= 0 && spec.EndAnchor == "" {
 				if m := reHeading.FindStringSubmatch(line); m != nil && len(m[1]) <= lastPhaseLevel && reEnd.MatchString(m[2]) {
-					spec.EndAnchor = strings.TrimSpace(line)
+					spec.EndAnchor = once(text, lines, offs, i)
 				}
 			}
 			continue
@@ -54,13 +63,85 @@ func Suggest(doc []byte) Spec {
 		if spec.EndAnchor != "" {
 			continue // phases after the end marker belong to some other list
 		}
-		spec.Phases = append(spec.Phases, Phase{ID: id, Title: title, Anchor: strings.TrimSpace(line)})
+		spec.Phases = append(spec.Phases, Phase{ID: id, Title: title, Anchor: once(text, lines, offs, i)})
 		lastPhaseLine, lastPhaseLevel = i, level
 	}
 	if p, err := Build("", doc, spec); err == nil {
 		spec.Phases = p.Phases
 	}
 	return spec
+}
+
+// maxAnchorLines bounds how many lines after a heading once may add to make its anchor unique.
+const maxAnchorLines = 8
+
+// once returns the anchor for the heading on line i of text: the line itself when it occurs once in text;
+// else the line with its line end, which a quote of it inside other text ("see `## Verification`") lacks;
+// else the line and as many lines of its section after it as make it occur once (never into the next
+// heading, so a heading written twice stays two). When nothing does, it is the line itself, and Build
+// says it occurs more than once.
+func once(text string, lines []string, offs []int, i int) string {
+	line := strings.TrimSpace(lines[i])
+	if strings.Count(text, line) <= 1 {
+		return line
+	}
+	start := offs[i] + strings.Index(lines[i], line)
+	if i+1 < len(lines) {
+		if a := text[start:offs[i+1]]; strings.Count(text, a) == 1 {
+			return a
+		}
+	}
+	for j := i + 1; j < len(lines) && j <= i+maxAnchorLines; j++ {
+		end := strings.TrimRight(lines[j], " \t\r")
+		if reHeading.MatchString(end) {
+			break
+		}
+		if end == "" {
+			continue
+		}
+		if a := text[start : offs[j]+len(end)]; strings.Count(text, a) == 1 {
+			return a
+		}
+	}
+	return line
+}
+
+// lineOffsets returns where each of lines (text split at "\n") starts in text.
+func lineOffsets(lines []string) []int {
+	offs := make([]int, len(lines))
+	at := 0
+	for i, l := range lines {
+		offs[i] = at
+		at += len(l) + 1
+	}
+	return offs
+}
+
+// fenced marks the lines of a fenced code block (``` or ~~~, closed by a fence of the same character at
+// least as long), its fences included.
+func fenced(lines []string) []bool {
+	in := make([]bool, len(lines))
+	fence := ""
+	for i, raw := range lines {
+		t := strings.TrimSpace(raw)
+		switch {
+		case fence != "":
+			in[i] = true
+			if strings.HasPrefix(t, fence) && strings.Trim(t, fence[:1]) == "" {
+				fence = "" // the closing fence
+			}
+		case strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~"):
+			in[i] = true
+			fence = t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
+		}
+	}
+	return in
+}
+
+// heading is an anchor's first line: the heading it starts at.
+func heading(anchor string) string {
+	first, _, _ := strings.Cut(anchor, "\n")
+	return strings.TrimSpace(first)
 }
 
 var (

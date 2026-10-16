@@ -53,6 +53,9 @@ func LeftForYou(ds []state.Decision) []state.Decision {
 // baton status lists.
 func PlanDone(phases, decided, left int) string {
 	s := fmt.Sprintf("all %d phases done", phases)
+	if phases == 1 {
+		s = "its 1 phase done"
+	}
 	if decided > 0 {
 		s += " · " + Tally(decided)
 	}
