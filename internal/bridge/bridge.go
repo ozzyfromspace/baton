@@ -23,6 +23,7 @@
 package bridge
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,18 +275,24 @@ func (b *Bridge) Load() (Record, error) {
 func (b *Bridge) Peek() (Record, error) { return b.read() }
 
 func (b *Bridge) read() (Record, error) {
+	r, _, err := b.readRaw()
+	return r, err
+}
+
+// readRaw reads the record, returning also the bytes it read: nil for no record yet.
+func (b *Bridge) readRaw() (Record, []byte, error) {
 	var r Record
 	data, err := os.ReadFile(b.recordPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return r, nil
+		return r, nil, nil
 	}
 	if err != nil {
-		return r, err
+		return r, nil, err
 	}
 	if err := json.Unmarshal(data, &r); err != nil {
-		return Record{}, fmt.Errorf("bridge.json: %w", err)
+		return Record{}, nil, fmt.Errorf("bridge.json: %w", err)
 	}
-	return r, nil
+	return r, data, nil
 }
 
 func (b *Bridge) locked(fn func() error) error {
@@ -295,31 +302,49 @@ func (b *Bridge) locked(fn func() error) error {
 	return state.Locked(filepath.Join(b.Dir, "lock"), state.LockWatch{Now: b.Now, Event: b.Event}, fn)
 }
 
-// update applies fn to the record under the lock, and saves it unless fn fails.
+// update applies fn to the record under the lock, and saves it unless fn fails or leaves it as it was:
+// the host takes the inbox on every tick (Take), and an empty one changes nothing.
 func (b *Bridge) update(fn func(*Record) error) (Record, error) {
 	var r Record
 	err := b.locked(func() error {
-		var err error
-		if r, err = b.read(); err != nil {
+		var (
+			old []byte
+			err error
+		)
+		if r, old, err = b.readRaw(); err != nil {
 			return err
 		}
 		if err := fn(&r); err != nil {
 			return err
 		}
-		return writeJSON(b.recordPath(), r)
+		data, err := encodeJSON(r)
+		if err != nil || old != nil && bytes.Equal(data, old) {
+			return err
+		}
+		return writeData(b.recordPath(), data)
 	})
 	return r, err
 }
 
 func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := encodeJSON(v)
 	if err != nil {
 		return err
 	}
+	return writeData(path, data)
+}
+
+// encodeJSON is v as the bridge's files hold it.
+func encodeJSON(v any) ([]byte, error) {
+	data, err := json.MarshalIndent(v, "", "  ")
+	return append(data, '\n'), err
+}
+
+func writeData(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return state.WriteFile(path, append(data, '\n'))
+	return state.WriteFile(path, data)
 }
 
 // Agents lists baton's agents.

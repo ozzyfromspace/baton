@@ -560,3 +560,46 @@ func TestTheLeadsCompactionAndLines(t *testing.T) {
 		}
 	}
 }
+
+// The host takes the inbox on every tick: taking an empty one leaves the record's file as it was, while a
+// change, or a bridge with no record yet, writes it.
+func TestAnUpdateThatChangesNothingWritesNothing(t *testing.T) {
+	old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		setup  func(r *rig) // before the record's time is set back; nil: no record yet
+		step   func(r *rig)
+		writes bool
+	}{
+		{"an empty inbox taken", func(r *rig) { r.hello("inst") }, func(r *rig) { r.b.Take() }, false},
+		{"an inbox taken again", func(r *rig) { r.hello("inst"); r.record(Report{Seq: 1, Kind: Compacted}); r.b.Take() },
+			func(r *rig) { r.b.Take() }, false},
+		{"a repeated report", func(r *rig) { r.hello("inst"); r.record(Report{Seq: 1, Kind: Compacted}); r.b.Take() },
+			func(r *rig) { r.record(Report{Seq: 1, Kind: Compacted}) }, false},
+		{"a report taken", func(r *rig) { r.hello("inst"); r.record(Report{Seq: 1, Kind: Compacted}) }, func(r *rig) { r.b.Take() }, true},
+		{"a new report", func(r *rig) { r.hello("inst") }, func(r *rig) { r.record(Report{Seq: 1, Kind: Compacted}) }, true},
+		{"no record yet", nil, func(r *rig) { r.b.Take() }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			path := filepath.Join(r.b.Dir, "bridge.json")
+			if tc.setup != nil {
+				tc.setup(r)
+				if err := os.Chtimes(path, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tc.step(r)
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.setup == nil {
+				return // a record was written where there was none
+			}
+			if written := !fi.ModTime().Equal(old); written != tc.writes {
+				t.Errorf("bridge.json written: %v, want %v", written, tc.writes)
+			}
+		})
+	}
+}
