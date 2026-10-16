@@ -321,13 +321,19 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":
 		// Every phase left waits for a job, or a gate in the working tree holds the next one, so there is
-		// nothing to work on; baton takes the next phase up as soon as one can start.
+		// nothing to work on; baton takes the next phase up as soon as one can start. When a phase waits on
+		// the human's answer about the agent they stopped twice, the line says so, and when baton takes it
+		// back for the lead (stoppedWaits).
 		st.Run.StopBlocks = 0
 		waiting := ""
 		if jobs := st.Unfinished(); len(jobs) > 0 {
 			waiting = waitingOn(jobs)
 		}
-		d.say(decide.NoPhaseYet(waiting, st.HereGate()))
+		line := decide.NoPhaseYet(waiting, st.HereGate())
+		if r := st.StoppedTwice(); r != nil {
+			line = stoppedWaits(st, &d, pl, *r, line, now, w.Timeout)
+		}
+		d.say(line)
 	case len(st.CurrentJobs()) > 0:
 		// The phase in hand waits on its jobs, and nothing else is owed: the session idles in place. Each
 		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.
@@ -389,6 +395,21 @@ func backgroundWhat(bg []state.Task) string {
 		what = fmt.Sprintf("%s, and %d more", what, len(bg)-1)
 	}
 	return what
+}
+
+// stoppedWaits is the lead's stop line with no phase in hand while r, the question about a phase whose
+// agent the human stopped twice, waits on them (state.StoppedTwice). With nothing else in the run able to
+// move (state.Moves), the run waits on that answer alone, and the line names when baton takes the phase
+// back for the lead (state.TakeUpAt, counted from this stop); otherwise it is line, the one the stop would
+// have said, and that baton takes the phase back once nothing else can move.
+func stoppedWaits(st *state.State, d *decision, pl plan.Plan, r state.Relay, line string, now time.Time, wait time.Duration) string {
+	if moves := st.Moves(pl, r.Phase, now); moves != "" {
+		d.emit("stopped_phase_waits", map[string]any{"phase": r.Phase, "moves": moves})
+		return line + "\n" + decide.StoppedPhaseWaits(r.Phase, wait)
+	}
+	at := st.TakeUpAt(r, r.Stuck, wait)
+	d.emit("stopped_phase_waits", map[string]any{"phase": r.Phase, "take_up": at.UTC().Format(time.RFC3339)})
+	return decide.StoppedRunWaits(r.Phase, at)
 }
 
 // escalate brings the human in: once in the session (a question, which reaches all their devices) and

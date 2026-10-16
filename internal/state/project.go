@@ -478,6 +478,7 @@ type RunInfo struct {
 	Pending  bool     // attached outside any session; the next session started here takes it
 	Title    string   // the attached plan's title, "" without one
 	File     string   // the attached plan's file, "" without one
+	Origin   string   // the file it was attached from, when baton moved it out of Claude Code's way (plan.Plan.Origin)
 	State    State
 	Updated  time.Time // when its state last changed
 }
@@ -552,11 +553,12 @@ func (p *Project) info(ref, dir string, sessions map[string][]string) RunInfo {
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "plan.json")); err == nil {
 		var pl struct {
-			Title string `json:"title"`
-			File  string `json:"plan_file"`
+			Title  string `json:"title"`
+			File   string `json:"plan_file"`
+			Origin string `json:"plan_origin"`
 		}
 		json.Unmarshal(b, &pl)
-		info.Title, info.File = pl.Title, pl.File
+		info.Title, info.File, info.Origin = pl.Title, pl.File, pl.Origin
 	}
 	return info
 }

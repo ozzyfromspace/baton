@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -422,14 +423,54 @@ func TestUnansweredDialogIsPushedAgain(t *testing.T) {
 	}
 }
 
-// baton answers its own context question ("Keep going", option 3) when nobody has within WarnTimeout,
-// so an unattended run does not stop on a warning. It never answers anything else, and never while
-// the human is typing.
+// lapsedAnswer is a question baton answered for the human (Loop.Lapse), and the answer it gave.
+type lapsedAnswer struct{ question, answer string }
+
+// recordLapses has the rig's loop record what it answers for the human (Loop.Lapse), where the host's
+// hooks would act on it.
+func (r *rig) recordLapses() *[]lapsedAnswer {
+	got := &[]lapsedAnswer{}
+	r.loop.Lapse = func(s *state.Store, question, answer string, now time.Time) error {
+		*got = append(*got, lapsedAnswer{question, answer})
+		return nil
+	}
+	return got
+}
+
+// dismissed checks that baton answered the question on screen in serial mode by its new path, once: Esc
+// typed and nothing else (no digit, which in a permission prompt approves), the dismissal recorded as the
+// default (want), the lead's turn closed on record (the dismissal ended it with no hook), and the
+// dialog marked as baton's.
+func (r *rig) dismissed(t *testing.T, got *[]lapsedAnswer, want lapsedAnswer) {
+	t.Helper()
+	if len(r.in.text) != 1 || r.in.text[0] != "\x1b" {
+		t.Fatalf("typed %q, want Esc alone", r.in.text)
+	}
+	if len(*got) != 1 || (*got)[0] != want {
+		t.Fatalf("recorded %+v, want %+v", *got, want)
+	}
+	st := r.state()
+	if st.Run.TurnOpen {
+		t.Error("the lead's turn is still open on record after the dismissal ended it")
+	}
+	if d, _ := st.Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
+		t.Error("the dismissal is not marked as baton's own")
+	}
+	if !hasEvent(r.events(), "auto_answered", map[string]any{"key": "esc", "answer": want.answer}) {
+		t.Errorf("events:\n%s", r.events())
+	}
+}
+
+// baton answers its own context question ("Keep going") when nobody has within WarnTimeout, so an
+// unattended run does not stop on a warning: it dismisses it and records Keep going. It never answers
+// anything else, never while the human is typing, and never with nothing to record the answer.
 func TestTheContextQuestionTimesOut(t *testing.T) {
 	r := newIdleRig(t)
+	got := r.recordLapses()
+	key := decide.Normalize("baton: the context is full. Checkpoint now?")
 	r.set(func(st *state.State) {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
-		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: key, Since: r.now, Kind: "context_warning"})
 	})
 	r.view.Draft = true // a draft in the input box does not matter: keys go to the dialog
 	r.run(DefaultTiming.WarnTimeout - time.Minute)
@@ -437,23 +478,15 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 		t.Fatalf("answered early: %q", r.in.text)
 	}
 	r.run(2 * time.Minute)
-	if len(r.in.text) != 1 || r.in.text[0] != "3" {
-		t.Fatalf("typed %q", r.in.text)
-	}
-	if d, _ := r.state().Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
-		t.Fatal("the answer is not marked as baton's own")
-	}
+	r.dismissed(t, got, lapsedAnswer{key, "Keep going"})
 	r.run(5 * time.Minute)
-	if len(r.in.text) != 1 {
-		t.Fatalf("answered twice: %q", r.in.text)
-	}
-	if b, _ := os.ReadFile(filepath.Join(r.loop.Store.Dir, "events.jsonl")); !strings.Contains(string(b), `"kind":"auto_answered"`) ||
-		!strings.Contains(string(b), `"key":"3"`) || !strings.Contains(string(b), `"dialog":"context_warning"`) {
-		t.Fatalf("events: %s", b)
+	if len(r.in.text) != 1 || len(*got) != 1 {
+		t.Fatalf("answered twice: %q, %+v", r.in.text, *got)
 	}
 
 	// Any other question waits for the human, however long.
 	r = newIdleRig(t)
+	r.recordLapses()
 	r.set(func(st *state.State) {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now})
@@ -463,23 +496,29 @@ func TestTheContextQuestionTimesOut(t *testing.T) {
 		t.Fatalf("answered a question that was not baton's: %q", r.in.text)
 	}
 
-	// Where baton's mod runs in the lead's claude, the mod settles it, and nothing types into a dialog.
-	r = newIdleRig(t)
-	helloFrom(t, r.loop.Store)
-	r.set(func(st *state.State) {
-		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
-		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
-	})
-	r.run(DefaultTiming.WarnTimeout * 3)
-	if len(r.in.text) != 0 {
-		t.Fatalf("typed %q with baton's mod in the lead's claude", r.in.text)
+	// Where baton's mod runs in the lead's claude, the mod settles it, and nothing types into a dialog;
+	// with nothing to record the answer (no Lapse), nothing is typed either.
+	for _, mod := range []bool{true, false} {
+		r = newIdleRig(t)
+		if mod {
+			r.recordLapses()
+			helloFrom(t, r.loop.Store)
+		}
+		r.set(func(st *state.State) {
+			st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
+			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
+		})
+		r.run(DefaultTiming.WarnTimeout * 3)
+		if len(r.in.text) != 0 {
+			t.Fatalf("typed %q (mod %v)", r.in.text, mod)
+		}
 	}
 }
 
 // Where the mod does not run, baton's question about the run and its question about a plan approved
-// mid-run are answered with their default's key (3, where each keeps it) after the escalation timeout,
-// alone on screen, exactly as issued. A block's question, a review's, one baton no longer has open, or any
-// with the mod in the lead's claude: none is typed into.
+// mid-run are dismissed after the escalation timeout, alone on screen, exactly as issued, and their
+// default recorded. A block's question, a review's, one baton no longer has open, or any with the mod in
+// the lead's claude: none is typed into.
 func TestBatonsQuestionsAboutTheRunAreAnsweredInSerialMode(t *testing.T) {
 	escalation := func(kind string) func(st *state.State, now time.Time) {
 		return func(st *state.State, now time.Time) {
@@ -494,53 +533,99 @@ func TestBatonsQuestionsAboutTheRunAreAnsweredInSerialMode(t *testing.T) {
 		}
 	}
 	for _, c := range []struct {
-		name  string
-		set   func(st *state.State, now time.Time)
-		mod   bool
-		typed bool
+		name   string
+		set    func(st *state.State, now time.Time)
+		mod    bool
+		answer string // what baton records; "" for nothing typed
 	}{
-		{"a stall's question", escalation("stalled"), false, true},
-		{"a revised plan's", planQuestion(true), false, true},
-		{"another plan's", planQuestion(false), false, true},
-		{"a block's", escalation("blocked"), false, false},
+		{"a stall's question", escalation("stalled"), false, "Continue"},
+		{"a revised plan's", planQuestion(true), false, "Continue with the revised plan"},
+		{"another plan's", planQuestion(false), false, "Keep the current run"},
+		{"a block's", escalation("blocked"), false, ""},
 		{"a review's", func(st *state.State, now time.Time) {
 			st.Run.Escalation = &state.Escalation{Kind: "review", Reason: "r", Since: now, Question: "baton: r", Asked: true}
 			st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize("baton: r"), Since: now, Kind: "review"})
-		}, false, false},
+		}, false, ""},
 		{"one no longer open", func(st *state.State, now time.Time) {
 			escalation("stalled")(st, now)
 			st.Run.Escalation.Question = "baton: something else"
-		}, false, false},
-		{"with the mod", escalation("stalled"), true, false},
+		}, false, ""},
+		{"with the mod", escalation("stalled"), true, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newIdleRig(t)
+			got := r.recordLapses()
 			if c.mod {
 				helloFrom(t, r.loop.Store)
 			}
-			r.set(func(st *state.State) { c.set(st, r.now) })
+			r.set(func(st *state.State) {
+				c.set(st, r.now)
+				st.Run.TurnOpen, st.Run.TurnStarted = true, r.now // the model's call waits on the dialog
+			})
 			r.run(DefaultTiming.EscalationTimeout - time.Minute)
 			if len(r.in.text) != 0 {
 				t.Fatalf("answered early: %q", r.in.text)
 			}
 			r.run(2 * time.Minute)
-			if !c.typed {
-				if len(r.in.text) != 0 {
-					t.Fatalf("typed %q", r.in.text)
+			if c.answer == "" {
+				if len(r.in.text) != 0 || len(*got) != 0 {
+					t.Fatalf("typed %q, recorded %+v", r.in.text, *got)
 				}
 				return
 			}
-			if len(r.in.text) != 1 || r.in.text[0] != "3" {
-				t.Fatalf("typed %q", r.in.text)
+			question := "baton: r"
+			if r.state().PlanQuestion != nil {
+				question = "baton: which?"
 			}
-			if d, _ := r.state().Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
-				t.Fatal("the answer is not marked as baton's own")
-			}
+			r.dismissed(t, got, lapsedAnswer{decide.Normalize(question), c.answer})
 			r.run(DefaultTiming.EscalationTimeout)
-			if len(r.in.text) != 1 {
-				t.Fatalf("answered twice: %q", r.in.text)
+			if len(r.in.text) != 1 || len(*got) != 1 {
+				t.Fatalf("answered twice: %q, %+v", r.in.text, *got)
 			}
 		})
+	}
+}
+
+// In serial mode, baton's question about a plan approved mid-run, alone on screen with nobody answering,
+// is dismissed with Esc at the escalation timeout, never answered by a digit (spike 39: on Claude Code
+// 2.1.30x a permission prompt's 3 approves the call and switches to auto mode). The dismissal is recorded
+// as its default through the hooks (hooks.Lapse): the current run is kept, nothing attached. The lead's
+// turn, which the dismissal ended with no hook, is closed on record, so baton's mail line then tells the
+// model, whose call came back declined.
+func TestSerialModeDismissesItsQuestionAndTellsTheModel(t *testing.T) {
+	r := newIdleRig(t)
+	r.loop.Lapse = func(s *state.Store, question, answer string, now time.Time) error {
+		_, err := hooks.Lapse(s, question, answer, now, func(string) string { return "" })
+		return err
+	}
+	q := decide.PlanQuestion("Demo", "P1", "running", false)
+	r.set(func(st *state.State) {
+		st.PlanQuestion = &state.PlanQuestion{File: filepath.Join(t.TempDir(), "other.md"), Question: q.Text, Since: r.now}
+		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.LastActivity = true, r.now, r.now
+		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Key: decide.Normalize(q.Text), Since: r.now, Kind: "plan_question"})
+	})
+	r.run(DefaultTiming.EscalationTimeout - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("answered early: %q", r.in.text)
+	}
+	r.run(70 * time.Second)
+	if len(r.in.text) != 1 || r.in.text[0] != "\x1b" {
+		t.Fatalf("typed %q, want Esc alone", r.in.text)
+	}
+	st := r.state()
+	if st.PlanQuestion != nil || st.Run.Dialogs.AnyOpen() || st.Run.TurnOpen {
+		t.Fatalf("after the dismissal: plan question %+v, dialogs %+v, turn open %v", st.PlanQuestion, st.Run.Dialogs, st.Run.TurnOpen)
+	}
+	if !hasEvent(r.events(), "plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) ||
+		!hasEvent(r.events(), "auto_answered", map[string]any{"dialog": "plan_question", "key": "esc", "answer": "Keep the current run"}) {
+		t.Fatalf("events:\n%s", r.events())
+	}
+	if st.Current != "P1" || len(st.Phases) != 2 || st.Phases["P0"].Status != state.PhaseDone {
+		t.Fatalf("the run changed: current %q, phases %+v", st.Current, st.Phases)
+	}
+	r.tick(10 * time.Second)
+	if len(r.in.text) != 2 || r.in.text[1] != decide.MailTyped([]string{state.MessageAnswer}) {
+		t.Fatalf("typed %q: want baton's mail line after the Esc", r.in.text)
 	}
 }
 
@@ -570,6 +655,7 @@ func TestAHeldPlanLapsesIntoItsDefault(t *testing.T) {
 // Every key the human presses starts the clock over: somebody at the keyboard is answering.
 func TestAKeyRestartsTheClock(t *testing.T) {
 	r := newIdleRig(t)
+	r.recordLapses()
 	r.set(func(st *state.State) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
 	})
@@ -580,36 +666,49 @@ func TestAKeyRestartsTheClock(t *testing.T) {
 		t.Fatalf("answered while the human was at it: %q", r.in.text)
 	}
 	r.run(2 * time.Minute)
-	if len(r.in.text) != 1 || r.in.text[0] != "3" {
+	if len(r.in.text) != 1 || r.in.text[0] != ownAnswerKey {
 		t.Fatalf("typed %q", r.in.text)
 	}
 }
 
 // baton types only when its question is the only dialog open. Another dialog may be on screen in front
-// of it (spikes/16-escalation, S1-D), and there a key would answer that dialog instead. The clock starts
-// when the question is first alone.
+// of it (spikes/16-escalation, S1-D), and there a key would answer that dialog instead: a phase agent's
+// permission prompt, the lead's own, or a question of the lead model's. Nothing is typed then, not even
+// Esc, and nothing is recorded. The clock starts when the question is first alone.
 func TestOnlyAnsweredWhenAlone(t *testing.T) {
-	r := newIdleRig(t)
-	r.set(func(st *state.State) {
-		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "sub", Key: "k", Since: r.now})
-		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now.Add(time.Second), Kind: "context_warning"})
-	})
-	r.run(DefaultTiming.WarnTimeout * 2)
-	if len(r.in.text) != 0 {
-		t.Fatalf("typed with another dialog open: %q", r.in.text)
-	}
-	r.set(func(st *state.State) { st.Run.Dialogs.CloseAgent("sub") })
-	r.run(DefaultTiming.WarnTimeout - time.Minute)
-	if len(r.in.text) != 0 {
-		t.Fatalf("the clock ran while the question was not alone: %q", r.in.text)
-	}
-	r.run(2 * time.Minute)
-	if len(r.in.text) != 1 || r.in.text[0] != "3" {
-		t.Fatalf("typed %q", r.in.text)
+	for _, other := range []state.Dialog{
+		{Tool: "Bash", Agent: "sub", Key: "k"},
+		{Tool: "Bash", Key: "k"},
+		{Tool: "Write", Key: "w"},
+		{Tool: "AskUserQuestion", Key: "which colour?"},
+	} {
+		t.Run(other.Tool+"/"+other.Agent, func(t *testing.T) {
+			r := newIdleRig(t)
+			got := r.recordLapses()
+			r.set(func(st *state.State) {
+				other.Since = r.now
+				st.Run.Dialogs.Open(other)
+				st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now.Add(time.Second), Kind: "context_warning"})
+			})
+			r.run(DefaultTiming.WarnTimeout * 2)
+			if len(r.in.text) != 0 || len(*got) != 0 {
+				t.Fatalf("typed %q, recorded %+v with another dialog open", r.in.text, *got)
+			}
+			r.set(func(st *state.State) { st.Run.Dialogs.CloseExact(other.Agent, other.Tool, other.Key) })
+			r.run(DefaultTiming.WarnTimeout - time.Minute)
+			if len(r.in.text) != 0 {
+				t.Fatalf("the clock ran while the question was not alone: %q", r.in.text)
+			}
+			r.run(2 * time.Minute)
+			if len(r.in.text) != 1 || r.in.text[0] != ownAnswerKey || len(*got) != 1 {
+				t.Fatalf("typed %q, recorded %+v", r.in.text, *got)
+			}
+		})
 	}
 
 	// A dialog that joins behind it stops baton too: the question might already be answered and gone.
-	r = newIdleRig(t)
+	r := newIdleRig(t)
+	got := r.recordLapses()
 	r.set(func(st *state.State) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
 	})
@@ -618,14 +717,15 @@ func TestOnlyAnsweredWhenAlone(t *testing.T) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "Bash", Agent: "sub", Key: "k", Since: r.now})
 	})
 	r.run(DefaultTiming.WarnTimeout)
-	if len(r.in.text) != 0 {
-		t.Fatalf("typed with a second dialog open: %q", r.in.text)
+	if len(r.in.text) != 0 || len(*got) != 0 {
+		t.Fatalf("typed %q, recorded %+v with a second dialog open", r.in.text, *got)
 	}
 }
 
 // Asleep, nobody can answer: the clock starts over at the wake.
 func TestSleepRestartsTheQuestionClock(t *testing.T) {
 	r := newIdleRig(t)
+	r.recordLapses()
 	r.set(func(st *state.State) {
 		st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion", Since: r.now, Kind: "context_warning"})
 	})

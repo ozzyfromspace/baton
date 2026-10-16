@@ -141,9 +141,10 @@ func TestASecondBlockLooksAgainToo(t *testing.T) {
 }
 
 // Where the block's question is on screen, the model's call waits on its dialog, so the loop only marks
-// the block lapsed, and the dialog is answered Look again: where baton types (serial mode), with the key 3
-// once the question is alone; where baton's mod runs, by the mod (hooks.Bound), and nothing is typed. The
-// answer lifts it (the hooks). Behind another dialog nothing is typed.
+// the block lapsed, and the dialog is answered Look again: where baton's mod does not run (serial mode),
+// by dismissing it with Esc once the question is alone and recording Look again; where it runs, by the
+// mod (hooks.Bound), and nothing is typed. The answer lifts it (the hooks). Behind another dialog nothing
+// is typed.
 func TestABlockOnScreenIsAnsweredLookAgain(t *testing.T) {
 	look := DefaultTiming.BlockLook
 	for _, c := range []struct {
@@ -158,6 +159,7 @@ func TestABlockOnScreenIsAnsweredLookAgain(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := blockRig(t)
+			got := r.recordLapses()
 			if c.mod {
 				helloFrom(t, r.loop.Store)
 			}
@@ -181,6 +183,9 @@ func TestABlockOnScreenIsAnsweredLookAgain(t *testing.T) {
 			}
 			if c.typed && !hasEvent(r.events(), "auto_answered", map[string]any{"dialog": "escalation", "blocked": true}) {
 				t.Errorf("events:\n%s", r.events())
+			}
+			if want := (lapsedAnswer{decide.Normalize(blockQuestion), decide.LookAgain}); c.typed != (len(*got) == 1 && (*got)[0] == want) || !c.typed && len(*got) != 0 {
+				t.Errorf("recorded %+v", *got)
 			}
 			if hasEvent(r.events(), "block_lapsed", nil) {
 				t.Errorf("lifted by the loop with its question on screen:\n%s", r.events())

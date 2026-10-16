@@ -64,12 +64,19 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 	switch st.Mode {
 	case state.ModeRunning, state.ModePaused:
 		cur, _ := s.LoadPlan()
-		same := cur.File == file
+		// The run's own file is revised in place; one baton moved out of Claude Code's way is revised where
+		// it was (Origin), and the revision moves aside in its turn (revisedAside).
+		revision := cur.Origin != "" && cur.Origin == file
+		same := cur.File == file || revision
 		q := decide.PlanQuestion(cur.Title, st.Current, st.Mode, same)
 		st.PlanQuestion = &state.PlanQuestion{File: file, Same: same, Question: q.Text, Since: c.Now}
-		return valveAction{event: "plan_question_asked", fields: map[string]any{"plan": file, "same": same},
+		v := valveAction{event: "plan_question_asked", fields: map[string]any{"plan": file, "same": same},
 			say:  fmt.Sprintf("baton: you approved a plan while %q is %s → asking you what to do with it", cur.Title, st.Mode),
 			tell: NudgePrefix + " Before anything else, " + q.Call() + ". baton acts on the answer itself; then follow what it tells you."}
+		if revision && g != nil {
+			v.revisedAside(st.PlanQuestion, pl, g.aside)
+		}
+		return v
 	}
 	return attach(st, s, c, pl, fresh, w, g)
 }
@@ -84,9 +91,16 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": "the working tree was not read"},
 			say: "baton: plan approved, but baton could not attach it (/baton run attaches it)"}
 	}
+	// The session's plan-mode file moves out of Claude Code's way first, and the plan follows it (state.Aside).
+	file := pl.File
 	rec, err := s.Record(*st)
+	var moved bool
+	var unmoved error
 	if err == nil {
-		err = s.WritePlan(pl)
+		moved, unmoved = g.aside.Move(&pl)
+		if err = s.WritePlan(pl); err != nil && moved {
+			state.Unmove(&pl)
+		}
 	}
 	if err != nil {
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": pl.File, "why": err.Error()},
@@ -102,16 +116,18 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	}
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, *g.origin)
-		st.RunBranch = branch
+		st.RunBranch, st.PlanLooked = branch, true
 		v.say = fmt.Sprintf("baton: attached %q (%s; %s) → %s starts now", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = append(v.also, event{"phase_started", map[string]any{"phase": first.ID}})
+		v.movedAside(pl, g.aside, file, moved, unmoved, "approval")
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
-	st.RunBranch = branch
+	st.RunBranch, st.PlanLooked = branch, true
 	v.say = fmt.Sprintf("baton: attached %q (%s; %s) → compacting the planning conversation, then %s starts", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
+	v.movedAside(pl, g.aside, file, moved, unmoved, "approval")
 	return v
 }
 
@@ -144,6 +160,7 @@ type ground struct {
 	branch string        // the branch checked out there: workers branch off it, and their work lands on it
 	origin *state.Origin // where the repository stands, for a first phase that starts at once (nil: not read)
 	room   workerRoom
+	aside  state.Aside // what moving the plan file out of Claude Code's way needs (lookAside)
 }
 
 // readGround reads the ground for attaching a plan in s's run; origin says to read where the repository
@@ -272,6 +289,7 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 			v.tell = NudgePrefix + " " + chose + " " + strconv.Quote(answer) + ", but the plan file no longer attaches (" + first + "). Nothing changed. Tell the human, and carry on with " + decide.Named(st.Current) + "."
 			return v
 		}
+		pl.Origin = r.Origin // a revision baton moved aside as it was approved (revisedAside)
 		if answer == "Start the new plan from P0" {
 			a := attach(st, s, c, pl, false, w, g)
 			if a.event == "attached" {

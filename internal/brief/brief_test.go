@@ -169,7 +169,7 @@ func resumed(t *testing.T) (plan.Plan, []byte, state.State) {
 
 func TestResumeBrief(t *testing.T) {
 	pl, doc, st := resumed(t)
-	result := decide.JobResult(*st.Job("j2"), "/work/.baton/runs/r1/jobs/j2.log", "--- FAIL: TestRanking (0.02s)\nFAIL", nil, "")
+	result := decide.JobResult(*st.Job("j2"), decide.Log{Path: "/work/.baton/runs/r1/jobs/j2.log", Tail: "--- FAIL: TestRanking (0.02s)\nFAIL"}, nil, "")
 	b := Write(Input{Kind: Resume, Plan: pl, Doc: doc, State: st, Handoff: "## P0 — 2026-10-04 11:00\n\nTables in 1a2b3c4.\n", Words: decide.Words{Git: true}, Result: result})
 	golden(t, "resume.golden", b)
 }

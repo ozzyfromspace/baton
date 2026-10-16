@@ -25,7 +25,7 @@ func TestHereWords(t *testing.T) {
 	// A lane error here is not a lane's: it says nothing of lane scripts.
 	failed := gate
 	failed.Status = state.JobLaneError
-	if r := JobResult(failed, "", "", nil, ""); !strings.Contains(r, "the gate's command never ran") || strings.Contains(r, ".baton-lane") {
+	if r := JobResult(failed, Log{}, nil, ""); !strings.Contains(r, "the gate's command never ran") || strings.Contains(r, ".baton-lane") {
 		t.Errorf("a lane error here: %s", r)
 	}
 	// With a lane script, the refusal of a gate naming the checkout does not offer one.

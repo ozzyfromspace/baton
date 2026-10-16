@@ -540,3 +540,80 @@ func TestSwitchSequenceThroughTheHooks(t *testing.T) {
 		t.Fatalf("rewake: code %d %q", code, msg)
 	}
 }
+
+// The lead's stop with no phase in hand, while a phase whose agent the human stopped twice waits on their
+// answer, says so: with nothing else able to move, the run waits on that answer alone, and the line names
+// when baton takes the phase back for the lead; with something else under way, it says the line it would
+// have and that baton takes the phase back once nothing else can move. An answer of theirs ends it.
+func TestTheStopLineNamesATwiceStoppedPhase(t *testing.T) {
+	const wait = 10 * time.Minute
+	pl := plan.Plan{Version: 1, Title: "Demo", Phases: []plan.Phase{{ID: "P0", Title: "First"}, {ID: "P1", Title: "Second", After: []string{}},
+		{ID: "P2", Title: "Third", After: []string{"P1"}}, {ID: "P3", Title: "Fourth", After: []string{}}}}
+	down := tStop.Add(-5 * time.Minute)
+	stuck := func(st *state.State) {
+		*st = state.Attach(pl, tStop.Add(-time.Hour), state.Origin{})
+		st.Phases["P0"].Status, st.Phases["P3"].Status, st.Current = state.PhaseDone, state.PhaseDone, ""
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "run/P1"}
+		st.Workers = []state.Worker{{Phase: "P1", Ref: "run/P1", Status: state.WorkerHeld, Assigned: down.Add(-time.Hour), Generation: st.Generation,
+			Stops: 2, StoppedAt: down.Add(-10 * time.Minute), TakenDown: down}}
+		st.Relay = []state.Relay{{Phase: "P1", Kind: state.RelayStopped, Since: down, Count: 2, Persist: decide.AgentPersistent, Queued: down}}
+		st.Run.LastStop = tStop // recorded as the stop came
+	}
+	moves := decide.NoPhaseYet("", nil) + "\n" + decide.StoppedPhaseWaits("P1", wait)
+	for _, c := range []struct {
+		name  string
+		setup func(*state.State)
+		say   string
+		event map[string]any
+	}{
+		{"nothing else can move", nil, decide.StoppedRunWaits("P1", tStop.Add(wait)),
+			map[string]any{"phase": "P1", "take_up": tStop.Add(wait).UTC().Format(time.RFC3339)}},
+		{"not before its dialog's time", func(st *state.State) { st.Relay[0].Deadline = tStop.Add(wait + 3*time.Minute) },
+			decide.StoppedRunWaits("P1", tStop.Add(wait+3*time.Minute)), map[string]any{"phase": "P1"}},
+		{"another agent at work", func(st *state.State) {
+			st.Phases["P3"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "run/P3"}
+			st.Workers = append(st.Workers, state.Worker{Phase: "P3", Ref: "run/P3", Status: state.WorkerWorking, Assigned: down, Generation: st.Generation})
+		}, moves, map[string]any{"phase": "P1", "moves": "the agent on P3 is at work"}},
+		{"a phase can start", func(st *state.State) { st.Phases["P3"].Status = state.PhasePending },
+			moves, map[string]any{"phase": "P1", "moves": "P3 can start"}},
+		{"a job runs", func(st *state.State) {
+			st.Phases["P0"].Status = state.PhaseVerifying
+			st.Jobs = []state.Job{{ID: "j1", Phase: "P0", Command: "make test", Status: state.JobRunning}}
+		}, decide.NoPhaseYet("job j1 (`make test`, P0)", nil) + "\n" + decide.StoppedPhaseWaits("P1", wait), map[string]any{"phase": "P1", "moves": "job j1 runs"}},
+		{"the human answered", func(st *state.State) {
+			st.Relay[0].Answered = &state.Resolution{By: state.ByHuman, Answer: decide.LeaveStopped, At: tStop}
+		}, decide.NoPhaseYet("", nil), nil},
+		{"stepped aside, unanswered", func(st *state.State) {
+			st.Relay[0].Answered, st.Relay[0].Applied = &state.Resolution{By: state.ByTimeout, Answer: "Ask me later", At: tStop}, tStop
+		}, decide.StoppedRunWaits("P1", tStop.Add(wait)), map[string]any{"phase": "P1"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var st state.State
+			stuck(&st)
+			if c.setup != nil {
+				c.setup(&st)
+			}
+			d := decideStop(&st, pl, tStop, decide.Words{Git: true, Timeout: wait}, nil)
+			if d.output["decision"] == "block" {
+				t.Fatalf("the stop was refused: %v", d.output)
+			}
+			if got := said(d.output); got != c.say {
+				t.Errorf("said %q\nwant %q", got, c.say)
+			}
+			var got map[string]any
+			for _, e := range d.events {
+				if e.kind == "stopped_phase_waits" {
+					got = e.fields
+				}
+			}
+			if (got == nil) != (c.event == nil) {
+				t.Fatalf("logged %v, want %v", got, c.event)
+			}
+			for k, v := range c.event {
+				if got[k] != v {
+					t.Errorf("logged %s = %v, want %v", k, got[k], v)
+				}
+			}
+		})
+	}
+}
