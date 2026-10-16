@@ -113,14 +113,18 @@ func Handlers(d Deps) map[string]Handler {
 		m[event] = func(c Context) (Result, error) {
 			c.Machine = read
 			if agent := str(c.Input, "agent_id"); agent != "" && d.Open != nil {
-				// A subagent's hook: its loop comes first. A phase agent's hooks are its sub-run's own, a fork's
-				// are nobody's, and any other subagent is one its loop's model started.
+				// A subagent's hook: its loop comes first. A phase agent's hooks are its sub-run's own (unless
+				// baton let go of it: letGo), a fork's are nobody's, and any other subagent is one its loop's
+				// model started.
 				s, err := d.Open(c)
 				if err == errFork {
 					return Result{}, nil
 				}
 				if c.Agent = agent; err == nil && s.Agent == agent {
 					c.Agent = ""
+					if res, gone := h.letGo(c, s, agent); gone {
+						return res, nil
+					}
 				}
 			}
 			return fn(c)
@@ -1054,6 +1058,16 @@ func TurnSource(prompt, source string) string {
 
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"), str(c.Input, "source"))
+	var lead *toLead
+	if by == "human" {
+		// The human's words for a phase's agent (@P23 <words>): sent to its agent, with no turn of the
+		// lead's, or the lead's own prompt, told where the phase stands.
+		res, routed, l := h.addressed(c)
+		if routed {
+			return res, nil
+		}
+		lead = l
+	}
 	mark := markOf(str(c.Input, "transcript_path")) // read before the lock: the turn's next hook looks at the prompt (rewind.go)
 	var events []event
 	var tell, staleSkill, ann string
@@ -1129,6 +1143,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 		tell = strings.TrimSpace(tell + "\n\n" + refresh)
 		s.Event("skill_refreshed", map[string]any{"from": staleSkill, "to": c.Env("BATON_VERSION")})
 		says = append(says, fmt.Sprintf("baton: gave Claude the current /baton instructions (the copy earlier in this conversation is from baton %s)", staleSkill))
+	}
+	if lead != nil {
+		tell = strings.TrimSpace(tell + "\n\n" + lead.context) // last, beside the prompt it is about
+		says = append(says, lead.say)
 	}
 	if tell == "" {
 		if len(says) > 0 {

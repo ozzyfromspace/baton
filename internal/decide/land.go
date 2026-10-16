@@ -127,6 +127,8 @@ func MailTyped(kinds []string) string {
 			return "[baton] Your question has its answer: baton's message, attached, says what it is and what to do."
 		case state.MessageCommit:
 			return "[baton] A phase's work waits to land on your uncommitted changes: baton's message, attached, says which files to commit."
+		case state.MessageWords:
+			return "[baton] The human wrote something for a phase's agent that did not reach it: baton's message, attached, has their words."
 		}
 	}
 	return "[baton] baton has a message for you, attached."
