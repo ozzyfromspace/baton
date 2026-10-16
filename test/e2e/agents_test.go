@@ -647,7 +647,7 @@ Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
 After: none
 
 1. Write the single word one into a new file named one.txt. Commit it: git add one.txt, then git commit -m 'feat: one'.
-2. Hand baton this wait, exactly: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
+2. Hand baton this wait with exactly this command, run on its own, joined to no other: baton await 'sh hold.sh' --notes 'one.txt committed; report P1 done once the wait ends'
 3. End your turn. baton gives you the result when the wait ends: do not run hold.sh yourself, and do not wait for it or check on it.
 4. When baton gives you the result, report P1 done: baton done P1 --notes 'wrote one'
 
