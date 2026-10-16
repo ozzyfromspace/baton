@@ -34,8 +34,8 @@ func TestSkillAttachesAndStartsAPlan(t *testing.T) {
 // test plays the human: it approves entering plan mode, the plan, and any permission prompt.
 func TestSkillPlansAttachesAndStarts(t *testing.T) {
 	dir := NewProject(t)
+	PlansHere(t, dir)
 	s := Start(t, dir, "--model", "haiku", "--plugin-dir", pluginDir(t))
-	s.RemovePlansAfter()
 	s.Trust()
 	s.WaitQuiet(3*time.Second, 40*time.Second)
 	s.AutoApprove()
