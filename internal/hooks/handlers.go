@@ -236,7 +236,8 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		}
 		return permission("deny", decide.PhaseTypeIsBatons), nil
 	}
-	if res, asked := h.directives(c); asked {
+	res, asked, shown := h.directives(c)
+	if asked {
 		return res, nil
 	}
 	h.agentCall(c, false)
@@ -367,7 +368,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		return permission("deny", refuseQuestion), nil
 	}
 	if hold == "" {
-		return Result{}, nil
+		return shown.result(), nil
 	}
 	// While something has gone wrong, let the model LOOK. The block exists to stop work before a
 	// compaction, and reading is not work — but it refused every tool, so in the one incident where a
@@ -448,41 +449,89 @@ func (h *handlers) guardLanded(c Context, rw *rewrite) (Result, bool, error) {
 }
 
 // directives answers the lead's first ExitPlanMode for a plan with phase headings, in a hosted session,
-// with baton's request to flag the instructions that compete with it (decide.CompetingDirectives): once
-// per plan file, so the next call goes through. It never holds the plan back a second time.
-func (h *handlers) directives(c Context) (Result, bool) {
+// with baton's request to flag the instructions that compete with it (decide.CompetingDirectives), and,
+// for a plan that is mostly a chain (plan.Shape.MostlyChain), to check that chain against the shape rules
+// (decide.ShapeCheck): once per plan file, so the next call goes through. It never holds the plan back a
+// second time. When the plan goes to the human, shown has its shape in one line for them (decide.PlanShape).
+func (h *handlers) directives(c Context) (res Result, asked bool, shown planShown) {
 	if str(c.Input, "tool_name") != "ExitPlanMode" || str(c.Input, "agent_id") != "" {
-		return Result{}, false
+		return Result{}, false, shown
 	}
 	ti, _ := c.Input["tool_input"].(map[string]any)
 	text := str(ti, "plan")
-	if text == "" || !plan.Shaped(plan.Suggest([]byte(text))) {
-		return Result{}, false // not a baton plan
+	if text == "" {
+		return Result{}, false, shown
+	}
+	spec := plan.Suggest([]byte(text))
+	if !plan.Shaped(spec) {
+		return Result{}, false, shown // not a baton plan
+	}
+	// The plan's shape, read from the text as baton reads a plan it attaches. One that does not build is
+	// asked about all the same, with no shape: its approval says what keeps it from being attached.
+	var shape plan.Shape
+	pl, err := plan.Build("", []byte(text), spec)
+	built := err == nil
+	if built {
+		shape = pl.Shape()
 	}
 	key := str(ti, "planFilePath")
 	if key == "" {
 		sum := sha256.Sum256([]byte(text))
 		key = hex.EncodeToString(sum[:8])
 	}
-	asked := false
+	toHuman := false
 	s, _, err := h.update(c, func(st *state.State, s *state.Store) error {
 		if s.Worker() != "" {
 			return nil
 		}
 		if slices.Contains(st.Run.DirectivesAsked, key) {
-			st.Run.DirectivesPending = "" // asked, and the plan goes to the human now
+			st.Run.DirectivesPending, toHuman = "", true // asked, and the plan goes to the human now
 			return nil
 		}
 		st.Run.DirectivesAsked, st.Run.DirectivesPending, asked = append(st.Run.DirectivesAsked, key), key, true
 		return nil
 	})
-	if err != nil || !asked {
-		return Result{}, false
+	if err != nil {
+		return Result{}, false, shown
 	}
-	s.Event("directives_asked", map[string]any{"plan": key})
-	res := permission("deny", decide.CompetingDirectives())
-	res.Output["systemMessage"] = "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it"
-	return res, true
+	fields := map[string]any{"plan": key}
+	flagged := built && shape.MostlyChain()
+	if built {
+		fields["phases"], fields["longest_chain"], fields["width"], fields["shape_flagged"] = shape.Phases, len(shape.Chain), shape.Width, flagged
+	}
+	switch {
+	case asked:
+		s.Event("directives_asked", fields)
+		why := decide.CompetingDirectives()
+		if flagged {
+			why += "\n\n" + decide.ShapeCheck(shape)
+		}
+		res = permission("deny", why)
+		res.Output["systemMessage"] = decide.PlanChecked(shape, flagged)
+		return res, true, shown
+	case toHuman && built:
+		delete(fields, "shape_flagged")
+		fields["mostly_chain"] = flagged
+		shown = planShown{s: s, line: decide.PlanShape(shape), fields: fields}
+	}
+	return Result{}, false, shown
+}
+
+// planShown is what the human is told as a plan goes to them for approval: its shape in one line
+// (decide.PlanShape), logged as plan_shape when the call goes on to them.
+type planShown struct {
+	s      *state.Store
+	line   string
+	fields map[string]any
+}
+
+// result lets the call go on, with the line for the human if there is one.
+func (p planShown) result() Result {
+	if p.line == "" {
+		return Result{}
+	}
+	p.s.Event("plan_shape", p.fields)
+	return Result{Output: map[string]any{"systemMessage": p.line}}
 }
 
 // workerRefusal is why a worker on phase may not make a tool call, or "" if it may: it never changes the
