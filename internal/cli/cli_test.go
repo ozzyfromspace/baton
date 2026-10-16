@@ -159,7 +159,7 @@ func TestVersionAtLeast(t *testing.T) {
 func TestContextSettings(t *testing.T) {
 	pct := func(f float64) *float64 { return &f }
 	cfg := func(autocompact string) config.Config {
-		return config.Config{Autocompact: autocompact, CheckpointPct: pct(60), WarnPct: pct(90)}
+		return config.Config{Autocompact: autocompact, NoticePct: pct(60), CheckpointPct: pct(80), WarnPct: pct(90)}
 	}
 	for _, c := range []struct {
 		name, autocompact string
@@ -187,12 +187,32 @@ func TestContextSettings(t *testing.T) {
 			}
 			continue
 		}
-		want := valve.Settings{Cap: c.cap, CheckpointPct: 60, WarnPct: 90}
+		want := valve.Settings{Cap: c.cap, NoticePct: 60, CheckpointPct: 80, WarnPct: 90}
 		if c.env["BATON_WARN_TOKENS"] != "" {
 			want.WarnTokens = 5000
 		}
 		if err != nil || flag != c.flag || vs != want {
 			t.Errorf("%s: flag %q settings %+v err %v; want %q %+v", c.name, flag, vs, err, c.flag, want)
+		}
+	}
+}
+
+// baton setup says where the valves sit on a 1M-token model: the notice, the checkpoint and the question.
+func TestContextSummary(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		vs   valve.Settings
+		want string
+	}{
+		{"default", valve.Settings{Cap: 810_000, NoticePct: 60, CheckpointPct: 80, WarnPct: 90},
+			"On a 1M-token model baton tells the model where its context stands at 486k, asks the model to checkpoint at 648k and asks you (AskUserQuestion) at 729k; Claude Code compacts on its own at about 777k"},
+		{"no notice", valve.Settings{Cap: 810_000, CheckpointPct: 80, WarnPct: 90},
+			"On a 1M-token model baton asks the model to checkpoint at 648k and asks you (AskUserQuestion) at 729k;"},
+		{"all off", valve.Settings{Cap: 810_000},
+			"leaves the context alone (notice_pct, checkpoint_pct and warn_pct are 0)"},
+	} {
+		if got := contextSummary("810k", c.vs); !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q lacks %q", c.name, got, c.want)
 		}
 	}
 }

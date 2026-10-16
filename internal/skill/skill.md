@@ -155,7 +155,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 
 - Report progress only with `baton done <phase> --notes "…"` and `baton checkpoint --notes "…"`.
 - When the phase is complete and committed, run `baton done` even while its gate still runs. The phase is then verifying: baton marks it done when the gate passes, and the phases that need it wait until then. If the gate fails, baton reopens the phase later, and you resume it from your notes.
-- `baton done` is refused while the phase's latest gate or wait on something outside is red: fix what failed, commit, and run it again. Only if the failure is not the phase's to fix, `baton done <phase> --despite-red "<why>"` finishes it anyway; that is a decision made without the human, and they are told.
+- `baton done` is refused while the phase's gate or its latest wait on something outside is red: fix what failed, commit, and run it again. A red gate stands until the same command passes: a narrower check that passes does not clear it, so verify again with the gate's own command, or make another command the phase's gate with `baton verify --replace` (a decision made without the human, and they are told). Only if the failure is not the phase's to fix, `baton done <phase> --despite-red "<why>"` finishes it anyway; that is a decision made without the human, and they are told.
 - Run each `baton` command as a plain command on its own. Inside double quotes, the shell runs backticks and `$( )` as commands and expands `$NAME`, so keep those out of notes, or use single quotes.
 
 ### When something goes wrong

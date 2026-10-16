@@ -87,6 +87,10 @@ type Runtime struct {
 	// runs, it reports each one as it begins, so a /compact baton typed that it says nothing of soon did
 	// not take; where it does not (this claude has not shown it yet), only the compaction's proof can say.
 	ModReports time.Time `json:"mod_reports,omitzero"`
+	// ModCounted is the mod's report of the lead's compaction counted here last (CountOnce): the same
+	// report sent again, by a mod whose report process was killed before the bridge recorded it, is not
+	// counted twice.
+	ModCounted *ModSeq `json:"mod_counted,omitempty"`
 	// Serial is why the host that decided it runs the plan's phases one at a time in the lead: baton's mod
 	// did not say hello in its claude, or is another baton's (loop/mod.go). Another host decides afresh.
 	Serial *Serial `json:"serial,omitempty"`
@@ -107,9 +111,11 @@ type Runtime struct {
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
-	// ContextNudged is set once the model has been asked to checkpoint (ContextNudgedAt: at what size, so
-	// the request is repeated as the context keeps growing), and ContextWarned once the human has been
-	// asked; each re-arms when the context falls well below its threshold (after a compaction).
+	// ContextNoticed is set once the model has been told where its context stands (the notice, which asks
+	// nothing), ContextNudged once it has been asked to checkpoint (ContextNudgedAt: at what size, so the
+	// request is repeated as the context keeps growing), and ContextWarned once the human has been asked;
+	// each re-arms when the context falls well below its threshold (after a compaction).
+	ContextNoticed  bool `json:"context_noticed,omitempty"`
 	ContextNudged   bool `json:"context_nudged,omitempty"`
 	ContextNudgedAt int  `json:"context_nudged_at,omitempty"`
 	ContextWarned   bool `json:"context_warned,omitempty"`

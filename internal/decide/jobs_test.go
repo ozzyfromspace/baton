@@ -56,7 +56,7 @@ func TestJobsOfEachKindWords(t *testing.T) {
 
 	red := watch
 	red.Status, red.Exit = state.JobFailed, 1
-	if got := RedRefusal(red); !strings.HasPrefix(got, "not done — P13's latest wait on something outside, job j65 (`gh run watch 7 --exit-status`), failed (exit 1)") ||
+	if got := RedRefusal(red, nil); !strings.HasPrefix(got, "not done — P13's latest wait on something outside, job j65 (`gh run watch 7 --exit-status`), failed (exit 1)") ||
 		!strings.Contains(got, "Fix what failed, commit, and wait on it again (`baton await`, the same command); `baton done P13` then waits for it.") {
 		t.Errorf("a red wait refuses done with %q", got)
 	}

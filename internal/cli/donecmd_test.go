@@ -95,7 +95,7 @@ func TestDoneRefusesARedVerification(t *testing.T) {
 	j := s.job(state.JobFailed, 1)
 	errs := s.fails("done", "P0")
 	for _, want := range []string{"[baton] Job j1 (P0) failed (exit 1) after 12m: `make test` on " + j.Commit[:12], "--- FAIL: TestLinks",
-		"baton: not done — P0's latest verification, job j1", "`baton done P0 --despite-red \"<why>\"`"} {
+		"baton: not done — P0's gate, job j1", "`baton done P0 --despite-red \"<why>\"`"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("refusal lacks %q:\n%s", want, errs)
 		}
@@ -106,7 +106,7 @@ func TestDoneRefusesARedVerification(t *testing.T) {
 	if !s.logged("refused", map[string]any{"command": "done", "why": "red", "job": "j1"}) {
 		t.Errorf("events:\n%s", s.events())
 	}
-	if errs := s.fails("done", "P0"); strings.Contains(errs, "--- FAIL") || !strings.Contains(errs, "not done — P0's latest verification") {
+	if errs := s.fails("done", "P0"); strings.Contains(errs, "--- FAIL") || !strings.Contains(errs, "not done — P0's gate") {
 		t.Errorf("the second refusal:\n%s", errs)
 	}
 
