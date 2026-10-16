@@ -168,7 +168,7 @@ func TestARevisedPlanApprovedMidRunIsPutToTheHuman(t *testing.T) {
 	if d := denyReason(f.fire("PreToolUse", bash("make"))); !strings.Contains(d, "put baton's question about the plan the human approved to them first") {
 		t.Fatalf("work was not held: %q", d)
 	}
-	question := ask(q, "Start the new plan from P0", "Wait for me", "Continue with the revised plan")
+	question := ask(q, "Wait for me", "Start the new plan from P0", "Continue with the revised plan")
 	if d := denyReason(f.fire("PreToolUse", question)); d != "" {
 		t.Fatalf("baton's own question was refused: %q", d)
 	}
@@ -205,7 +205,7 @@ func TestARevisionThatMustWaitForAJob(t *testing.T) {
 	})
 	os.WriteFile(file, []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b.\n\n## P2 — Third\nDo c, better.\n"), 0o644)
 	f.approve(file)
-	question := ask(f.state().PlanQuestion.Question, "Start the new plan from P0", "Wait for me", "Continue with the revised plan")
+	question := ask(f.state().PlanQuestion.Question, "Wait for me", "Start the new plan from P0", "Continue with the revised plan")
 	f.fire("PermissionRequest", question)
 	out := f.fire("PostToolUse", answer(question, "Continue with the revised plan"))
 	if st := f.state(); st.Mode != state.ModeRunning || st.Current != "" || st.Phases["P1"].Status != state.PhaseVerifying {
@@ -226,7 +226,7 @@ func TestANewPlanApprovedMidRunCanStartOver(t *testing.T) {
 	if !strings.Contains(feedback(out), q) {
 		t.Fatalf("asked %q", feedback(out))
 	}
-	question := ask(q, "Start the new plan from P0", "Wait for me", "Keep the current run")
+	question := ask(q, "Wait for me", "Start the new plan from P0", "Keep the current run")
 	f.fire("PermissionRequest", question)
 	f.fire("PostToolUse", answer(question, "Start the new plan from P0"))
 	st := f.state()
@@ -242,7 +242,7 @@ func TestANewPlanApprovedMidRunCanStartOver(t *testing.T) {
 	f.startRun()
 	f.store.Update(func(st *state.State) error { return state.Pause(st) })
 	f.approve(f.writePlan("after-clear.md", approvedDoc))
-	f.fire("PostToolUse", answer(ask(strings.Replace(q, "is running", "is paused", 1), "Start the new plan from P0", "Wait for me", "Keep the current run"), "Start the new plan from P0"))
+	f.fire("PostToolUse", answer(ask(strings.Replace(q, "is running", "is paused", 1), "Wait for me", "Start the new plan from P0", "Keep the current run"), "Start the new plan from P0"))
 	if st := f.state(); st.Mode != state.ModeRunning || st.Current != "P0" || !st.BoundaryOwed || !f.logged("resumed", map[string]any{"by": "plan_question"}) {
 		t.Fatalf("after starting over from a pause: mode %s current %s; events %v", st.Mode, st.Current, f.events())
 	}
@@ -313,21 +313,70 @@ func TestWaitForMeHoldsAnApprovedPlan(t *testing.T) {
 	}
 }
 
-// Where the mod does not run, the host types the default's key (3): the answer that arrives on the dialog
-// it marked is baton's, by timeout, and says nobody answered.
-func TestAPlanQuestionTheHostAnsweredIsBatons(t *testing.T) {
+// Where the mod does not run, the host dismisses its question with Esc at the deadline, which no hook
+// reports (spike 39), and records the default itself (Lapse): baton's, by timeout, with the approved plan
+// set aside, not the human's taking part. The model, whose call came back declined, is told at the prompt
+// the host's mail line starts.
+func TestAPlanQuestionTheHostDismissedIsBatons(t *testing.T) {
 	f := newFixture(t, false)
 	f.startRun()
-	f.approve(f.writePlan("after-clear.md", approvedDoc))
-	question := ask(f.state().PlanQuestion.Question, labelsOf(decide.ReplaceOptions)...)
-	f.fire("PermissionRequest", question)
+	file := f.writePlan("after-clear.md", approvedDoc)
+	f.approve(file)
+	q := f.state().PlanQuestion.Question
+	f.fire("PermissionRequest", ask(q, labelsOf(decide.ReplaceOptions)...))
 	f.set(func(st *state.State) { st.Run.Dialogs[0].AutoAnswered = f.now })
 	human := f.state().Run.HumanAt
 	f.now = f.now.Add(10 * time.Minute)
-	out := f.fire("PostToolUse", answer(question, "Keep the current run"))
-	if !f.logged("plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout"}) || !strings.Contains(say(out), "nobody answered by") ||
-		!f.state().Run.HumanAt.Equal(human) {
-		t.Fatalf("out %v; events:\n%s", out, f.eventLog())
+	if own, err := Lapse(f.store, decide.Normalize(q), decide.PlanQuestionDefault(false), f.now, f.env(f.inst)); !own || err != nil {
+		t.Fatalf("recorded %v, %v", own, err)
+	}
+	st := f.state()
+	if st.PlanQuestion != nil || st.Run.Dialogs.AnyOpen() || !st.Run.HumanAt.Equal(human) {
+		t.Fatalf("plan question %+v, dialogs %+v, human at %s", st.PlanQuestion, st.Run.Dialogs, st.Run.HumanAt)
+	}
+	if !f.logged("plan_question_resolved", map[string]any{"answer": "Keep the current run", "by": "timeout", "via": "lapsed"}) {
+		t.Fatalf("events:\n%s", f.eventLog())
+	}
+	if pl, _ := f.store.LoadPlan(); pl.Title != "Demo" || pl.File == file {
+		t.Fatalf("the approved plan was attached: %+v", pl)
+	}
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": decide.MailTyped([]string{state.MessageAnswer})})
+	if told := additionalContext(out); !strings.Contains(told, "Nobody answered by") || !strings.Contains(told, "keep the current run") {
+		t.Fatalf("the model was told %q", told)
+	}
+}
+
+// The question about a plan approved mid-run puts Wait for me first, where a stray key lands (a second
+// Enter after the one that approved the plan): answered so, it holds the approved plan for the human and
+// changes nothing; the run's progress is set aside only by choosing Start the new plan from P0.
+func TestAStrayFirstAnswerHoldsTheRun(t *testing.T) {
+	for _, same := range []bool{false, true} {
+		f := newFixture(t, false)
+		run := f.startRun()
+		file := run
+		if same {
+			os.WriteFile(file, []byte("# Demo\n\n## P0 — First\nDo a.\n\n## P1 — Second\nDo b, better.\n\n## P2 — Third\nDo c.\n\n## P3 — Fourth\nDo d.\n"), 0o644)
+		} else {
+			file = f.writePlan("after-clear.md", approvedDoc)
+		}
+		f.approve(file)
+		opts := decide.ReplaceOptions
+		if same {
+			opts = decide.ReviseOptions
+		}
+		question := ask(f.state().PlanQuestion.Question, labelsOf(opts)...)
+		f.fire("PermissionRequest", question)
+		out := f.fire("PostToolUse", answer(question, opts[0].Label)) // the first option: what Enter picks
+		st := f.state()
+		if opts[0].Label != "Wait for me" || st.PlanQuestion == nil || st.PlanQuestion.Held.IsZero() || st.Current != "P1" || st.Phases["P0"].Status != state.PhaseDone {
+			t.Fatalf("same %v: first option %q; plan question %+v, current %q", same, opts[0].Label, st.PlanQuestion, st.Current)
+		}
+		if !f.logged("plan_question_held", map[string]any{"answer": "Wait for me", "by": "human"}) || f.logged("revised", nil) || f.logged("plan_question_resolved", nil) {
+			t.Fatalf("same %v: out %v; events:\n%s", same, out, f.eventLog())
+		}
+		if pl, _ := f.store.LoadPlan(); pl.File != run || len(pl.Phases) != 3 {
+			t.Fatalf("same %v: the run's plan changed: %+v", same, pl)
+		}
 	}
 }
 

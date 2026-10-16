@@ -98,7 +98,7 @@ func Fresh(st *State, p Proof, path string, now time.Time) (checkpoint bool) {
 	checkpoint = st.CheckpointOwed
 	endCheckpoint(st, now)
 	st.Run.Briefed, st.Run.Transcript, st.Run.Proven, st.Run.Briefing = p.agent, path, markEnd(path), nil
-	st.Run.Context, st.Run.ContextNudged, st.Run.ContextNudgedAt, st.Run.ContextWarned, st.Run.WarnOwed = nil, false, 0, false, false
+	st.Run.Context, st.Run.ContextNoticed, st.Run.ContextNudged, st.Run.ContextNudgedAt, st.Run.ContextWarned, st.Run.WarnOwed = nil, false, false, 0, false, false
 	return checkpoint
 }
 

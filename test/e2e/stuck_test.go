@@ -25,7 +25,8 @@ const proposePush = `Before anything else, run exactly this one command with the
 
 // Nobody answers an outward proposal: at its deadline baton answers Not now for the human, which leaves
 // the push for them (it is neither reversible nor inside the project), and the run goes on to its end.
-// Where baton's mod runs, the mod settles it; where it does not, the host types 3, Not now's key.
+// Where baton's mod runs, the mod settles it; where it does not, the host dismisses it with Esc and
+// records Not now itself.
 func TestAnOutwardProposalIsLeftAtItsDeadline(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -44,7 +45,7 @@ func TestAnOutwardProposalIsLeftAtItsDeadline(t *testing.T) {
 			}
 			if !c.mod {
 				args = append(args, "--plugin-dir", noModPlugin(t))
-				steps = append(steps, is("auto_answered", "dialog", "proposal", "key", "3"))
+				steps = append(steps, is("auto_answered", "dialog", "proposal", "key", "esc"))
 			}
 			steps = append(steps,
 				is("proposal_resolved", "id", "d1", "by", "timeout", "answer", "Not now"),

@@ -762,9 +762,10 @@ func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
 	}
 	dir := projectWith(t, files)
 	Attach(t, dir, compactPlan)
-	// Claude Code compacts the agent at 100k tokens, and baton's checkpoint does not come first. The waits
+	// Claude Code compacts the agent at 100k tokens, and baton's checkpoint (and its notice) do not come
+	// first: off, since on a small window every line moves before Claude Code's own compaction. The waits
 	// stay in the foreground.
-	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_CHECKPOINT_PCT=99", "BATON_FOREGROUND_MAX=10m"}, "--autocompact", "100k", "--permission-mode", "acceptEdits",
+	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_CHECKPOINT_PCT=0", "BATON_NOTICE_PCT=0", "BATON_FOREGROUND_MAX=10m"}, "--autocompact", "100k", "--permission-mode", "acceptEdits",
 		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Bash(sh wait.sh asked)", "Bash(sh wait.sh read)", "Read")
 
 	waitStarted(t, s, dir, "asked", 6*time.Minute)

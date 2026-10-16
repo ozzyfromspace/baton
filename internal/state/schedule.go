@@ -45,6 +45,10 @@ type Job struct {
 	// cancelled, its phase was finished with it in hand, or its verification passed for a phase the run
 	// had moved on from. Each result is given once.
 	Delivered time.Time `json:"delivered,omitzero"`
+
+	// Replaces is the red gate of another command this gate was queued to stand in for (--replace, RedGate):
+	// its phase's gate from then on, as a decision the human is told of.
+	Replaces string `json:"replaces,omitempty"`
 }
 
 // Job kinds: a verify job runs a gate on a commit, in a lane; an await job waits on something outside the
@@ -83,7 +87,8 @@ func (j Job) Took(now time.Time) time.Duration {
 	return j.Ended.Sub(j.Started)
 }
 
-// MaxJobs is how many jobs a run keeps on record. Past it, the oldest finished jobs are dropped.
+// MaxJobs is how many jobs a run keeps on record. Past it, the oldest finished jobs are dropped, apart from
+// those a red verification stands on (droppable).
 const MaxJobs = 30
 
 // kind is the job's kind: JobVerify or JobAwait (a job recorded without one is a verify).
@@ -106,7 +111,8 @@ func (j Job) Same(o Job) bool {
 // its job of j's kind already queued or running is cancelled and replaced by j, and one of the other kind
 // is left alone. Whether a different check may replace the one that runs is the caller's to ask first
 // (Clash). It returns the job as queued, the job it replaced (nil for none), and the finished jobs dropped
-// from the record to keep it within MaxJobs.
+// from the record to keep it within MaxJobs: never one whose phase would stand on another red job without
+// it (droppable). A red job dropped keeps its log (KeptLogs).
 func QueueJob(st *State, j Job, now time.Time) (queued Job, replaced *Job, dropped []Job) {
 	n := st.JobSeq
 	for _, o := range st.Jobs {
@@ -122,14 +128,35 @@ func QueueJob(st *State, j Job, now time.Time) (queued Job, replaced *Job, dropp
 	}
 	st.Jobs = append(st.Jobs, j)
 	for len(st.Jobs) > MaxJobs {
-		i := slices.IndexFunc(st.Jobs, Job.Finished)
+		i := slices.IndexFunc(st.Jobs, func(o Job) bool { return o.Finished() && st.droppable(o) })
 		if i < 0 {
 			break
+		}
+		if o := st.Jobs[i]; o.Red() {
+			st.KeptLogs = append(st.KeptLogs, o.ID)
 		}
 		dropped = append(dropped, st.Jobs[i])
 		st.Jobs = slices.Delete(st.Jobs, i, i+1)
 	}
 	return j, replaced, dropped
+}
+
+// droppable reports whether job o can leave the record without changing the red jobs its phase stands on
+// (Standing): it is none of them, and none stands in its place once it is gone (a red gate an older check
+// of the same command had cleared, say). A passing job its phase stands on may go, as it always could.
+func (st State) droppable(o Job) bool {
+	reds := func(st State) []string {
+		var out []string
+		for _, j := range st.Standing(o.Phase) {
+			if j.Red() {
+				out = append(out, j.ID)
+			}
+		}
+		return out
+	}
+	rest := st
+	rest.Jobs = slices.DeleteFunc(slices.Clone(st.Jobs), func(x Job) bool { return x.ID == o.ID })
+	return slices.Equal(reds(st), reds(rest))
 }
 
 // CancelJobs cancels the jobs not finished yet that which picks, for reason: each is marked interrupted,
@@ -203,14 +230,68 @@ func (st State) LatestOf(phase, kind string) *Job {
 	return nil
 }
 
-// Standing is what phase's verification stands on: its latest job of each kind, the verify first, then
-// the await; none, one or two. A local gate and a wait on something outside check different things, so
-// the phase is done once both passed, and red while either is.
+// Standing is what phase's verification stands on: its gate (gate) and its latest wait on something
+// outside, in that order; none, one or two. A local gate and a wait on something outside check different
+// things, so the phase is done once both passed, and red while either is.
 func (st State) Standing(phase string) []Job {
 	var out []Job
-	for _, kind := range []string{JobVerify, JobAwait} {
-		if j := st.LatestOf(phase, kind); j != nil {
-			out = append(out, *j)
+	if j := st.gate(phase, false); j != nil {
+		out = append(out, *j)
+	}
+	if j := st.LatestOf(phase, JobAwait); j != nil {
+		out = append(out, *j)
+	}
+	return out
+}
+
+// gate is phase's gate, the verify job its verification stands on: its latest, unless a gate before it is
+// red and it runs another check. A red gate stands until a gate that takes over from it (takesOver) is
+// queued: one of the same command, or one the model made the phase's gate in its place (--replace). A
+// narrower check that passes does not clear it. With ended, only the gates that have ended count: the gate
+// the phase stood on before those queued or running now.
+func (st State) gate(phase string, ended bool) *Job {
+	var g *Job
+	for i := range st.Jobs {
+		j := &st.Jobs[i]
+		if j.Phase != phase || j.kind() != JobVerify || ended && !j.Finished() {
+			continue
+		}
+		if g == nil || !g.Red() || takesOver(*j, *g) {
+			g = j
+		}
+	}
+	return g
+}
+
+// takesOver reports whether gate j takes over from red gate g: it runs the same command (in a lane or in
+// the working tree), or was queued to stand in for g (Replaces), and it is queued, running, or ended with a
+// verdict. One that ended without a verdict (it could not run, or was interrupted) checked nothing, and g
+// stands again.
+func takesOver(j, g Job) bool {
+	return (j.Command == g.Command || j.Replaces == g.ID) && (!j.Finished() || j.Red() || j.Status == JobPassed)
+}
+
+// RedGate is the red gate phase stood on before the gates queued or running now (gate), or nil when it
+// stood on none that is red: what a gate of another command queued now does not clear, unless it is made
+// the phase's gate in its place (--replace).
+func (st State) RedGate(phase string) *Job {
+	if g := st.gate(phase, true); g != nil && g.Red() {
+		return g
+	}
+	return nil
+}
+
+// After is phase j.Phase's jobs of j's kind queued after j, oldest first: for a red gate it stands on, the
+// checks that did not clear it.
+func (st State) After(j Job) []Job {
+	var out []Job
+	seen := false
+	for _, o := range st.Jobs {
+		switch {
+		case o.ID == j.ID:
+			seen = true
+		case seen && o.Phase == j.Phase && o.kind() == j.kind():
+			out = append(out, o)
 		}
 	}
 	return out
@@ -227,11 +308,9 @@ func (st State) Running(phase string) []Job {
 	return out
 }
 
-// stands reports whether j is one its phase's verification stands on (Standing): no later job of its
-// phase is of its kind.
+// stands reports whether j is one its phase's verification stands on (Standing).
 func (st State) stands(j Job) bool {
-	o := st.LatestOf(j.Phase, j.kind())
-	return o != nil && o.ID == j.ID
+	return slices.ContainsFunc(st.Standing(j.Phase), func(o Job) bool { return o.ID == j.ID })
 }
 
 // Red lists the jobs red that their phases stand on (Standing), oldest first. Their phases share the

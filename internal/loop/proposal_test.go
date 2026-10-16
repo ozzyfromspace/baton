@@ -33,8 +33,8 @@ func proposalRig(t *testing.T, outward bool) (*rig, time.Time) {
 // runTo ticks until t.
 func (r *rig) runTo(t time.Time) { r.run(t.Sub(r.now)) }
 
-// A proposal nobody answers goes ahead at the time its question names: baton types 3, Go ahead. An
-// outward one's third option is Not now, so the same key answers it so.
+// A proposal nobody answers goes ahead at the time its question names: baton dismisses its question and
+// records Go ahead, or Not now for an outward one.
 func TestAProposalGoesAheadAtItsDeadline(t *testing.T) {
 	for _, outward := range []bool{false, true} {
 		answer := "Go ahead"
@@ -47,24 +47,18 @@ func TestAProposalGoesAheadAtItsDeadline(t *testing.T) {
 
 func aProposalGoesAheadAtItsDeadline(t *testing.T, outward bool, answer string) {
 	r, deadline := proposalRig(t, outward)
+	got := r.recordLapses()
+	st := r.state()
+	question := st.PendingProposal().Question
 	r.view.Draft = true // keys go to the dialog: a draft does not matter
 	r.runTo(deadline.Add(-10 * time.Second))
 	if len(r.in.text) != 0 {
 		t.Fatalf("answered before the deadline: %q", r.in.text)
 	}
 	r.run(20 * time.Second)
-	if len(r.in.text) != 1 || r.in.text[0] != "3" {
-		t.Fatalf("typed %q", r.in.text)
-	}
-	if d, _ := r.state().Run.Dialogs.Only(); d.AutoAnswered.IsZero() {
-		t.Fatal("the answer is not marked as baton's own")
-	}
-	if st := r.state(); decide.OptionsOf(*st.PendingProposal())[2].Label != answer {
-		t.Fatalf("option 3 is %q, want %q", decide.OptionsOf(*st.PendingProposal())[2].Label, answer)
-	}
+	r.dismissed(t, got, lapsedAnswer{decide.Normalize(question), answer})
 	b, _ := os.ReadFile(filepath.Join(r.loop.Store.Dir, "events.jsonl"))
-	if !strings.Contains(string(b), `"dialog":"proposal"`) || !strings.Contains(string(b), `"id":"d1"`) || !strings.Contains(string(b), `"key":"3"`) ||
-		!strings.Contains(string(b), `"answer":"`+answer+`"`) {
+	if !strings.Contains(string(b), `"dialog":"proposal"`) || !strings.Contains(string(b), `"id":"d1"`) {
 		t.Fatalf("events: %s", b)
 	}
 	r.run(10 * time.Minute)
@@ -173,6 +167,7 @@ func TestWhenAProposalGoesAhead(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r, deadline := proposalRig(t, false)
+			r.recordLapses()
 			c.setup(r, deadline)
 			at := c.at(r, deadline)
 			r.runTo(at.Add(-10 * time.Second))
@@ -180,7 +175,7 @@ func TestWhenAProposalGoesAhead(t *testing.T) {
 				t.Fatalf("answered %s early: %q", at.Sub(r.now), r.in.text)
 			}
 			r.run(20 * time.Second)
-			if len(r.in.text) != 1 || r.in.text[0] != "3" {
+			if len(r.in.text) != 1 || r.in.text[0] != ownAnswerKey {
 				t.Fatalf("typed %q", r.in.text)
 			}
 		})
@@ -205,6 +200,7 @@ func TestProposalsBatonNeverAnswers(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _ := proposalRig(t, false)
+			r.recordLapses()
 			setup(r)
 			r.run(time.Hour)
 			if len(r.in.text) != 0 {
@@ -216,7 +212,8 @@ func TestProposalsBatonNeverAnswers(t *testing.T) {
 
 // baton's own question about the run, waiting the escalation timeout with no dialog of it on screen, is
 // answered for the human: the plan goes on, and a plan approved mid-run gets its default. A block, a
-// review the human opted into, a dialog on screen (the mod answers that) or a paused run: none is.
+// review the human opted into, a dialog on screen (the mod answers that; with no mod, answerOwnQuestion
+// does) or a paused run: none is.
 func TestBatonsOwnQuestionsLapse(t *testing.T) {
 	type lapsed struct{ question, answer string }
 	for _, c := range []struct {
@@ -250,6 +247,9 @@ func TestBatonsOwnQuestionsLapse(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newIdleRig(t)
+			if c.name == "on screen" {
+				helloFrom(t, r.loop.Store)
+			}
 			var got []lapsed
 			r.loop.Lapse = func(s *state.Store, question, answer string, now time.Time) error {
 				got = append(got, lapsed{question, answer})

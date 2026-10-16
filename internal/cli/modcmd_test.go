@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -416,5 +417,111 @@ func TestTheModsCompactionForBaton(t *testing.T) {
 	ev := m.events()
 	if n := strings.Count(ev, `"kind":"compact_declined"`); n != 4 || !strings.Contains(ev, `"proof":"mod"`) {
 		t.Errorf("%d compact_declined events:\n%s", n, ev)
+	}
+}
+
+// A report of the lead's compaction is counted in the run's state before the bridge records it, once. A
+// report process killed before it counted leaves nothing behind, and the report sent again counts; one
+// killed after it counted, before the bridge recorded it, leaves the count, and the report sent again is
+// recorded and changes nothing more; and once recorded, it is recorded already.
+func TestAKilledCompactionReportCountsOnce(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		report  string // its fields; {id} is the compact command's id, {epoch} its compaction's epoch
+		event   string // what counting it logs, once
+		ack     bool   // it acks the command, which recording it closes
+		counted func(state.Compaction) bool
+	}{
+		{"an ack: begun", `"kind":"ack","command":{id},"ok":true,"result":"compacting"`, "compact_started", true,
+			func(c state.Compaction) bool { return c.Status == state.CompactActive && c.ByBaton }},
+		{"an ack: refused", `"kind":"ack","command":{id},"ok":false,"error":"a turn is running (t1)"`, "compact_declined", true,
+			func(c state.Compaction) bool { return strings.Contains(c.Refused(), "a turn is running") }},
+		{"compacting", `"kind":"compacting","trigger":"manual"`, "compact_started", false,
+			func(c state.Compaction) bool { return c.Status == state.CompactActive && c.ByBaton }},
+		{"compacted for the command", `"kind":"compacted","command":{id},"epoch":{epoch}`, "compact_reported", false,
+			func(c state.Compaction) bool { return c.Reported != nil && c.Reported.Trigger == "manual" }},
+		{"compacted with an error", `"kind":"compacted","command":{id},"epoch":{epoch},"error":"the API failed"`, "compact_declined", false,
+			func(c state.Compaction) bool { return c.Refused() == "the API failed" }},
+		{"compacted, vetoed", `"kind":"compacted","command":{id},"epoch":{epoch},"skipped":true,"result":"no"`, "compact_declined", false,
+			func(c state.Compaction) bool { return c.Refused() == decide.CompactVetoed+": no" }},
+	} {
+		for _, kill := range []string{"state", "bridge"} {
+			t.Run(c.name+", killed before the "+kill, func(t *testing.T) {
+				m := newModRun(t)
+				m.report(modHelloJSON)
+				var epoch int
+				m.run.Update(func(st *state.State) error {
+					st.Run.Compaction.Queue("boundary", m.run.Now())
+					epoch = st.Run.Compaction.Epoch
+					return nil
+				})
+				cmd, err := m.bridge().Issue(bridge.Command{Kind: bridge.Compact, Instance: "i", Epoch: epoch})
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.run.Update(func(st *state.State) error {
+					st.Run.Compaction.Status, st.Run.Compaction.Command, st.Run.Compaction.Tries = state.CompactTyped, cmd.ID, 1
+					return nil
+				})
+				rep := strings.NewReplacer("{id}", fmt.Sprint(cmd.ID), "{epoch}", fmt.Sprint(epoch)).Replace(`{"seq":1,"session":"sess",` + c.report + "}")
+				type count struct {
+					comp    state.Compaction
+					reports time.Time
+					events  int
+				}
+				now := func() count {
+					st, _ := m.run.Load()
+					return count{st.Run.Compaction, st.Run.ModReports, strings.Count(m.events(), `"kind":"`+c.event+`"`)}
+				}
+				recorded := func(seen, inbox, open int) {
+					t.Helper()
+					if rec, _ := m.bridge().Load(); rec.Seen != seen || len(rec.Inbox) != inbox || len(rec.Open) != open {
+						t.Errorf("the bridge: seen %d, %d reports, %d open; want %d, %d, %d", rec.Seen, len(rec.Inbox), len(rec.Open), seen, inbox, open)
+					}
+				}
+				open := 1
+				if c.ack {
+					open = 0
+				}
+
+				before := now()
+				reportStep = func(step string) {
+					if step == kill {
+						panic("killed")
+					}
+				}
+				r := m.report(rep)
+				reportStep = func(string) {}
+				if r.OK || !r.Retry {
+					t.Fatalf("killed: %+v", r)
+				}
+				recorded(0, 0, 1)
+				switch got := now(); {
+				case kill == "state" && !reflect.DeepEqual(got, before):
+					t.Errorf("killed before the state: counted\n%+v\nwas\n%+v", got, before)
+				case kill == "bridge" && (!c.counted(got.comp) || got.events != 1):
+					t.Errorf("killed before the bridge: not counted: %+v", got)
+				}
+
+				if r := m.report(rep); !r.OK || r.Ignored != "" {
+					t.Fatalf("sent again: %+v", r)
+				}
+				recorded(1, 1, open)
+				after := now()
+				var sent bridge.Report
+				json.Unmarshal([]byte(rep), &sent)
+				if !c.counted(after.comp) || after.events != 1 || strings.Count(m.events(), `"kind":"mod_`+sent.Kind+`"`) != 1 {
+					t.Errorf("sent again: %+v\n%s", after, m.events())
+				}
+
+				if r := m.report(rep); !r.OK || r.Ignored != "recorded already" {
+					t.Errorf("once more: %+v", r)
+				}
+				recorded(1, 1, open)
+				if got := now(); !reflect.DeepEqual(got, after) {
+					t.Errorf("once more: counted again\n%+v\nwas\n%+v", got, after)
+				}
+			})
+		}
 	}
 }

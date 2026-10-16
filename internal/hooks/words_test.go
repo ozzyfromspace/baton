@@ -41,7 +41,7 @@ func TestTheWordingFitsTheProject(t *testing.T) {
 			}
 			said["stop refused"], _ = f.fire("Stop", map[string]any{})["reason"].(string)
 			f.vars = defaultCap
-			f.setContext(500_000)
+			f.setContext(650_000)
 			said["checkpoint nudge"] = feedback(f.fire("PostToolUse", bash("ls")))
 			said["checkpoint now"] = feedback(f.fire("PostToolUse", answer(ask(f.warned(), warnLabels...), "Checkpoint now")))
 

@@ -6,6 +6,7 @@ import (
 	goio "io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,8 @@ import (
 
 func init() {
 	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
-		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace", cmdVerify)
+		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace. "+
+		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told)", cmdVerify)
 	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
@@ -96,8 +98,11 @@ func queueJob(args []string, io IO, kind string) int {
 				plural(len(work.fresh), "it", "them"), fileList(work.fresh))
 		}
 	}
+	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var queued state.Job
-	var replaced, clash, beside *state.Job
+	var replaced, clash, beside, red *state.Job
+	var gateNote *state.Decision
+	var count int
 	st, err = s.Update(func(st *state.State) error {
 		if err := jobRefusal(isHosted, st, notes); err != nil {
 			return err
@@ -111,7 +116,31 @@ func queueJob(args []string, io IO, kind string) int {
 			clash = &x
 			return refusal{"another check runs", decide.Clash(kind, command, x)}
 		}
+		// A red gate stands until the same command passes: a gate of another command clears it only when the
+		// model makes it the phase's gate in its place (--replace), a decision without the human.
+		if g := st.RedGate(phase); kind == state.JobVerify && g != nil && g.Command != command {
+			x := *g
+			red = &x
+			if replace {
+				if st.ReviewDue != "" && st.Mode == state.ModeRunning {
+					return reviewRefusal(st)
+				}
+				j.Replaces = g.ID
+			}
+		}
 		queued, replaced, _ = state.QueueJob(st, j, io.Now())
+		if red != nil && replace && st.Mode == state.ModeRunning {
+			what, undo := decide.GateReplaced(*red, queued)
+			d, err := state.NoteOn(st, phase, what, undo, io.Now())
+			if err != nil {
+				return err
+			}
+			gateNote = &d
+			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "note", Text: d.What, At: io.Now()})
+			if count = st.Unattended(phase); decide.CapReached(count, most) {
+				state.DueReview(st, phase, io.Now())
+			}
+		}
 		if b := st.Beside(queued); b != nil {
 			x := *b
 			beside = &x
@@ -125,6 +154,9 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 		if replaced != nil {
 			line += fmt.Sprintf("; it replaces %s, which baton stops", replaced.ID)
+		}
+		if red != nil && replace {
+			line += fmt.Sprintf("; it is %s's gate now, in place of %s (`%s`), which is red", phase, red.ID, red.Command)
 		}
 		if beside != nil {
 			line += "; " + decide.BesideShort(*beside)
@@ -156,7 +188,25 @@ func queueJob(args []string, io IO, kind string) int {
 	if beside != nil {
 		queuedEvent["beside"] = beside.ID
 	}
+	if red != nil && replace {
+		queuedEvent["replaces_gate"] = red.ID
+	} else if red != nil {
+		queuedEvent["red_gate"] = red.ID // stands, whatever this job's result
+	}
 	s.Event("job_queued", queuedEvent)
+	if gateNote != nil {
+		s.Event("note", map[string]any{"id": gateNote.ID, "phase": phase, "what": gateNote.What, "undo": gateNote.Undo, "replaces_gate": red.ID})
+		if st.ReviewDue != "" {
+			s.Event("review_due", map[string]any{"phase": phase, "decisions": count})
+		}
+		if up, err := s.ParentRun(); err == nil {
+			// Nobody watches a worker's session: the human reads its decision in the lead's.
+			up.Update(func(st *state.State) error {
+				st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: the worker on %s noted — %s (%s)", s.Worker(), gateNote.What, gateNote.ID))
+				return nil
+			})
+		}
+	}
 	if qa != "" {
 		s.Event("qa_early", map[string]any{"job": queued.ID, "phase": phase, "why": qa, "command": command})
 	}
@@ -180,6 +230,14 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	if beside != nil {
 		fmt.Fprintln(io.Out, "baton: "+decide.Beside(queued, *beside))
+	}
+	switch {
+	case gateNote != nil:
+		fmt.Fprintln(io.Out, "baton: "+decide.GateReplacedSay(gateNote.ID, *red, queued))
+	case red != nil && replace: // paused: no decision without the human
+		fmt.Fprintln(io.Out, "baton: "+decide.GateReplacedSay("", *red, queued))
+	case red != nil:
+		fmt.Fprintln(io.Out, "baton: "+decide.RedGateStands(*red, queued))
 	}
 	cfg := config.Load(batonRoot(io), io.Env)
 	timeout, _ := cfg.JobTimeout()
@@ -283,12 +341,13 @@ func namesCheckout(command, checkout, home string) bool {
 }
 
 // pruneLogs removes the logs of jobs no longer on record: dropped to keep the record short, or left by a
-// plan set aside.
+// plan set aside (whose record took the logs of its failed jobs, Store.Record). The log of every failed
+// job of the plan st runs stays, dropped from the record or not (KeptLogs).
 func pruneLogs(s *state.Store, st state.State) {
 	dir := jobsDir(s)
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if st.Job(strings.TrimSuffix(e.Name(), ".log")) == nil {
+		if id := strings.TrimSuffix(e.Name(), ".log"); st.Job(id) == nil && !slices.Contains(st.KeptLogs, id) {
 			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}

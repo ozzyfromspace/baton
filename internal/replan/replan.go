@@ -133,7 +133,11 @@ func open(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time
 		s.DropReplan(n)
 		return Opened{}, err
 	}
+	b := brief(s, st, old, doc, r, max)
 	fields := map[string]any{"by": r.By, "n": n, "unstarted": len(state.Unstarted(st, old))}
+	if len(b.Shared) > 0 {
+		fields["shared"] = len(b.Shared) // pairs of phases not started that may run at once and name the same files
+	}
 	if r.Words != "" {
 		fields["words"] = r.Words
 	}
@@ -144,7 +148,7 @@ func open(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time
 		fields["then"] = r.Then
 	}
 	s.Event("replan_opened", fields)
-	return Opened{Replan: r, Brief: brief(s, st, old, r, max)}, nil
+	return Opened{Replan: r, Brief: b.Brief()}, nil
 }
 
 // again gives the replan open on run s again, its draft copied afresh from the text it found if it is
@@ -175,12 +179,13 @@ func again(s *state.Store, st state.State, pl plan.Plan, by, words string, max t
 		}
 	}
 	old := pl
-	if doc, err := os.ReadFile(s.ReplanText(r.N)); err == nil {
+	doc, err := os.ReadFile(s.ReplanText(r.N))
+	if err == nil {
 		if p, err := follow(st, pl, doc); err == nil {
 			old = p
 		}
 	}
-	return Opened{Replan: r, Brief: brief(s, st, old, r, max), Again: true}, nil
+	return Opened{Replan: r, Brief: brief(s, st, old, doc, r, max).Brief(), Again: true}, nil
 }
 
 // follow is pl as it reads in doc: pl itself when doc is the text it was made from, or the change in doc
@@ -193,10 +198,12 @@ func follow(st state.State, pl plan.Plan, doc []byte) (plan.Plan, error) {
 	return adopted, err
 }
 
-// brief is the brief of replan r of plan pl, run st on s. One baton opened by itself names the phases
-// that cued it, and the phase the model begins once it is finished, whose brief follows it; where they
-// have notes, it says where (a marked phase's findings are in its notes).
-func brief(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time.Duration) string {
+// brief is the brief of replan r of plan pl, run st on s, whose text is doc (nil when it is not at hand).
+// One baton opened by itself names the phases that cued it, and the phase the model begins once it is
+// finished, whose brief follows it; where they have notes, it says where (a marked phase's findings are in
+// its notes). Every one lists the phases not started that may run at once and whose sections in doc name
+// the same files.
+func brief(s *state.Store, st state.State, pl plan.Plan, doc []byte, r state.Replan, max time.Duration) decide.ReplanBrief {
 	frozen := state.Frozen(st, pl)
 	b := decide.ReplanBrief{Title: pl.Title, By: r.By, Words: r.Words, Draft: s.DraftPath(), Limits: LimitsOf(r), Max: max, Then: r.Then}
 	for _, id := range r.Cue {
@@ -224,7 +231,8 @@ func brief(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max tim
 		b.Pending = append(b.Pending, decide.ReplanPhase{ID: ph.ID, Title: ph.Title, Waits: pl.DepsLabel(ph.ID)})
 	}
 	b.Shape = pl.Part(pending).Shape()
-	return b.Brief()
+	b.Shared = pl.Overlaps(doc, pending)
+	return b
 }
 
 // Refused is a draft Finish did not follow, and why: each breach, as the model is told them.

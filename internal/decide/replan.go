@@ -53,15 +53,16 @@ type ReplanPhase struct {
 
 // ReplanBrief is what a replan's brief says.
 type ReplanBrief struct {
-	Title   string        // the plan's
-	By      string        // who opened it (state.ReplanHuman, …)
-	Words   string        // what the human asked it to consider
-	Draft   string        // the draft's path
-	Pending []ReplanPhase // the phases not started, which it may restructure
-	Frozen  []ReplanPhase // the phases that started or are done
-	Shape   plan.Shape    // the shape of the phases not started (plan.Plan.Part)
-	Limits  plan.Limits   // what it may change beyond their order and After: lines
-	Max     time.Duration // how long it may stay open (Timing.ReplanMax)
+	Title   string         // the plan's
+	By      string         // who opened it (state.ReplanHuman, …)
+	Words   string         // what the human asked it to consider
+	Draft   string         // the draft's path
+	Pending []ReplanPhase  // the phases not started, which it may restructure
+	Frozen  []ReplanPhase  // the phases that started or are done
+	Shape   plan.Shape     // the shape of the phases not started (plan.Plan.Part)
+	Shared  []plan.Overlap // phases not started that may run at once and name the same files (plan.Plan.Overlaps)
+	Limits  plan.Limits    // what it may change beyond their order and After: lines
+	Max     time.Duration  // how long it may stay open (Timing.ReplanMax)
 	// A replan baton opened by itself, at the lead's phase boundary (autoreplan.go): the phases that cued
 	// it (the QA phase that starts, or the phases marked Replan: after that are done), the phase whose
 	// brief follows this one, which the model begins once it is finished, and where the phases' notes are.
@@ -104,6 +105,7 @@ func (b ReplanBrief) Brief() string {
 	if line := strings.TrimPrefix(PlanShape(b.Shape), "baton: "); line != "" {
 		fmt.Fprintf(&s, "The phases not started now: %s.\n", line)
 	}
+	s.WriteString(sharedFiles(b.Shared))
 	fmt.Fprintf(&s, "\nbaton's shape rules:\n%s\n\nWhat you may change:\n%s\n", ShapeRules, b.allowed())
 	if structural(b.By) {
 		fmt.Fprintf(&s, "\nbaton keeps the draft only if it shortens the longest chain of the phases not started (%d now) or lets more of them run at once (%d now); otherwise the plan stays as it is.\n",
@@ -116,6 +118,28 @@ func (b ReplanBrief) Brief() string {
 		"If it is not finished within %s, baton drops the draft and the plan goes on as it was.", b.Draft, Spell(b.Max))
 	if b.Then != "" {
 		fmt.Fprintf(&s, "\n\nOnce baton replanned has answered, begin %s, as its brief below says.", b.Then)
+	}
+	return s.String()
+}
+
+// sharedMax is the most pairs of phases sharedFiles lists; it counts the rest.
+const sharedMax = 20
+
+// sharedFiles lists the phases not started that may run at once and name the same files, for a replan's
+// brief, as information: "" when there are none.
+func sharedFiles(pairs []plan.Overlap) string {
+	if len(pairs) == 0 {
+		return ""
+	}
+	var s strings.Builder
+	s.WriteString("Phases not started that may run at once and name the same files (for your information: phases that run at once and change the same file " +
+		"collide when they land, and the later one has to merge the other's change; shape rule 4 says how to weigh it):\n")
+	for i, o := range pairs {
+		if i == sharedMax {
+			fmt.Fprintf(&s, "  and %d more %s\n", len(pairs)-i, plural(len(pairs)-i, "pair", "pairs"))
+			break
+		}
+		fmt.Fprintf(&s, "  %s and %s: %s\n", o.A, o.B, strings.Join(o.Paths, ", "))
 	}
 	return s.String()
 }

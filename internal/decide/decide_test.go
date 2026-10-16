@@ -86,13 +86,39 @@ func TestEachDefaultIsThird(t *testing.T) {
 			t.Errorf("%s: options %+v, default %q", c.name, c.opts, c.dflt)
 		}
 	}
-	for _, opts := range [][]Option{EscalationOptions, ReviseOptions, ReplaceOptions} {
-		if opts[1].Label != "Wait for me" {
-			t.Errorf("options %+v: Wait for me is not second", opts)
-		}
+	if EscalationOptions[1].Label != "Wait for me" {
+		t.Errorf("options %+v: Wait for me is not second", EscalationOptions)
 	}
 	if PlanQuestionDefault(true) != "Continue with the revised plan" || PlanQuestionDefault(false) != "Keep the current run" {
 		t.Errorf("plan question defaults %q, %q", PlanQuestionDefault(true), PlanQuestionDefault(false))
+	}
+}
+
+// The question about a plan approved mid-run puts Wait for me first, where a stray Enter lands, and Start
+// the new plan from P0, which sets the run's progress aside, second: no single key discards a run.
+func TestPlanQuestionOrder(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		same bool
+		want []string
+	}{
+		{"revised plan", true, []string{"Wait for me", "Start the new plan from P0", "Continue with the revised plan"}},
+		{"another plan", false, []string{"Wait for me", "Start the new plan from P0", "Keep the current run"}},
+	} {
+		q := PlanQuestion("Demo", "P1", "running", c.same)
+		var got []string
+		for _, o := range q.Options {
+			got = append(got, o.Label)
+		}
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s: options %q, want %q", c.name, got, c.want)
+		}
+		if got[2] != PlanQuestionDefault(c.same) {
+			t.Errorf("%s: the default %q is not third", c.name, PlanQuestionDefault(c.same))
+		}
+		if !strings.Contains(q.Call(), `exactly 3 options, in this order: "Wait for me"`) {
+			t.Errorf("%s: the call does not put Wait for me first: %s", c.name, q.Call())
+		}
 	}
 }
 
