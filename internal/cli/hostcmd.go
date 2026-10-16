@@ -21,6 +21,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/notify"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/statusline"
 	"github.com/ozzyfromspace/baton/internal/upgrade"
@@ -153,7 +154,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle, "BATON_BACKGROUND_IDLE": &timing.BackgroundIdle,
 		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_HOLD_LAPSE": &timing.HoldLapse, "BATON_RECOVER_AFTER": &timing.RecoverAfter, "BATON_RECOVER_EVERY": &timing.RecoverEvery,
-		"BATON_BLOCK_LOOK": &timing.BlockLook} {
+		"BATON_BLOCK_LOOK": &timing.BlockLook, "BATON_REPLAN_MAX": &timing.ReplanMax} {
 		if d, err := time.ParseDuration(io.Env(name)); err == nil && d > 0 {
 			*field = d
 		}
@@ -181,6 +182,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	if !cfg.Restarts() {
 		batonEnv = append(batonEnv, "BATON_AUTO_RESTART=0") // so the hooks tell the human the session stays put
+	}
+	if timing.ReplanMax != replan.Max {
+		batonEnv = append(batonEnv, "BATON_REPLAN_MAX="+timing.ReplanMax.String()) // so a replan's brief says when it lapses
 	}
 	if tty := elevate.ProcTTY(strconv.Itoa(os.Getpid())); tty != "" {
 		// The terminal the human sees. claude runs on baton's own pseudo-terminal, so its tty is not
