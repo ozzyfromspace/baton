@@ -328,13 +328,17 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			waiting = waitingOn(jobs)
 		}
 		d.say(decide.NoPhaseYet(waiting, st.HereGate()))
-	case st.CurrentJob() != nil:
-		// The phase in hand waits on its job, and nothing else is owed: the session idles in place. The
+	case len(st.CurrentJobs()) > 0:
+		// The phase in hand waits on its jobs, and nothing else is owed: the session idles in place. Each
 		// result wakes it; if the wait runs long and another phase can go on, the host switches to that.
 		st.Run.StopBlocks = 0
-		j := st.CurrentJob()
-		d.say(decide.GateWait(cur, *j))
-		d.emit("idle_on_job", map[string]any{"phase": st.Current, "job": j.ID})
+		jobs := st.CurrentJobs()
+		d.say(decide.GateWait(cur, jobs))
+		idle := map[string]any{"phase": st.Current, "job": jobs[len(jobs)-1].ID}
+		if len(jobs) > 1 {
+			idle["beside"] = jobs[0].ID
+		}
+		d.emit("idle_on_job", idle)
 	case len(st.Run.BusyBackground()) > 0:
 		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.
 		// The model is told to keep working meanwhile as the work starts, with the result of the call that

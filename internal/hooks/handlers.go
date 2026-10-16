@@ -887,8 +887,16 @@ func phasesAside(pl plan.Plan, st state.State) string {
 		name := ph.ID + " — " + ph.Title
 		switch ps.Status {
 		case state.PhaseVerifying:
-			if j := st.Latest(ph.ID); j != nil {
-				name += " (job " + j.ID + ")"
+			var jobs []string
+			for _, j := range st.WaitsOn(ph.ID) {
+				jobs = append(jobs, j.ID)
+			}
+			switch len(jobs) {
+			case 0:
+			case 1:
+				name += " (job " + jobs[0] + ")"
+			default:
+				name += " (jobs " + strings.Join(jobs, " and ") + ")"
 			}
 			verifying = append(verifying, name)
 		case state.PhaseParked:
@@ -899,7 +907,7 @@ func phasesAside(pl plan.Plan, st state.State) string {
 	}
 	var out []string
 	if len(verifying) > 0 {
-		out = append(out, "Verifying, each done once its job passes: "+strings.Join(verifying, "; ")+".")
+		out = append(out, "Verifying, each done once its jobs pass: "+strings.Join(verifying, "; ")+".")
 	}
 	if len(parked) > 0 {
 		out = append(out, "Set aside unfinished: "+strings.Join(parked, "; ")+".")

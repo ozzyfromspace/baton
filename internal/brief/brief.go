@@ -103,9 +103,19 @@ func Write(in Input) string {
 			switch ps.Status {
 			case state.PhaseDone:
 				mark = "✓"
-				// Its notes were left while its gate ran, and may well say so: they are out of date.
-				if j := st.Latest(ph.ID); j != nil && j.Status == state.JobPassed {
-					extra = fmt.Sprintf(" (verified: job %s passed)", j.ID)
+				// Its notes were left while its gates ran, and may well say so: they are out of date.
+				var passed []string
+				for _, j := range st.Standing(ph.ID) {
+					if j.Status == state.JobPassed {
+						passed = append(passed, j.ID)
+					}
+				}
+				switch len(passed) {
+				case 0:
+				case 1:
+					extra = fmt.Sprintf(" (verified: job %s passed)", passed[0])
+				default:
+					extra = fmt.Sprintf(" (verified: jobs %s passed)", strings.Join(passed, " and "))
 				}
 			case state.PhaseVerifying:
 				mark, extra = "⧗", " (verifying)"

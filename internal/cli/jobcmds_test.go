@@ -40,7 +40,7 @@ func TestVerifyAndAwaitRefusals(t *testing.T) {
 		want  string
 		why   string // the refused event's, if one is logged
 	}{
-		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] [--qa "<why a full check now>"] --notes`, ""},
+		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] [--qa "<why a full check now>"] [--replace] --notes`, ""},
 		{"not hosted", func(s *session, _ string) { delete(s.env, "BATON_HOST") }, []string{"verify", "make test", notes}, "not queued — the baton host runs jobs, and this session is not hosted", ""},
 		{"no notes", nil, []string{"verify", "make test"}, `not queued — say where P0 stands with --notes "<what is done, what is left, what this job checks>"`, "no notes"},
 		{"blank notes", nil, []string{"await", "gh run watch", "--notes", " "}, "not queued — say where P0 stands", "no notes"},
@@ -107,24 +107,79 @@ func TestVerifyQueuesAGateOnHead(t *testing.T) {
 		t.Error("the log of a job no longer on record is still there")
 	}
 
-	// A phase has one job at a time: another replaces it.
+	// An await runs beside the gate: neither stops the other.
 	out = s.must("", "await", "gh run watch 7 --exit-status", "--notes", "pushed; CI checks it")
-	if !strings.Contains(out, "baton: queued j2 — `gh run watch 7 --exit-status` (P0), run from the working tree.") || !strings.Contains(out, "it replaces j1 (`make test`), which baton stops") {
+	if !strings.Contains(out, "baton: queued j2 — `gh run watch 7 --exit-status` (P0), run from the working tree.") ||
+		!strings.Contains(out, "baton: j2 runs beside j1 (`make test`), a gate: neither stops the other, and `baton done P0` waits for both, and is refused while either is red.") ||
+		strings.Contains(out, "replaces") {
 		t.Errorf("await says:\n%s", out)
 	}
 	if strings.Contains(out, "not in this check") {
 		t.Errorf("await speaks of commits:\n%s", out)
 	}
 	st := s.state()
-	if j1, j2 := st.Job("j1"), st.Job("j2"); j1.Status != state.JobInterrupted || j1.Reason != "replaced by j2" || j2.Kind != state.JobAwait || j2.Commit != "" {
+	if j1, j2 := st.Job("j1"), st.Job("j2"); j1.Status != state.JobQueued || j2.Kind != state.JobAwait || j2.Commit != "" || j2.Status != state.JobQueued {
 		t.Errorf("jobs: %+v, %+v", *j1, *j2)
 	}
-	if !s.logged("job_queued", map[string]any{"job": "j2", "type": "await", "replaced": "j1"}) {
+	if !s.logged("job_queued", map[string]any{"job": "j2", "type": "await", "beside": "j1"}) || s.logged("job_queued", map[string]any{"job": "j2", "replaced": "j1"}) {
 		t.Errorf("events: %s", s.events())
 	}
 	if want := []string{"baton: job j1 queued for P0 — `make test` on " + head[:12] + ", in a lane",
-		"baton: job j2 queued for P0 — `gh run watch 7 --exit-status`, from the working tree; it replaces j1, which baton stops"}; !slices.Equal(st.Run.Announce, want) {
+		"baton: job j2 queued for P0 — `gh run watch 7 --exit-status`, from the working tree; it runs beside j1, a gate"}; !slices.Equal(st.Run.Announce, want) {
 		t.Errorf("announced %q, want %q", st.Run.Announce, want)
+	}
+}
+
+// Within a kind, the same check queued again replaces the one that runs; another is refused, naming the
+// one that runs and the ways forward, and replaces it only with --replace.
+func TestAnotherGateReplacesOnlyWhenAsked(t *testing.T) {
+	s, root := gitSession(t)
+	gittest.Write(t, root, "src/parse.go", "package src\n")
+	gittest.Commit(t, root, "parse", "src/parse.go")
+	s.must("", "verify", "make", "test", "--notes", "the parser is done")
+	s.must("", "await", "gh run watch 7 --exit-status", "--notes", "pushed; CI checks it")
+
+	// The same gate again, on a newer commit: it replaces j1 by itself, and leaves the wait alone.
+	gittest.Write(t, root, "src/lex.go", "package src\n")
+	gittest.Commit(t, root, "lex", "src/lex.go")
+	out := s.must("", "verify", "make", "test", "--notes", "the lexer too")
+	if !strings.Contains(out, "baton: it replaces j1, the same check queued before, which baton stops.") || !strings.Contains(out, "j3 runs beside j2 (`gh run watch 7 --exit-status`), a wait on something outside") {
+		t.Errorf("verify again says:\n%s", out)
+	}
+	if st := s.state(); st.Job("j1").Status != state.JobInterrupted || st.Job("j2").Status != state.JobQueued || st.Job("j3").Status != state.JobQueued {
+		t.Errorf("jobs: %+v", st.Jobs)
+	}
+
+	// Another gate is refused, and nothing changes.
+	errs := s.fails("verify", "make", "e2e", "--notes", "e2e as well")
+	for _, want := range []string{"not queued — P0's job j3 (`make test` on", "a phase runs one gate at a time (one gate beside one wait on something outside",
+		"`make e2e` is not the same check, so baton does not stop j3 unasked", "run it again with --replace", "fold both checks into one command", "queue this one once j3's result comes"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("another gate refused with:\n%s\nwant %q", errs, want)
+		}
+	}
+	if st := s.state(); len(st.Jobs) != 3 || st.Job("j3").Status != state.JobQueued {
+		t.Errorf("jobs after the refusal: %+v", st.Jobs)
+	}
+	if !s.logged("refused", map[string]any{"command": "verify", "why": "another check runs", "phase": "P0", "running": "j3", "asked": "make e2e"}) {
+		t.Errorf("events: %s", s.events())
+	}
+	// So is another wait.
+	if errs := s.fails("await", "gh run watch 8 --exit-status", "--notes", "the other run"); !strings.Contains(errs, "a phase runs one wait on something outside at a time") {
+		t.Errorf("another wait refused with:\n%s", errs)
+	}
+
+	// With --replace, it replaces the gate that runs, and still leaves the wait alone.
+	out = s.must("", "verify", "--replace", "make", "e2e", "--notes", "e2e instead")
+	if !strings.Contains(out, "baton: it replaces j3 (`make test`), which baton stops, as --replace asked.") {
+		t.Errorf("verify --replace says:\n%s", out)
+	}
+	st := s.state()
+	if st.Job("j3").Status != state.JobInterrupted || st.Job("j3").Reason != "replaced by j4" || st.Job("j4").Command != "make e2e" || st.Job("j2").Status != state.JobQueued {
+		t.Errorf("jobs: %+v", st.Jobs)
+	}
+	if !s.logged("job_queued", map[string]any{"job": "j4", "replaced": "j3", "replace": true, "beside": "j2"}) {
+		t.Errorf("events: %s", s.events())
 	}
 }
 
@@ -246,8 +301,8 @@ func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
 	if want := []string{"baton: job j1 queued for P0 — `make e2e` on " + head[:12] + ", in the working tree (no lane): edits there wait until it ends"}; !slices.Equal(s.state().Run.Announce, want) {
 		t.Errorf("announced %q, want %q", s.state().Run.Announce, want)
 	}
-	// A plain verify queued over it is a lane gate again.
-	s.must("", "verify", "make test", "--notes", "x")
+	// A plain verify queued over it (another check, so --replace) is a lane gate again.
+	s.must("", "verify", "--replace", "make test", "--notes", "x")
 	if j := s.state().Job("j2"); j == nil || j.Here {
 		t.Errorf("job: %+v", j)
 	}
@@ -382,7 +437,7 @@ func TestVerifyNotesWorkFromBeforeThePhase(t *testing.T) {
 	if out := s.must("", "verify", "make test", "--notes", "x"); !strings.Contains(out, "1 uncommitted file was already there when P0 started; the gate checks HEAD, without it.") {
 		t.Errorf("verify says:\n%s", out)
 	}
-	if out := s.must("", "verify", "--here", "make test", "--notes", "x"); !strings.Contains(out, "1 uncommitted file was already there when P0 started; the gate runs with it, as it is in the working tree.") {
+	if out := s.must("", "verify", "--here", "--replace", "make test", "--notes", "x"); !strings.Contains(out, "1 uncommitted file was already there when P0 started; the gate runs with it, as it is in the working tree.") {
 		t.Errorf("verify --here says:\n%s", out)
 	}
 }

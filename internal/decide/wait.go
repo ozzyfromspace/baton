@@ -12,10 +12,18 @@ import (
 // A session that waits on a job needs nothing from the human, but Claude Code's own idle notice, once the
 // turn has ended, reads as if it did. The session lines baton gives at such a stop say so.
 
-// GateWait is the session line when the phase in hand (cur) waits on its job j, and nothing else: no
-// one needs to do anything.
-func GateWait(cur string, j state.Job) string {
-	return fmt.Sprintf("baton: %s waits on job %s (`%s`) — nothing is needed from you: Claude is given its result when it ends", cur, j.ID, j.Command)
+// GateWait is the session line when the phase in hand (cur) waits on its jobs (a gate, a wait on something
+// outside, or both), and nothing else: no one needs to do anything.
+func GateWait(cur string, jobs []state.Job) string {
+	if len(jobs) == 1 {
+		j := jobs[0]
+		return fmt.Sprintf("baton: %s waits on job %s (`%s`) — nothing is needed from you: Claude is given its result when it ends", cur, j.ID, j.Command)
+	}
+	var names []string
+	for _, j := range jobs {
+		names = append(names, fmt.Sprintf("%s (`%s`)", j.ID, j.Command))
+	}
+	return fmt.Sprintf("baton: %s waits on jobs %s — nothing is needed from you: Claude is given each result when it ends", cur, andList(names))
 }
 
 // NoPhaseYet is the session line when no phase is in hand because every phase left waits on a job

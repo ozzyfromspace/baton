@@ -196,7 +196,7 @@ func TestPrimerNamesThePhasesAside(t *testing.T) {
 			st.Phases["P3"] = &state.PhaseState{Status: state.PhaseParked, Park: &state.Park{Reason: state.ParkJob, Job: "j4"}}
 			st.Phases["P4"] = &state.PhaseState{Status: state.PhaseActive}
 			st.Current = "P4"
-		}, "Verifying, each done once its job passes: P0 — First (job j1). Set aside unfinished: P1 — Second (its verification failed); " +
+		}, "Verifying, each done once its jobs pass: P0 — First (job j1). Set aside unfinished: P1 — Second (its verification failed); " +
 			"P2 — Third (until its job j3 ends); P3 — Fourth (its job j4 has ended). baton takes these up again by itself: work only on the current phase.",
 			"Demo · 0/5 phases done · current P4 · verifying P0 · parked P1, P2, P3"},
 		{"the current phase resumes next", func(st *state.State) {

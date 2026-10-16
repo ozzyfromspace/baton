@@ -55,6 +55,10 @@ type PhaseState struct {
 	// Worker is the sub-run of the worker the phase was given to (a ref, see Project), from the moment it
 	// is assigned; it stays once the phase has landed.
 	Worker string `json:"worker,omitempty"`
+	// On is the jobs the phase waits on while it is verifying or parked (WaitsOn): those still running
+	// when its done was claimed, or it was set aside, a verify and an await at most. A job that had ended
+	// by then was judged then, so it is not waited on again. Cleared once the phase is done or resumes.
+	On []string `json:"on,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
@@ -329,13 +333,13 @@ type DoneOpts struct {
 type RedError struct{ Job Job }
 
 func (e RedError) Error() string {
-	return fmt.Sprintf("phase %s's latest verification, job %s (`%s`), is red (%s)", e.Job.Phase, e.Job.ID, e.Job.Command, e.Job.Status)
+	return fmt.Sprintf("phase %s's verification, job %s (`%s`), is red (%s)", e.Job.Phase, e.Job.ID, e.Job.Command, e.Job.Status)
 }
 
-// Done marks phase id finished. Unless o.Force is set, id must be the current phase. While the phase's
-// job is queued or running, the phase is verifying rather than done: Settle marks it done once the job
-// passes, and reopens it if the job fails. A phase whose latest job is red is not finished at all, unless
-// o.DespiteRed. It returns the phase in hand afterwards: the next one, which starts after a compaction, or
+// Done marks phase id finished. Unless o.Force is set, id must be the current phase. While any of the
+// phase's jobs is queued or running, the phase is verifying on them (PhaseState.On) rather than done:
+// Settle marks it done once they have all passed, and reopens it on the first that fails. A phase that
+// stands on a red job (Standing) is not finished at all, unless o.DespiteRed. It returns the phase in hand afterwards: the next one, which starts after a compaction, or
 // the one under way when id was finished out of order; "" when the plan is complete (ModeComplete) or
 // nothing can start until a job finishes.
 func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next string, err error) {
@@ -363,14 +367,15 @@ func Done(st *State, p plan.Plan, id string, now time.Time, o DoneOpts) (next st
 	if st.BoundaryOwed && !o.Force {
 		return "", fmt.Errorf("phase %s has not started yet: end your turn now, so baton can compact the context before %s begins", id, id)
 	}
-	j := st.Latest(id)
-	if j != nil && j.Red() && !o.DespiteRed {
-		return "", RedError{*j}
+	for _, j := range st.Standing(id) {
+		if j.Red() && !o.DespiteRed {
+			return "", RedError{j}
+		}
 	}
-	if j != nil && !j.Finished() {
-		ps.Status = PhaseVerifying
+	if running := st.Running(id); len(running) > 0 {
+		ps.Status, ps.On = PhaseVerifying, ids(running)
 	} else {
-		ps.Status, ps.DoneAt = PhaseDone, now
+		ps.Status, ps.DoneAt, ps.On = PhaseDone, now, nil
 	}
 	for i := range st.Jobs {
 		if x := &st.Jobs[i]; x.Phase == id && x.Finished() && x.Delivered.IsZero() {
@@ -401,7 +406,7 @@ func Start(st *State, now time.Time, o Origin) {
 	switch ps.Status {
 	case PhaseActive:
 	case PhaseParked:
-		ps.Status, ps.StartHead, ps.StartDirty, ps.Edited = PhaseActive, o.Head, o.Dirty, nil
+		ps.Status, ps.StartHead, ps.StartDirty, ps.Edited, ps.On = PhaseActive, o.Head, o.Dirty, nil, nil
 		if ps.Park != nil {
 			ps.Park.Resumed = now
 		}

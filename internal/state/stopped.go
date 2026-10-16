@@ -65,7 +65,7 @@ func StopAgent(st *State, e Worker, agent, title string, now time.Time) (int, bo
 
 // Satisfied reports, from the record alone, that worker w needs no agent for its phase any more: its work
 // landed (its phase is done in the run st), or in its sub-run sub the phase is done, or verifying with no
-// red verdict on its latest job.
+// red verdict on the jobs it verifies on (WaitsOn).
 func Satisfied(st, sub State, w Worker) bool {
 	if w.Status == WorkerLanded {
 		return true
@@ -80,8 +80,12 @@ func Satisfied(st, sub State, w Worker) bool {
 	case ps.Status == PhaseDone:
 		return true
 	case ps.Status == PhaseVerifying:
-		j := sub.Latest(w.Phase)
-		return j == nil || !j.Red()
+		for _, j := range sub.WaitsOn(w.Phase) {
+			if j.Red() {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
