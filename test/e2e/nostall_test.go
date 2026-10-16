@@ -582,28 +582,80 @@ func TestAPlanChangeReachesTheAgentAtWork(t *testing.T) {
 	none(t, s, "controller_panic", "escalated")
 }
 
-// The lead waits on a job whose log never grows, and nothing else in the run moves: once nothing has moved
-// for stall_after (a minute here), baton tells the human once, naming what P0 waits on. Movement re-arms
-// it: the job ends, and the plan completes. (On v0.8.1 a run could stop for hours with no word.)
+// quietScript is a gate that waits, as a hung one would, until the test lets it end (releaseQuiet): its
+// log stays still, and its shell sits in one open of a FIFO in the repository's git directory, so its
+// process tree uses no CPU and starts no process (hold.sh's sleep starts one a second, which the stall
+// alarm counts as work).
+const quietScript = `#!/bin/sh
+fifo="$(git rev-parse --git-common-dir)/quiet"
+[ -p "$fifo" ] || mkfifo "$fifo"
+echo "quiet: waiting"
+read line <"$fifo"
+echo "quiet: released"
+`
+
+// quietPlan's P0 hands baton quiet.sh as its gate, and goes on only once the test lets it end.
+const quietPlan = `# Quiet plan
+
+## P0 — Wait for the gate
+After: none
+
+1. Hand baton this gate, exactly: baton verify --notes 'the gate waits for the release' -- sh quiet.sh
+2. End your turn. baton gives you the gate's result when it ends: do not run quiet.sh yourself, and do not wait for it or check on it.
+3. When baton gives you the gate's result, report P0 done: baton done P0 --notes 'released'
+`
+
+// releaseQuiet lets the project's quiet.sh end, writing a line to the FIFO it waits on.
+func releaseQuiet(t *testing.T, dir string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		f, err := os.OpenFile(filepath.Join(dir, ".git", "quiet"), os.O_WRONLY, 0) // waits for its reader
+		if err == nil {
+			_, err = f.WriteString("go\n")
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("releasing quiet.sh: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("releasing quiet.sh: nothing reads its FIFO")
+	}
+}
+
+// The lead waits on a gate whose log never grows and whose processes use no CPU, and nothing else in the
+// run moves: once nothing has moved for stall_after (a minute here), baton tells the human once, naming
+// what P0 waits on. Movement re-arms it: the gate ends, and the plan completes. (On v0.8.1 a run could
+// stop for hours with no word. Since v0.8.6 a gate that works quietly, and an await, raise no alarm.)
 func TestAStalledRunTellsTheHuman(t *testing.T) {
-	dir := projectWith(t, map[string]string{"hold.sh": holdScript})
-	Attach(t, dir, waitPlan)
+	dir := projectWith(t, map[string]string{"quiet.sh": quietScript})
+	Attach(t, dir, quietPlan)
 	s := StartEnv(t, dir, []string{"BATON_STALL_AFTER=1m"}, "--model", "haiku", "Start the attached plan, and follow baton's instructions.")
 	s.Trust()
-	waitSequence(t, s, 3*time.Minute, is("idle_on_job", "phase", "P0"))
+	// The lead goes idle on the gate: in place, or once it has reported P0 done while the gate runs.
+	idle := func(e map[string]any) bool {
+		return is("idle_on_job", "phase", "P0")(e) || is("phase_verifying", "phase", "P0")(e)
+	}
+	waitSequence(t, s, 3*time.Minute, is("job_queued", "phase", "P0"), idle)
 	stalled := s.WaitEvent("run_stalled", 5*time.Minute)
 	if stalled == nil {
 		t.Fatalf("the run never said it stalled:\n%s", eventLog(s))
 	}
 	ev := s.Events()
-	if d := eventTime(stalled).Sub(eventTime(ev[first(ev, is("idle_on_job", "phase", "P0"))])); d < time.Minute {
+	if d := eventTime(stalled).Sub(eventTime(ev[first(ev, idle)])); d < time.Minute {
 		t.Errorf("stalled %s after the lead went idle, under a minute", d)
 	}
 	phases, _ := stalled["phases"].(map[string]any)
 	if p0 := fmt.Sprint(phases["P0"]); !strings.Contains(p0, "log has not grown") {
 		t.Errorf("run_stalled names P0 as %q", p0)
 	}
-	release(t, dir)
+	releaseQuiet(t, dir)
 	s.Until("the plan to complete", 4*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })
 	if first(s.Events(), is("phase_done", "phase", "P0")) < 0 {
 		t.Fatalf("P0 was not done once the job ended:\n%s", eventLog(s))
