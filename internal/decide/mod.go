@@ -2,6 +2,7 @@ package decide
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -14,9 +15,32 @@ import (
 const PhaseAgentDescription = "A phase of a plan baton runs, in a git worktree of its own. Only baton starts these: never use this type yourself."
 
 // PhaseAgentPrompt is the baton:phase agent type's system prompt. Its brief, which says what to do, comes
-// from baton when it starts.
+// from baton when it starts. Claude Code 2.1.302 tells a background agent in auto mode that handing its
+// report back (SubagentHandback) "ends your run"; for a phase agent it ends a turn, as a message resumes
+// it, so the prompt says so (hooks/handback.go).
 const PhaseAgentPrompt = "You work on one phase of a plan that baton runs, in a git worktree of your own, beside the lead session and any other phase agents. " +
-	"baton gives you your brief when you start, and its messages as you go: follow them, work only in your worktree, and report through the baton command as the brief says."
+	"baton gives you your brief when you start, and its messages as you go: follow them, work only in your worktree, and report through the baton command as the brief says. " +
+	"Claude Code may ask you to hand your report back (SubagentHandback): that ends only your turn, never your phase. baton takes your report only through the baton command, " +
+	"and its messages resume you after a hand-back, to go on with the phase."
+
+// HandbackHeld is why baton refuses a phase agent's hand-back (SubagentHandback) while its phase is not
+// reported and nothing it waits on will wake it: noStatus, the words its stop would be refused with
+// (Words.NoStatus), after what a hand-back is for a phase agent. No hook can refuse a stop once a hand-back
+// ended the turn, so the hand-back is where it is refused.
+func HandbackHeld(noStatus string) string {
+	return "[baton] Not handed back: a hand-back ends only your turn, never your phase, and baton takes your report only through the baton command. " +
+		strings.TrimPrefix(noStatus, "[baton] ")
+}
+
+// HandbackFirst comes before what baton had for a phase agent (a job's result, a message) when it refused
+// the agent's hand-back to give it that first, as its stop would have.
+const HandbackFirst = "[baton] Not handed back: baton has this for you first, and your phase goes on (a hand-back ends only your turn, never your phase)."
+
+// HandbackKept tells the human that baton refused the hand-back of the agent on phase, which had not
+// reported it.
+func HandbackKept(phase string) string {
+	return fmt.Sprintf("baton: the agent on %s handed back before reporting its phase → kept it on the phase", Named(phase))
+}
 
 // BoardCommand is the line of baton's board command (/baton-board) in Claude Code's list of commands. It
 // opens the board while Claude works; /baton board, the skill's, waits for the turn to end.

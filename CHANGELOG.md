@@ -142,6 +142,14 @@ phase ids it has; a new plan, a replan's draft and a phase added to the plan fil
   of the session at each stop, whoever started it, so the lead's stop was refused over its phase agents'
   commands, and an agent's over the lead's or another agent's. Each loop now waits on, and is told of, its own
   background work only.
+- **A phase agent's hand-back no longer ends its phase (Claude Code 2.1.302).** In auto mode Claude Code now gives
+  a background agent a hand-back tool (`SubagentHandback`) that "ends your run", and sends an agent that ends a
+  turn without it back to call it. A phase agent that handed back while it waited on its job took the result,
+  when baton's message resumed it, as coming after its run, and never reported its phase; and no stop hook can
+  refuse a turn a hand-back ended. A phase agent's hand-back is now decided as its stop would be: refused, with
+  the stop's words, while its phase is not reported and nothing it waits on will wake it, or to give it a result
+  or a message due first (`handback_refused`); let through while it waits on a job, its proposal or its block,
+  and once its phase is done. The agent's prompt says that a hand-back ends only its turn.
 
 ## [0.8.5] - 2026-10-16
 

@@ -262,6 +262,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 	if res, refused := h.agentNameTaken(c); refused {
 		return res, nil
 	}
+	if res, refused := h.handedBack(c); refused {
+		return res, nil
+	}
 	if res, ok := h.unbuilt(c); ok {
 		return res, nil
 	}
