@@ -312,6 +312,36 @@ func (p Plan) Width() int {
 	return width
 }
 
+// A plan whose phases mostly wait one for another gains little from phase agents: they work beside the
+// lead only on phases whose dependencies are done. baton measures a plan's shape when the model puts it to
+// the human, and asks the model once to check a plan that is mostly a chain against its shape rules: one
+// of at least ShapeMinPhases phases whose longest chain covers more than ShapeChainShare of them. The
+// thresholds were measured on ten real plans: they flag the eight whose longest chains covered over 60% of
+// their phases (six were one chain), and pass the two at 43% and 58%.
+const (
+	ShapeMinPhases  = 6
+	ShapeChainShare = 0.6
+)
+
+// Shape sums up how much of a plan can be worked on at once.
+type Shape struct {
+	Phases int      // how many phases the plan has
+	Chain  []string // its longest chain of phases that must run one after another (LongestChain)
+	Width  int      // the most phases that can be worked on at once (Width)
+}
+
+// Shape is the shape of p.
+func (p Plan) Shape() Shape {
+	_, chain := p.LongestChain()
+	return Shape{Phases: len(p.Phases), Chain: chain, Width: p.Width()}
+}
+
+// MostlyChain reports a plan that is mostly one chain: at least ShapeMinPhases phases, and a longest chain
+// over ShapeChainShare of them.
+func (s Shape) MostlyChain() bool {
+	return s.Phases >= ShapeMinPhases && float64(len(s.Chain)) > ShapeChainShare*float64(s.Phases)
+}
+
 // Steps groups the plan's phases by how far down the graph they are: a phase that waits for none is in
 // the first step, and any other in the step after the latest of the phases it waits for. So no phase of a
 // step waits for another of it, and a step's phases may run at once once the steps before it are done.
