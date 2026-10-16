@@ -706,11 +706,51 @@ func TestALandingMovesTheRunOn(t *testing.T) {
 	x.tick(time.Second)
 	st = x.state()
 	if st.Mode != state.ModeComplete || !st.Run.CompleteNotified || !x.has("plan_complete", `"by":"landed"`) ||
-		!strings.Contains(x.announced(), "plan complete — all 4 phases done · 1 decision made without you — /baton status") {
+		!strings.Contains(x.announced(), "plan complete — all 4 phases done · phase agents saved ") ||
+		!strings.Contains(x.announced(), " · 1 decision made without you — /baton status") {
 		t.Fatalf("mode %s, notified %v\n%s", st.Mode, st.Run.CompleteNotified, x.events())
 	}
-	if n := st.Run.Notices; len(n) == 0 || n[len(n)-1].Kind != "plan_complete" || n[len(n)-1].Text != "Demo: all 4 phases done · 1 decision made without you — /baton status" {
+	if n := st.Run.Notices; len(n) == 0 || n[len(n)-1].Kind != "plan_complete" || !strings.HasPrefix(n[len(n)-1].Text, "Demo: all 4 phases done · phase agents saved ") ||
+		!strings.HasSuffix(n[len(n)-1].Text, " · 1 decision made without you — /baton status") {
 		t.Errorf("notices %+v", st.Run.Notices)
+	}
+}
+
+// A phase agent's work ends when its sub-run finished the phase, not when the merge queue took it, nor when
+// it landed; the landing that completes the plan says what phase agents saved it, and logs the numbers.
+func TestALandingThatCompletesThePlanSaysWhatAgentsSaved(t *testing.T) {
+	x := landingCrew(t)
+	t0 := x.now
+	x.lead.Update(func(st *state.State) error {
+		for id, span := range map[string][2]time.Duration{"P0": {-3 * time.Hour, -2 * time.Hour}, "P2": {-2 * time.Hour, -time.Hour}} {
+			ps := st.Phases[id]
+			ps.Status, ps.StartedAt, ps.DoneAt = state.PhaseDone, t0.Add(span[0]), t0.Add(span[1])
+		}
+		st.Phases["P3"].Status = state.PhaseDone // done with no times on record: no work, no wall clock
+		st.Current = ""
+		for i := range st.Workers {
+			if st.Workers[i].Phase == "P1" {
+				st.Workers[i].Started = t0.Add(-2 * time.Hour) // its agent has been at work for two hours
+			}
+		}
+		return nil
+	})
+	x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	finished := x.now
+	x.tick(time.Second)
+	if w := x.worker("P1"); w.Status != state.WorkerLanded || !w.Finished.Equal(finished) {
+		t.Fatalf("worker %s, finished %v, want its sub-run's done %v\n%s", w.Status, w.Finished, finished, x.events())
+	}
+	// P0 and P2 an hour each, and P1's agent two hours and a few seconds: four hours of work, in three
+	// hours and a few seconds from P0's start to P1's landing.
+	if want := "baton: plan complete — all 4 phases done · phase agents saved about 1h00m: 4h00m of phase work in 3h00m"; !slices.Contains(x.state().Run.Announce, want) {
+		t.Errorf("announced %q, want %q", x.announced(), want)
+	}
+	landed := x.state().Phases["P1"].DoneAt
+	work, wall := 2*time.Hour+finished.Sub(t0.Add(-2*time.Hour)), landed.Sub(t0.Add(-3*time.Hour))
+	if !x.logged("plan_complete", map[string]any{"by": "landed", "agent_phases": 1, "work_seconds": int(work.Seconds()),
+		"wall_seconds": int(wall.Seconds()), "saved_seconds": int((work - wall).Seconds())}) {
+		t.Errorf("plan_complete logs other numbers than %v of work in %v\n%s", work, wall, x.events())
 	}
 }
 

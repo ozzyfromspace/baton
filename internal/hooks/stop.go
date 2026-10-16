@@ -194,10 +194,11 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			st.Run.CompleteNotified = true
 			n := len(decide.WithoutHuman(st.Decisions)) + len(decide.WithoutHuman(workers))
 			left := len(decide.LeftForYou(st.Decisions)) + len(decide.LeftForYou(workers))
-			done := decide.PlanDone(len(pl.Phases), n, left)
+			saving := state.SavingOf(*st)
+			done := decide.PlanDone(len(pl.Phases), n, left, saving)
 			notice(st, "plan_complete", pl.Title+": "+done, now)
 			d.say("baton: plan complete — " + done)
-			d.emit("plan_complete", map[string]any{"decisions": n, "left": left})
+			d.emit("plan_complete", saving.Log(map[string]any{"decisions": n, "left": left}))
 		}
 		return d
 	}

@@ -430,6 +430,7 @@ func cmdStatus(args []string, io IO) int {
 		k, chain := pl.LongestChain()
 		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
+	printSaved(io, st)
 	printReplans(io, s, st)
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)
@@ -464,6 +465,16 @@ func cmdStatus(args []string, io IO) int {
 	printEarlier(io, s)
 	printOthers(io, s)
 	return 0
+}
+
+// printSaved says what phase agents saved a complete plan (state.SavingOf), when any worked on it.
+func printSaved(io IO, st state.State) {
+	if st.Mode != state.ModeComplete {
+		return
+	}
+	if line := decide.Saved(state.SavingOf(st)); line != "" {
+		fmt.Fprintln(io.Out, "time: "+line)
+	}
 }
 
 // printEarlier lists the run's earlier plans, each kept as another replaced it (Store.Archive).
