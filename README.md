@@ -14,8 +14,8 @@ So baton takes those decisions away from the model. The model does the work; det
 
 ## How a run goes
 
-1. **Plan.** `/baton plan <goal>` plans in plan mode, with a heading per phase (`## P0 — …`). Under each heading, a line says what the phase needs done first: `After: P1, P3`, `After: none` or `After: all`. Without the line, a phase follows the one before it. A few phases are **QA phases** (`Type: qa`): they run the full test suites and lints, once for the phases before them, which run focused checks only, so no small phase spends an hour on a full suite. Before the plan reaches you, the model checks it against your other instructions (CLAUDE.md, memory) and addresses anything that competes with it.
-2. **Approve.** baton attaches the plan when you approve it, compacts the planning conversation away, and starts P0 from a brief: the phase's section of the plan, the standing rules, and the notes of earlier phases.
+1. **Plan.** `/baton plan <goal>` plans in plan mode, with a heading per phase (`## P0 — …`); a small task can be a plan of one phase. Under each heading, a line says what the phase needs done first: `After: P1, P3`, `After: none` or `After: all`. Without the line, a phase follows the one before it. A plan's longest chain of phases waiting one for another sets how long it takes, so the model builds a graph, not a list: a phase waits for another only when it needs something that phase makes; the small part others need (an interface, a schema, a fixture) goes first in a phase of its own; work is split by the files it touches; and waits on CI or a deploy stay off the main chain. A few phases are **QA phases** (`Type: qa`): they run the full test suites and lints, once for the phases before them, which run focused checks only, so no small phase spends an hour on a full suite. A spike whose findings should reshape the phases after it is marked `Replan: after`. Before the plan reaches you, the model checks it against your other instructions (CLAUDE.md, memory) and addresses anything that competes with it, and, when most of a long plan is one chain, checks each link of that chain once.
+2. **Approve.** As the plan comes to you, baton shows its shape in one line: `baton: 12 phases · longest chain 5 (P1 → P7 → P8 → P9 → P11) · up to 7 at once`. baton attaches the plan when you approve it, compacts the planning conversation away, and starts P0 from a brief: the phase's section of the plan, the standing rules, and the notes of earlier phases.
 3. **Work.** Your session, the **lead**, works the phase in your checkout and reports with `baton done`. A stop without a status is refused, with instructions.
 4. **Phases at once.** Each other phase that can start goes to a **phase agent**: a background agent of your session that baton starts, in a git worktree and on a branch of its own. baton starts as many as the plan and the machine have room for, at least 2 minutes apart, so the machine shows each one's load before the next starts. Each phase agent gets the same guarantees as your session, from baton's hooks rather than a model's memory.
 5. **Gates off the critical path.** A gate that takes more than a couple of minutes goes to baton (`baton verify`), which runs it on the committed code outside your checkout while the model works on. A finished phase is reported done while its gate runs: it is done when the gate passes, and reopens if it fails. A phase agent's failed gate goes back to that agent, with the result.
@@ -92,7 +92,8 @@ Start sessions with `baton` instead of `claude`; it takes the same arguments. In
 |---|---|
 | `/baton plan <goal>` | Plan in plan mode, in a form baton can run. baton runs it once you approve. |
 | `/baton run [plan.md]` | Run a plan. This session's own plan goes on where it stopped (a pause, a block, phases you added to it); any other plan is attached and started. |
-| `/baton status` | Where the run stands: phases, jobs, decisions with their undo, snapshots, and the run's earlier plans. |
+| `/baton replan [what to consider]` | Restructure the phases not started so more of them can run at once, weighing what you say. baton checks the result, keeps the phases that started as they are, and records the change with its undo. |
+| `/baton status` | Where the run stands: phases, jobs, decisions with their undo, snapshots, replans, and the run's earlier plans. |
 | `/baton board` | The plan step by step. |
 | `/baton pause` | Take the wheel; `/baton run` gives it back. |
 | `/baton drop` | Drop the run. Its phase agents end, with their work saved, the plan's record is kept, and baton does nothing until the next plan. |
@@ -103,7 +104,7 @@ Start sessions with `baton` instead of `claude`; it takes the same arguments. In
 
 `baton --help` lists every command.
 
-You can edit the plan file while it runs: baton follows the new text, and a phase agent at work is told when its phase or the standing rules change. If a phase agent's work reached your branch some other way (merged by hand), `baton done <phase>` in your session records it landed. `/baton pause` hands you the session: a `/compact` of yours while paused counts for the compaction baton owed, so `/baton run` doesn't compact again unless the conversation has grown much since, and a plan attached while paused waits for `/baton run`. A plan that another replaces, or that you drop, is kept in `.baton/runs/<run>/gen-<N>/`.
+You can edit the plan file while it runs: baton follows the new text, and a phase agent at work is told when its phase or the standing rules change. baton also replans by itself, at a phase boundary, in your session: once after an upgrade whose planning rules changed, at a QA phase when the phases left are mostly one chain, and once a phase marked `Replan: after` is done. The first two change only which phases wait for which, and stand only if more of the plan can run at once; the third may also rework the steps of the phases left with what that phase found, never dropping work. While a replan is open, no new phase agent starts, for 20 minutes at most. If a phase agent's work reached your branch some other way (merged by hand), `baton done <phase>` in your session records it landed. `/baton pause` hands you the session: a `/compact` of yours while paused counts for the compaction baton owed, so `/baton run` doesn't compact again unless the conversation has grown much since, and a plan attached while paused waits for `/baton run`. A plan that another replaces, or that you drop, is kept in `.baton/runs/<run>/gen-<N>/`.
 
 Each session has a run of its own in `.baton/runs/` (kept out of git), so several terminals can each run a plan in one project. A run follows its conversation through `--resume` and `/clear`. A conversation Claude Code moves to its background service is no longer hosted, though it inherited baton's settings, and baton says so once: `baton --resume <session id>` in a terminal gives it back, and `/baton run <plan>` there carries the run on where it stood. Without git, a plan runs the same way; baton just has nothing to commit or snapshot.
 
@@ -114,6 +115,8 @@ Each session has a run of its own in `.baton/runs/` (kept out of git), so severa
 | `baton verify "<command>" --notes "…"` | Runs the gate on `HEAD` in a lane (a worktree outside your checkout), so edits meanwhile can't disturb it. |
 | `baton verify --here "<command>" --notes "…"` | Runs it on `HEAD` in the checkout itself, for a gate that needs the checkout's running services. Edits and landings there wait until it ends. In a phase agent's worktree it holds one of the project's lanes while it runs, so here gates and lane gates take turns (one at a time without a `.baton-lane`). |
 | `baton await "<command>" --notes "…"` | Waits on something outside the project, such as a CI run. No git needed. |
+
+A phase runs one gate and one `await` at a time, beside each other: neither stops the other, and the phase is done once both pass. The same command again replaces the one of its kind that runs (the gate on a newer commit); another command is refused unless the model adds `--replace`.
 
 The result reaches the model at its next tool call or stop, or wakes it. If a phase can't go on without its result and another phase can start, baton sets the phase aside after 5 minutes, and comes back to it when the result is in. A `verify` gate that hangs in silence, its log unchanged and its processes using no CPU for 20 minutes, is stopped and counts as unverified, with the reason; where baton can't read the CPU, it never stops a gate on log silence alone.
 
@@ -144,6 +147,7 @@ Settings go in `~/.baton/config.json`. Most have an environment variable too (`B
 | `escalation_timeout` | `10m` | How long a proposal with no `--wait` of its own waits for you before it goes ahead, and how long baton's questions, and the model's own, wait: `1m` to `20m`. |
 | `max_auto_decisions` | off | How many decisions one phase may make without you before baton stops for a review. Off unless you set a number. |
 | `aggregate_qa` | `true` | A plan's heavy checks (full suites, lints, end-to-end) run in its QA phases only (`Type: qa`); the phases between run focused checks. `false` has every phase check itself in full. |
+| `auto_replan` | `true` | baton replans the phases not started by itself, at a phase boundary: after an upgrade whose planning rules changed, at a QA phase when the phases left are mostly one chain, and once a phase marked `Replan: after` is done. `false` turns that off; `/baton replan` works either way. |
 | `details` | `false` | Put the reason in pushes, which otherwise say only that you're needed. |
 
 The rest are described in [`internal/config/config.go`](internal/config/config.go): `ntfy_server`, `desktop`, `checkpoint_pct` (60), `warn_pct` (90), `auto_restart`, `switch_after` (5m), `verify_timeout` (3h), `foreground_max` (2m) and `worker_usage_max`. `BATON_HOME` moves `~/.baton` elsewhere.
@@ -159,7 +163,7 @@ The rest are described in [`internal/config/config.go`](internal/config/config.g
 
   It refuses an amend, reset or rebase over landed commits. While another baton session works in the same checkout, it also refuses git commands that take every change.
 - **Transcripts** are read, never written: to tell a refused turn apart, to notice a rewind, and to read a phase agent's context.
-- **Processes.** baton stops only processes of its own, and with `baton clean`, ones a session that is gone left running under `~/.baton`.
+- **Processes.** baton stops only processes of its own, and with `baton clean`, ones a session that is gone left running under `~/.baton`. Those such a session left in your project it lists, with the command to stop each, and one working anywhere else (a gpg-agent or ssh-agent your shell started) it leaves alone.
 - **Settings.** baton never edits your Claude Code settings. Its hooks, its status line and an allow rule for its own CLI reach each session through `claude --settings`.
 - **Downloads** are verified against checksums committed to this repository. See [SECURITY.md](SECURITY.md).
 

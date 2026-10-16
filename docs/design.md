@@ -43,12 +43,92 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
   which is Claude Code's "block".
 - **A run per session.** `.baton/runs/<id>/` holds the plan's anchors, the state, the notes and `events.jsonl`. An
   anchor is a verbatim snippet checked to occur once in the plan file, so baton needs no heading parser. Every write
-  is locked and atomic. A run follows its conversation through `--resume` and `/clear`.
+  is locked and atomic, and a lock is held for that write alone: commands, process and transcript reads and the
+  network come before it or after it. A hold over a second, or a waiter that gives up after 5, names the holder in
+  the log. A run follows its conversation through `--resume` and `/clear`.
 - **Handing a session over.** `/baton start` records the session. Once its turn ends, the plugin's Stop hook ends
   claude, and the `baton init` shell hook relaunches the same conversation under baton. A host that finds a newer
   compatible baton installed restarts its session on it in place, resuming the same conversation.
 - **The skill** is a stub that loads its instructions from the binary (`baton skill`), so they always match the baton
   that carries them out.
+
+## Plans
+
+A plan is a Markdown file with a heading per phase (`## P0 — …`). The line under each heading says what the phase
+needs done first (`After: P1, P3`, `After: none` or `After: all`); a phase without it follows the one before it. Beside
+it, `Type: qa` marks a QA phase (below), and `Replan: after` a phase whose findings should reshape the phases after it.
+One phase is enough: a small task can be a plan of one phase. A plan with no phase headings is ordinary plan-mode
+work, and baton leaves it alone. Each anchor is the phase's heading, or more of its lines where the plan quotes its
+own headings, and fenced code is passed over, so the anchor occurs once.
+
+- **The shape sets how long a plan runs.** Phase agents work beside the lead only on phases whose dependencies are
+  done, so a plan's longest chain of `After:` lines, not its number of phases, sets how long it takes. In a real run,
+  a plan of 57 phases had a longest chain of 42, and of the 12 phases it ran in 13 hours, 2 ran beside the lead;
+  eight of ten plans saved on one machine had a longest chain over 60% of their phases, and six were one chain. So
+  `/baton plan` builds a graph by six rules:
+  1. A dependency is a need: a phase waits for another only for something it makes (code, a schema, a file, a
+     decision), never because the other's gate checks it.
+  2. Split enabling work: the small part others need goes first, in a phase of its own; the rest becomes a leaf.
+  3. Contract first: fix an interface in a small phase, then build both sides at once.
+  4. Split by files: divide work by the files each phase owns, and chain only what truly shares files.
+  5. Outside waits off the main chain: waiting on CI, a deploy or an outside service belongs in a leaf, a QA phase
+     or the release. In that run, a phase on the main chain that awaited CI went red five times in 3 hours, and the
+     phase after it waited all that time.
+  6. A small task can be one phase.
+- **Checked before the human sees it.** At the lead's `ExitPlanMode`, each check once per plan, and none of them
+  blocking (the same plan again goes on):
+  - a plan with phase headings that baton could not attach as written (a duplicate id, an `After:` naming an unknown
+    or later phase) is turned back with what is wrong;
+  - the plan's first `ExitPlanMode` is turned back with baton's request to check it against CLAUDE.md, memory, skills
+    and settings, and address in it anything that competes (a rule to run the full suite before every commit, say);
+  - in the same turn-back, a plan that is mostly one chain (6 phases or more, the longest chain over 60% of them) is
+    asked to check each link of that chain against the shape rules. Where every link holds, the model puts the plan
+    to the human unchanged, saying in it why the chain is real. On those ten plans, the threshold flags the eight
+    and passes the two at 43% and 58%.
+
+  A stop in plan mode before the plan reaches the human is turned back once too.
+- **The shape line.** As the plan goes to the human, they see its shape in one line: `baton: 12 phases · longest
+  chain 5 (P1 → P7 → P8 → P9 → P11) · up to 7 at once`.
+
+### Replans
+
+What a run learns (a phase that turned out to wait on CI, phases that turned out independent, a newer baton's
+planning rules) used to stop at the phases already done. A replan carries it to the phases not started: the lead's
+model restructures them, in the session where the human sees it, and baton checks the result. **The model decides
+how; the host decides when, and whether the result stands.**
+
+- **Only on a cue,** never on a timer or the model's own initiative:
+  - the human's `/baton replan "<what to consider>"`, done at once in that turn;
+  - a run carried across an upgrade whose planning rules changed (`plan.RulesVersion`), once;
+  - a QA phase under way while the phases not started are mostly one chain, once per QA phase;
+  - a phase marked `Replan: after` (a spike, an exploration), once it is done.
+
+  baton's own replans open at the lead's phase boundary, in its fresh context: the replan's brief comes before the
+  next phase's, and the lead replans, runs `baton replanned`, then begins the phase. `auto_replan: false` turns them
+  off.
+- **A draft, checked.** `baton replan` copies the plan file to a draft and prints the brief: the phases not started
+  and those that started, the shape now, the shape rules, the human's words, and what this replan may change. The
+  model edits only the draft, and ends with `baton replanned --notes "<what changed and why>"`, or `--none "<why>"`.
+  baton checks the draft before the plan file is touched: one that fails is refused with each thing it may not
+  change, and the model fixes it.
+- **What each kind may change.** Phases that started or are done never change, and the order and `After:` lines of
+  the rest always may.
+  - After an upgrade or at a QA phase, that is all: every other byte of each phase stays as approved, so however
+    many such replans run, each phase's goal, steps and "done when" are what the human approved. One stands only if
+    the phases not started got a shorter longest chain or more of them can run at once; otherwise the plan stays as
+    it was, and the model is told why.
+  - After a marked phase, the steps of the phases not started may also take in what it found, and a phase may be
+    split, but no work is dropped or merged.
+  - The human's may also add, split and reword phases, and, as far as their words ask, drop or merge phases or
+    change the plan's goal sections (its title and opening, the standing rules, the end section).
+- **Recorded, and undone in one step.** A draft that stands is written over the plan file and followed: the phase
+  agents at work hear of their part, as of any change to the plan. It is a decision without the human, with its
+  undo: copy the text the replan found back over the plan file. baton keeps the text the human approved, and
+  `baton status` lists every replan with what it changed against that text, so drift across many replans stays
+  visible.
+- **Bounded.** While a replan is open, or owed at the lead's boundary, no new phase agent starts, since it could
+  take a phase the replan restructures; the agents at work go on. One not finished in 20 minutes lapses, and the plan
+  goes on as it was.
 
 ## A phase boundary
 
@@ -56,11 +136,18 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
    plan complete, when the run is paused or blocked, and when the phase waits on a job or on background work. It
    refuses a stop without a status, even in a turn the human started (to talk without the plan, the human pauses
    baton), and names the way forward. After three refusals in a row, it escalates.
+   The model hears of its own background work (a command run in or moved to the background, a Monitor, a
+   background agent) with the result of the call that starts it: the work wakes it when it ends, so it keeps working
+   on what does not depend on that, and with nothing left, ends its turn. Its stop over that work is then allowed;
+   the refusal that says the same is left for work whose start baton did not see.
    The boundary that the model's own `done` owes holds the rest of its turn, and its stop queues the compaction; so
    does the lead's `done` of a worker's phase (below).
 2. The host asks the mod to compact the lead once nothing is in the way: no turn, no dialog, none of the lead's own
-   subagents at work. The human's draft stays in the box. A compaction Claude Code refuses because a turn runs is
-   asked again after it, using up no try. In serial mode the host types `/compact`, and an unsent draft is saved and
+   subagents at work. The human's draft stays in the box. The host asks once the lead's Stop hook has run, a
+   moment before Claude Code counts the turn over, and Claude Code compacts only between turns: so the mod holds a
+   compaction it refuses while the lead's turn runs, and calls it from that turn's end (`turn.complete`), where it
+   is taken ([spike 37](../spikes/37-compact-at-turn-end/)). One still refused 30 seconds later is asked again after
+   the turn, using up no try. In serial mode the host types `/compact`, and an unsent draft is saved and
    cleared after a grace period, unless an agent may be live: then the draft holds the compaction, and the human is
    told why.
 3. **Only proof moves a compaction.** A phase agent's compaction fires `PreCompact`, `SessionStart(compact)` and
@@ -107,13 +194,22 @@ A long gate goes to baton:
   lane is announced with how many are ahead of it.
 - `baton await` waits on something outside the project.
 
+A phase runs one gate and one wait on something outside at a time, side by side: a local gate and an outside wait
+never check the same thing, so a `verify` never stops an `await`, nor the reverse. In a real run, a QA phase's wait on
+CI replaced its running suite, and queuing the suite again replaced the CI watch: of that run's 16 replacements, 12
+swapped one check for another, and phases took to gluing gates into one command. Within a kind, the same command
+queued again replaces the one that runs (the gate on a newer commit, or the wait again). Another command is refused,
+naming the job that runs: the model stops it with `--replace`, folds both into one command, or queues its own once
+the result comes. The phase stands on its latest job of each kind: it is done once both passed, and reopens on the
+first red.
+
 A gate that hangs in silence is stopped: a `verify` job whose log has not grown and whose processes used no CPU for 20
 minutes ends unverified, with the reason, and the model is told. Log silence alone never stops one, so where the CPU
 can't be read (Windows), a gate runs to `verify_timeout`.
 
 The job runs detached (`baton lane-run`), so it outlives claude. Its result reaches the model at its next tool call
-or its stop, or wakes it. A finished phase is "verifying" while its gate runs: it is done when the gate passes, and
-reopens when it fails. A phase that can't go on without its result is set aside after `switch_after` for another phase
+or its stop, or wakes it. A finished phase is "verifying" while its jobs run: it is done when they pass, and
+reopens when one fails. A phase that can't go on without its result is set aside after `switch_after` for another phase
 that can start, and later resumes from its notes.
 
 ## Phases at once
@@ -160,7 +256,8 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   - A model's own call to the `baton:phase` type is refused.
 - **Room.** `workers: auto` sizes the fleet to the machine. New agents start at least 2 minutes apart, since the
   machine's readings lag the load an agent brings. A new agent also waits while the machine is busy, the lanes fall
-  behind, landings keep conflicting, or a usage limit holds. Every hold is host code.
+  behind, landings keep conflicting, a usage limit holds, or a replan is open or owed ([Replans](#replans)). Every
+  hold is host code.
 - **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, it is merged into the phase's
   branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Nothing baton
   runs, or asks an agent to run, rewrites a commit: a rebase can drop a resolved conflict without a word, and Claude
@@ -264,10 +361,7 @@ interface had made *notify* and *halt* the same operation.
   phase (a wait on CI is often a full check in disguise), and the job runs either way; `--qa "<why now>"` flags a
   full check run early on purpose. A red result there says that other phases' work in progress may be why: the
   model fixes what is its phase's, and finishes with `baton done --despite-red "<why>"` if the rest is not.
-- **Competing instructions are flagged before approval.** The model's first `ExitPlanMode` for a plan is turned
-  back once with baton's request to check the plan against CLAUDE.md, memory, skills and settings, and address in
-  it anything that competes (a rule to run the full suite before every commit, say). A stop in plan mode before the
-  plan reaches the human is turned back once too.
+- **Competing instructions are flagged before approval,** with the plan's shape ([Plans](#plans)).
 - **Without git** there is no gate and no snapshot, and baton says "complete" rather than "committed".
 
 ## When the human steps in
@@ -283,7 +377,10 @@ interface had made *notify* and *halt* the same operation.
   handoff are copied into `.baton/runs/<run>/gen-<N>/`, and `baton status` lists the run's earlier plans with how
   many phases each finished.
 - **The plan file may change while it runs.** baton follows the new text, and the phase agents at work hear of a
-  change to their part of it (above).
+  change to their part of it (above). An edit made while a replan is open is followed once the replan closes, and
+  the replan's draft, made from the older text, is refused.
+- **`/baton replan "<what to consider>"`** has the lead's model restructure the phases not started at once, as far
+  as the human's words ask ([Replans](#replans)).
 
 ## Recovery
 

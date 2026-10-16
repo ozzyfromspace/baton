@@ -10,7 +10,8 @@ background agent, so where the mod runs baton types nothing: the mod compacts an
 stays in the box; in auto mode agents' reports come back as peer prompts, which the mod drops (v0.8.2). A real run
 taught that nothing may wait on a phase agent's compaction: a sub-run never owes one, so an agent's red gate goes
 back to it; agents start 2 minutes apart, their `--here` gates take lane slots, and a run that stops moving tells the
-human (v0.8.2). Workflows were ruled out: a workflow agent cannot wait.
+human (v0.8.2). A compaction Claude Code refuses while the lead's turn ends is run from the mod's `turn.complete`
+hook (v0.8.5). Workflows were ruled out: a workflow agent cannot wait.
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
@@ -264,6 +265,26 @@ agent looks:
 
 So v0.8.4 lets a phase agent's dialog hold only that agent where the mod runs, while the relay and the stall alarm
 still see it; serial mode keeps its hold; and a stopped agent is still told by the refusal its next message gets.
+
+## What spike 37 found (v0.8.5)
+
+In a real run on v0.8.3 and v0.8.4, the lead's compaction went the same way 15 times in 13 hours: the host asked
+for it within 100 ms of the lead's Stop hook, Claude Code refused it ("a turn is running …; the conversation compacts
+between turns, so call it from turn.complete or later"), and the host asked again about 3 seconds later, which
+worked. The Stop hook runs a moment before Claude Code counts the turn over.
+[`spikes/37-compact-at-turn-end`](../../spikes/37-compact-at-turn-end) measured, on Claude Code 2.1.301 with Haiku,
+where a mod's call is taken:
+
+- **From the poll timer while the Stop hooks run**, it is refused at once, as in the run. The lead's `turn.complete`
+  came 4 to 6 ms after the classic `Stop` ended.
+- **From the lead's `turn.complete` hook** (before or after `next(e)`, or a timer started there), it is taken and
+  compacts. A timer started in a classic `Stop` hook carries that hook's context: before `next(e)` it is refused.
+- **The mod's own `session.compact` hook runs for a call made inside one of its hooks** (`trigger: plugin`), unlike
+  one from its timer (spike 35), so the mod tells its own call apart.
+
+So in v0.8.5 the mod holds a compaction refused while the lead's turn runs (by its own `turn.start` and
+`turn.complete`), and calls it from that turn's `turn.complete`, once. Past 30 seconds it acks the refusal, and the
+host asks again after the turn, as before.
 
 ## What a real run taught (v0.8.2)
 

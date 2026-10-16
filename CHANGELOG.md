@@ -4,6 +4,115 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-16
+
+A read-only look at a long real run found baton itself healthy: no questions, blocks or deadline answers in 13
+hours, and a 3-second move to v0.8.4. The time went to the plan's shape. Its longest chain held 42 of its 57
+phases, so of the 12 phases it ran in those 13 hours, 2 ran beside the lead. One phase on that chain verified
+itself by waiting on CI, which went red 5 times over 3 hours (runs of 14 to 48 minutes), and the phase after it
+waited all that time. Of ten plans saved on one machine, eight had a longest chain over 60% of their phases, and
+six were one chain. So `/baton plan` now builds a graph by six shape rules, baton shows a plan's shape as it
+comes to you and asks the model once about a long chain, and a running plan is replanned as the run learns: on
+your word, after an upgrade with newer planning rules, at a QA phase, and after a phase marked to reshape what
+follows. The model decides how; baton decides when, checks every replan against what its kind may change, and
+records it with its undo. This release also fixes four small things that run turned up, a wait on CI that
+stopped a running gate, and two kinds of plan that would not attach.
+
+A session on v0.8.x moves to v0.8.5 by itself at its next restart point; `baton update` updates baton's host
+and its mod together. At its next phase boundary, a run whose plan was attached before v0.8.5 has the model
+replan its phases not started once by the new planning rules: only which of them wait for which may change, and
+the change stands only if more of them can then run at once (`auto_replan: false` turns this off).
+
+### Added
+- **A plan's shape, shown and checked at approval.** As a plan comes to you, baton shows its shape in one line
+  (`plan_shape`): `baton: 12 phases · longest chain 5 (P1 → P7 → P8 → P9 → P11) · up to 7 at once`. A plan of
+  one phase shows none. When a plan of 6 phases or more is mostly one chain (its longest chain over 60% of its
+  phases; on the ten saved plans this flags the eight and passes the two at 43% and 58%), baton's one turn-back
+  at the model's first `ExitPlanMode`, which already checks competing instructions, also asks it to check each
+  link of that chain against the shape rules. Where every link holds, the model puts the plan to you unchanged
+  and says in it why the chain is real. Still one turn-back per plan; `directives_asked` gains `phases`,
+  `longest_chain`, `width` and `shape_flagged`.
+- **`/baton replan [what to consider]`.** The lead's model restructures the phases not started so more of them
+  can run at once, weighing your words, in your session: `baton replan` copies the plan file to a draft and
+  prints the brief, the model edits the draft, and `baton replanned --notes "<what changed and why>"` (or `--none
+  "<why>"`) hands it back. baton checks the draft before the plan file is touched: phases that started or are
+  done never change, the order and `After:` lines of the others may, and so may adding, splitting and rewording
+  phases; dropping or merging phases, or changing the plan's goal sections, only as far as your words ask, with
+  each dropped phase named in the notes. A draft that fails is refused with each breach (`replan_refused`), for
+  the model to fix. One that passes is written over the plan file and followed (`plan_replanned`), the phase
+  agents at work hear of their part, and it is recorded as a decision with its undo: copy the text it found,
+  `.baton/runs/<run>/replan/<n>.md`, back over the plan file (`replan_undone`). The approved text is kept
+  (`replan/0.md`, `plan_kept`), and `baton status` lists each replan with what it changed against it. While a
+  replan is open, no new phase agent starts; one not finished in 20 minutes lapses (`replan_lapsed`), and the
+  plan goes on as it was. Also `replan_opened`, `replan_taken_over` and `replan_declined`.
+- **baton replans by itself, now and then.** At the lead's phase boundary, in its fresh context, a replan's brief
+  comes before the next phase's: once for a run whose plan was made under older planning rules
+  (`plan.RulesVersion`, 1 in this release; a release that changes the planning rules bumps it); at most once per
+  QA phase, when the phases not started are mostly one chain; and once a phase marked `Replan: after` is done,
+  a new line under a heading, beside `After:` and `Type:`, for a spike or an exploration whose findings should
+  reshape what follows. The first two change only the `After:` lines and the order of the phases not started,
+  every other byte of each phase as you approved it, and stand only if the longest chain got shorter or more
+  phases can run at once; otherwise the plan file is left as it was (`replan_unchanged`). One after a marked
+  phase may also rework the steps of the phases not started with what it found, and split them, but never drops
+  or merges work. A cue with nothing to change is logged (`replan_skipped`). New phase agents wait while a
+  boundary owes one, for 20 minutes at most. The setting `auto_replan` (on by default) turns these off; `/baton
+  replan` works either way.
+- **A plan that would not attach is turned back before you approve it.** A plan with phase headings that baton
+  could not attach as written (a duplicate id, an `After:` naming an unknown or later phase, an anchor that
+  occurs twice) is turned back at the model's `ExitPlanMode` with what is wrong (`plan_unbuilt`), once per plan
+  text: the same text again goes on to you, and your approval says it was not attached, as before.
+- **Locks name their holder.** A hold over a second logs `lock_slow` with where the lock was taken, and a waiter
+  that gives up after 5 seconds logs `lock_timeout` with the holder's pid, where it took the lock, and how long
+  it had held it.
+
+### Changed
+- **`/baton plan` builds a graph, not a list.** The skill's planning guidance is now six shape rules: a
+  dependency is a need (being checked by another phase's gate is not one); split enabling work; contract first;
+  split by files; outside waits off the main chain; a small task can be one phase. Phases that would edit the
+  same files go one after the other only as the last resort of the fourth. It also teaches `Replan: after`.
+- **The reminder of the model's background work comes with the call that starts it.** A command run in or moved
+  to the background, a Monitor or a background agent gets baton's reminder with its result (it wakes the model
+  when it ends; keep working on what does not depend on it; with nothing left, end the turn), logged
+  `background_told` with `via: start`, and the stop over it is no longer refused. In the real run, the lead's
+  stop was refused 17 times to say this, each an extra turn on a context of 200k to 480k tokens. The refusal
+  stays for work whose start baton did not see.
+- **A gate and a wait on something outside run side by side.** In the real run, a QA phase's `baton await` on CI
+  replaced its running `baton verify --here` suite, and queuing the suite again replaced the CI watch: of the
+  run's 16 replacements, 4 ran the same check again and 12 swapped one check for another, and phases took to
+  gluing gates into one command. A phase now runs one `verify` and one `await` at a time, and neither stops the
+  other. `baton done` waits for both and is refused while either is red; the phase is done once both passed, and
+  reopens on the first red. The same command again replaces the one of its kind that runs, as before; another is
+  refused, naming the job that runs (`refused`, why "another check runs"), unless the model adds `--replace`.
+  `job_queued` gains `beside` and `replace`, `phase_verifying` and `idle_on_job` gain `beside`, and the board,
+  `baton status` and the briefs show both jobs.
+- **Nothing slow runs under a lock.** A hook timed out on the run's lock 4 times since 2026-10-10, and failed
+  open. Every update under a store lock was audited: the transcript reads, git commands, machine and process
+  reads, and copies of a plan's record found there now run before the lock or after it, with the state change
+  alone under it. A plan's record that cannot be kept is logged (`plan_not_archived`).
+- **The question about a plan approved mid-run is the plan question.** "Replan" now names the new feature, so
+  that question's events are renamed outright: `replan_asked`, `replan_held`, `replan_resolved` and
+  `replan_waits` are now `plan_question_asked`, `plan_question_held`, `plan_question_resolved` and
+  `plan_question_waits`. A v0.8.4 state file with that question pending loses it, and the question lapses as an
+  unanswered one does.
+
+### Fixed
+- **A plan of one phase attaches.** An approved plan with a single `## P0 — …` heading was not attached, with a
+  message saying it had no phase headings. It now attaches and runs, and the competing-instructions check covers
+  it.
+- **A plan that quotes its own headings attaches.** The plan for this release failed to attach at approval: its
+  decisions quoted the standing-rules heading, so that anchor occurred twice. Every anchor (each phase's, the
+  standing rules', the end section's) is now made to occur once: the heading line, else the heading with its line
+  end, else with the lines after it. Headings in fenced code are passed over.
+- **The compaction is asked for between turns.** At every boundary, baton's mod asked Claude Code to compact while
+  the lead's turn was still ending, was declined ("call it from turn.complete or later"), and asked again a few
+  seconds later: 15 times in the 13 hours of the real run. The mod now holds such a compaction and runs it from
+  the lead's `turn.complete`, where Claude Code takes it (spike 37), so the boundary logs no `compact_declined`.
+  Past 30 seconds, the host's retry after the turn stays the fallback.
+- **`baton clean` leaves your own daemons alone.** It listed a gpg-agent that a hosted shell had started, and that
+  so carried baton's variables, as "left by a session that is gone: kill". A leftover process is now stopped only
+  under baton's home, listed only when it works in the project, a worktree on record or a lane, and left alone
+  anywhere else.
+
 ## [0.8.4] - 2026-10-15
 
 v0.8.3 made baton wait on you only where you chose it or where nothing in baton can answer. Going through
@@ -1019,7 +1128,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/ozzyfromspace/baton/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/ozzyfromspace/baton/compare/v0.8.1...v0.8.2
