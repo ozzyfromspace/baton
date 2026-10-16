@@ -12,8 +12,10 @@ func TestWaitWords(t *testing.T) {
 	for _, c := range []struct {
 		name, got, want string
 	}{
-		{"the session waits on its gate", GateWait("P4 (Gates)", gate),
+		{"the session waits on its gate", GateWait("P4 (Gates)", []state.Job{gate}),
 			"baton: P4 (Gates) waits on job j3 (`make e2e`) — nothing is needed from you: Claude is given its result when it ends"},
+		{"the session waits on its gate and a wait outside", GateWait("P4 (Gates)", []state.Job{gate, {ID: "j4", Phase: "P4", Kind: state.JobAwait, Command: "gh run watch 7 --exit-status"}}),
+			"baton: P4 (Gates) waits on jobs j3 (`make e2e`) and j4 (`gh run watch 7 --exit-status`) — nothing is needed from you: Claude is given each result when it ends"},
 		{"no phase until a job ends", NoPhaseYet("job j1 (`make test`, P0)", nil),
 			"baton: no phase can start until job j1 (`make test`, P0) finishes — nothing is needed from you: baton takes the next one up then"},
 		{"no phase while a gate runs here", NoPhaseYet("job j3 (`make e2e`, P4)", &gate),

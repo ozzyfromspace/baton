@@ -234,12 +234,17 @@ func VerifiedComplete(ds []state.Decision) string {
 	return "[baton] That verification was the last thing the plan waited for: the plan is complete. " + PlanComplete(ds)
 }
 
-// RedRefusal turns down done for a phase whose latest verification is red, and gives the ways forward.
+// RedRefusal turns down done for a phase that stands on a red job j (its latest gate, or its latest wait
+// on something outside), and gives the ways forward.
 func RedRefusal(j state.Job) string {
-	return fmt.Sprintf("not done — %s's latest verification, job %s (%s), %s. "+
-		"Fix what failed, commit, and verify again (`baton verify`); `baton done %s` then waits for it. "+
+	what, again := "verification", "verify again (`baton verify`)"
+	if j.Kind == state.JobAwait {
+		what, again = "wait on something outside", "wait on it again (`baton await`, the same command)"
+	}
+	return fmt.Sprintf("not done — %s's latest %s, job %s (%s), %s. "+
+		"Fix what failed, commit, and %s; `baton done %s` then waits for it. "+
 		"If the failure is not %s's to fix, finish it anyway with `baton done %s --despite-red \"<why>\"`: "+
-		"that is a decision without the human, and they are told.", j.Phase, j.ID, Ran(j), Outcome(j), j.Phase, j.Phase, j.Phase)
+		"that is a decision without the human, and they are told.", j.Phase, what, j.ID, Ran(j), Outcome(j), again, j.Phase, j.Phase, j.Phase)
 }
 
 func plural(n int, one, many string) string {

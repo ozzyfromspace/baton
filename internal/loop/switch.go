@@ -3,6 +3,7 @@ package loop
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -10,24 +11,23 @@ import (
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// switching moves an idle session off a phase that waits on its job, and calls off a switch the job beat.
+// switching moves an idle session off a phase that waits on its jobs, and calls off a switch the jobs beat.
 //
-// Once the job has run for SwitchAfter (sooner for a command known to take that long: state.SwitchAfter)
+// Once one has run for SwitchAfter (sooner for a command known to take that long: state.SwitchAfter)
 // and the session sits idle on it, the phase is set aside for the next phase that can go on
 // (state.Switch), and the compaction that queues is typed like any other. Never with the phase's work
 // uncommitted: it would sit in the checkout while another phase works there, and the phase, resumed,
-// would take it for work it found. A switch whose job ends before its compaction is typed is called off
-// (state.Unswitch), and the result is given in place. It returns the state as it left it.
+// would take it for work it found. A switch whose phase waits on its jobs no more before its compaction
+// is typed is called off (state.Unswitch), and the results are given in place. It returns the state as it left it.
 func (l *Loop) switching(v host.View, st state.State) state.State {
 	if sw := st.Run.Compaction.Switch; sw != nil && st.Run.Compaction.Status == state.CompactQueued {
-		if j := st.Job(sw.Job); j == nil || j.Finished() {
+		if !st.HeldOn(sw.From) {
 			return l.unswitch(st)
 		}
 		return st
 	}
-	j := st.CurrentJob()
-	// The wait is measured on the wall clock: the job's runner outlives a restarted host.
-	if j == nil || !l.idle(v, st) || !state.Switchable(st) || v.Now.Sub(j.Queued) < state.SwitchAfter(st, *j, l.Timing.SwitchAfter) {
+	j, long := l.longWait(v, st.CurrentJobs(), st)
+	if !long || !l.idle(v, st) || !state.Switchable(st) {
 		return st
 	}
 	if v.Now.Before(l.switchNext) {
@@ -91,6 +91,18 @@ func (l *Loop) switching(v host.View, st state.State) state.State {
 	return nst
 }
 
+// longWait is the job of jobs, the phase in hand's, that has run for its SwitchAfter, and whether there is
+// one: the phase waits on all its jobs, so one that runs long makes the wait long. The wait is measured on
+// the wall clock: a job's runner outlives a restarted host.
+func (l *Loop) longWait(v host.View, jobs []state.Job, st state.State) (state.Job, bool) {
+	for _, j := range jobs {
+		if v.Now.Sub(j.Queued) >= state.SwitchAfter(st, j, l.Timing.SwitchAfter) {
+			return j, true
+		}
+	}
+	return state.Job{}, false
+}
+
 // switchRecheck is how soon a switch held by uncommitted work is looked at again.
 const switchRecheck = 30 * time.Second
 
@@ -102,16 +114,18 @@ func (l *Loop) idle(v host.View, st state.State) bool {
 	return !open && !l.dialogHolds(st)
 }
 
-// unswitch calls off a switch whose job ended before its compaction was typed. The human was to be told
-// of the switch with the next hook; if they have not been yet, they never are.
+// unswitch calls off a switch whose phase waits on its jobs no more (state.HeldOn) before its compaction
+// was typed. The human was to be told of the switch with the next hook; if they have not been yet, they
+// never are.
 func (l *Loop) unswitch(st state.State) state.State {
 	var sw state.Switched
 	var ok bool
 	var status string
 	nst, err := l.Store.Update(func(st *state.State) error {
-		line := ""
+		line, ended := "", ""
 		if x := st.Run.Compaction.Switch; x != nil {
 			line = switchLine(*st, *x)
+			ended = endedJobs(st.WaitsOn(x.From))
 		}
 		if sw, ok = state.Unswitch(st); !ok {
 			return nil
@@ -122,7 +136,7 @@ func (l *Loop) unswitch(st state.State) state.State {
 		if i := slices.Index(st.Run.Announce, line); i >= 0 {
 			st.Run.Announce = slices.Delete(st.Run.Announce, i, i+1)
 		} else {
-			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: job %s ended before the switch → %s goes on, and %s waits", sw.Job, sw.From, sw.To))
+			st.Run.Announce = append(st.Run.Announce, fmt.Sprintf("baton: %s ended before the switch → %s goes on, and %s waits", ended, sw.From, sw.To))
 		}
 		return nil
 	})
@@ -138,12 +152,39 @@ func (l *Loop) unswitch(st state.State) state.State {
 
 // switchLine tells the human about a switch.
 func switchLine(st state.State, sw state.Switched) string {
-	cmd, verb := "", "starts"
-	if j := st.Job(sw.Job); j != nil {
-		cmd = " (`" + j.Command + "`)"
-	}
+	verb := "starts"
 	if ps := st.Phases[sw.To]; ps != nil && ps.Status == state.PhaseParked {
 		verb = "resumes"
 	}
-	return fmt.Sprintf("baton: %s waits on job %s%s → set aside; compacting, then %s %s, and %s resumes once the job ends", sw.From, sw.Job, cmd, sw.To, verb, sw.From)
+	jobs := st.WaitsOn(sw.From)
+	if len(jobs) < 2 {
+		cmd := ""
+		if j := st.Job(sw.Job); j != nil {
+			cmd = " (`" + j.Command + "`)"
+		}
+		return fmt.Sprintf("baton: %s waits on job %s%s → set aside; compacting, then %s %s, and %s resumes once the job ends", sw.From, sw.Job, cmd, sw.To, verb, sw.From)
+	}
+	var names []string
+	for _, j := range jobs {
+		names = append(names, fmt.Sprintf("%s (`%s`)", j.ID, j.Command))
+	}
+	return fmt.Sprintf("baton: %s waits on jobs %s → set aside; compacting, then %s %s, and %s resumes once they have passed, or one has not",
+		sw.From, strings.Join(names, " and "), sw.To, verb, sw.From)
+}
+
+// endedJobs names the jobs of jobs that have ended: "job j4", "jobs j4 and j5".
+func endedJobs(jobs []state.Job) string {
+	var ended []string
+	for _, j := range jobs {
+		if j.Finished() {
+			ended = append(ended, j.ID)
+		}
+	}
+	if len(ended) == 1 {
+		return "job " + ended[0]
+	}
+	if len(ended) == 0 {
+		return "its job"
+	}
+	return "jobs " + strings.Join(ended, " and ")
 }

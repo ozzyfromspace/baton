@@ -38,6 +38,7 @@ type Stand struct {
 	Kind  string    `json:"kind"`
 	Since time.Time `json:"since,omitzero"` // since when it has stood so, where that says something
 	Job   string    `json:"job,omitempty"`  // the job it waits on
+	Also  string    `json:"also,omitempty"` // the job of the other kind it waits on beside Job
 	// Waits are the phases it waits on; Why is what it needs of the human, or why it is held back, set
 	// aside, suspended or waits to land.
 	Waits []string `json:"waits,omitempty"`
@@ -113,7 +114,10 @@ func (s Stand) Band(id string, now time.Time) string {
 // "waits on P3 and P4", "needs you: blocked: the signing key is gone".
 func (s Stand) Board(now time.Time) string {
 	job := ""
-	if s.Job != "" {
+	switch {
+	case s.Job != "" && s.Also != "":
+		job = "(jobs " + s.Job + " and " + s.Also + ")"
+	case s.Job != "":
 		job = "(job " + s.Job + ")"
 	}
 	switch s.Kind {

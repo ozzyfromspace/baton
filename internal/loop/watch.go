@@ -55,8 +55,8 @@ func (l *Loop) watch(v host.View, st state.State, in host.Injector) {
 		l.idleNudged = time.Time{}
 		return
 	}
-	if st.CurrentJob() != nil {
-		// The phase in hand waits on its job, which ends by itself: its result wakes the session, unless
+	if len(st.CurrentJobs()) > 0 {
+		// The phase in hand waits on its jobs, which end by themselves: each result wakes the session, unless
 		// baton switches it to another phase first. Nothing is stalled.
 		l.idleNudged = time.Time{}
 		return
