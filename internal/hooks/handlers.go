@@ -294,6 +294,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			return Result{}, nil // operators or redirections: Claude Code's usual permission checks apply
 		}
 	}
+	if res, refused := h.backgroundCheck(c); refused {
+		return res, nil
+	}
 	var hold string
 	var refuseQuestion string
 	var pending []issued
@@ -1321,7 +1324,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		if c.Event == "PostToolUse" {
 			owed = takeBriefing(c, st) // a compaction's brief the conversation went on without
 			w := words(c, s)
-			bgTell, bg = tellBackground(st, c.Input, w)
+			bgTell, bg = tellBackground(st, c, w)
 			switch {
 			case tool == "ExitPlanMode" && s.Worker() != "":
 				v = workerPlan(s.Worker(), approvedFile(c.Input))
@@ -1372,7 +1375,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		s.Event(e.kind, e.fields)
 	}
 	if bgTell != "" {
-		s.Event("background_told", map[string]any{"phase": st.Current, "task": bg.id, "tool": bg.tool, "via": "start"})
+		s.Event("background_told", bg.told(st.Current))
 	}
 	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil && waits == "" && bgTell == "" {
 		return Result{}, nil
@@ -1694,15 +1697,16 @@ func (h *handlers) phaseAgent(c Context) (*state.Store, error) {
 	return s, nil
 }
 
-// recordStop notes what every Stop tells us; the decision about the stop is made in stop.go.
-func recordStop(st *state.State, c Context, others []string) {
+// recordStop notes what every Stop tells us, and returns the told background work it found ended; the
+// decision about the stop is made in stop.go.
+func recordStop(st *state.State, c Context, others []string) (ended []state.TaskEnded) {
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
 	st.Run.ToolsEnded("")
 	// Claude Code reports every background task of the session, whoever started it: the work another loop
 	// of the run was told of as it started (others, Store.OthersTold) is that loop's.
 	own := slices.DeleteFunc(tasks(c.Input["background_tasks"]), func(t state.Task) bool { return slices.Contains(others, t.ID) })
-	st.Run.SetBackground(own, c.Now)
+	ended = st.Run.SetBackground(own, c.Now)
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
@@ -1716,6 +1720,7 @@ func recordStop(st *state.State, c Context, others []string) {
 	} else {
 		st.Run.Crons = 0
 	}
+	return ended
 }
 
 // readRefusal reads a transcript for the refusal that ended its last turn (a variable, so a test can make it

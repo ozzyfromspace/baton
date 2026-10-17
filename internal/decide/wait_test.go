@@ -13,13 +13,13 @@ func TestWaitWords(t *testing.T) {
 		name, got, want string
 	}{
 		{"the session waits on its gate", GateWait("P4 (Gates)", []state.Job{gate}),
-			"baton: P4 (Gates) waits on job j3 (`make e2e`) — nothing is needed from you: Claude is given its result when it ends"},
+			"baton: P4 (Gates) waits on job j3 (`make e2e`) — baton needs nothing from you for this wait: Claude is given its result when it ends"},
 		{"the session waits on its gate and a wait outside", GateWait("P4 (Gates)", []state.Job{gate, {ID: "j4", Phase: "P4", Kind: state.JobAwait, Command: "gh run watch 7 --exit-status"}}),
-			"baton: P4 (Gates) waits on jobs j3 (`make e2e`) and j4 (`gh run watch 7 --exit-status`) — nothing is needed from you: Claude is given each result when it ends"},
+			"baton: P4 (Gates) waits on jobs j3 (`make e2e`) and j4 (`gh run watch 7 --exit-status`) — baton needs nothing from you for this wait: Claude is given each result when it ends"},
 		{"no phase until a job ends", NoPhaseYet("job j1 (`make test`, P0)", nil),
-			"baton: no phase can start until job j1 (`make test`, P0) finishes — nothing is needed from you: baton takes the next one up then"},
+			"baton: no phase can start until job j1 (`make test`, P0) finishes — baton needs nothing from you for this wait: it takes the next one up then"},
 		{"no phase while a gate runs here", NoPhaseYet("job j3 (`make e2e`, P4)", &gate),
-			"baton: job j3 (`make e2e`, P4) runs its gate in this working tree, so no phase starts here until it ends — nothing is needed from you: baton takes the next one up then"},
+			"baton: job j3 (`make e2e`, P4) runs its gate in this working tree, so no phase starts here until it ends — baton needs nothing from you for this wait: it takes the next one up then"},
 		{"no phase and no job", NoPhaseYet("", nil), "baton: no phase can start yet; baton takes the next one up as soon as one can"},
 		{"a run that stopped moving", RunStalled(41*time.Minute, []string{"P3: agent between turns 41m", "P4: verifying 50m (job P4.j1), " + LogQuiet(35*time.Minute)}, "lead: idle, with no phase in hand"),
 			"the run has not moved for 41m — P3: agent between turns 41m; P4: verifying 50m (job P4.j1), its log has not grown for 35m; lead: idle, with no phase in hand. " +

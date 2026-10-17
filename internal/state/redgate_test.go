@@ -132,6 +132,9 @@ func TestARecordTakesTheFailedJobsLogs(t *testing.T) {
 		os.MkdirAll(filepath.Dir(s.JobLog(id)), 0o755)
 		os.WriteFile(s.JobLog(id), []byte(id+" output\n"), 0o644)
 	}
+	for _, id := range []string{"j2", "j3"} { // a red job's stages go with its log
+		os.WriteFile(s.JobStages(id), []byte(`{"name":"unit","status":"failed","exit":1}`+"\n"), 0o644)
+	}
 	rec, err := s.Record(st)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +148,7 @@ func TestARecordTakesTheFailedJobsLogs(t *testing.T) {
 	for _, e := range entries {
 		got = append(got, e.Name())
 	}
-	if want := []string{"j1.log", "j3.log", "j4.log"}; !slices.Equal(got, want) {
+	if want := []string{"j1.log", "j3.log", "j3.stages", "j4.log"}; !slices.Equal(got, want) {
 		t.Errorf("kept %v, want %v", got, want)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "jobs", "j3.log")); string(b) != "j3 output\n" {

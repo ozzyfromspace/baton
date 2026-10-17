@@ -131,7 +131,26 @@ func (s *Store) HandoffPath() string {
 }
 
 // JobLog is where job id's output goes.
-func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", id+".log") }
+func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", id+jobLogExt) }
+
+// JobStages is job id's stages file (lane.ReadStages), beside its log.
+func (s *Store) JobStages(id string) string { return filepath.Join(s.Dir, "jobs", id+jobStagesExt) }
+
+// The files a job keeps in jobs/: its log and its stages file.
+const (
+	jobLogExt    = ".log"
+	jobStagesExt = ".stages"
+)
+
+// JobFileID is the job whose file in jobs/ name is, or "" for a file no job keeps.
+func JobFileID(name string) string {
+	for _, ext := range []string{jobLogExt, jobStagesExt} {
+		if id, ok := strings.CutSuffix(name, ext); ok && id != "" {
+			return id
+		}
+	}
+	return ""
+}
 
 // withLock runs fn holding the run's lock (see withLockFile), logging what the lock tells it in the run's
 // events.
