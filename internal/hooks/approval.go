@@ -54,6 +54,7 @@ func approved(st *state.State, s *state.Store, c Context, file string, fresh boo
 		return valveAction{event: "plan_not_attached", fields: map[string]any{"plan": file, "why": "no phase headings"},
 			say: "baton: plan approved — not attached, as it has no phase headings like `## P0 — …` (/baton run attaches it anyway)"}
 	}
+	spec.Root = s.Root // where its record file, if it names one, is checked
 	pl, err := plan.Build(file, doc, spec)
 	if err != nil {
 		first := strings.SplitN(err.Error(), "\n", 2)[0]
@@ -280,7 +281,9 @@ func answeredPlanQuestion(st *state.State, s *state.Store, c Context, w decide.W
 		doc, err := os.ReadFile(r.File)
 		var pl plan.Plan
 		if err == nil {
-			pl, err = plan.Build(r.File, doc, plan.Suggest(doc))
+			spec := plan.Suggest(doc)
+			spec.Root = s.Root
+			pl, err = plan.Build(r.File, doc, spec)
 		}
 		if err != nil {
 			first := strings.SplitN(err.Error(), "\n", 2)[0]
