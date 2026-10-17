@@ -34,6 +34,15 @@ func TestARedGateStandsUntilTheSameCommandPasses(t *testing.T) {
 		{"a passing gate, then another command", []Job{{ID: "j1", Phase: "P0", Command: "make test", Status: JobPassed},
 			{ID: "j2", Phase: "P0", Command: "make lint", Status: JobPassed}}, []string{"j2"}, "", nil},
 		{"another phase's gate", []Job{red, {ID: "j2", Phase: "P1", Command: "make lint", Status: JobPassed}}, []string{"j1"}, "j1", []string{"j1"}},
+		// verify --failed: the red gate's command on what failed alone, which takes over from it.
+		{"a rerun passed", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobPassed}}, []string{"j2"}, "", nil},
+		{"a rerun failed", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobFailed}}, []string{"j2"}, "j2", []string{"j2"}},
+		{"a rerun runs", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobRunning}}, []string{"j2"}, "j1", nil},
+		{"a rerun was stopped", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobInterrupted}}, []string{"j1"}, "j1", []string{"j1"}},
+		{"a rerun by its record alone", []Job{red, {ID: "j2", Phase: "P0", Command: "make test-all", Reruns: "j1", Status: JobPassed}}, []string{"j2"}, "", nil},
+		{"a rerun of another red", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Reruns: "j9", Status: JobPassed}}, []string{"j1"}, "j1", []string{"j1"}},
+		{"a red rerun, then a narrower gate passed", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobFailed},
+			{ID: "j3", Phase: "P0", Command: "go test -run X ./x", Status: JobPassed}}, []string{"j2"}, "j2", []string{"j2"}},
 		{"beside a wait outside, waited on again", []Job{red, {ID: "j2", Phase: "P0", Kind: JobAwait, Command: "gh run watch 1", Status: JobFailed},
 			{ID: "j3", Phase: "P0", Kind: JobAwait, Command: "gh run watch 2", Status: JobPassed}}, []string{"j1", "j3"}, "j1", []string{"j1"}},
 	} {
@@ -83,6 +92,10 @@ func TestTheRecordNeverForgetsARedGate(t *testing.T) {
 		{"an old red that would stand again", []Job{{ID: "j1", Phase: "P0", Command: "make test", Status: JobFailed},
 			{ID: "j2", Phase: "P0", Command: "make lint", Status: JobFailed}, {ID: "j3", Phase: "P0", Command: "make test", Status: JobPassed}}, "j2", []string{"j2"}},
 		{"a passing gate its phase stands on", []Job{{ID: "j1", Phase: "P0", Command: "make test", Status: JobPassed}}, "j1", nil},
+		{"a red a rerun cleared", []Job{{ID: "j1", Phase: "P0", Command: "make test", Status: JobFailed},
+			{ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobPassed}}, "j1", []string{"j1"}},
+		{"a red gate a stopped rerun left standing", []Job{{ID: "j1", Phase: "P0", Command: "make test", Status: JobFailed},
+			{ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobInterrupted}}, "j2", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := State{Jobs: slices.Clone(c.jobs)}
