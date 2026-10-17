@@ -57,7 +57,7 @@ func TestPhaseIDsAreAgentNames(t *testing.T) {
 // does not build. An id the plan had already passes as it is (one attached before baton checked names),
 // in a replan's draft and in a plan file baton follows.
 func TestARedraftsIDsAreAgentNames(t *testing.T) {
-	doc := string(fixture(t, "phase-letters.md"))
+	doc := lf(fixture(t, "phase-letters.md")) // git may check a fixture out with CRLF (Windows)
 	old, err := Build("letters.md", []byte(doc), Suggest([]byte(doc)))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestARedraftsIDsAreAgentNames(t *testing.T) {
 	}
 
 	// A plan of bold bullets keeps the ids it was given, and one of them has a dot.
-	bullets := string(fixture(t, "bold-bullets.md"))
+	bullets := lf(fixture(t, "bold-bullets.md"))
 	legacy, err := Build("bullets.md", []byte(bullets), Suggest([]byte(bullets)))
 	if err != nil {
 		t.Fatal(err)
@@ -101,3 +101,6 @@ func TestNamed(t *testing.T) {
 		}
 	}
 }
+
+// lf is a fixture with LF line ends, for edits that name a line end.
+func lf(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }

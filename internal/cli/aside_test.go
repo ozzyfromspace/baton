@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -97,7 +98,7 @@ func TestAttachMovesThePlanModeFileAside(t *testing.T) {
 			if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
 				t.Fatalf("the plan-mode file is still there: %v", err)
 			}
-			for _, want := range []string{`"kind":"attached"`, `"plan":"` + moved + `"`, `"kind":"plan_moved"`, `"by":"attach"`} {
+			for _, want := range []string{`"kind":"attached"`, `"plan":` + jsonString(moved), `"kind":"plan_moved"`, `"by":"attach"`} {
 				if !strings.Contains(string(events), want) {
 					t.Errorf("events lack %s:\n%s", want, events)
 				}
@@ -139,4 +140,10 @@ func TestAMovedPlansRunIsCarriedOn(t *testing.T) {
 			}
 		})
 	}
+}
+
+// jsonString is s as events.jsonl writes it (a Windows path's backslashes escaped).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
