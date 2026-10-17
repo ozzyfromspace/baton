@@ -18,6 +18,8 @@ Phase R1, from the plan:
 
 Add people to a household.
 
+Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, then rerun only what failed (`baton verify --failed`), never the whole suite again. A long gate is a script committed in the repo, built from `baton stage <name> -- <command>` steps so it streams every stage, and runs through `baton verify`, never a background shell. When a gate fails on its environment rather than the change (a port in use, a daemon down), record what it needs with `baton env "<what it needs>"`, so every phase sees it.
+
 Notes left by the phases R1 builds on (most recent last):
 
 ## P0 — 2026-10-04 12:00

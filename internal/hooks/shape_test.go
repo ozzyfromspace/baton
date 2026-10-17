@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -36,15 +37,15 @@ func TestAMostlyChainPlanIsAskedAboutItsShapeOnce(t *testing.T) {
 	f := newFixture(t, false)
 	doc := chainDoc(7)
 	d, why, shown := f.exitPlan("/plans/road.md", doc)
-	if d != "deny" || !strings.HasPrefix(why, decide.CompetingDirectives()+"\n\n[baton] Check this plan's shape too.") ||
+	if d != "deny" || !strings.HasPrefix(why, gatesAsked(t, doc)+"\n\n[baton] Check this plan's shape too.") ||
 		!strings.Contains(why, "Of its 7 phases, 7 form one chain, each waiting for the one before it: P0 → P1 → P2 → P3 → P4 → P5 → P6.") ||
 		!strings.Contains(why, decide.ShapeRules) || !strings.Contains(why, "call ExitPlanMode again with the phases as they are") {
 		t.Fatalf("first call: %q\n%s", d, why)
 	}
-	if !strings.Contains(shown, "and checks its longest chain (7 of 7 phases) against baton's shape rules") {
+	if !strings.Contains(shown, ", its gates and QA phases against baton's gate rules, and its longest chain (7 of 7 phases) against baton's shape rules") {
 		t.Errorf("showed %q", shown)
 	}
-	if !f.logged("directives_asked", map[string]any{"plan": "/plans/road.md", "phases": 7.0, "longest_chain": 7.0, "width": 1.0, "shape_flagged": true}) {
+	if !f.logged("directives_asked", map[string]any{"plan": "/plans/road.md", "phases": 7.0, "longest_chain": 7.0, "width": 1.0, "shape_flagged": true, "gates": true, "qa_phases": 0.0}) {
 		t.Errorf("events:\n%s", f.eventLog())
 	}
 	// Resubmitted unchanged, it goes to the human, with its shape.
@@ -68,7 +69,7 @@ func TestAMostlyChainPlanIsAskedAboutItsShapeOnce(t *testing.T) {
 func TestAPlansShapeWithoutTheShapeCheck(t *testing.T) {
 	f := newFixture(t, false)
 	d, why, shown := f.exitPlan("/plans/a.md", approvedDoc)
-	if d != "deny" || why != decide.CompetingDirectives() || strings.Contains(shown, "shape") {
+	if d != "deny" || why != gatesAsked(t, approvedDoc) || strings.Contains(shown, "shape") {
 		t.Fatalf("first call: %q %q, showed %q", d, why, shown)
 	}
 	if !f.logged("directives_asked", map[string]any{"plan": "/plans/a.md", "phases": 2.0, "longest_chain": 2.0, "width": 1.0, "shape_flagged": false}) {
@@ -104,10 +105,11 @@ func TestAPlansShapeWithoutTheShapeCheck(t *testing.T) {
 	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || !strings.Contains(why, "could not attach this plan as written") {
 		t.Errorf("a plan that does not build: %q\n%s", d, why)
 	}
-	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || why != decide.CompetingDirectives() {
+	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || why != decide.CompetingDirectives()+"\n\n"+decide.GateCheck(plan.Plan{}) {
 		t.Errorf("a plan that does not build: %q\n%s", d, why)
 	}
-	if !f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md"}) || f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "shape_flagged": false}) {
+	if !f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "gates": true}) || f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "shape_flagged": false}) ||
+		f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "qa_phases": 0.0}) {
 		t.Errorf("events:\n%s", f.eventLog())
 	}
 	if d, _, shown := f.exitPlan("/plans/broken.md", broken); d == "deny" || shown != "" {
