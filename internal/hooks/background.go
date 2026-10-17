@@ -2,17 +2,23 @@ package hooks
 
 import (
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // bgStart is background work of the model's own that a tool call started: its task's id (the id a Stop's
-// background_tasks gives it), the tool, and what names it.
+// background_tasks gives it), the tool, what names it to the model, and, for the record, the command and
+// the description the call gave.
 type bgStart struct {
-	id, tool, what string
-	monitor        bool // a Monitor, which wakes the model with what it reports
+	id, tool, what       string
+	command, description string
+	monitor              bool // a Monitor, which wakes the model with what it reports
 }
+
+// recordClip is how much of a background task's command and description its record keeps.
+const recordClip = 200
 
 // backgroundStarted is the background work a tool call's result says it started
 // (docs/research/parallel.md): a Monitor's task (tool_response.taskId), a command run in the background or
@@ -36,6 +42,7 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 		return bgStart{}, false
 	}
 	ti, _ := in["tool_input"].(map[string]any)
+	b.command, b.description = clip(str(ti, "command"), recordClip), clip(str(ti, "description"), recordClip)
 	for _, k := range []string{"description", "command"} {
 		if b.what = clipWhat(str(ti, k)); b.what != "" {
 			break
@@ -47,23 +54,55 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 	return b, true
 }
 
+// told is the record of background work told at its start (background_told): in phase, its task, the tool
+// that started it, and the command and description the call gave, each clipped to recordClip characters.
+func (b bgStart) told(phase string) map[string]any {
+	f := map[string]any{"phase": phase, "task": b.id, "tool": b.tool, "via": "start"}
+	if b.command != "" {
+		f["command"] = b.command
+	}
+	if b.description != "" {
+		f["description"] = b.description
+	}
+	return f
+}
+
 // tellBackground tells the model, with the result of the tool call that started it, of background work of
 // its own while its plan runs: what a stop on that work would be refused with (decide.BackgroundStarted),
 // said before the stop, so the stop is allowed (decideStop's idle_on_background). The work is recorded as
-// told (state.Runtime.Tell); text is "" for a call that started none, or work told already.
-func tellBackground(st *state.State, in map[string]any, w decide.Words) (text string, b bgStart) {
-	b, ok := backgroundStarted(in)
-	if !ok || st.Mode != state.ModeRunning || !st.Run.Tell(b.id) {
+// told at c.Now (state.Runtime.Tell); text is "" for a call that started none, or work told already.
+func tellBackground(st *state.State, c Context, w decide.Words) (text string, b bgStart) {
+	b, ok := backgroundStarted(c.Input)
+	if !ok || st.Mode != state.ModeRunning || !st.Run.Tell(b.id, c.Now) {
 		return "", bgStart{}
 	}
 	return w.BackgroundStarted(b.what, b.monitor), b
 }
 
+// backgroundEnded is the record of the told background work a stop found ended in phase (recordStop): no
+// hook reports a task's end (spike 19), so a task gone from a Stop's background_tasks ended by then. Each is
+// a background_ended with how long it ran from when the model was told of it, in whole seconds (none when
+// that was not recorded).
+func backgroundEnded(phase string, ended []state.TaskEnded, now time.Time) []event {
+	var out []event
+	for _, e := range ended {
+		f := map[string]any{"phase": phase, "task": e.ID}
+		if !e.Told.IsZero() {
+			f["seconds"] = int(max(now.Sub(e.Told), 0).Seconds())
+		}
+		out = append(out, event{kind: "background_ended", fields: f})
+	}
+	return out
+}
+
 // clipWhat is s on one line, at most 80 characters: a command can be long.
-func clipWhat(s string) string {
+func clipWhat(s string) string { return clip(s, 80) }
+
+// clip is s on one line, at most n characters.
+func clip(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 80 {
-		s = strings.TrimSpace(string(r[:79])) + "…"
+	if r := []rune(s); len(r) > n {
+		s = strings.TrimSpace(string(r[:n-1])) + "…"
 	}
 	return s
 }

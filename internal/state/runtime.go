@@ -48,6 +48,10 @@ type Runtime struct {
 	// baton did not see. A stop on that work is allowed. The ids of work no Stop reports any more are
 	// forgotten (SetBackground).
 	BackgroundTold []string `json:"background_told,omitempty"`
+	// BackgroundToldAt is when the model was told of each piece of work in BackgroundTold, by its id: no
+	// hook reports a task's end (spike 19), so the record of a Stop that no longer lists it says how long
+	// it ran from there (SetBackground).
+	BackgroundToldAt map[string]time.Time `json:"background_told_at,omitempty"`
 	// Monitors are the task ids of the Monitor watchers the session armed (PostToolUse(Monitor)
 	// tool_response.taskId), while they still run. Claude Code reports a Monitor at Stop as type "shell",
 	// like a background command, so its id is the only way to tell the two apart (spike 19).
@@ -574,13 +578,27 @@ func (r Runtime) Untold(bg []Task) bool {
 	return slices.ContainsFunc(bg, func(t Task) bool { return !slices.Contains(r.BackgroundTold, t.ID) })
 }
 
-// Tell records that the model has been told of background work id, and reports whether that was news.
-func (r *Runtime) Tell(id string) bool {
+// Tell records that the model has been told of background work id at at, and reports whether that was
+// news.
+func (r *Runtime) Tell(id string, at time.Time) bool {
 	if id == "" || slices.Contains(r.BackgroundTold, id) {
 		return false
 	}
 	r.BackgroundTold = append(r.BackgroundTold, id)
+	if !at.IsZero() {
+		if r.BackgroundToldAt == nil {
+			r.BackgroundToldAt = map[string]time.Time{}
+		}
+		r.BackgroundToldAt[id] = at
+	}
 	return true
+}
+
+// TaskEnded is background work the model was told of that a Stop no longer reports: its id, and when the
+// model was told of it (zero when that was not recorded, as by a baton before v0.8.7).
+type TaskEnded struct {
+	ID   string
+	Told time.Time
 }
 
 // Oldest is when the longest-running of tasks was first reported (zero for none).
@@ -615,8 +633,9 @@ func (r *Runtime) Watch(id string) {
 
 // SetBackground records the background work a Stop reported at now, keeping when each task was first
 // reported, and forgets the Monitors and the work told about that have ended: the PostToolUse of the call
-// that started a task always comes before the Stop of its turn, so one missing from the list is gone.
-func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
+// that started a task always comes before the Stop of its turn, so one missing from the list is gone. It
+// returns the told work that ended, in the order it was told.
+func (r *Runtime) SetBackground(tasks []Task, now time.Time) (ended []TaskEnded) {
 	for i := range tasks {
 		tasks[i].Since = now
 		if j := slices.IndexFunc(r.Background, func(t Task) bool { return t.ID == tasks[i].ID }); j >= 0 && !r.Background[j].Since.IsZero() {
@@ -626,7 +645,17 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) {
 	r.Background = tasks
 	gone := func(id string) bool { return !slices.ContainsFunc(tasks, func(t Task) bool { return t.ID == id }) }
 	r.Monitors = slices.DeleteFunc(r.Monitors, gone)
+	for _, id := range r.BackgroundTold {
+		if gone(id) {
+			ended = append(ended, TaskEnded{ID: id, Told: r.BackgroundToldAt[id]})
+			delete(r.BackgroundToldAt, id)
+		}
+	}
 	r.BackgroundTold = slices.DeleteFunc(r.BackgroundTold, gone)
+	if len(r.BackgroundToldAt) == 0 {
+		r.BackgroundToldAt = nil
+	}
+	return ended
 }
 
 // Spawning is the call baton's mod makes in the lead's session to start the phase agent on Phase: the Agent
