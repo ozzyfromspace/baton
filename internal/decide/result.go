@@ -24,9 +24,10 @@ func Span(d time.Duration) string {
 	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
-// Outcome is how a job ended, after its duration: "passed after 12m", "failed (exit 1) after 12m".
+// Outcome is how a job ended, after its duration: "passed after 12m", "failed (exit 1) after 12m", and
+// "passed after 12m, 31m waiting for a lane" (tookFor).
 func Outcome(j state.Job) string {
-	took := " after " + Span(j.Took(j.Ended))
+	took := tookFor(j)
 	why := ""
 	if j.Reason != "" {
 		why = ": " + j.Reason
