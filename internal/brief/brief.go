@@ -52,6 +52,9 @@ type Input struct {
 	Again, Checkpointed bool
 	// Decisions is the run's decisions, its workers' too (Store.Decisions); nil: the state's own.
 	Decisions []state.Decision
+	// Facts is the run's environment facts (Store.Facts: a worker's sub-run keeps none of its own); nil:
+	// the state's own.
+	Facts []state.Fact
 }
 
 // Write returns the brief.
@@ -172,7 +175,7 @@ func Write(in Input) string {
 			fmt.Fprintf(&b, "(baton could not quote phase %s from the plan document: %v. Read %s directly.)\n\n", st.Current, err, pl.File)
 		}
 	}
-	if q := qaGuide(pl, st.Current, in.Words.AggregateQA); q != "" {
+	if q := qaGuide(pl, st.Current, in.Words); q != "" {
 		b.WriteString(q + "\n\n")
 	}
 	if park != nil && strings.TrimSpace(park.Notes) != "" {
@@ -183,6 +186,13 @@ func Write(in Input) string {
 	}
 	if red := decide.RedPhases(st.Red(), st.Current); red != "" {
 		b.WriteString(red + "\n\n")
+	}
+	facts := in.Facts
+	if facts == nil {
+		facts = st.Facts
+	}
+	if text := decide.EnvFacts(facts); text != "" {
+		b.WriteString(text + "\n\n")
 	}
 	switch notes := strings.TrimSpace(in.Handoff); {
 	case notes == "":
@@ -289,13 +299,19 @@ func tail(s string, n int) string {
 	return "…(earlier notes omitted)\n" + cut
 }
 
-// qaGuide says how phase id checks its work while the plan aggregates its heavy checks in QA phases (on):
-// a QA phase runs them, and a phase before one runs focused checks only. A plan with no QA phase after id
-// gets nothing: id checks itself as it ends, as it always has.
-func qaGuide(pl plan.Plan, id string, on bool) string {
+// qaGuide says, in short, how phase id checks its work. While the plan aggregates its heavy checks in QA
+// phases (w.AggregateQA), a QA phase is told it runs them (decide.QAPhase), and a phase before one that it
+// runs scoped checks only (decide.QAFocus). Every phase then gets the gate rules in short
+// (decide.GateHabits): one with no QA phase after it, or with the setting off, checks itself as it ends,
+// by the same rules.
+func qaGuide(pl plan.Plan, id string, w decide.Words) string {
 	i := pl.Index(id)
-	if !on || i < 0 {
+	if i < 0 {
 		return ""
+	}
+	habits := decide.GateHabits(w.Git)
+	if !w.AggregateQA {
+		return habits
 	}
 	if pl.Phases[i].QA() {
 		since := pl.SinceQA(id)
@@ -306,10 +322,10 @@ func qaGuide(pl plan.Plan, id string, on bool) string {
 		case n > 1:
 			names = strings.Join(since[:n-1], ", ") + " and " + since[n-1]
 		}
-		return decide.QAPhase(names)
+		return decide.QAPhase(names) + "\n\n" + habits
 	}
 	if qa := pl.NextQA(id); qa != nil {
-		return decide.QAFocus(qa.ID + " (" + qa.Title + ")")
+		return decide.QAFocus(qa.ID+" ("+qa.Title+")") + "\n\n" + habits
 	}
-	return ""
+	return habits
 }

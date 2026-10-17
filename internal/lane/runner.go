@@ -38,6 +38,9 @@ type Job struct {
 	// Commit is the commit to check out in a lane and run the command on. Without one, the command runs
 	// in the working tree itself, with no lane (a wait on something outside the project).
 	Commit string
+	// Stages is the job's stages file (EnvStages), and Rerun the red gate's that it reruns (EnvRerun): both
+	// given to its command, "" for none.
+	Stages, Rerun string
 	// Here runs the command in the working tree itself (the runner's WorkDir), on the commit checked out
 	// there (Commit, which nothing checks out): a gate that needs that tree. In the project's checkout it
 	// holds no lane. In a worktree of its own (a phase agent's), it holds one of the pool's lanes while it
@@ -53,7 +56,8 @@ type Result struct {
 	Exit   int           // the command's exit code; -1 when it did not exit by itself, or never ran
 	Lane   int           // the lane it ran in; 0 for none
 	Reason string        // why, when the status is not the command's own verdict
-	Took   time.Duration // how long the job ran while the machine was awake
+	Took   time.Duration // how long the job ran while the machine was awake, its wait for a lane included
+	Waited time.Duration // of Took, how long it waited for a lane
 }
 
 // Runner defaults.
@@ -66,8 +70,9 @@ const (
 
 // Runner runs one job: it holds a lane, checks the commit out, brings the lane up if this host has not,
 // and runs the command, every process in a group of its own. It beats every Tick, and stops the job when
-// it runs past Timeout, when the host stops beating for HostStale, when Beat says the job is no longer
-// wanted, or when ctx ends (a SIGTERM). A stopped job's lane is brought down.
+// it runs past Timeout, counted from when it got its lane (a wait for one is not running time), when the
+// host stops beating for HostStale, when Beat says the job is no longer wanted, or when ctx ends (a
+// SIGTERM). A stopped job's lane is brought down.
 type Runner struct {
 	Pool Pool
 	// WorkDir is where a job with no commit (await), or one run Here, runs: the working tree of the
@@ -75,7 +80,10 @@ type Runner struct {
 	WorkDir string
 	Host    string    // the baton host the job runs for: a lane is brought up once per host
 	Log     io.Writer // where every process's output goes, and the runner's own account; safe for concurrent use
-	Now     func() time.Time
+	// Output is where the job's command's output goes instead of Log (a writer that passes it on to Log,
+	// reading it as it goes); nil: Log. A lane's up and down write to Log.
+	Output io.Writer
+	Now    func() time.Time
 
 	Timeout   time.Duration
 	Tick      time.Duration
@@ -95,9 +103,14 @@ type Runner struct {
 	// (since: when it started to), with how many jobs that began to wait before it wait still (ahead), and
 	// when it stops waiting, with a lane or without (the zero time).
 	LaneWait func(since time.Time, slots, ahead int)
+	// Acquired is told when the job got its lane (at), whether it found one free or waited for it, and how
+	// long it waited while the machine was awake; lane 0 for a job that needs none, as its command begins.
+	// Its running time, and Timeout, count from then.
+	Acquired func(at time.Time, lane int, waited time.Duration)
 
-	ran, stale time.Duration
-	prev, host time.Time
+	ran, stale, waited time.Duration
+	held               bool // the job has its lane, or needs none: Timeout counts
+	prev, host         time.Time
 }
 
 func (r *Runner) defaults() {
@@ -133,24 +146,46 @@ func (r *Runner) Run(ctx context.Context, j Job) Result {
 		res = r.hereInSlot(ctx, j, dir)
 	case j.Here:
 		r.say("job %s: %s, on %s in %s, with no lane", j.ID, j.Command, short(j.Commit), dir)
-		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
+		r.got(0)
+		res = r.command(ctx, 0, dir, j.env(r.Pool.env(0, "", "")), shell(j.Command))
 	case j.Commit == "":
 		r.say("job %s: %s, in %s", j.ID, j.Command, dir)
-		res = r.command(ctx, 0, dir, r.Pool.env(0, "", ""), shell(j.Command))
+		r.got(0)
+		res = r.command(ctx, 0, dir, j.env(r.Pool.env(0, "", "")), shell(j.Command))
 	default:
 		res = r.inLane(ctx, j)
 	}
 	r.account()
-	res.Took = r.ran
+	res.Took, res.Waited = r.ran, r.waited
+	if !r.held { // it never got a lane: all of it was waiting
+		res.Waited = r.ran
+	}
+	took := (res.Took - res.Waited).Round(time.Second).String()
+	if w := res.Waited.Round(time.Second); w > 0 {
+		took += fmt.Sprintf(", %s waiting for a lane", w)
+	}
 	switch res.Status {
 	case Passed:
-		r.say("passed after %s", res.Took.Round(time.Second))
+		r.say("passed after %s", took)
 	case Failed:
-		r.say("failed (exit %d) after %s", res.Exit, res.Took.Round(time.Second))
+		r.say("failed (exit %d) after %s", res.Exit, took)
 	default:
-		r.say("%s after %s: %s", res.Status, res.Took.Round(time.Second), res.Reason)
+		r.say("%s after %s: %s", res.Status, took, res.Reason)
 	}
 	return res
+}
+
+// env is the environment of the job's command: env, a lane's, with the job's own variables of the gate
+// protocol.
+func (j Job) env(env []string) []string {
+	env = append(env, EnvJob+"="+j.ID)
+	if j.Stages != "" {
+		env = append(env, EnvStages+"="+j.Stages)
+	}
+	if j.Rerun != "" {
+		env = append(env, EnvRerun+"="+j.Rerun)
+	}
+	return env
 }
 
 // begin starts the clock, and takes the host's heartbeat as it stands as the one to see move on.
@@ -167,6 +202,9 @@ func (r *Runner) begin() {
 func (r *Runner) slot(ctx context.Context) (*Slot, *Result, error) {
 	n := r.Pool.Slots(ctx)
 	slot, err := r.Pool.TryAcquire(n)
+	if slot != nil {
+		r.got(slot.N)
+	}
 	if slot != nil || err != nil {
 		return slot, nil, err
 	}
@@ -191,7 +229,21 @@ func (r *Runner) slot(ctx context.Context) (*Slot, *Result, error) {
 		}
 		return nil, stop, nil
 	}
+	if slot != nil {
+		r.got(slot.N)
+		r.say("lane %d came free after %s", slot.N, r.waited.Round(time.Second))
+	}
 	return slot, nil, err
+}
+
+// got starts the job's running time, and Timeout's count with it: it holds lane n (0: it needs none),
+// having waited for it for as long as it has been at it so far.
+func (r *Runner) got(n int) {
+	_, now := r.account()
+	r.waited, r.held = r.ran, true
+	if r.Acquired != nil {
+		r.Acquired(now, n, r.waited)
+	}
 }
 
 // hereInSlot runs a gate Here in dir, a worktree outside the project's checkout, holding one of the
@@ -207,7 +259,7 @@ func (r *Runner) hereInSlot(ctx context.Context, j Job, dir string) Result {
 	}
 	defer slot.Release()
 	r.say("job %s: %s, on %s in %s, holding lane %d", j.ID, j.Command, short(j.Commit), dir, slot.N)
-	res := r.command(ctx, slot.N, dir, r.Pool.env(slot.N, dir, j.Commit), shell(j.Command))
+	res := r.command(ctx, slot.N, dir, j.env(r.Pool.env(slot.N, dir, j.Commit)), shell(j.Command))
 	res.Lane = slot.N
 	return res
 }
@@ -234,7 +286,7 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 
 	env, s := r.Pool.env(slot.N, slot.Dir, j.Commit), script(slot.Dir)
 	if s == "" {
-		res := r.command(ctx, slot.N, slot.Dir, env, shell(j.Command))
+		res := r.command(ctx, slot.N, slot.Dir, j.env(env), shell(j.Command))
 		return r.stopped(res, slot)
 	}
 	if by := r.Pool.upBy(slot.N); by == "" || by != r.Host {
@@ -248,7 +300,7 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 		}
 		for try := 1; ; try++ {
 			r.say("lane %d: %s up", slot.N, Script)
-			exit, stop, err := r.proc(ctx, slot.N, slot.Dir, env, []string{s, "up", slot.Dir})
+			exit, stop, err := r.proc(ctx, slot.N, slot.Dir, env, []string{s, "up", slot.Dir}, r.Log)
 			if stop != nil {
 				return r.stopped(*stop, slot)
 			}
@@ -266,7 +318,7 @@ func (r *Runner) inLane(ctx context.Context, j Job) Result {
 			r.say("lane %d: up failed (%s); trying once more", slot.N, exitText(exit, err))
 		}
 	}
-	res := r.command(ctx, slot.N, slot.Dir, env, []string{s, "run", slot.Dir, j.Command})
+	res := r.command(ctx, slot.N, slot.Dir, j.env(env), []string{s, "run", slot.Dir, j.Command})
 	return r.stopped(res, slot)
 }
 
@@ -290,9 +342,13 @@ func (r *Runner) stopped(res Result, slot *Slot) Result {
 	return res
 }
 
-// command runs the job's command and judges it by its exit code.
+// command runs the job's command, its output to Output, and judges it by its exit code.
 func (r *Runner) command(ctx context.Context, lane int, dir string, env, argv []string) Result {
-	exit, stop, err := r.proc(ctx, lane, dir, env, argv)
+	out := r.Output
+	if out == nil {
+		out = r.Log
+	}
+	exit, stop, err := r.proc(ctx, lane, dir, env, argv, out)
 	switch {
 	case stop != nil:
 		stop.Exit = exit
@@ -305,12 +361,12 @@ func (r *Runner) command(ctx context.Context, lane int, dir string, env, argv []
 	return Result{Status: Outcome(exit), Exit: exit}
 }
 
-// proc runs one process in a group of its own and waits for it under supervision. A process that is
-// stopped gets SIGTERM, and is killed with everything left in its group after Grace. Whatever the process
-// leaves running in its group is killed when it exits.
-func (r *Runner) proc(ctx context.Context, lane int, dir string, env, argv []string) (exit int, stop *Result, err error) {
+// proc runs one process in a group of its own, its output to out, and waits for it under supervision. A
+// process that is stopped gets SIGTERM, and is killed with everything left in its group after Grace.
+// Whatever the process leaves running in its group is killed when it exits.
+func (r *Runner) proc(ctx context.Context, lane int, dir string, env, argv []string, out io.Writer) (exit int, stop *Result, err error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, r.Log, r.Log
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, out, out
 	cmd.WaitDelay = r.Grace // a background child holding the output open cannot hold the job up
 	setGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -405,15 +461,24 @@ func (r *Runner) check() *Result {
 			return &Result{Status: Interrupted, Exit: -1, Reason: fmt.Sprintf("the baton host has not been heard from for %s", r.stale.Round(time.Second))}
 		}
 	}
-	if r.ran >= r.Timeout {
+	if r.held && r.ran-r.waited >= r.Timeout {
 		return &Result{Status: Timeout, Exit: -1, Reason: fmt.Sprintf("still running after %s", r.Timeout)}
 	}
 	return nil
 }
 
-// say adds a line of the runner's own to the log.
+// say adds a line of the runner's own to the log, with the time.
 func (r *Runner) say(format string, args ...any) {
-	fmt.Fprintf(r.Log, "[baton] "+format+"\n", args...)
+	now := time.Now
+	if r.Now != nil {
+		now = r.Now
+	}
+	Say(r.Log, now(), format, args...)
+}
+
+// Say writes a line of baton's own into a job's log, with the time it says it: "[baton 14:02:11] …".
+func Say(w io.Writer, now time.Time, format string, args ...any) {
+	fmt.Fprintf(w, "[baton "+now.Format(time.TimeOnly)+"] "+format+"\n", args...)
 }
 
 func exitText(exit int, err error) string {

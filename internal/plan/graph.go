@@ -366,12 +366,19 @@ type Shape struct {
 	Phases int      // how many phases the plan has
 	Chain  []string // its longest chain of phases that must run one after another (LongestChain)
 	Width  int      // the most phases that can be worked on at once (Width)
+	QA     int      // how many of its phases are QA phases (Phase.QA)
 }
 
 // Shape is the shape of p.
 func (p Plan) Shape() Shape {
 	_, chain := p.LongestChain()
-	return Shape{Phases: len(p.Phases), Chain: chain, Width: p.Width()}
+	qa := 0
+	for _, ph := range p.Phases {
+		if ph.QA() {
+			qa++
+		}
+	}
+	return Shape{Phases: len(p.Phases), Chain: chain, Width: p.Width(), QA: qa}
 }
 
 // MostlyChain reports a plan that is mostly one chain: at least ShapeMinPhases phases, and a longest chain

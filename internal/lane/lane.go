@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -42,7 +43,9 @@ import (
 //	.baton-lane slots             prints how many lanes may run at once (1 to MaxSlots)
 //
 // with BATON_LANE (the lane's number), BATON_LANE_DIR, BATON_ROOT (the project's working tree) and
-// BATON_COMMIT set, and every other GIT_*, BATON_* and CLAUDE_* variable removed.
+// BATON_COMMIT set, the directory of the baton running the job first on the PATH, and every other GIT_*,
+// BATON_* and CLAUDE_* variable removed. A run also gets the job's variables of the gate protocol
+// (BATON_JOB, BATON_STAGES, BATON_RERUN), to pass on to the command.
 const Script = ".baton-lane"
 
 // MaxSlots is the most lanes a project may run at once.
@@ -52,6 +55,9 @@ const MaxSlots = 4
 type Pool struct {
 	Home string // baton's home ($BATON_HOME, or ~/.baton)
 	Root string // the project's working tree
+	// Bin is the directory of the baton binary that runs the pool's jobs, put first on the PATH of what it
+	// runs for them, so that a gate finds `baton stage` in every lane; "" leaves PATH as it is.
+	Bin string
 }
 
 // Dir is where the pool's lanes live.
@@ -257,7 +263,8 @@ func script(dir string) string {
 }
 
 // env is the environment of every command run for a lane (n 0 is no lane: the working tree itself).
-// Nothing of git's, baton's or Claude Code's leaks in, so a gate sees the lane and nothing else.
+// Nothing of git's, baton's or Claude Code's leaks in, so a gate sees the lane and nothing else; the PATH
+// starts with Bin. A job's command also gets its own variables (Job.env).
 func (p Pool) env(n int, dir, commit string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -267,6 +274,9 @@ func (p Pool) env(n int, dir, commit string) []string {
 		}
 		env = append(env, kv)
 	}
+	if p.Bin != "" {
+		env = firstOnPath(env, p.Bin)
+	}
 	env = append(env, "BATON_ROOT="+p.Root)
 	if commit != "" {
 		env = append(env, "BATON_COMMIT="+commit)
@@ -275,6 +285,27 @@ func (p Pool) env(n int, dir, commit string) []string {
 		env = append(env, "BATON_LANE="+strconv.Itoa(n), "BATON_LANE_DIR="+dir)
 	}
 	return env
+}
+
+// firstOnPath puts dir first on env's PATH (Windows spells the name as it likes), unless it is first
+// already.
+func firstOnPath(env []string, dir string) []string {
+	sep := string(os.PathListSeparator)
+	for i, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if k != "PATH" && (runtime.GOOS != "windows" || !strings.EqualFold(k, "PATH")) {
+			continue
+		}
+		switch {
+		case v == dir || strings.HasPrefix(v, dir+sep):
+		case v == "":
+			env[i] = k + "=" + dir
+		default:
+			env[i] = k + "=" + dir + sep + v
+		}
+		return env
+	}
+	return append(env, "PATH="+dir)
 }
 
 // downTimeout bounds a lane's down, which runs when nothing else is left to stop it.

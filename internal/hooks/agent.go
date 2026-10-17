@@ -98,6 +98,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 		}
 		checkpointed, brief = state.Fresh(st, state.Started(s.Agent, c.Now), path, c.Now), true
 		state.DropMail(st, state.MessagePlan) // its brief reads the plan as it is now
+		state.DropMail(st, state.MessageFact) // and lists the run's environment facts
 		if ps := st.Phases[st.Current]; st.Mode == state.ModeRunning && (ps == nil || ps.Status == state.PhasePending) {
 			state.Start(st, c.Now, origin)
 			started = true

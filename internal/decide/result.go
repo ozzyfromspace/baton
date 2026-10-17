@@ -24,9 +24,10 @@ func Span(d time.Duration) string {
 	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
-// Outcome is how a job ended, after its duration: "passed after 12m", "failed (exit 1) after 12m".
+// Outcome is how a job ended, after its duration: "passed after 12m", "failed (exit 1) after 12m", and
+// "passed after 12m, 31m waiting for a lane" (tookFor).
 func Outcome(j state.Job) string {
-	took := " after " + Span(j.Took(j.Ended))
+	took := tookFor(j)
 	why := ""
 	if j.Reason != "" {
 		why = ": " + j.Reason
@@ -76,6 +77,9 @@ type Log struct {
 	// Rerun is what a rerun of a red gate (verify --failed) carried and narrowed (state.RanRerun); nil for
 	// any other job.
 	Rerun *state.RerunView
+	// Env is what the log of a red gate says of its environment, when it shows an environment failure and
+	// no test failure (lane.Environment); nil otherwise.
+	Env *Env
 }
 
 // JobResult is a finished job's result for the model: what ran and how it ended, the lines of its log that
@@ -122,6 +126,8 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		b.WriteString("Nothing was checked. Hand it to baton again, or run it in place.")
 	case j.Kind == state.JobAwait:
 		b.WriteString("What it waited on did not succeed: look into it, then await it again or carry on without it.")
+	case log.Env != nil:
+		b.WriteString(EnvFailed(j, *log.Env))
 	default:
 		if j.Status == state.JobTimeout {
 			b.WriteString("It ran past verify_timeout, so baton stopped it: that counts as a failure. ")
@@ -129,7 +135,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and %s: %s "+
 			"`baton done %s` is refused until then.", again(j, true), gateRule(j), j.Phase)
 	}
-	if j.Red() && qa != "" {
+	if j.Red() && qa != "" && log.Env == nil {
 		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))
 	}
 	if red := RedPhases(others, j.Phase); red != "" {

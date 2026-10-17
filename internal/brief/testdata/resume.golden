@@ -23,6 +23,8 @@ After: P0
 
 Index the records and query them.
 
+Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, then rerun only what failed (`baton verify --failed`), never the whole suite again. A long gate is a script committed in the repo, built from `baton stage <name> -- <command>` steps so it streams every stage, and runs through `baton verify`, never a background shell. When a gate fails on its environment rather than the change (a port in use, a daemon down), record what it needs with `baton env "<what it needs>"`, so every phase sees it.
+
 This phase's park notes (where P2 stood when it was set aside):
 
 Index and query done in 4f2a9c1; the ranking test is the slow one.

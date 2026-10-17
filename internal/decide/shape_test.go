@@ -67,9 +67,10 @@ func TestShapeCheckWords(t *testing.T) {
 		flagged bool
 		want    string
 	}{
-		{"not flagged", false, "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it"},
+		{"not flagged", false, "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it, " +
+			"and checks its gates and QA phases against baton's gate rules"},
 		{"flagged", true, "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it, " +
-			"and checks its longest chain (11 of 12 phases) against baton's shape rules"},
+			"its gates and QA phases against baton's gate rules, and its longest chain (11 of 12 phases) against baton's shape rules"},
 	} {
 		if got := PlanChecked(long, c.flagged); got != c.want {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)

@@ -91,6 +91,8 @@ type Coordinator struct {
 	stallAt time.Time
 	logs    map[string]logSeen
 
+	rec recorder // the record step's (record.go)
+
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
 	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
@@ -123,6 +125,7 @@ func (c *Coordinator) duties(v host.View) {
 		return
 	}
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
+	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
