@@ -40,7 +40,7 @@ type Record struct {
 	Generation int
 	dir        string            // the run's directory
 	files      map[string][]byte // what its folder holds, by name
-	logs       []string          // the logs of the plan's red jobs, copied into its jobs/ as Save writes it
+	logs       []string          // the logs and stages files of the plan's red jobs, copied into its jobs/ as Save writes it
 }
 
 // recordFiles are the files of a Record, in the order Save writes them.
@@ -79,7 +79,7 @@ func (s *Store) Record(st State) (*Record, error) {
 		}
 	}
 	for _, id := range ids {
-		r.logs = append(r.logs, s.JobLog(id))
+		r.logs = append(r.logs, s.JobLog(id), s.JobStages(id))
 	}
 	return r, nil
 }

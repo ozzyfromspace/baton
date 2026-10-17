@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/plan"
 )
 
@@ -49,6 +50,29 @@ type Job struct {
 	// Replaces is the red gate of another command this gate was queued to stand in for (--replace, RedGate):
 	// its phase's gate from then on, as a decision the human is told of.
 	Replaces string `json:"replaces,omitempty"`
+	// Reruns is the red gate this job reruns (verify --failed): its stages that passed are carried, its
+	// failed ones run narrowed to what failed, and a pass takes over from it.
+	Reruns string `json:"reruns,omitempty"`
+
+	// Ran is when the job got its lane (or needed none) and its command began: what it waited for a lane
+	// before is not its running time.
+	Ran time.Time `json:"ran,omitzero"`
+	// Stages are the stages of the gate that have ended so far (the gate protocol, lane.Stage), oldest first.
+	Stages []lane.Stage `json:"stages,omitempty"`
+	// Failing is the first failure seen in the job's output while it ran; FailTold is when its owner was
+	// told of it, once.
+	Failing  *Failing  `json:"failing,omitempty"`
+	FailTold time.Time `json:"fail_told,omitzero"`
+	// LookedIn are the kinds of look-in already sent about the job, each once.
+	LookedIn []string `json:"looked_in,omitempty"`
+}
+
+// Failing is the first failure a job's output showed while it ran: a failure line (lane.Failure), a fail
+// marker, or a stage that failed.
+type Failing struct {
+	At    time.Time `json:"at"`
+	Line  string    `json:"line"`
+	Stage string    `json:"stage,omitempty"` // the stage it failed in, if the gate names its stages
 }
 
 // Job kinds: a verify job runs a gate on a commit, in a lane; an await job waits on something outside the

@@ -59,6 +59,12 @@ type PhaseState struct {
 	// when its done was claimed, or it was set aside, a verify and an await at most. A job that had ended
 	// by then was judged then, so it is not waited on again. Cleared once the phase is done or resumes.
 	On []string `json:"on,omitempty"`
+	// LandCheck is the focused command a landing of the phase's work re-verifies it with, in place of its
+	// last passing gate (baton done --land-check).
+	LandCheck string `json:"land_check,omitempty"`
+	// Deviation is how the phase departed from the plan, or "none", in the model's words (baton done
+	// --deviation); "" when it did not say.
+	Deviation string `json:"deviation,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
@@ -194,6 +200,14 @@ type State struct {
 	ToAgents []HumanWords `json:"to_agents,omitempty"`
 	// PlanText is what a worker's agent was given of the plan (a sub-run's only).
 	PlanText *PlanText `json:"plan_text,omitempty"`
+	// Facts are what the gates' environment needs, as the models found it (baton env), oldest first: every
+	// later brief lists them.
+	Facts []Fact `json:"facts,omitempty"`
+	// Recorded are the phases whose record baton has written into the plan's record file (Record: in its
+	// standing rules), each once.
+	Recorded []string `json:"recorded,omitempty"`
+	// Risk is the exposure the run has built up on work no full check has passed since (risk.go).
+	Risk *Risk `json:"risk,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }
