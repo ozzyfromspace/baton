@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -80,34 +81,43 @@ func cmdLaneRun(args []string, io IO) int {
 	}
 	s.Event("job_started", started)
 
-	res := runJob(s, job, io)
-	ended := finishJob(s, job, res, io.Now())
+	res, stages := runJob(s, job, io)
+	ended := finishJob(s, job, res, stages, io.Now())
 	s.Event("job_finished", map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
-		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds())})
+		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds()),
+		"waited_seconds": int(res.Waited.Seconds()), "ran_seconds": int((res.Took - res.Waited).Seconds())})
 	return 0
 }
 
-// runJob runs the job through a lane runner that beats into the run's state.
-func runJob(s *state.Store, job state.Job, io IO) lane.Result {
+// runJob runs the job through a lane runner that beats into the run's state, and records what its output
+// says as it runs (watchJob). It returns how the job ended, and its stages, final.
+func runJob(s *state.Store, job state.Job, io IO) (lane.Result, []lane.Stage) {
 	log, err := lane.CreateLog(job.Log)
 	if err != nil {
-		return lane.Result{Status: lane.LaneError, Exit: -1, Reason: fmt.Sprintf("no log: %v", err)}
+		return lane.Result{Status: lane.LaneError, Exit: -1, Reason: fmt.Sprintf("no log: %v", err)}, nil
 	}
 	defer log.Close()
+	os.Remove(s.JobStages(job.ID)) // a job's stages file starts empty, as its log does
 	cfg := config.Load(config.Root(io.Env), io.Env)
 	timeout, err := cfg.JobTimeout()
 	if err != nil {
-		fmt.Fprintf(log, "[baton] %v; using %s\n", err, timeout)
+		lane.Say(log, io.Now(), "%v; using %s", err, timeout)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	bin := "" // where this baton is, so that the gate finds `baton stage`
+	if exe, err := os.Executable(); err == nil {
+		bin = filepath.Dir(exe)
+	}
+	out, watch := watchJob(s, job, log, io.Now)
 	var host time.Time // the host's latest heartbeat
 	r := &lane.Runner{
-		Pool:    lane.Pool{Home: config.Root(io.Env), Root: s.Checkout},
+		Pool:    lane.Pool{Home: config.Root(io.Env), Root: s.Checkout, Bin: bin},
 		WorkDir: s.Root,
 		Host:    io.Env("BATON_INSTANCE"),
 		Log:     log,
+		Output:  out,
 		Now:     io.Now,
 		Timeout: timeout,
 		Tick:    laneTick,
@@ -150,8 +160,27 @@ func runJob(s *state.Store, job state.Job, io IO) lane.Result {
 				s.Event("lane_wait", map[string]any{"job": job.ID, "phase": job.Phase, "slots": slots, "ahead": ahead, "here": job.Here})
 			}
 		},
+		Acquired: func(at time.Time, n int, waited time.Duration) {
+			s.Update(func(st *state.State) error {
+				if j := st.Job(job.ID); mine(j, job) && j.Status == state.JobRunning {
+					j.Ran = at
+					if n > 0 {
+						j.Lane = n
+					}
+				}
+				return nil
+			})
+			if n > 0 {
+				s.Event("lane_acquired", map[string]any{"job": job.ID, "phase": job.Phase, "lane": n, "waited_seconds": int(waited.Seconds()), "here": job.Here})
+			}
+		},
 	}
-	return r.Run(ctx, lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here})
+	lj := lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here, Stages: s.JobStages(job.ID)}
+	if job.Reruns != "" {
+		lj.Rerun = s.JobStages(job.Reruns)
+	}
+	res := r.Run(ctx, lj)
+	return res, watch.finish(out)
 }
 
 // mine reports whether j, as the run's state has it now, is the job this runner took up: a job dropped
@@ -160,9 +189,10 @@ func mine(j *state.Job, job state.Job) bool {
 	return j != nil && j.PID == job.PID && j.Started.Equal(job.Started)
 }
 
-// finishJob records how the job ended, unless something else ended it first (it was cancelled), and
-// returns the job as recorded. The state may be busy for a moment, so it tries more than once.
-func finishJob(s *state.Store, job state.Job, res lane.Result, now time.Time) state.Job {
+// finishJob records how the job ended, unless something else ended it first (it was cancelled), with its
+// stages as final, and returns the job as recorded. The state may be busy for a moment, so it tries more
+// than once.
+func finishJob(s *state.Store, job state.Job, res lane.Result, stages []lane.Stage, now time.Time) state.Job {
 	var ended state.Job
 	for try := 0; try < 3; try++ {
 		_, err := s.Update(func(st *state.State) error {
@@ -183,6 +213,9 @@ func finishJob(s *state.Store, job state.Job, res lane.Result, now time.Time) st
 			}
 			if res.Lane != 0 {
 				j.Lane = res.Lane
+			}
+			if len(stages) > 0 {
+				j.Stages = stages
 			}
 			if j.Ended.IsZero() {
 				j.Ended = now

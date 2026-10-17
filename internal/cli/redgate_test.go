@@ -118,14 +118,21 @@ func TestAFailedJobsLogIsKept(t *testing.T) {
 	os.MkdirAll(logs, 0o755)
 	for _, id := range []string{"j1", "j2"} {
 		os.WriteFile(filepath.Join(logs, id+".log"), []byte(id+" output\n"), 0o644)
+		os.WriteFile(s.store().JobStages(id), []byte(`{"name":"e2e","status":"failed","exit":1}`+"\n"), 0o644)
 	}
+	os.WriteFile(s.store().JobStages("j0"), []byte("{}\n"), 0o644) // a job long gone
 	s.must("", "verify", "make", "e2e", "--notes", "again")
 	st := s.state()
 	if st.Job("j1") != nil || st.Job("j2") == nil || len(st.KeptLogs) != 1 || st.KeptLogs[0] != "j1" {
 		t.Fatalf("jobs %d, kept logs %v", len(st.Jobs), st.KeptLogs)
 	}
-	if _, err := os.Stat(filepath.Join(logs, "j1.log")); err != nil {
-		t.Errorf("the failed job's log went: %v", err)
+	for _, f := range []string{"j1.log", "j1.stages", "j2.stages"} {
+		if _, err := os.Stat(filepath.Join(logs, f)); err != nil {
+			t.Errorf("%s went: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(s.store().JobStages("j0")); err == nil {
+		t.Errorf("the stages of a job no longer on record stayed")
 	}
 	s.must("", "drop")
 	matches, _ := filepath.Glob(filepath.Join(s.store().Dir, "gen-*", "jobs", "j1.log"))

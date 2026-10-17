@@ -50,9 +50,10 @@ func (h *handlers) stop(c Context) (Result, error) {
 			vd := st.ParkedOn()
 			retook = &vd
 		}
-		recordStop(st, c, others)
+		ended := recordStop(st, c, others)
 		ann = announced(st)
 		dropped, _ := vanished(st, c.Now, false) // the turn ended with the proposal's question unanswered
+		dropped = append(dropped, backgroundEnded(st.Current, ended, c.Now)...)
 		// A worker's plan is the run's narrowed to its phase (plan.Only): the plan file is the lead's to
 		// follow, and so is restarting on a newer baton.
 		worker := s.Worker() != ""
@@ -356,7 +357,7 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		bg := st.Run.BusyBackground()
 		if st.Run.Untold(bg) {
 			for _, t := range bg {
-				st.Run.Tell(t.ID)
+				st.Run.Tell(t.ID, now)
 			}
 			d.refuse(w.BackgroundStop(backgroundWhat(bg)))
 			d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "background work", "tasks": len(bg)})

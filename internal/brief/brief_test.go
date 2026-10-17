@@ -460,9 +460,10 @@ func TestNotesSince(t *testing.T) {
 }
 
 // While the plan aggregates its heavy checks (aggregate_qa), a phase before a QA phase is told to run
-// focused checks only and leave the full ones to it, and a QA phase is told it is the place for them;
-// with the setting off, or no QA phase ahead, the brief says nothing of it. A phase agent's narrowed plan
-// still names its QA phase.
+// scoped checks only and leave the full ones to it, and a QA phase is told it is the place for them; with
+// the setting off, or no QA phase ahead, the brief says nothing of QA. Every phase's brief then gives the
+// gate rules in short (decide.GateHabits): with git, stages and baton verify; without, baton await. A
+// phase agent's narrowed plan still names its QA phase.
 func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 	doc := []byte("# Demo\n\n## P0 — Parser\n\nAfter: none\n\nParse.\n\n## P1 — Printer\n\nPrint.\n\n## P2 — Check it all\n\nAfter: all\nType: qa\n\nRun everything.\n\n## P3 — Ship\n\nShip.\n\n## Verification\n")
 	pl, err := plan.Build("/work/plan.md", doc, plan.Suggest(doc))
@@ -475,24 +476,32 @@ func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 		st.Current = id
 		return st
 	}
-	focus := "In this phase run focused checks only"
+	focus := "In this phase, run checks that finish in seconds or minutes: the tests of what you changed, by name."
+	habits, bare := decide.GateHabits(true), decide.GateHabits(false)
 	for _, c := range []struct {
 		name, phase string
-		on          bool
-		want, not   string
+		on, git     bool
+		want, not   []string
 	}{
-		{"before the QA phase", "P1", true, "the next is P2 (Check it all)", "this is a QA phase"},
-		{"the QA phase", "P2", true, "QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find in the work of P0 and P1", focus},
-		{"after the last QA phase", "P3", true, "", "QA:"},
-		{"aggregate_qa off", "P1", false, "", "QA:"},
+		{"before the QA phase", "P1", true, true, []string{"the next is P2 (Check it all)", focus,
+			"No full suite, end-to-end run or whole-project lint before P2 (Check it all)", habits}, []string{"this is a QA phase"}},
+		{"the QA phase", "P2", true, true, []string{"QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, " +
+			"and fix what they find in the work of P0 and P1, which ran scoped checks only", "Push to CI early", habits}, []string{focus}},
+		{"after the last QA phase", "P3", true, true, []string{habits}, []string{"QA:"}},
+		{"aggregate_qa off", "P1", false, true, []string{habits}, []string{"QA:"}},
+		{"no repository", "P1", true, false, []string{focus, bare}, []string{habits}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: at(c.phase), Words: decide.Words{AggregateQA: c.on}})
-			if c.want != "" && !strings.Contains(b, c.want) {
-				t.Errorf("brief lacks %q:\n%s", c.want, b)
+			b := Write(Input{Kind: Boundary, Plan: pl, Doc: doc, State: at(c.phase), Words: decide.Words{AggregateQA: c.on, Git: c.git}})
+			for _, want := range c.want {
+				if !strings.Contains(b, want) {
+					t.Errorf("brief lacks %q:\n%s", want, b)
+				}
 			}
-			if strings.Contains(b, c.not) {
-				t.Errorf("brief has %q:\n%s", c.not, b)
+			for _, not := range c.not {
+				if strings.Contains(b, not) {
+					t.Errorf("brief has %q:\n%s", not, b)
+				}
 			}
 		})
 	}
@@ -502,7 +511,8 @@ func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 	}
 	st := state.Attach(only, now, state.Origin{})
 	st.Current = "P1"
-	if b := Write(Input{Kind: Worker, Plan: only, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Worker: true}}); !strings.Contains(b, "the next is P2 (Check it all)") || !strings.Contains(b, focus) {
+	if b := Write(Input{Kind: Worker, Plan: only, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Worker: true, Git: true}}); !strings.Contains(b, "the next is P2 (Check it all)") ||
+		!strings.Contains(b, focus) || !strings.Contains(b, habits) {
 		t.Errorf("a phase agent's brief:\n%s", b)
 	}
 }

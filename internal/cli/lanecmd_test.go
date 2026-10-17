@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -81,17 +82,21 @@ func TestLaneRunRunsAJob(t *testing.T) {
 	if j.Status != state.JobFailed || j.Exit != 1 || j.Lane != 1 || j.PID != os.Getpid() || j.PGID == 0 || j.Log != s.JobLog("j1") {
 		t.Errorf("job: %+v", *j)
 	}
-	if j.Started.IsZero() || j.Heartbeat.IsZero() || j.Ended.Sub(j.Started) < time.Second {
-		t.Errorf("times: started %s, heartbeat %s, ended %s", j.Started, j.Heartbeat, j.Ended)
+	if j.Started.IsZero() || j.Heartbeat.IsZero() || j.Ended.Sub(j.Started) < time.Second || j.Ran.Before(j.Started) || j.Ended.Sub(j.Ran) < time.Second {
+		t.Errorf("times: started %s, ran %s, heartbeat %s, ended %s", j.Started, j.Ran, j.Heartbeat, j.Ended)
 	}
-	if log, _ := os.ReadFile(j.Log); !strings.Contains(string(log), "gate output") || !strings.Contains(string(log), "[baton] failed (exit 1)") {
+	if log, _ := os.ReadFile(j.Log); !strings.Contains(string(log), "gate output") || !regexp.MustCompile(`\[baton \d\d:\d\d:\d\d\] failed \(exit 1\)`).Match(log) {
 		t.Errorf("job log:\n%s", log)
 	}
 	ev := events(t, s)
 	if e := ev["job_started"]; e == nil || e["job"] != "j1" || e["phase"] != "P1" || e["type"] != "verify" {
 		t.Errorf("job_started: %v", e)
 	}
-	if e := ev["job_finished"]; e == nil || e["status"] != "failed" || e["exit"] != 1.0 || e["lane"] != 1.0 || e["seconds"].(float64) < 1 {
+	if e := ev["lane_acquired"]; e == nil || e["job"] != "j1" || e["phase"] != "P1" || e["lane"] != 1.0 || e["waited_seconds"] != 0.0 {
+		t.Errorf("lane_acquired: %v", e)
+	}
+	if e := ev["job_finished"]; e == nil || e["status"] != "failed" || e["exit"] != 1.0 || e["lane"] != 1.0 || e["seconds"].(float64) < 1 ||
+		e["waited_seconds"] != 0.0 || e["ran_seconds"].(float64) < 1 {
 		t.Errorf("job_finished: %v", e)
 	}
 	if got := st.Run.Announce; len(got) != 1 || got[0] != "baton: job j1 started — `sleep 1; echo gate output; exit 1` (P1)" {
@@ -227,14 +232,90 @@ func TestLaneRunRecordsItsWaitForALane(t *testing.T) {
 	}
 	st, _ := s.Load()
 	j := st.Job("j1")
-	if j.Status != state.JobPassed || j.Lane != 1 || !j.LaneWait.IsZero() {
+	if j.Status != state.JobPassed || j.Lane != 1 || !j.LaneWait.IsZero() || !j.Ran.After(j.Started) || j.Ran.After(j.Ended) {
 		t.Errorf("job: %+v", *j)
 	}
 	if want := decide.LaneWaits(*j, 1, 0); !slices.Contains(st.Run.Announce, want) {
 		t.Errorf("announced %q, want %q", st.Run.Announce, want)
 	}
-	if e := events(t, s)["lane_wait"]; e == nil || e["job"] != "j1" || e["phase"] != "P1" || e["slots"] != 1.0 || e["ahead"] != 0.0 || e["here"] != false {
+	ev := events(t, s)
+	if e := ev["lane_wait"]; e == nil || e["job"] != "j1" || e["phase"] != "P1" || e["slots"] != 1.0 || e["ahead"] != 0.0 || e["here"] != false {
 		t.Errorf("lane_wait: %v", e)
+	}
+	if e := ev["lane_acquired"]; e == nil || e["job"] != "j1" || e["lane"] != 1.0 || e["waited_seconds"] == nil {
+		t.Errorf("lane_acquired: %v", e)
+	}
+}
+
+// verify_timeout counts from when the job got its lane: a job that waited for one longer than the timeout
+// still runs, and runs out of time a timeout after it got the lane.
+func TestLaneRunCountsTheTimeoutFromTheLane(t *testing.T) {
+	defer func(d time.Duration) { laneTick = d }(laneTick)
+	laneTick = 20 * time.Millisecond
+	s, env := laneProject(t, "sleep 30")
+	env["BATON_VERIFY_TIMEOUT"] = "1s"
+	held, err := lane.Pool{Home: env["BATON_HOME"], Root: s.Checkout}.TryAcquire(1)
+	if err != nil || held == nil {
+		t.Fatalf("holding the only lane: %+v, %v", held, err)
+	}
+	done := make(chan int)
+	go func() {
+		code, _ := laneRun(env, "sess-1", "j1")
+		done <- code
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if st, _ := s.Load(); !st.Job("j1").LaneWait.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the job never waited for a lane")
+		}
+	}
+	time.Sleep(1500 * time.Millisecond) // longer than the timeout
+	held.Release()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("lane-run never ended")
+	}
+	st, _ := s.Load()
+	j := st.Job("j1")
+	if j.Status != state.JobTimeout || j.Ran.IsZero() || j.Ran.Sub(j.Started) < 1400*time.Millisecond || j.Ended.Sub(j.Ran) < time.Second ||
+		!strings.Contains(j.Reason, "still running after 1s") {
+		t.Errorf("job: %s %q, started %s, ran %s, ended %s", j.Status, j.Reason, j.Started, j.Ran, j.Ended)
+	}
+	if e := events(t, s)["job_finished"]; e == nil || e["waited_seconds"].(float64) < 1 || e["ran_seconds"].(float64) < 1 {
+		t.Errorf("job_finished: %v", e)
+	}
+}
+
+// A gate's command gets its job's variables of the gate protocol, its stages file and, for a rerun, the
+// red gate's, and finds the baton running it first on its PATH.
+func TestLaneRunGivesTheGateItsEnvironment(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name   string
+		reruns string
+	}{{"a gate", ""}, {"a rerun", "j0"}} {
+		t.Run(c.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "env.txt")
+			s, env := laneProject(t, `printf '%s\n' "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${PATH%%:*}" > `+out)
+			s.Update(func(st *state.State) error { st.Jobs[0].Reruns = c.reruns; return nil })
+			if code, errs := laneRun(env, "sess-1", "j1"); code != 0 {
+				t.Fatalf("lane-run: exit %d: %s", code, errs)
+			}
+			rerun := "none"
+			if c.reruns != "" {
+				rerun = s.JobStages(c.reruns)
+			}
+			b, _ := os.ReadFile(out)
+			if got, want := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"), []string{"j1", s.JobStages("j1"), rerun, filepath.Dir(exe)}; !slices.Equal(got, want) {
+				t.Errorf("the gate saw %q, want %q", got, want)
+			}
+		})
 	}
 }
 

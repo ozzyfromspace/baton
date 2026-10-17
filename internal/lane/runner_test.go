@@ -58,6 +58,7 @@ func TestCheck(t *testing.T) {
 				r.Beat = func(time.Time) (time.Time, bool) { return host, wanted }
 			}
 			r.begin()
+			r.got(0)
 			var stop *Result
 			for _, b := range c.beats {
 				for i := 0; i < b.n && stop == nil; i++ {
@@ -75,6 +76,59 @@ func TestCheck(t *testing.T) {
 			}
 			if got != c.want || r.ran != c.ran {
 				t.Errorf("stopped: %q after %s, want %q after %s (%+v)", got, r.ran, c.want, c.ran, stop)
+			}
+		})
+	}
+}
+
+// The timeout counts from when the job got its lane: a wait for one, however long, is not running time.
+func TestTheTimeoutCountsFromTheLane(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		before, after int  // beats of a minute before the job got its lane, and after
+		got           bool // it got one
+		want          string
+		waited        time.Duration
+	}{
+		{"waiting past the timeout", 120, 0, false, "", 0},
+		{"inside the timeout after a wait", 30, 59, true, "", 30 * time.Minute},
+		{"past the timeout after a wait", 30, 60, true, Timeout, 30 * time.Minute},
+		{"past the timeout with no wait", 0, 60, true, Timeout, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+			var told []time.Duration
+			r := &Runner{Timeout: time.Hour, Tick: time.Minute, Gap: time.Hour, Now: func() time.Time { return now },
+				Acquired: func(at time.Time, lane int, waited time.Duration) {
+					if !at.Equal(now) || lane != 1 {
+						t.Errorf("told of lane %d at %s, want lane 1 at %s", lane, at, now)
+					}
+					told = append(told, waited)
+				}}
+			r.begin()
+			var stop *Result
+			for range c.before {
+				now = now.Add(time.Minute)
+				if stop = r.check(); stop != nil {
+					t.Fatalf("stopped while it waited for a lane: %+v", stop)
+				}
+			}
+			if c.got {
+				r.got(1)
+			}
+			for i := 0; i < c.after && stop == nil; i++ {
+				now = now.Add(time.Minute)
+				stop = r.check()
+			}
+			got := ""
+			if stop != nil {
+				got = stop.Status
+			}
+			if got != c.want || r.waited != c.waited {
+				t.Errorf("stopped %q having waited %s, want %q having waited %s", got, r.waited, c.want, c.waited)
+			}
+			if c.got && (len(told) != 1 || told[0] != c.waited) {
+				t.Errorf("told of the lane %v, want once, having waited %s", told, c.waited)
 			}
 		})
 	}
@@ -394,7 +448,120 @@ func TestASpawnedRunnerRunsDetached(t *testing.T) {
 		t.Error("the runner is in the test's process group")
 	}
 	log, _ := os.ReadFile(filepath.Join(dir, "job.log"))
-	if !strings.Contains(string(log), "done waiting") || !strings.Contains(string(log), "[baton] failed (exit 1)") {
+	if !strings.Contains(string(log), "done waiting") || !strings.Contains(string(log), "] failed (exit 1)") {
 		t.Errorf("job log:\n%s", log)
+	}
+}
+
+// A job is told when it got its lane, whether it found one free or waited for one, and a job that needs
+// none as its command begins; its result says how long it waited.
+func TestAJobIsToldWhenItGetsItsLane(t *testing.T) {
+	type told struct {
+		lane   int
+		waited time.Duration
+	}
+	for _, c := range []struct {
+		name     string
+		lane     bool // the job runs in a lane
+		hold     time.Duration
+		wantLane int
+	}{
+		{"a free lane", true, 0, 1},
+		{"a lane after a wait", true, 300 * time.Millisecond, 1},
+		{"no lane needed", false, 0, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root, head := project(t, false)
+			r := testRunner(t, root)
+			r.Gap = time.Hour
+			var got []told
+			r.Acquired = func(_ time.Time, lane int, waited time.Duration) { got = append(got, told{lane, waited}) }
+			if c.hold > 0 {
+				held, _ := r.Pool.TryAcquire(1)
+				time.AfterFunc(c.hold, func() { held.Release() })
+			}
+			j := Job{ID: "j1", Command: "true"}
+			if c.lane {
+				j.Commit = head
+			}
+			res := r.Run(context.Background(), j)
+			if res.Status != Passed || len(got) != 1 || got[0].lane != c.wantLane {
+				t.Fatalf("%+v; told %+v, want once, of lane %d", res, got, c.wantLane)
+			}
+			if w := got[0].waited; w < c.hold*3/4 || w > c.hold+5*time.Second || res.Waited != w || res.Took < w {
+				t.Errorf("told it waited %s, result %+v; want about %s", w, res, c.hold)
+			}
+			if came := strings.Contains(logOf(t, r), "lane 1 came free after"); came != (c.hold > 0) {
+				t.Errorf("the log says a lane came free: %v\n%s", came, logOf(t, r))
+			}
+		})
+	}
+}
+
+// The runner's own lines in the log say when it wrote them.
+func TestRunnerLinesCarryTheTime(t *testing.T) {
+	root, _ := project(t, false)
+	r := testRunner(t, root)
+	r.Now = func() time.Time { return time.Date(2026, 10, 17, 14, 2, 11, 0, time.Local) }
+	if res := r.Run(context.Background(), Job{ID: "j1", Command: "true"}); res.Status != Passed {
+		t.Fatalf("%+v", res)
+	}
+	for _, want := range []string{"[baton 14:02:11] job j1: true, in ", "[baton 14:02:11] passed after 0s\n"} {
+		if log := logOf(t, r); !strings.Contains(log, want) {
+			t.Errorf("the log lacks %q:\n%s", want, log)
+		}
+	}
+	var b strings.Builder
+	Say(&b, time.Date(2026, 10, 17, 9, 5, 0, 0, time.Local), "lane %d", 2)
+	if b.String() != "[baton 09:05:00] lane 2\n" {
+		t.Errorf("Say wrote %q", b.String())
+	}
+}
+
+// A job's command gets its variables of the gate protocol, and finds the baton running it first on its
+// PATH.
+func TestAJobsCommandGetsItsEnvironment(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		rerun string
+		want  string
+	}{
+		{"a gate", "", "j7 /runs/s/jobs/j7.stages none /opt/baton/v1"},
+		{"a rerun", "/runs/s/jobs/j3.stages", "j7 /runs/s/jobs/j7.stages /runs/s/jobs/j3.stages /opt/baton/v1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root, head := project(t, false)
+			r := testRunner(t, root)
+			r.Pool.Bin = "/opt/baton/v1"
+			out := filepath.Join(t.TempDir(), "env.txt")
+			cmd := `echo "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${PATH%%:*}" > ` + out
+			res := r.Run(context.Background(), Job{ID: "j7", Command: cmd, Commit: head, Stages: "/runs/s/jobs/j7.stages", Rerun: c.rerun})
+			if res.Status != Passed {
+				t.Fatalf("%+v\n%s", res, logOf(t, r))
+			}
+			if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != c.want {
+				t.Errorf("the command saw %q, want %q", strings.TrimSpace(string(b)), c.want)
+			}
+		})
+	}
+}
+
+func TestFirstOnPath(t *testing.T) {
+	sep := string(os.PathListSeparator)
+	for _, c := range []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{"a PATH", []string{"HOME=/h", "PATH=/usr/bin" + sep + "/bin"}, []string{"HOME=/h", "PATH=/b" + sep + "/usr/bin" + sep + "/bin"}},
+		{"first already", []string{"PATH=/b" + sep + "/bin"}, []string{"PATH=/b" + sep + "/bin"}},
+		{"only it", []string{"PATH=/b"}, []string{"PATH=/b"}},
+		{"an empty PATH", []string{"PATH="}, []string{"PATH=/b"}},
+		{"no PATH", []string{"HOME=/h"}, []string{"HOME=/h", "PATH=/b"}},
+		{"a longer name that starts with it", []string{"PATH=/bin"}, []string{"PATH=/b" + sep + "/bin"}},
+	} {
+		if got := firstOnPath(slices.Clone(c.env), "/b"); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }

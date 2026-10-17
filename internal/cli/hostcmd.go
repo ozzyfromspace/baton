@@ -203,7 +203,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
 		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Ramp: agentRamp(io), Machine: machineFor(io),
-			AutoReplan: cfg.AutoReplans(io.Env), ReplanMax: timing.ReplanMax}
+			AutoReplan: cfg.AutoReplans(io.Env), ReplanMax: timing.ReplanMax, AggregateQA: cfg.Aggregates(io.Env)}
 	}
 	leadEnv := slices.Clip(batonEnv)
 	if why := io.Env("BATON_RECOVER"); why != "" {
