@@ -57,6 +57,9 @@ func (h *handlers) handedBack(c Context) (Result, bool) {
 	switch {
 	case hb.deliver.any():
 		fields["why"] = "results"
+		if len(hb.deliver.jobs) == 0 {
+			fields["why"] = "look_in"
+		}
 		why = decide.HandbackFirst + "\n\n" + hb.deliver.text(s, config.AggregatesFromEnv(c.Env))
 		say = hb.deliver.says()
 		hb.deliver.event(s, "handback")
@@ -91,7 +94,7 @@ func heldHandback(st *state.State, now time.Time, w decide.Words, title string) 
 		return hb, false
 	}
 	switch {
-	case len(st.Due()) > 0:
+	case len(st.Due()) > 0 || st.LookInsDue():
 		st.Run.StopBlocks = 0
 		hb.deliver = take(st, now)
 		return hb, true

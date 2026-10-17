@@ -30,18 +30,29 @@ type delivery struct {
 	jobs     []state.Job
 	red      []state.Job // the phases red now (state.Red)
 	complete bool        // the plan is complete: these results are the last of it
+	looks    lookIns     // the look-ins taken with them (takeLookIns)
 }
 
-// take takes the results due (state.TakeDue).
+// take takes the results due (state.TakeDue), and the look-ins due beside them (takeLookIns).
 func take(st *state.State, now time.Time) delivery {
+	looks := takeLookIns(st, now)
 	jobs := state.TakeDue(st, now)
 	if len(jobs) == 0 {
-		return delivery{}
+		return delivery{looks: looks}
 	}
-	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete}
+	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete, looks: looks}
 }
 
-func (d delivery) any() bool { return len(d.jobs) > 0 }
+// takeLookIns takes the look-ins due to this store's session, whatever phase the run is on: the first
+// failures of its gates that run on (state.UntoldFailures, marked FailTold), and what the host left for it
+// (state.LookIn). Every path a result takes gives them: a tool call, a stop, a hand-back, a prompt (one
+// the host types to an idle session among them, Loop.deliver) and a brief.
+func takeLookIns(st *state.State, now time.Time) lookIns {
+	failing, left := state.TakeLookIns(st, now)
+	return lookIns{failing: failing, left: left}
+}
+
+func (d delivery) any() bool { return len(d.jobs) > 0 || d.looks.any() }
 
 // text is the results for the model, each with the end of its log. aggregate is aggregate_qa (jobResult).
 func (d delivery) text(s *state.Store, aggregate bool) string {
@@ -49,6 +60,9 @@ func (d delivery) text(s *state.Store, aggregate bool) string {
 	var parts []string
 	for _, j := range d.jobs {
 		parts = append(parts, jobResult(s, pl, j, d.red, aggregate))
+	}
+	if d.looks.any() {
+		parts = append(parts, d.looks.text(s))
 	}
 	if d.complete {
 		// The run's decisions, its phase agents' too: read without the lock, which no code holds twice.
@@ -64,11 +78,18 @@ func (d delivery) says() string {
 	for _, j := range d.jobs {
 		lines = append(lines, fmt.Sprintf("baton: job %s (`%s`, %s) %s → told Claude", j.ID, j.Command, j.Phase, decide.Outcome(j)))
 	}
+	if d.looks.any() {
+		lines = append(lines, d.looks.says())
+	}
 	return strings.Join(lines, "\n")
 }
 
 // event logs the delivery, and how it went.
 func (d delivery) event(s *state.Store, via string) {
+	d.looks.event(s, via)
+	if len(d.jobs) == 0 {
+		return
+	}
 	var ids []string
 	for _, j := range d.jobs {
 		ids = append(ids, j.ID)

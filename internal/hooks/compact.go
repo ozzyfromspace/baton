@@ -213,6 +213,7 @@ func briefKind(a state.After) string {
 // call) takes it first. A plan no longer running is owed nothing.
 func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
 	var b *state.Briefing
+	var looks lookIns
 	st, err := s.Update(func(st *state.State) error {
 		if !st.IsOwner(s.Instance, c.Now) {
 			return errNotOwner
@@ -221,6 +222,7 @@ func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
 			st.Run.Briefing = nil
 			if st.Mode == state.ModeRunning {
 				b = x
+				looks = takeBriefLookIns(st, c.Now) // what a gate did while the conversation compacted
 			}
 		}
 		return nil
@@ -230,6 +232,7 @@ func (h *handlers) wake(c Context, s *state.Store) (Result, error) {
 	}
 	pl, _ := s.LoadPlan()
 	text, replanning := h.briefing(c, s, st, *b, "rewake")
+	text = briefLookIns(s, text, looks)
 	line := decide.Compacted(phaseTitle(pl, b.Phase), b.Kind != brief.Checkpoint, b.Kind == brief.Resume)
 	if replanning {
 		line = decide.CompactedReplan(phaseTitle(pl, b.Phase), b.Kind == brief.Resume)
