@@ -291,6 +291,9 @@ func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
 	if strings.Contains(out, "sets P0 aside") || strings.Contains(out, "worker's worktree") {
 		t.Errorf("verify --here promises what it does not do:\n%s", out)
 	}
+	if want := "they would change what it checks. A worker's work that finishes meanwhile lands once the gate ends. Meanwhile,"; !strings.Contains(out, want) {
+		t.Errorf("verify --here with nothing landing says:\n%s\nwant %q", out, want)
+	}
 	j := s.state().Job("j1")
 	if j == nil || !j.Here || j.Kind != state.JobVerify || j.Commit != head || j.Command != "make e2e" || j.Status != state.JobQueued {
 		t.Fatalf("job: %+v", j)
@@ -305,6 +308,43 @@ func TestVerifyHereQueuesAGateInTheCheckout(t *testing.T) {
 	s.must("", "verify", "--replace", "make test", "--notes", "x")
 	if j := s.state().Job("j2"); j == nil || j.Here {
 		t.Errorf("job: %+v", j)
+	}
+}
+
+// A gate in the lead's checkout holds the landings that wait there, this run's and other sessions':
+// verify --here names them, and says they land once it ends.
+func TestVerifyHereNamesTheLandingsItHolds(t *testing.T) {
+	s, planFile, _ := newRepoSession(t)
+	s.env["BATON_HOME"] = t.TempDir()
+	s.attach(planFile)
+	landing := func(phase string) state.Worker {
+		return state.Worker{Phase: phase, Ref: "r/" + phase, Status: state.WorkerLanding, Merge: &state.Merge{Queued: s.now}}
+	}
+	s.set(func(x *state.State) {
+		state.Claim(x, "inst", 1, s.now)
+		x.Workers = []state.Worker{landing("P1"), {Phase: "P2", Ref: "r/P2", Status: state.WorkerWorking}, landing("P3")}
+	})
+	other := &session{t: t, now: s.now, env: map[string]string{"BATON_DIR": s.env["BATON_DIR"], "BATON_HOST": "1",
+		"BATON_INSTANCE": "inst-2", "CLAUDE_CODE_SESSION_ID": "sess-2"}}
+	other.attach(planFile)
+	p, err := state.OpenProject(s.env["BATON_DIR"], func() time.Time { return s.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := p.Bind(state.Binding{Session: "sess-2"}) // the session helper's store is sess-1's
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2.Update(func(x *state.State) error {
+		state.Claim(x, "inst-2", 1, s.now)
+		x.Workers = []state.Worker{landing("P1")}
+		return nil
+	})
+
+	out := s.must("", "verify", "--here", "make e2e", "--notes", "the server is up; this checks the pages")
+	if want := "they would change what it checks. P1, P3 and 1 phase of another baton session wait to land: " +
+		"their work lands once the gate ends, as does any worker's work that finishes meanwhile. Meanwhile,"; !strings.Contains(out, want) {
+		t.Errorf("verify --here says:\n%s\nwant %q", out, want)
 	}
 }
 
@@ -389,7 +429,7 @@ func TestAWorkersGateHere(t *testing.T) {
 		}
 	}
 	out := w.must("", "verify", "--here", "make e2e", "--notes", "x")
-	if want := "until it ends baton refuses edits to it, and takes up nothing else here: they would change what it checks."; !strings.Contains(out, want) {
+	if want := "until it ends baton refuses edits to it, and takes up nothing else here: they would change what it checks. Meanwhile,"; !strings.Contains(out, want) {
 		t.Errorf("verify --here says:\n%s\nwant %q", out, want)
 	}
 	if j := w.state().Job("P1.j1"); j == nil || !j.Here || j.Commit != gittest.Git(t, tree, "rev-parse", "HEAD") {

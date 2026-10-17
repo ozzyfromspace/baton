@@ -36,9 +36,34 @@ func TestHereWords(t *testing.T) {
 		t.Errorf("without a lane script: %s", r)
 	}
 	for _, worker := range []bool{false, true} {
-		r := HereQueued(worker, "3h00m")
-		if strings.Contains(r, "lands no worker's work") == worker || !strings.Contains(r, "If it runs past 3h00m") {
+		r := HereQueued(worker, "3h00m", []string{"P3"}, 0)
+		if strings.Contains(r, "lands no worker's work") == worker || strings.Contains(r, "P3 waits to land") == worker || !strings.Contains(r, "If it runs past 3h00m") {
 			t.Errorf("worker %v: %s", worker, r)
 		}
+	}
+}
+
+// A gate in the lead's checkout names the landings it holds, and says they land once it ends.
+func TestLandingsHeld(t *testing.T) {
+	const after = "lands once the gate ends, as does any worker's work that finishes meanwhile."
+	for _, c := range []struct {
+		name    string
+		landing []string
+		others  int
+		want    string
+	}{
+		{"nothing waits", nil, 0, "A worker's work that finishes meanwhile lands once the gate ends."},
+		{"one phase", []string{"P3"}, 0, "P3 waits to land: its work " + after},
+		{"two phases", []string{"P3", "P5"}, 0, "P3 and P5 wait to land: their work " + after},
+		{"another session's only", nil, 1, "1 phase of another baton session waits to land: its work " + after},
+		{"this run's and others'", []string{"P3"}, 2, "P3 and 2 phases of another baton session wait to land: their work " + after},
+	} {
+		if got := landingsHeld(c.landing, c.others); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+	lead := HereQueued(false, "3h00m", []string{"P3", "P5"}, 0)
+	if want := "lands no worker's work in this checkout: they would change what it checks. P3 and P5 wait to land: their work " + after + " Meanwhile,"; !strings.Contains(lead, want) {
+		t.Errorf("the lead's:\n%s\nwant %q", lead, want)
 	}
 }

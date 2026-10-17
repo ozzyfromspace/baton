@@ -246,7 +246,8 @@ func queueJob(args []string, io IO, kind string) int {
 		fmt.Fprintln(io.Out, ask)
 	}
 	if here {
-		fmt.Fprintln(io.Out, "baton: "+decide.HereQueued(s.Worker() != "", decide.Span(timeout)))
+		landing, others := hereLandings(s, st)
+		fmt.Fprintln(io.Out, "baton: "+decide.HereQueued(s.Worker() != "", decide.Span(timeout), landing, others))
 		if work.warn != "" {
 			fmt.Fprintln(io.Out, work.warn)
 		}
