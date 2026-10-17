@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -188,6 +189,96 @@ func TestAStopLeavesOutAnotherLoopsBackgroundWork(t *testing.T) {
 	}
 	if len(lead.eventsOf("stop_refused")) != 0 {
 		t.Errorf("the lead's events: %s", lead.eventLog())
+	}
+}
+
+// The record of background work told at its start keeps the command and the description the call gave,
+// each on one line and clipped to 200 characters, and leaves out what the call did not give.
+func TestBackgroundToldRecordsTheCommandAndDescription(t *testing.T) {
+	long := "go test ./... -run '" + strings.Repeat("A", 300) + "'"
+	for _, c := range []struct {
+		name                 string
+		in                   map[string]any
+		command, description string // "" for a field the record leaves out
+	}{
+		{name: "a command run in the background", in: bgBash("npm test", "b1", false), command: "npm test", description: "run npm test"},
+		{name: "a long command", in: bgBash(long, "b1", false),
+			command: string([]rune(long)[:199]) + "…", description: string([]rune("run " + long)[:199]) + "…"},
+		{name: "a command on several lines", in: map[string]any{"tool_name": "Bash",
+			"tool_input":    map[string]any{"command": "cd web &&\n  pnpm test", "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: "cd web && pnpm test"},
+		{name: "a PowerShell command", in: map[string]any{"tool_name": "PowerShell",
+			"tool_input":    map[string]any{"command": "Invoke-Pester", "description": "run the tests", "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: "Invoke-Pester", description: "run the tests"},
+		{name: "a Monitor", in: map[string]any{"tool_name": "Monitor", "tool_input": map[string]any{"command": "tail -F app.log", "description": "watch the log"},
+			"tool_response": map[string]any{"taskId": "b1"}}, command: "tail -F app.log", description: "watch the log"},
+		{name: "an agent launched in the background", in: map[string]any{"tool_name": "Agent",
+			"tool_input":    map[string]any{"description": "explore the parser", "prompt": "Find …", "run_in_background": true},
+			"tool_response": map[string]any{"status": "async_launched", "agentId": "b1"}}, description: "explore the parser"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			f.fire("PostToolUse", c.in)
+			told := f.eventsOf("background_told")
+			if len(told) != 1 {
+				t.Fatalf("events: %s", f.eventLog())
+			}
+			e := told[0]
+			if e["task"] != "b1" || e["tool"] != c.in["tool_name"] || e["via"] != "start" || e["phase"] != "P0" {
+				t.Errorf("told %v", e)
+			}
+			for field, want := range map[string]string{"command": c.command, "description": c.description} {
+				got, has := e[field]
+				if want == "" && has || want != "" && got != want {
+					t.Errorf("%s: %q, want %q", field, got, want)
+				}
+			}
+		})
+	}
+}
+
+// No hook reports a background task's end, so a Stop whose background_tasks no longer lists told work
+// records its end, with how long it ran from when the model was told of it: work told at its start, and
+// work told at a stop refused over it. Work still listed, and work another loop was told of, are not ended
+// here; a phase agent's work ends in its sub-run.
+func TestBackgroundWorkEndsWhenAStopNoLongerListsIt(t *testing.T) {
+	f := newFixture(t, true)
+	t0 := f.now
+	f.fire("PostToolUse", bgBash("npm test", "b1", false))
+	f.now = t0.Add(10 * time.Second)
+	f.fire("PostToolUse", map[string]any{"tool_name": "Monitor", "tool_input": map[string]any{"command": "tail -F app.log", "description": "watch the log"},
+		"tool_response": map[string]any{"taskId": "m1"}})
+	f.now = t0.Add(time.Minute)
+	f.fire("Stop", map[string]any{"background_tasks": shells("b1", "m1")})
+	if ended := f.eventsOf("background_ended"); len(ended) != 0 {
+		t.Fatalf("ended while listed: %v", ended)
+	}
+	f.now = t0.Add(5 * time.Minute)
+	f.fire("Stop", map[string]any{"background_tasks": shells("m1", "s1")}) // s1: work baton did not see start, told now
+	if ended := f.eventsOf("background_ended"); len(ended) != 1 || !f.logged("background_ended", map[string]any{"task": "b1", "seconds": float64(300), "phase": "P0"}) {
+		t.Fatalf("events: %s", f.eventLog())
+	}
+	f.now = t0.Add(7 * time.Minute)
+	f.fire("Stop", map[string]any{"background_tasks": []any{}})
+	if ended := f.eventsOf("background_ended"); len(ended) != 3 ||
+		!f.logged("background_ended", map[string]any{"task": "m1", "seconds": float64(410)}) ||
+		!f.logged("background_ended", map[string]any{"task": "s1", "seconds": float64(120)}) {
+		t.Fatalf("events: %s", f.eventLog())
+	}
+	if st := f.state(); len(st.Run.BackgroundTold) != 0 || st.Run.BackgroundToldAt != nil {
+		t.Fatalf("still told: %v at %v", st.Run.BackgroundTold, st.Run.BackgroundToldAt)
+	}
+
+	w, lead, _ := newWorker(t)
+	w.fire("PostToolUse", bgBash("go test ./...", "b1", true))
+	lead.fire("Stop", map[string]any{"background_tasks": []any{}})
+	if len(lead.eventsOf("background_ended")) != 0 {
+		t.Fatalf("the lead ended the agent's work: %s", lead.eventLog())
+	}
+	w.now = w.now.Add(90 * time.Second)
+	w.fire("SubagentStop", map[string]any{"background_tasks": []any{}})
+	if !w.logged("background_ended", map[string]any{"task": "b1", "seconds": float64(90), "phase": "P2"}) {
+		t.Fatalf("the agent's events: %s", w.eventLog())
 	}
 }
 

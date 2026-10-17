@@ -19,8 +19,8 @@ import (
 type Board struct {
 	Title string `json:"title,omitempty"`
 	Mode  string `json:"mode"` // the run's: idle (no plan), running, paused or complete
-	// Step is the step the run is at, from 1: the first with a phase not done, or the last once every
-	// phase is (0 with no plan).
+	// Step is the step the run is at, from 1: the first with a phase not through (done, verifying or
+	// landing: through), or the last once every phase is (0 with no plan).
 	Step  int              `json:"step"`
 	Steps []Step           `json:"steps,omitempty"`
 	Lead  decide.LeadStand `json:"lead"`
@@ -93,13 +93,39 @@ func Build(in Input) Board {
 	}
 	b.Step = len(b.Steps)
 	for _, s := range b.Steps {
-		if slices.ContainsFunc(s.Phases, func(p Phase) bool { return p.Stand.Kind != decide.StandDone }) {
+		if slices.ContainsFunc(s.Phases, func(p Phase) bool { return !through(st, subs, p.ID) }) {
 			b.Step = s.N
 			break
 		}
 	}
 	b.Lead = lead(st, now)
 	return b
+}
+
+// through reports whether phase id of run st is through as far as the step goes: done, or with its work
+// finished and only to be checked or landed: verifying after `baton done` (the lead's, or a phase agent's
+// in its sub-run, subs), or its worker's work in the merge queue. So a phase of a plan's first step that
+// lands late leaves the run at the step its other phases have reached, not at step 1.
+func through(st state.State, subs map[string]state.State, id string) bool {
+	ps := st.Phases[id]
+	if ps == nil {
+		return false
+	}
+	switch ps.Status {
+	case state.PhaseDone, state.PhaseVerifying:
+		return true
+	case state.PhaseWorking:
+		w := st.WorkerOn(id)
+		if w == nil {
+			return false
+		}
+		if w.Status == state.WorkerLanding {
+			return true
+		}
+		sp := subs[w.Ref].Phases[id]
+		return w.Status == state.WorkerWorking && sp != nil && (sp.Status == state.PhaseVerifying || sp.Status == state.PhaseDone)
+	}
+	return false
 }
 
 // phase is phase id of run st, and how it stands.

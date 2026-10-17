@@ -10,20 +10,22 @@ import (
 )
 
 // A session that waits on a job needs nothing from the human, but Claude Code's own idle notice, once the
-// turn has ended, reads as if it did. The session lines baton gives at such a stop say so.
+// turn has ended, reads as if it did. The session lines baton gives at such a stop say so, and say it of
+// baton alone ("baton needs nothing from you for this wait"): the model may have asked the human something
+// of its own in the same turn, which a plain "nothing is needed from you" would seem to take back.
 
 // GateWait is the session line when the phase in hand (cur) waits on its jobs (a gate, a wait on something
 // outside, or both), and nothing else: no one needs to do anything.
 func GateWait(cur string, jobs []state.Job) string {
 	if len(jobs) == 1 {
 		j := jobs[0]
-		return fmt.Sprintf("baton: %s waits on job %s (`%s`) — nothing is needed from you: Claude is given its result when it ends", cur, j.ID, j.Command)
+		return fmt.Sprintf("baton: %s waits on job %s (`%s`) — baton needs nothing from you for this wait: Claude is given its result when it ends", cur, j.ID, j.Command)
 	}
 	var names []string
 	for _, j := range jobs {
 		names = append(names, fmt.Sprintf("%s (`%s`)", j.ID, j.Command))
 	}
-	return fmt.Sprintf("baton: %s waits on jobs %s — nothing is needed from you: Claude is given each result when it ends", cur, andList(names))
+	return fmt.Sprintf("baton: %s waits on jobs %s — baton needs nothing from you for this wait: Claude is given each result when it ends", cur, andList(names))
 }
 
 // NoPhaseYet is the session line when no phase is in hand because every phase left waits on a job
@@ -32,12 +34,12 @@ func GateWait(cur string, jobs []state.Job) string {
 func NoPhaseYet(waiting string, here *state.Job) string {
 	if here != nil {
 		return fmt.Sprintf("baton: job %s (`%s`, %s) runs its gate in this working tree, so no phase starts here until it ends — "+
-			"nothing is needed from you: baton takes the next one up then", here.ID, here.Command, here.Phase)
+			"baton needs nothing from you for this wait: it takes the next one up then", here.ID, here.Command, here.Phase)
 	}
 	if waiting == "" {
 		return "baton: no phase can start yet; baton takes the next one up as soon as one can"
 	}
-	return "baton: no phase can start until " + waiting + " finishes — nothing is needed from you: baton takes the next one up then"
+	return "baton: no phase can start until " + waiting + " finishes — baton needs nothing from you for this wait: it takes the next one up then"
 }
 
 // RunStalled is the notice pushed to the human when nothing in the run has moved for quiet (loop's stall

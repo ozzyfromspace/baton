@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -201,25 +202,35 @@ func TestUntoldBackgroundWork(t *testing.T) {
 	}
 }
 
-// Work told about at its start is told once, and forgotten when no Stop reports it any more; a Monitor's
-// told id goes with it.
+// Work told about at its start is told once, with when, and forgotten when no Stop reports it any more,
+// which returns it as ended with when it was told; a Monitor's told id goes with it. Work told by a baton
+// that kept no time ends with none.
 func TestToldBackgroundWorkIsForgottenWhenItEnds(t *testing.T) {
 	t0 := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	var r Runtime
-	if !r.Tell("b1") || r.Tell("b1") || r.Tell("") || !r.Tell("m1") {
+	if !r.Tell("b1", t0) || r.Tell("b1", t0.Add(time.Second)) || r.Tell("", t0) || !r.Tell("m1", t0.Add(10*time.Second)) {
 		t.Fatalf("told %v", r.BackgroundTold)
+	}
+	if !r.BackgroundToldAt["b1"].Equal(t0) || !r.BackgroundToldAt["m1"].Equal(t0.Add(10*time.Second)) || len(r.BackgroundToldAt) != 2 {
+		t.Fatalf("told at %v", r.BackgroundToldAt)
 	}
 	r.Watch("m1")
-	r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}}, t0)
-	if r.Untold(r.BusyBackground()) || len(r.BackgroundTold) != 2 {
-		t.Fatalf("told %v", r.BackgroundTold)
+	if ended := r.SetBackground([]Task{{ID: "b1", Type: "shell"}, {ID: "m1", Type: "shell"}}, t0); r.Untold(r.BusyBackground()) || len(r.BackgroundTold) != 2 || len(ended) != 0 {
+		t.Fatalf("told %v, ended %v", r.BackgroundTold, ended)
 	}
-	r.SetBackground([]Task{{ID: "b1", Type: "shell"}}, t0.Add(time.Minute))
+	ended := r.SetBackground([]Task{{ID: "b1", Type: "shell"}}, t0.Add(time.Minute))
 	if len(r.BackgroundTold) != 1 || r.BackgroundTold[0] != "b1" || len(r.Monitors) != 0 {
 		t.Fatalf("after the monitor ended: told %v, monitors %v", r.BackgroundTold, r.Monitors)
 	}
-	r.SetBackground(nil, t0.Add(2*time.Minute))
-	if len(r.BackgroundTold) != 0 {
-		t.Fatalf("after the work ended: told %v", r.BackgroundTold)
+	if want := []TaskEnded{{ID: "m1", Told: t0.Add(10 * time.Second)}}; !slices.Equal(ended, want) || len(r.BackgroundToldAt) != 1 {
+		t.Fatalf("ended %v, want %v; told at %v", ended, want, r.BackgroundToldAt)
+	}
+	r.BackgroundTold = append(r.BackgroundTold, "old") // told by a baton that kept no time
+	ended = r.SetBackground(nil, t0.Add(2*time.Minute))
+	if len(r.BackgroundTold) != 0 || r.BackgroundToldAt != nil {
+		t.Fatalf("after the work ended: told %v at %v", r.BackgroundTold, r.BackgroundToldAt)
+	}
+	if want := []TaskEnded{{ID: "b1", Told: t0}, {ID: "old"}}; !slices.Equal(ended, want) {
+		t.Fatalf("ended %v, want %v", ended, want)
 	}
 }
