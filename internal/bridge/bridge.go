@@ -58,6 +58,13 @@ const (
 	// blocked, and which Claude Code keeps in the box after a block, for a second Enter to send again
 	// (spike 40). A draft the human started since is left as it is.
 	Empty = "empty"
+	// Complete has the mod make one model call for the host ($.model.complete: the session's own client and
+	// credentials, with no history and no tools; spike 41): Model, System, Prompt, MaxTokens, TimeoutMs.
+	// Nothing of it reaches the lead's conversation or starts a turn. The mod starts the call and goes on to
+	// the next command, and acks it once the call is over: the answer (Result, cut at 4,000 characters), how
+	// long it took (Ms) and what it used (Usage), or why there is none (Reason and Error). The bridge keeps
+	// that ack for the host that issued it (Answer), out of the inbox.
+	Complete = "complete"
 	// Moved tells the mod that its host drives another run now (its session carried a run on, or the human
 	// switched conversations): the mod says hello again, which gives it that run's bridge, and acks
 	// nothing here. Its host takes it back if it drives this run again (Retract).
@@ -105,6 +112,13 @@ type Command struct {
 	// Compact: the compaction it is for (state.Compaction.Epoch). Submit: the line, in Text. Empty: the
 	// prompt, in Text.
 	Epoch int `json:"epoch,omitempty"`
+	// Complete: the model (an alias such as haiku, or a full id), the system prompt, and the prompt in
+	// Prompt; the reply's token cap (0: Claude Code's default, 1024), and how long the call may take, in
+	// milliseconds (0: no bound of its own).
+	Model     string `json:"model,omitempty"`
+	System    string `json:"system,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	TimeoutMs int64  `json:"timeout_ms,omitempty"`
 }
 
 // Report is what the mod saw or did, as `baton mod report` reads it.
@@ -127,6 +141,10 @@ type Report struct {
 	Interrupted bool   `json:"interrupted,omitempty"`
 	// Ack of a spawn, Turn, Dropped: the agent.
 	Agent string `json:"agent,omitempty"`
+	// Ack of a complete: the answer in Result and how long the call took in Ms, or, not OK, why there is
+	// none in Reason (api-error, empty-reply, aborted, refused: Claude Code would not send it) and Error;
+	// and what the call used, as the API counts it.
+	Usage *Usage `json:"usage,omitempty"`
 	// Turn: why it ended (answer, aborted, refusal or error), a refusal's category, the agent's last
 	// words (cut), and how long the turn took.
 	Reason  string `json:"reason,omitempty"`
@@ -174,6 +192,9 @@ type Record struct {
 	// the oldest go, counted in Lost.
 	Inbox []Report `json:"inbox,omitempty"`
 	Lost  int      `json:"lost,omitempty"`
+	// Answers holds the acks of complete commands, until the host that issued each takes it (Answer),
+	// oldest first; past MaxAnswers the oldest go.
+	Answers []Report `json:"answers,omitempty"`
 }
 
 // HelloInfo is the mod's hello as recorded.
@@ -467,6 +488,13 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 			if c.Epoch <= 0 {
 				return fmt.Errorf("a compact names no compaction")
 			}
+		case Complete:
+			if c.Model == "" || c.Prompt == "" {
+				return fmt.Errorf("a complete names no model or no prompt")
+			}
+			if c.MaxTokens < 0 || c.TimeoutMs < 0 {
+				return fmt.Errorf("a complete's token cap and time limit cannot be negative")
+			}
 		default:
 			return fmt.Errorf("no such command: %q", c.Kind)
 		}
@@ -489,6 +517,9 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 		}
 		if c.Epoch != 0 {
 			fields["epoch"] = c.Epoch
+		}
+		if c.Kind == Complete {
+			fields["model"], fields["chars"] = c.Model, len(c.System)+len(c.Prompt)
 		}
 		b.event("mod_command", fields)
 		return nil
@@ -518,6 +549,7 @@ func (b *Bridge) Claim(instance string) error {
 			os.Remove(b.CommandPath(o.ID))
 		}
 		r.Open = kept
+		r.Answers = slices.DeleteFunc(r.Answers, func(a Report) bool { return a.Instance != instance }) // no one waits for them
 		return nil
 	})
 	if err == nil && len(void) > 0 {
@@ -658,6 +690,13 @@ func (b *Bridge) Accept(rep Report) (Accepted, error) {
 					return err
 				}
 			}
+			if cmd != nil && cmd.Kind == Complete {
+				r.Answers = append(r.Answers, rep) // for the host that waits for it, not the inbox
+				if n := len(r.Answers) - MaxAnswers; n > 0 {
+					r.Answers = slices.Delete(r.Answers, 0, n)
+				}
+				return nil
+			}
 		}
 		r.Inbox = append(r.Inbox, rep)
 		if n := len(r.Inbox) - MaxInbox; n > 0 {
@@ -693,6 +732,9 @@ func reportFields(rep Report, cmd *Issued) map[string]any {
 	add("error", cut(rep.Error, 300), rep.Error != "")
 	add("interrupted", true, rep.Interrupted)
 	add("agent", rep.Agent, rep.Agent != "")
+	if u := rep.Usage; u != nil {
+		f["input_tokens"], f["output_tokens"] = u.Input+u.CacheRead+u.CacheWrite, u.Output
+	}
 	add("reason", rep.Reason, rep.Reason != "")
 	add("refusal", rep.Refusal, rep.Refusal != "")
 	add("ms", rep.Ms, rep.Ms != 0)
