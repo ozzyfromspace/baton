@@ -107,7 +107,7 @@ func TestExitCodes(t *testing.T) {
 			t.Errorf("%q: a lane error with no reason", c.command)
 		}
 	}
-	if log := logOf(t, r); !strings.Contains(log, "broken") || !strings.Contains(log, "[baton] failed (exit 3)") {
+	if log := logOf(t, r); !strings.Contains(log, "broken") || !strings.Contains(log, "] failed (exit 3)") {
 		t.Errorf("the log has neither the command's output nor its verdict:\n%s", log)
 	}
 }
@@ -131,7 +131,7 @@ func TestTheLaneContract(t *testing.T) {
 	env := strings.Fields(string(b))
 	slices.Sort(env)
 	dir := r.Pool.LaneDir(1)
-	if want := []string{"BATON_COMMIT=" + head, "BATON_LANE=1", "BATON_LANE_DIR=" + dir, "BATON_ROOT=" + root}; !slices.Equal(env, want) {
+	if want := []string{"BATON_COMMIT=" + head, "BATON_JOB=j1", "BATON_LANE=1", "BATON_LANE_DIR=" + dir, "BATON_ROOT=" + root}; !slices.Equal(env, want) {
 		t.Errorf("the lane script's environment: %q, want %q", env, want)
 	}
 	if log := logOf(t, r); !strings.Contains(log, "hello from the gate") || !strings.Contains(log, "up in "+dir) {

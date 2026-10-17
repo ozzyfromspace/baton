@@ -108,6 +108,10 @@ type Plan struct {
 	// way to File (MoveAside): the session's plan-mode file, which Claude Code writes afresh at the
 	// session's next planning, so an approval of it is a revision of this plan. "" for a plan never moved.
 	Origin string `json:"plan_origin,omitempty"`
+	// Record is the record file the standing rules name (`Record: docs/record.md`, record.go), relative to
+	// the project's root: baton appends each phase's record to it, and no model of the run edits it. ""
+	// for none.
+	Record string `json:"record,omitempty"`
 }
 
 // Spec is what the model supplies to `baton attach`: everything except the file identity.
@@ -116,6 +120,9 @@ type Spec struct {
 	Phases      []Phase `json:"phases"`
 	RulesAnchor string  `json:"rules_anchor,omitempty"`
 	EndAnchor   string  `json:"end_anchor,omitempty"`
+	// Root is the project's root, where Build checks that the plan's record file (Record) names no
+	// directory: "" checks the record's path by its form alone. Never the model's to give.
+	Root string `json:"-"`
 }
 
 // Build validates spec against the plan document's text and returns the plan to store, with each phase's
@@ -137,6 +144,10 @@ func build(file string, doc []byte, spec Spec, kept map[string]bool) (Plan, erro
 		Phases: slices.Clone(spec.Phases), RulesAnchor: spec.RulesAnchor, EndAnchor: spec.EndAnchor,
 	}
 	errs := p.derive(text, func(int) bool { return true })
+	var err error
+	if p.Record, err = recordOf(p.Rules(doc), spec.Root); err != nil {
+		errs = append(errs, err)
+	}
 	for i, ph := range spec.Phases {
 		if got := p.Phases[i].Type; ph.Type != "" && ph.Type != got {
 			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"type\" (%s) differs from the plan's (%q). A phase's type comes from the plan text, "+
@@ -375,7 +386,11 @@ func Follow(p Plan, doc []byte, remaining []string) (adopted Plan, changed bool,
 	}
 	adopted = p
 	adopted.SHA256, adopted.Phases = hex.EncodeToString(sum[:]), phases
+	record, rerr := recordOf(adopted.Rules(doc), "") // the rules may name another record file now
 	if len(spec.Phases) == 0 {
+		if rerr == nil {
+			adopted.Record = record
+		}
 		return adopted, true, nil
 	}
 	if len(added) > 0 {
@@ -390,7 +405,11 @@ func Follow(p Plan, doc []byte, remaining []string) (adopted Plan, changed bool,
 		return p, true, errors.Join(errs...)
 	}
 	adopted.EndAnchor = spec.EndAnchor
-	if errs := adopted.derive(text, func(i int) bool { return redo[phases[i].ID] }); len(errs) > 0 {
+	errs := adopted.derive(text, func(i int) bool { return redo[phases[i].ID] })
+	if adopted.Record = record; rerr != nil {
+		errs = append(errs, rerr)
+	}
+	if len(errs) > 0 {
 		return p, true, errors.Join(errs...)
 	}
 	return adopted, true, nil

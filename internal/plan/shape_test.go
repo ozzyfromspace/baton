@@ -60,7 +60,32 @@ func TestShape(t *testing.T) {
 			}
 		})
 	}
-	if s := (Plan{}).Shape(); s.Phases != 0 || len(s.Chain) != 0 || s.Width != 0 || s.MostlyChain() {
+	if s := (Plan{}).Shape(); s.Phases != 0 || len(s.Chain) != 0 || s.Width != 0 || s.QA != 0 || s.MostlyChain() {
 		t.Errorf("no phases: %+v", s)
+	}
+}
+
+// A plan's shape counts its QA phases, which the gate rules ask the model to place at real seams. (An
+// entry's "\nType: qa" puts that line under its After: line.)
+func TestShapeCountsQAPhases(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		after []string
+		qa    int
+	}{
+		{"none", []string{"", "none", "all"}, 0},
+		{"one at the end", []string{"", "none", "all\nType: qa"}, 1},
+		{"one per phase", []string{"", "P0\nType: qa", "P1", "P2\nType: qa"}, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc := shapeDoc(c.after...)
+			p, err := Build("shapes.md", doc, Suggest(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s := p.Shape(); s.QA != c.qa {
+				t.Errorf("Shape().QA = %d, want %d (%+v)", s.QA, c.qa, s)
+			}
+		})
 	}
 }

@@ -76,6 +76,10 @@ type Fleet struct {
 	// (0: replan.Max), as while a replan is open.
 	AutoReplan bool
 	ReplanMax  time.Duration
+	// AggregateQA is aggregate_qa: the plan's heavy checks wait for its QA phases. With it, a landing
+	// whose phase shares no file with what landed since its gate, and that a QA phase not started yet
+	// follows, lands without its verification again (sized.go).
+	AggregateQA bool
 	// Go runs the coordinator's work on the agents off the lead's tick (nil: on a goroutine of its own).
 	Go func(fn func())
 

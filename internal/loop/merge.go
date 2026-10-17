@@ -28,7 +28,10 @@ import (
 //     verifies it again every time. The checkout's own commits (the lead's, or the human's) verify it
 //     again once: those made while the merge queue's verification runs are landed over, unverified with
 //     it, and the lead is told that its next gate checks them together (Landing.Unverified), so a lead
-//     that commits more often than the gate takes cannot hold a landing up for good;
+//     that commits more often than the gate takes cannot hold a landing up for good. The verification
+//     again is sized to the change (sized.go): run with the phase's land check if it gave one, and
+//     skipped, the phase landing over those commits, when none of them changes a file of its (Markdown
+//     aside) and a QA phase not started yet follows it, with aggregate_qa on;
 //  3. the branch's changed paths are checked against the lead's local changes, ignored files included,
 //     without taking git's locks: on an overlap, landing waits until the lead has committed those files.
 //     Once they have held it for Timing.LandNudge, the lead's model is asked to commit them, by path
@@ -56,6 +59,8 @@ type landGit interface {
 	Overlap(root string, changes []gitx.Change) ([]string, error)
 	FastForward(ctx context.Context, root, commit string) error
 	Dirty(root string) ([]string, error)
+	MergeBase(ctx context.Context, root, a, b string) (string, error)
+	ChangedBetween(ctx context.Context, root, base, to string) ([]string, error)
 }
 
 type realGit struct{}
@@ -81,6 +86,12 @@ func (realGit) FastForward(ctx context.Context, root, commit string) error {
 	return gitx.FastForward(ctx, root, commit)
 }
 func (realGit) Dirty(root string) ([]string, error) { return gitx.Dirty(root) }
+func (realGit) MergeBase(ctx context.Context, root, a, b string) (string, error) {
+	return gitx.MergeBase(ctx, root, a, b)
+}
+func (realGit) ChangedBetween(ctx context.Context, root, base, to string) ([]string, error) {
+	return gitx.ChangedBetween(ctx, root, base, to)
+}
 
 func (f *Fleet) gitx() landGit {
 	if f.git != nil {
@@ -217,11 +228,14 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 				c.deferLanding(now, s, e, err.Error(), nil, failedRetry)
 				return false
 			}
+			var sk skip
 			if why := c.moved(s, st, since); why == movedLanded || !j.Requeue {
-				c.reverify(now, s, st, w, e, *j, tip, why)
-				return true
+				if sk = c.sized(ctx, s, st, e, since, onto, tip); sk.qa == "" {
+					c.reverify(now, s, st, w, e, *j, tip, why)
+					return true
+				}
 			}
-			over = unverified{verified: j.Commit, commits: since}
+			over = unverified{verified: j.Commit, commits: since, skip: sk}
 		}
 	}
 	return c.fastForward(ctx, now, s, st, e, onto, tip, over)
@@ -260,10 +274,12 @@ func (c *Coordinator) moved(s *state.Store, st state.State, commits []string) st
 }
 
 // unverified are the checkout's own commits a landing goes over without its verification, which passed
-// on verified before them.
+// on verified before them; or, when its verification again was skipped (skip, sized.go), every commit
+// that came on the run's branch since.
 type unverified struct {
 	verified string
 	commits  []string
+	skip
 }
 
 // mergeIn merges the run's branch, at onto, into worker e's branch, at tip. A merge that does not go
@@ -315,9 +331,14 @@ func verified(sub state.State, phase string) *state.Job {
 func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, j state.Job, tip, why string) {
 	var q state.Job
 	notes := decide.ReverifyNotes(st.RunBranch, j.Notes, why == movedLead)
+	var command string
 	_, err := w.store.Update(func(sub *state.State) error {
+		command = j.Command
+		if ps := sub.Phases[e.Phase]; ps != nil && ps.LandCheck != "" {
+			command = ps.LandCheck // the focused check it gave with its done, in its gate's place
+		}
 		var err error
-		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: j.Command, Commit: tip, Here: j.Here, Notes: notes}, now)
+		q, err = state.Reverify(sub, state.Job{Phase: e.Phase, Command: command, Commit: tip, Here: j.Here, Notes: notes}, now)
 		return err
 	})
 	if err != nil {
@@ -325,12 +346,17 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 		return
 	}
 	c.setEntry(s, e, func(x *state.Worker) { x.Merge.Reverify = q.ID })
-	s.Event("reverify_queued", map[string]any{"phase": e.Phase, "job": q.ID, "command": j.Command, "commit": tip, "verified": j.Commit, "why": why})
+	fields := map[string]any{"phase": e.Phase, "job": q.ID, "command": command, "commit": tip, "verified": j.Commit, "why": why}
+	by := ""
+	if command != j.Command {
+		fields["land_check"], by = true, ", by its land check"
+	}
+	s.Event("reverify_queued", fields)
 	came := "other work landed on " + st.RunBranch
 	if why == movedLead {
 		came = "commits were made on " + st.RunBranch + " in the checkout"
 	}
-	c.announce(s, fmt.Sprintf("baton: %s since %s was verified → verifying it again with the run's branch merged in (job %s, `%s`)", came, e.Phase, q.ID, j.Command))
+	c.announce(s, fmt.Sprintf("baton: %s since %s was verified → verifying it again with the run's branch merged in%s (job %s, `%s`)", came, e.Phase, by, q.ID, command))
 }
 
 // fastForward lands worker e's branch, at tip, with the run's branch at onto merged in, over the commits
@@ -417,7 +443,10 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 	for _, ch := range changes {
 		files = append(files, ch.Path)
 	}
-	c.landed(now, s, e, state.Landing{Phase: e.Phase, Commits: commits, Files: files, Head: tip, At: now, Verified: over.verified, Unverified: over.commits})
+	if over.qa != "" {
+		s.Event("reverify_skipped", map[string]any{"phase": e.Phase, "why": over.why, "qa": over.qa, "verified": over.verified, "commits": over.commits})
+	}
+	c.landed(now, s, e, state.Landing{Phase: e.Phase, Commits: commits, Files: files, Head: tip, At: now, Verified: over.verified, Unverified: over.commits, QA: over.qa})
 	if check != "" {
 		s.Event("land_check", map[string]any{"phase": e.Phase, "problem": check})
 		c.announce(s, fmt.Sprintf("baton: after %s landed, %s: look over the checkout", e.Phase, check))
@@ -523,7 +552,11 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 		fields["next"] = next
 	}
 	over := ""
-	if len(l.Unverified) > 0 {
+	switch {
+	case len(l.Unverified) > 0 && l.QA != "":
+		fields["verified"], fields["unverified"], fields["qa"] = l.Verified, l.Unverified, l.QA
+		over = decide.SkippedOver(l.Unverified, l.QA)
+	case len(l.Unverified) > 0:
 		fields["verified"], fields["unverified"] = l.Verified, l.Unverified
 		var shorts []string
 		for _, x := range l.Unverified {
