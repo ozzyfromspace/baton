@@ -52,6 +52,9 @@ type Runtime struct {
 	// hook reports a task's end (spike 19), so the record of a Stop that no longer lists it says how long
 	// it ran from there (SetBackground).
 	BackgroundToldAt map[string]time.Time `json:"background_told_at,omitempty"`
+	// BackgroundQuestioned lists the checks (a hash of each command) the model started as a background
+	// shell task that baton refused once, pointing it to baton verify: the same call again goes through.
+	BackgroundQuestioned []string `json:"background_questioned,omitempty"`
 	// Monitors are the task ids of the Monitor watchers the session armed (PostToolUse(Monitor)
 	// tool_response.taskId), while they still run. Claude Code reports a Monitor at Stop as type "shell",
 	// like a background command, so its id is the only way to tell the two apart (spike 19).

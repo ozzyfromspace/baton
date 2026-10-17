@@ -294,6 +294,9 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 			return Result{}, nil // operators or redirections: Claude Code's usual permission checks apply
 		}
 	}
+	if res, refused := h.backgroundCheck(c); refused {
+		return res, nil
+	}
 	var hold string
 	var refuseQuestion string
 	var pending []issued
