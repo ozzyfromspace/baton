@@ -17,13 +17,17 @@ import (
 const maxFiles = 20
 
 // Landed tells the lead what landed on branch (the run's branch) underneath it, and which of its own
-// commits a landing was not verified with (Landing.Unverified), which its next gate checks with it.
+// commits a landing was not verified with (Landing.Unverified), which its next gate checks with it, or,
+// for a landing whose verification again was skipped (Landing.QA), the QA phase ahead.
 func Landed(ls []state.Landing, branch string) string {
-	var parts, gates []string
+	var parts, gates, skipped []string
 	head := ""
 	for _, l := range ls {
 		commits := shorts(l.Commits)
-		if len(l.Unverified) > 0 {
+		switch {
+		case len(l.Unverified) > 0 && l.QA != "":
+			skipped = append(skipped, skippedGate(l))
+		case len(l.Unverified) > 0:
 			gates = append(gates, fmt.Sprintf("%s's gate passed on %s, before your %s %s", l.Phase, short7(l.Verified),
 				plural(len(l.Unverified), "commit", "commits"), strings.Join(shorts(l.Unverified), ", ")))
 		}
@@ -40,6 +44,9 @@ func Landed(ls []state.Landing, branch string) string {
 	unverified := ""
 	if len(gates) > 0 {
 		unverified = strings.Join(gates, "; ") + "; your next gate runs them together. "
+	}
+	for _, g := range skipped {
+		unverified += g + " "
 	}
 	return fmt.Sprintf("[baton] While you worked, baton landed the work of another session on %s, underneath you: %s. A worker made %s, not you. "+
 		"Your own uncommitted changes were not touched, and git diff still shows only yours. HEAD is now %s, so your own last commit may no longer be HEAD. "+

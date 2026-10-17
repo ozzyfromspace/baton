@@ -142,9 +142,13 @@ type Landing struct {
 	By string `json:"by,omitempty"`
 	// Unverified are the commits of the checkout's own (not landed by baton) that it landed over without
 	// being verified with them, oldest first, its verification having passed on Verified before them: the
-	// merge queue verifies a landing again at most once for those (loop/merge.go).
+	// merge queue verifies a landing again at most once for those (loop/merge.go). With QA set, they are
+	// every commit that came on the run's branch since that verification, other phases' landings
+	// included, none changing a file of the phase's but Markdown: its verification again was skipped, and
+	// QA, the QA phase ahead, checks them together (loop/sized.go).
 	Verified   string   `json:"verified,omitempty"`
 	Unverified []string `json:"unverified,omitempty"`
+	QA         string   `json:"qa,omitempty"`
 }
 
 // LandedByLead is Landing.By for work the lead recorded as landed.

@@ -59,6 +59,10 @@ type PhaseState struct {
 	// when its done was claimed, or it was set aside, a verify and an await at most. A job that had ended
 	// by then was judged then, so it is not waited on again. Cleared once the phase is done or resumes.
 	On []string `json:"on,omitempty"`
+	// LandCheck is the focused command a phase agent gave with its done (`baton done --land-check`): the
+	// merge queue verifies its landing again with it, instead of its last passing gate, when other work
+	// landed since that gate (loop/merge.go reverify).
+	LandCheck string `json:"land_check,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
