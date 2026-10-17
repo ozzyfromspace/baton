@@ -294,6 +294,37 @@ func TestARerunCarriesNarrowsOrRunsEachStage(t *testing.T) {
 	}
 }
 
+// The record a rerun runs from (verify --failed) is a file of the rerun's own, so each of its stages names
+// the job its record comes from, and that is the job a stage is carried from, or narrowed to what failed in.
+func TestARerunsRecordNamesWhereEachStageCameFrom(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "jobs", "j81.rerun")
+	for _, s := range []lane.Stage{
+		{Name: "lint", Status: lane.StagePassed, Commit: "72b7740aaaaa", From: "j80"},
+		{Name: "unit", Status: lane.StageFailed, Exit: 1, Commit: "5d1e2aa0000", From: "j79", Failures: []string{"TestA"}},
+	} {
+		if err := lane.AppendStage(record, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stages := filepath.Join(dir, "jobs", "j81.stages")
+	env := map[string]string{lane.EnvStages: stages, lane.EnvRerun: record, "BATON_COMMIT": "9c0ffee1234"}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"lint"}, "■ lint passed in j80 on 72b7740, so this rerun does not run it again\n"},
+		{[]string{"unit", "--runner", "go"}, "— only the 1 that failed in j79: TestA\n"},
+	} {
+		if code, out, errOut := runStage(t, env, c.args, "out:ran"); code != 0 || !strings.Contains(out, c.want) {
+			t.Errorf("%v: exit %d, output lacks %q:\n%s%s", c.args, code, c.want, out, errOut)
+		}
+	}
+	if got := readStages(t, stages); len(got) != 2 || got[0].From != "j80" || got[0].Status != lane.StageCarried || got[1].Status != lane.StagePassed {
+		t.Errorf("recorded %+v", got)
+	}
+}
+
 func TestStagePresets(t *testing.T) {
 	failures := []struct {
 		runner, line, want string

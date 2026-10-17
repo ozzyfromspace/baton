@@ -309,7 +309,7 @@ func TestLaneRunGivesTheGateItsEnvironment(t *testing.T) {
 			}
 			rerun := "none"
 			if c.reruns != "" {
-				rerun = s.JobStages(c.reruns)
+				rerun = s.JobRerun("j1") // the record it runs from, written as verify --failed queued it
 			}
 			b, _ := os.ReadFile(out)
 			if got, want := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"), []string{"j1", s.JobStages("j1"), rerun, filepath.Dir(exe)}; !slices.Equal(got, want) {

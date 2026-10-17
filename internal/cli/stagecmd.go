@@ -101,12 +101,14 @@ func (s *stageRun) run() int {
 		}
 	}
 	prior, from := s.inRedGate()
+	if prior != nil && prior.From != "" {
+		// The job the stage's record comes from: a carried stage's, or each stage of the record a rerun runs
+		// from (state.Store.JobRerun), which is a file of the rerun's own.
+		from = prior.From
+	}
 	var narrow []string
 	switch {
 	case prior != nil && (prior.Status == lane.StagePassed || prior.Status == lane.StageCarried):
-		if prior.Status == lane.StageCarried && prior.From != "" {
-			from = prior.From
-		}
 		s.say(decide.StageCarried(s.name, from, prior.Commit))
 		s.say(lane.EndMarker(s.name, lane.StageCarried, 0, 0))
 		s.record(lane.Stage{Name: s.name, Status: lane.StageCarried, Commit: prior.Commit, From: from, KeepGoing: s.keepGoing})

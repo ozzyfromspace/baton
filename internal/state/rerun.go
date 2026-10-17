@@ -94,9 +94,10 @@ func sawFailure(j Job, stages []lane.Stage) bool {
 }
 
 // mergeStages is the latest record of each stage among jobs, oldest first, in the order the stages first
-// ran. A passed stage keeps the job it passed in (From) and its commit; a carried one, those it was carried
-// from. A stage a later job showed a failure in that never ended has no record any more: what an earlier
-// job knew of it is stale, so a rerun runs it whole.
+// ran. Each names the job its record comes from (From) and the commit: the job it ran in, or, carried, the
+// job it passed in, since the record is read by `baton stage` from a file of the rerun's own (JobRerun). A
+// stage a later job showed a failure in that never ended has no record any more: what an earlier job knew
+// of it is stale, so a rerun runs it whole.
 func mergeStages(jobs []Job, stagesOf func(Job) []lane.Stage) []lane.Stage {
 	var out []lane.Stage
 	for _, j := range jobs {
@@ -105,7 +106,7 @@ func mergeStages(jobs []Job, stagesOf func(Job) []lane.Stage) []lane.Stage {
 			if s.Commit == "" {
 				s.Commit = j.Commit
 			}
-			if s.Status == lane.StagePassed && s.From == "" {
+			if s.From == "" {
 				s.From = j.ID
 			}
 			if i := slices.IndexFunc(out, func(o lane.Stage) bool { return o.Name == s.Name }); i >= 0 {
