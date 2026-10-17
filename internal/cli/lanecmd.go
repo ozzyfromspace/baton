@@ -177,7 +177,9 @@ func runJob(s *state.Store, job state.Job, io IO) (lane.Result, []lane.Stage) {
 	}
 	lj := lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here, Stages: s.JobStages(job.ID)}
 	if job.Reruns != "" {
-		lj.Rerun = s.JobStages(job.Reruns)
+		// The record the rerun runs from, written as it was queued (verify --failed): the red gate's stages,
+		// with what later runs of its command learned and less what --stages brings back.
+		lj.Rerun = s.JobRerun(job.ID)
 	}
 	res := r.Run(ctx, lj)
 	return res, watch.finish(out)

@@ -39,8 +39,9 @@ import (
 //
 // The environment. A gate's command gets, besides the lane's (Pool.env, which strips every BATON_ variable
 // it inherits), EnvJob (the job's id), EnvStages (this job's stages file) and, on a rerun of a red gate,
-// EnvRerun (the red gate's stages file). A stage narrowed to what failed in the red gate also gets
-// EnvFailed (a file of the ids, one a line) and EnvFailedRE (FailedRE of them).
+// EnvRerun (the record of the red gate it reruns: a stages file, in which a stage names the job its record
+// comes from, Stage.From, when that is not the file's own). A stage narrowed to what failed in the red
+// gate also gets EnvFailed (a file of the ids, one a line) and EnvFailedRE (FailedRE of them).
 
 // Environment variables of the gate protocol.
 const (

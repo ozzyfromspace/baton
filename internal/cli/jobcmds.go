@@ -26,7 +26,8 @@ import (
 func init() {
 	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace. "+
-		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told)", cmdVerify)
+		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told). "+
+		"verify --failed [--stages <name>,<name>] --notes \"…\" reruns what failed in a red gate built from stages: the stages that passed are carried, and a pass clears it", cmdVerify)
 	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
@@ -40,10 +41,10 @@ func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAw
 func queueJob(args []string, io IO, kind string) int {
 	bools := []string{"replace"}
 	usage := " [--qa \"<why a full check now>\"] [--replace]"
-	if kind == state.JobVerify {
-		bools, usage = append(bools, "here"), " [--here]"+usage
-	}
 	vals := []string{"notes", "qa"}
+	if kind == state.JobVerify {
+		bools, vals, usage = append(bools, "here", "failed"), append(vals, "stages"), " [--here]"+usage
+	}
 	p, err := parseArgs(args, vals, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
 	if p.dash >= 0 {
@@ -51,8 +52,13 @@ func queueJob(args []string, io IO, kind string) int {
 		// command that hands a program text starting with a shell or git (`baton verify "sh check.sh"`).
 		command = strings.TrimSpace(strings.Join(p.pos[:p.dash], " ") + " " + lane.Join(p.pos[p.dash:]))
 	}
-	if err != nil || command == "" {
-		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s", kind, usage, kind, usage, errSuffix(err))
+	failed, bring := p.bools["failed"], stageList(p.vals["stages"])
+	if err != nil || command == "" && !failed || len(bring) > 0 && !failed {
+		rerun := ""
+		if kind == state.JobVerify {
+			rerun = ", or baton verify --failed [--stages <name>,<name>] --notes \"<where the phase stands>\" to rerun what failed in the red gate"
+		}
+		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s%s", kind, usage, kind, usage, rerun, errSuffix(err))
 	}
 	here, replace := p.bools["here"], p.bools["replace"]
 	isHosted := hosted(io) // read before the run's lock: it reads processes
@@ -72,6 +78,14 @@ func queueJob(args []string, io IO, kind string) int {
 		return refused(io, s, kind, err)
 	}
 	phase := st.Current
+	var re *rerunAsk
+	if failed {
+		a, err := askRerun(s, st, phase, command, bring)
+		if err != nil {
+			return refused(io, s, kind, err)
+		}
+		command, here, re = a.r.Of.Command, here || a.r.Of.Here, &a
+	}
 	var commit string
 	var work workLeft
 	if kind == state.JobVerify {
@@ -111,6 +125,12 @@ func queueJob(args []string, io IO, kind string) int {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
 		j := state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa}
+		if re != nil {
+			if err := re.still(*st, phase); err != nil {
+				return err
+			}
+			j.Reruns = re.r.Of.ID
+		}
 		if c := st.Clash(j); c != nil && !replace {
 			x := *c
 			clash = &x
@@ -155,6 +175,9 @@ func queueJob(args []string, io IO, kind string) int {
 		if replaced != nil {
 			line += fmt.Sprintf("; it replaces %s, which baton stops", replaced.ID)
 		}
+		if re != nil {
+			line += fmt.Sprintf("; it reruns what failed in %s", re.r.Of.ID)
+		}
 		if red != nil && replace {
 			line += fmt.Sprintf("; it is %s's gate now, in place of %s (`%s`), which is red", phase, red.ID, red.Command)
 		}
@@ -174,10 +197,19 @@ func queueJob(args []string, io IO, kind string) int {
 	if err != nil {
 		return refused(io, s, kind, err)
 	}
+	if re != nil {
+		re.save(s, queued)
+	}
 	pruneLogs(s, st)
 	queuedEvent := map[string]any{"job": queued.ID, "phase": phase, "type": kind, "command": command, "commit": commit}
 	if here {
 		queuedEvent["here"] = true
+	}
+	if re != nil {
+		queuedEvent["reruns"] = re.r.Of.ID
+		if len(re.bring) > 0 {
+			queuedEvent["stages"] = re.bring
+		}
 	}
 	if replaced != nil {
 		queuedEvent["replaced"] = replaced.ID
@@ -225,6 +257,9 @@ func queueJob(args []string, io IO, kind string) int {
 		where = fmt.Sprintf("on %s, in a lane of its own", shortCommit(commit))
 	}
 	fmt.Fprintf(io.Out, "baton: queued %s — `%s` (%s), %s. baton starts it within seconds; its output goes to %s.\n", queued.ID, command, phase, where, s.JobLog(queued.ID))
+	if re != nil {
+		re.say(io, s, queued)
+	}
 	if replaced != nil {
 		fmt.Fprintln(io.Out, "baton: "+decide.Replaced(*replaced, !replaced.Same(queued)))
 	}

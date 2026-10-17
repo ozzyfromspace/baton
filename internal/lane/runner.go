@@ -38,8 +38,8 @@ type Job struct {
 	// Commit is the commit to check out in a lane and run the command on. Without one, the command runs
 	// in the working tree itself, with no lane (a wait on something outside the project).
 	Commit string
-	// Stages is the job's stages file (EnvStages), and Rerun the red gate's that it reruns (EnvRerun): both
-	// given to its command, "" for none.
+	// Stages is the job's stages file (EnvStages), and Rerun the record of the red gate it reruns, a stages
+	// file too (EnvRerun): both given to its command, "" for none.
 	Stages, Rerun string
 	// Here runs the command in the working tree itself (the runner's WorkDir), on the commit checked out
 	// there (Commit, which nothing checks out): a gate that needs that tree. In the project's checkout it

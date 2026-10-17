@@ -125,7 +125,8 @@ func (j Job) kind() string {
 
 // Same reports whether j runs the same check as o: a job of the same kind, with the same command (and,
 // for a verify, the same --here). Queued again, it is the gate again, on a newer commit or as a wait
-// again.
+// again. A rerun of a red gate (verify --failed, Job.Reruns) has the gate's command, and its --here unless
+// asked to run there, so it is the same check as the gate, and as any other run of its command.
 func (j Job) Same(o Job) bool {
 	return j.kind() == o.kind() && j.Command == o.Command && j.Here == o.Here
 }
@@ -288,11 +289,12 @@ func (st State) gate(phase string, ended bool) *Job {
 }
 
 // takesOver reports whether gate j takes over from red gate g: it runs the same command (in a lane or in
-// the working tree), or was queued to stand in for g (Replaces), and it is queued, running, or ended with a
-// verdict. One that ended without a verdict (it could not run, or was interrupted) checked nothing, and g
-// stands again.
+// the working tree), reruns what failed in g (Reruns: verify --failed, the same command on its failures
+// alone), or was queued to stand in for g (Replaces), and it is queued, running, or ended with a verdict:
+// a pass clears g, and a failure of its own is the red gate from then on. One that ended without a verdict
+// (it could not run, or was interrupted, by `baton stop` say) checked nothing, and g stands again.
 func takesOver(j, g Job) bool {
-	return (j.Command == g.Command || j.Replaces == g.ID) && (!j.Finished() || j.Red() || j.Status == JobPassed)
+	return (j.Command == g.Command || j.Reruns == g.ID || j.Replaces == g.ID) && (!j.Finished() || j.Red() || j.Status == JobPassed)
 }
 
 // RedGate is the red gate phase stood on before the gates queued or running now (gate), or nil when it
