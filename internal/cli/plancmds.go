@@ -27,7 +27,7 @@ import (
 func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", leadOnly("attach", cmdAttach))
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
-	register("done", "mark the current phase finished (verifying while its job runs), or a worker's phase whose work is on the run's branch already: done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY]", cmdDone)
+	register("done", "mark the current phase finished (verifying while its job runs), or a worker's phase whose work is on the run's branch already: done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND]", cmdDone)
 	register("blocked", "stop until the human answers, or for 30 minutes before looking again, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", leadOnly("run", cmdRun))
@@ -838,9 +838,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 }
 
 func cmdDone(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"notes", "keep-dirty", "despite-red"}, []string{"force"})
+	p, err := parseArgs(args, []string{"notes", "keep-dirty", "despite-red", "land-check"}, []string{"force"})
 	if err != nil || len(p.pos) != 1 {
-		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--force]%s", errSuffix(err))
+		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND] [--force]%s", errSuffix(err))
 	}
 	id := p.pos[0]
 	s, pl, ok := storeAndPlan(io)
@@ -874,6 +874,7 @@ func cmdDone(args []string, io IO) int {
 		return fail(io, "%s", decide.UncommittedRefusal("done", id, fileList(work.fresh)))
 	}
 	despite := decide.Sanitize(p.vals["despite-red"])
+	landCheck := landCheckOf(s, p.vals["land-check"])
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var next, startHead string
 	var note *state.Decision
@@ -921,6 +922,7 @@ func cmdDone(args []string, io IO) int {
 		if next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"], DespiteRed: red}); err != nil {
 			return err
 		}
+		recordLandCheck(st, id, landCheck)
 		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying {
 			if on := st.WaitsOn(id); len(on) > 0 {
 				st.Run.Announce = append(st.Run.Announce, decide.VerifyingOn(id, on))
@@ -954,6 +956,9 @@ func cmdDone(args []string, io IO) int {
 	if len(work.fresh) > 0 {
 		done["keep_dirty"], done["files"] = keep, len(work.fresh)
 	}
+	if landCheck != "" {
+		done["land_check"] = landCheck
+	}
 	if verifying {
 		done["job"] = on[len(on)-1].ID
 		if len(on) > 1 {
@@ -964,6 +969,7 @@ func cmdDone(args []string, io IO) int {
 		s.Event("phase_done", done)
 	}
 	work.report(io, id, keep)
+	reportLandCheck(io, id, p.vals["land-check"], landCheck)
 	if startHead != "" && startHead == gitx.Head(s.Root) {
 		fmt.Fprintf(io.Out, "baton: warning — no commit since %s started. If this phase changed files, commit before ending your turn.\n", id)
 	}

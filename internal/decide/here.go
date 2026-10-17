@@ -2,6 +2,7 @@ package decide
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -15,15 +16,33 @@ import (
 
 // HereQueued is what the model does while its gate runs in its working tree (--here), which baton holds
 // until the gate ends; worker: the session is a worker's, in a worktree no landing touches. timeout is
-// how long a job may run.
-func HereQueued(worker bool, timeout string) string {
+// how long a job may run. In the lead's checkout the gate holds the landings that wait now, which it
+// names: the phases of the session's run whose work waits to land (landing), and how many of other baton
+// sessions' in the checkout (others). They land once it ends.
+func HereQueued(worker bool, timeout string, landing []string, others int) string {
 	held := "takes up no other phase here, and lands no worker's work in this checkout"
+	lands := " " + landingsHeld(landing, others)
 	if worker {
-		held = "and takes up nothing else here"
+		held, lands = "and takes up nothing else here", ""
 	}
 	return fmt.Sprintf("The gate reads this working tree as it runs, so until it ends baton refuses edits to it, %s: "+
-		"they would change what it checks. Meanwhile, do only what changes no file here, or end your turn: baton gives you its result when it ends, "+
-		"and baton status shows it meanwhile. If it runs past %s, baton stops it and counts it as failed.", held, timeout)
+		"they would change what it checks.%s Meanwhile, do only what changes no file here, or end your turn: baton gives you its result when it ends, "+
+		"and baton status shows it meanwhile. If it runs past %s, baton stops it and counts it as failed.", held, lands, timeout)
+}
+
+// landingsHeld names the landings a gate in the lead's checkout holds as it runs (HereQueued): the phases
+// of the session's run whose work waits to land (landing), and how many of other baton sessions' in the
+// checkout (others). They land once it ends, as does work that finishes meanwhile.
+func landingsHeld(landing []string, others int) string {
+	names := slices.Clone(landing)
+	if others > 0 {
+		names = append(names, fmt.Sprintf("%d %s of another baton session", others, plural(others, "phase", "phases")))
+	}
+	if n := len(landing) + others; n > 0 {
+		return fmt.Sprintf("%s %s to land: %s work lands once the gate ends, as does any worker's work that finishes meanwhile.",
+			andList(names), plural(n, "waits", "wait"), plural(n, "its", "their"))
+	}
+	return "A worker's work that finishes meanwhile lands once the gate ends."
 }
 
 // HereKept notes the uncommitted files already in the working tree when phase started, which a gate run

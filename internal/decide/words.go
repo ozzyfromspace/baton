@@ -82,7 +82,7 @@ func (w Words) Reporting() string {
 		"A question baton gives you to put to the human is the exception: ask it as given. "
 	pause := "(If the human wants to talk instead of running the plan, they can run /baton pause.)"
 	if w.Worker {
-		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " "
+		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " " + LandCheckHow + " "
 		blocked = ", and end your turn: it stops only your phase, and baton asks the human; " + lookAgainAfter + ". "
 		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
 		pause = ""
@@ -264,20 +264,19 @@ func (w Words) Closing(id string) string {
 // checks: qa is the next QA phase ("P5 (QA after the parser)"). It protects the human's time: dense
 // checks at every phase burn hours and hold everything behind them.
 func QAFocus(qa string) string {
-	return "QA: this plan runs its heavy checks in QA phases, to protect the human's time; the next is " + qa + ". " +
-		"In this phase run focused checks only: the tests of what you changed or created, and of what that likely affects. " +
-		"Leave full test suites, lints and end-to-end runs to " + qa + ", even if a convention elsewhere says to run them before every commit. " +
-		"The repository may be in a work-in-progress state when this phase ends: commit it all the same. " +
-		"Run a full check now only for a particular reason, and flag it: baton verify \"<command>\" --qa \"<why now>\" --notes \"…\"."
+	return "QA: this plan runs its heavy checks in QA phases, to spare the human's time; the next is " + qa + ". " +
+		"In this phase, run checks that finish in seconds or minutes: the tests of what you changed, by name. " +
+		"No full suite, end-to-end run or whole-project lint before " + qa + ", even where a convention says to run them before every commit; " +
+		"commit work in progress all the same. A full check now only for a particular reason, flagged: `baton verify --qa \"<why now>\" --notes \"…\" -- <command>`."
 }
 
 // QAPhase tells a QA phase what it is for: since lists the phases it checks.
 func QAPhase(since string) string {
 	s := "QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find"
 	if since != "" {
-		s += " in the work of " + since + ", which ran focused checks only: expect things that do not fit together yet"
+		s += " in the work of " + since + ", which ran scoped checks only: expect things that do not fit together yet"
 	}
-	return s + ". Heavy checks belong here; finish when they pass."
+	return s + ". The heavy checks run here, once: after a red, rerun only what failed. Push to CI early, batching fixes per round trip. Finish when they pass."
 }
 
 // QAAsk is baton's standard question to a phase that queues a job of kind (state.JobVerify, state.JobAwait)

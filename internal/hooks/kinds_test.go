@@ -20,7 +20,7 @@ func TestAStopOnAGateAndAWait(t *testing.T) {
 	if d.output["decision"] == "block" {
 		t.Fatalf("refused: %v", d.output)
 	}
-	if msg, _ := d.output["systemMessage"].(string); !strings.Contains(msg, "P0 (First) waits on jobs j1 (`make qa`) and j2 (`gh run watch 7 --exit-status`) — nothing is needed from you") {
+	if msg, _ := d.output["systemMessage"].(string); !strings.Contains(msg, "P0 (First) waits on jobs j1 (`make qa`) and j2 (`gh run watch 7 --exit-status`) — baton needs nothing from you for this wait") {
 		t.Errorf("said %q", msg)
 	}
 	var logged bool
