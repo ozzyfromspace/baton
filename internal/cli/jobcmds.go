@@ -340,14 +340,14 @@ func namesCheckout(command, checkout, home string) bool {
 	return false
 }
 
-// pruneLogs removes the logs of jobs no longer on record: dropped to keep the record short, or left by a
-// plan set aside (whose record took the logs of its failed jobs, Store.Record). The log of every failed
-// job of the plan st runs stays, dropped from the record or not (KeptLogs).
+// pruneLogs removes the logs and stages files of jobs no longer on record: dropped to keep the record
+// short, or left by a plan set aside (whose record took the logs of its failed jobs, Store.Record). The log
+// of every failed job of the plan st runs stays, dropped from the record or not (KeptLogs).
 func pruneLogs(s *state.Store, st state.State) {
 	dir := jobsDir(s)
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if id := strings.TrimSuffix(e.Name(), ".log"); st.Job(id) == nil && !slices.Contains(st.KeptLogs, id) {
+		if id := state.JobFileID(e.Name()); st.Job(id) == nil && !slices.Contains(st.KeptLogs, id) {
 			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}

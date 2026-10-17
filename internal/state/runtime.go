@@ -132,6 +132,9 @@ type Runtime struct {
 	// UnbuiltAsked lists the plan texts (a hash of each) whose ExitPlanMode baton turned back because it
 	// could not attach them as written (once each).
 	UnbuiltAsked []string `json:"unbuilt_asked,omitempty"`
+	// GatesQuestioned lists the gates baton questioned as they were queued, out of proportion to the change
+	// (each a command and the commit it would run on, once each): the same call again goes through.
+	GatesQuestioned []string `json:"gates_questioned,omitempty"`
 	// DirectivesPending is the plan file asked about whose ExitPlanMode has not come again yet: a stop in
 	// plan mode before it is turned back once, so the plan still reaches the human.
 	DirectivesPending string      `json:"directives_pending,omitempty"`
