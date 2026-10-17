@@ -90,6 +90,8 @@ type Coordinator struct {
 	// jobs' logs as it saw them (stall.go). Only the lead's tick touches them.
 	stallAt time.Time
 	logs    map[string]logSeen
+	// lookAt is when the lead's tick last looked for look-ins at the run's gates and landings (lookin.go).
+	lookAt time.Time
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
@@ -126,6 +128,7 @@ func (c *Coordinator) duties(v host.View) {
 	c.lanes(s, st)
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
+	c.lookIns(v, s, st)
 }
 
 // worker is a phase agent this host asked baton's mod to start in the lead's claude: its roster entry, its

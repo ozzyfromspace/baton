@@ -486,7 +486,7 @@ func (c *Coordinator) gate(s *state.Store) string {
 	if j == nil {
 		return ""
 	}
-	return fmt.Sprintf("a gate runs in the checkout (job %s)", j.ID)
+	return heldByGate(j.ID)
 }
 
 // landed records worker e's work landed (l): its phase is done, the lead is told, and the worker ends.
@@ -573,6 +573,7 @@ func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, wh
 		fields["paths"] = paths
 	}
 	s.Event("land_returned", fields)
+	c.conflicted(now, s, e.Phase, paths)
 	c.announce(s, fmt.Sprintf("baton: %s's work did not land: %s → its worker takes it up again", e.Phase, why))
 }
 
