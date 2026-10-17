@@ -226,7 +226,9 @@ func TestALandingsRedVerificationGoesBackToTheAgent(t *testing.T) {
 	if failed < 0 || first(w[failed:], is("phase_resumed", "phase", "P1", "reason", "red")) < 0 || first(w[failed:], is("phase_done", "phase", "P1")) < 0 {
 		t.Fatalf("the agent's sub-run did not take P1 up again and finish it:\n%v", w)
 	}
-	at := eventTime(returned)
+	// The agent's loop may send as soon as the landing gives P1 back, before land_returned is logged, so
+	// what reached the agent is counted from the reverification on: its phase was done until then.
+	at := eventTime(ev[first(ev, is("reverify_queued", "phase", "P1"))])
 	if count(filter(ev, func(e map[string]any) bool { return eventTime(e).After(at) }), func(e map[string]any) bool {
 		return (e["kind"] == "mod_command" && e["command"] == "send" || e["kind"] == "worker_spawned") && e["phase"] == "P1"
 	}) == 0 {

@@ -235,9 +235,20 @@ func TestAQuickGateIsDeliveredInPlace(t *testing.T) {
 	waitSequence(t, s, 4*time.Minute,
 		is("job_queued", "phase", "P0"),
 		is("job_finished", "phase", "P0", "status", "passed"),
-		kind("results_delivered"),
 		is("phase_done", "phase", "P0"),
 	)
+	evs := s.Events()
+	ended := first(evs, is("job_finished", "phase", "P0"))
+	if v := first(evs, is("phase_verifying", "phase", "P0")); v >= 0 && v < ended {
+		// Haiku now and then reports P0 done while the gate runs, against its plan: the passing result then
+		// makes P0 done by itself, with nothing to deliver, which is baton's way too.
+		if first(evs[ended:], is("phase_done", "phase", "P0", "by", "verification")) < 0 {
+			t.Errorf("P0, reported done while its gate ran, was not done by the gate:\n%s", eventLog(s))
+		}
+		t.Log("the model reported P0 done while its gate ran: the delivery in place went unexercised")
+	} else if d := first(evs[ended:], kind("results_delivered")); d < 0 || d > first(evs[ended:], is("phase_done", "phase", "P0")) {
+		t.Errorf("the gate's result was not delivered before P0 was done:\n%s", eventLog(s))
+	}
 	none(t, s, "phase_switched", "phase_parked", "switch_cancelled", "phase_resumed")
 }
 
