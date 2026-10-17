@@ -141,6 +141,37 @@ func TestBand(t *testing.T) {
 			r.st.Workers[1].Status, r.st.Workers[1].Merge = state.WorkerLanding, &state.Merge{Queued: now, Reverify: "P4.j2"}
 			return r
 		}, "", step2 + "P2 ▶ 5m · P3 waits to land · P4 verifying again · P5 waits on P3 · lead: working on P2"},
+		{"a late phase of step 2 still landing: the run is at step 3", func() *run {
+			r := newRun()
+			for _, id := range []string{"P2", "P3"} {
+				r.st.Phases[id] = &state.PhaseState{Status: state.PhaseDone}
+			}
+			r.agent("P4", "a4", time.Hour)
+			r.st.Workers[0].Status, r.st.Workers[0].Merge = state.WorkerLanding, &state.Merge{Queued: now}
+			r.st.Current = "P5"
+			r.st.Phases["P5"] = &state.PhaseState{Status: state.PhaseActive, StartedAt: now.Add(-5 * time.Minute)}
+			return r
+		}, "", "◆ baton · step 3/4 · P4 landing · P5 ▶ 5m · P6 waits on P4, P5 · lead: working on P5"},
+		{"a late phase of step 2 verifying, the lead's or an agent's: the run is at step 3", func() *run {
+			r := newRun()
+			r.st.Phases["P2"] = &state.PhaseState{Status: state.PhaseVerifying}
+			r.st.Jobs = []state.Job{{ID: "j2", Phase: "P2", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-2 * time.Minute)}}
+			r.st.Phases["P3"] = &state.PhaseState{Status: state.PhaseDone}
+			sub := r.agent("P4", "a4", time.Hour)
+			sub.Phases["P4"].Status = state.PhaseVerifying
+			sub.Jobs = []state.Job{{ID: "P4.j1", Phase: "P4", Kind: state.JobVerify, Status: state.JobRunning, Queued: now.Add(-4 * time.Minute)}}
+			r.st.Current = "P5"
+			r.st.Phases["P5"] = &state.PhaseState{Status: state.PhaseActive, StartedAt: now.Add(-5 * time.Minute)}
+			return r
+		}, "", "◆ baton · step 3/4 · P2 verifying 2m · P4 verifying 4m · P5 ▶ 5m · P6 waits on P2, P4, P5 · lead: working on P5"},
+		{"a phase agent still at work holds the step", func() *run {
+			r := newRun()
+			r.st.Phases["P2"] = &state.PhaseState{Status: state.PhaseDone}
+			r.agent("P3", "a3", time.Hour)
+			r.st.Phases["P4"] = &state.PhaseState{Status: state.PhaseDone}
+			r.st.Current, r.st.Run.TurnOpen = "", false
+			return r
+		}, "", step2 + "P3 ⚙ 1h00m · P5 waits on P3 · lead: waiting on P3"},
 		{"a phase held back from an agent", func() *run {
 			r := newRun()
 			r.agent("P3", "a1", time.Minute)
