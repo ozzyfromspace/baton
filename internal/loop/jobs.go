@@ -332,20 +332,22 @@ func verdictLine(vd state.Verdict) string {
 }
 
 // deliver wakes an idle session whose phase in hand has job results due (state.Due), whose plan a
-// verification just completed, or that baton has messages for (state.Mail): it gives it a short line
-// (say), and the prompt's hook hands them over. It waits for the typing gates like anything baton types, and never
+// verification just completed, that baton has messages for (state.Mail), or look-ins at its gates and
+// landings, whatever phase they are for (state.LookInsDue): it gives it a short line (say), and the
+// prompt's hook hands them over. It waits for the typing gates like anything baton types, and never
 // while the session is to ask the human something (a worker's proposal is the lead session's to ask). It
 // reports whether it typed.
 func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 	due, mail := st.Due(), st.Mail()
-	if len(due) == 0 && len(mail) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.PlanQuestion != nil || st.OwnProposal() != nil {
+	looks, lookIDs := lookInsDue(st)
+	if len(due) == 0 && len(mail) == 0 && len(looks) == 0 || holdsDeliveries(st.Run.Escalation) || st.Blocked != nil || st.ReviewDue != "" || st.PlanQuestion != nil || st.OwnProposal() != nil {
 		return false
 	}
 	if l.why != "" {
 		l.held(v, st, "tell the model a job finished")
 		return false
 	}
-	ids := jobIDs(due)
+	ids := jobIDs(due) + lookIDs
 	var kinds []string
 	for _, m := range mail {
 		kinds = append(kinds, m.Kind)
@@ -364,6 +366,10 @@ func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 		line = decide.AgentJobsFinished(due)
 	case len(due) > 0:
 		line = decide.JobsFinished(due)
+	case len(looks) > 0 && agent:
+		line = decide.AgentLookIn(looks)
+	case len(looks) > 0:
+		line = decide.LookInTyped(looks)
 	case agent:
 		line = decide.AgentMail(kinds)
 	default:
@@ -374,9 +380,12 @@ func (l *Loop) deliver(v host.View, st state.State, in host.Injector) bool {
 		return false // said at a later tick
 	}
 	l.typedFor, l.typedAt = ids, v.Now
-	if len(due) > 0 {
+	switch {
+	case len(due) > 0:
 		l.Store.Event("results_typed", map[string]any{"jobs": jobIDs(due), "via": l.via()})
-	} else {
+	case len(looks) > 0:
+		l.Store.Event("look_in_typed", map[string]any{"kinds": looks, "via": l.via()})
+	default:
 		l.Store.Event("mail_typed", map[string]any{"messages": kinds, "via": l.via()})
 	}
 	return true

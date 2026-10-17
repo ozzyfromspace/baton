@@ -52,6 +52,9 @@ type Input struct {
 	Again, Checkpointed bool
 	// Decisions is the run's decisions, its workers' too (Store.Decisions); nil: the state's own.
 	Decisions []state.Decision
+	// Facts is the run's environment facts (Store.Facts: a worker's sub-run keeps none of its own); nil:
+	// the state's own.
+	Facts []state.Fact
 }
 
 // Write returns the brief.
@@ -183,6 +186,13 @@ func Write(in Input) string {
 	}
 	if red := decide.RedPhases(st.Red(), st.Current); red != "" {
 		b.WriteString(red + "\n\n")
+	}
+	facts := in.Facts
+	if facts == nil {
+		facts = st.Facts
+	}
+	if text := decide.EnvFacts(facts); text != "" {
+		b.WriteString(text + "\n\n")
 	}
 	switch notes := strings.TrimSpace(in.Handoff); {
 	case notes == "":

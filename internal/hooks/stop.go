@@ -300,8 +300,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		st.Run.WarnOwed = false
 		d.refuse(decide.ContextWarning(decide.Question{Text: st.Run.WarnQuestion, Options: decide.WarnOptions}.Call(), true))
 		d.emit("stop_refused", map[string]any{"phase": st.Current, "why": "context question not asked"})
-	case len(st.Due()) > 0:
-		// A job of the phase in hand finished: its result is what the model goes on with.
+	case len(st.Due()) > 0 || st.LookInsDue():
+		// A job of the phase in hand finished: its result is what the model goes on with. So is a look-in
+		// at a gate that runs, whatever phase it is for (state.LookIn).
 		st.Run.StopBlocks = 0
 		d.deliver = take(st, now)
 		d.refuse("")
