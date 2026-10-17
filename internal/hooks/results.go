@@ -95,7 +95,7 @@ func JobLog(s *state.Store, j state.Job) decide.Log {
 		path = s.JobLog(j.ID)
 	}
 	e, _ := lane.ReadExcerpt(path, resultLines, resultBytes, resultFailures, resultClip)
-	return decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More}
+	return decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More, Env: jobEnv(s, j, path)}
 }
 
 // announced takes the lines the host left for the human (Runtime.Announce).

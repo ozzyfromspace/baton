@@ -82,8 +82,8 @@ func cmdLaneRun(args []string, io IO) int {
 
 	res := runJob(s, job, io)
 	ended := finishJob(s, job, res, io.Now())
-	s.Event("job_finished", map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
-		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds())})
+	s.Event("job_finished", withEnvironment(job, ended, map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
+		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds())}))
 	return 0
 }
 

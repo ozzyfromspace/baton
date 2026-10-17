@@ -73,6 +73,9 @@ type Log struct {
 	Tail     string
 	Failures []string
 	More     int
+	// Env is what the log of a red gate says of its environment, when it shows an environment failure and
+	// no test failure (lane.Environment); nil otherwise.
+	Env *Env
 }
 
 // JobResult is a finished job's result for the model: what ran and how it ended, the lines of its log that
@@ -118,6 +121,8 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		b.WriteString("Nothing was checked. Hand it to baton again, or run it in place.")
 	case j.Kind == state.JobAwait:
 		b.WriteString("What it waited on did not succeed: look into it, then await it again or carry on without it.")
+	case log.Env != nil:
+		b.WriteString(EnvFailed(j, *log.Env))
 	default:
 		if j.Status == state.JobTimeout {
 			b.WriteString("It ran past verify_timeout, so baton stopped it: that counts as a failure. ")
@@ -125,7 +130,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and verify again with the same command, `%s`: %s "+
 			"`baton done %s` is refused until then.", j.Command, gateRule(j.Phase), j.Phase)
 	}
-	if j.Red() && qa != "" {
+	if j.Red() && qa != "" && log.Env == nil {
 		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))
 	}
 	if red := RedPhases(others, j.Phase); red != "" {
