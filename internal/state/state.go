@@ -195,6 +195,9 @@ type State struct {
 	IDPrefix string `json:"id_prefix,omitempty"`
 	// Inbox holds what baton has for the session's model that no hook could tell it yet (Message).
 	Inbox []Message `json:"inbox,omitempty"`
+	// Records are the phases' records baton wrote to the plan's record file (plan.Plan.Record), oldest
+	// first, each committed alone in the lead's checkout (recordfile.go).
+	Records []RecordNote `json:"records,omitempty"`
 	// ToAgents are the human's words for phases' agents, written at the lead's prompt (@P23 <words>), each
 	// until baton's mod has given it to its agent, or it went to the lead's model (HumanWords).
 	ToAgents []HumanWords `json:"to_agents,omitempty"`
