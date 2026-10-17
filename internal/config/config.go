@@ -61,9 +61,10 @@ type Config struct {
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
 	AutoRestart *bool `json:"auto_restart,omitempty"`
-	// VerifyTimeout is how long a job baton runs for the session (a gate in a lane, or a wait) may run
-	// before baton stops it and counts it as failed: a duration from 1m to 24h, "3h" by default
-	// (BATON_VERIFY_TIMEOUT, which may go down to 1s).
+	// VerifyTimeout is how long a job baton runs for the session (a gate in a lane, or a wait) may run,
+	// counted from when it got its lane (a wait for one is not running time), before baton stops it and
+	// counts it as failed: a duration from 1m to 24h, "3h" by default (BATON_VERIFY_TIMEOUT, which may go
+	// down to 1s).
 	VerifyTimeout string `json:"verify_timeout,omitempty"`
 	// SwitchAfter is how long the phase in hand waits on its job before baton sets it aside for another
 	// phase that can go on, if there is one: a duration from 1m to 2h, "5m" by default
