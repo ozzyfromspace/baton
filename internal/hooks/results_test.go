@@ -200,7 +200,7 @@ func TestAStopWithNothingInHand(t *testing.T) {
 		return nil
 	})
 	out := f.fire("Stop", map[string]any{})
-	if out["decision"] == "block" || said(out) != "baton: no phase can start until job j1 (`make test`, P0) finishes — nothing is needed from you: baton takes the next one up then" {
+	if out["decision"] == "block" || said(out) != "baton: no phase can start until job j1 (`make test`, P0) finishes — baton needs nothing from you for this wait: it takes the next one up then" {
 		t.Fatalf("stop: %v", out)
 	}
 }
