@@ -76,12 +76,12 @@ func ShapeCheck(s plan.Shape) string {
 }
 
 // PlanChecked tells the human what Claude does before they see the plan: it checks the plan against their
-// other instructions (CompetingDirectives), and, for a plan that is mostly a chain (flagged), its longest
-// chain against baton's shape rules (ShapeCheck).
+// other instructions (CompetingDirectives), its gates against baton's gate rules (GateCheck), and, for a
+// plan that is mostly a chain (flagged), its longest chain against baton's shape rules (ShapeCheck).
 func PlanChecked(s plan.Shape, flagged bool) string {
 	line := "baton: before you see the plan, Claude checks it against your other instructions (CLAUDE.md, memory) for anything that competes with it"
-	if flagged {
-		line += fmt.Sprintf(", and checks its longest chain (%d of %d phases) against baton's shape rules", len(s.Chain), s.Phases)
+	if !flagged {
+		return line + ", and checks its gates and QA phases against baton's gate rules"
 	}
-	return line
+	return line + fmt.Sprintf(", its gates and QA phases against baton's gate rules, and its longest chain (%d of %d phases) against baton's shape rules", len(s.Chain), s.Phases)
 }

@@ -484,7 +484,8 @@ func (h *handlers) guardLanded(c Context, rw *rewrite) (Result, bool, error) {
 }
 
 // directives answers the lead's first ExitPlanMode for a plan with phase headings, in a hosted session,
-// with baton's request to flag the instructions that compete with it (decide.CompetingDirectives), and,
+// with baton's request to flag the instructions that compete with it (decide.CompetingDirectives) and to
+// check its gates against the gate rules (gateCheck), and,
 // for a plan that is mostly a chain (plan.Shape.MostlyChain), to check that chain against the shape rules
 // (decide.ShapeCheck): once per plan file, so the next call goes through. It never holds the plan back a
 // second time. When the plan goes to the human, shown has its shape in one line for them (decide.PlanShape).
@@ -536,8 +537,9 @@ func (h *handlers) directives(c Context) (res Result, asked bool, shown planShow
 	}
 	switch {
 	case asked:
+		gates := gateCheck(pl, built, fields)
 		s.Event("directives_asked", fields)
-		why := decide.CompetingDirectives()
+		why := decide.CompetingDirectives() + "\n\n" + gates
 		if flagged {
 			why += "\n\n" + decide.ShapeCheck(shape)
 		}

@@ -45,6 +45,10 @@ func TestPlanTeachesTheShapeRules(t *testing.T) {
 		{"After lines", "`After: P1, P3`, `After: none`, or `After: all`"},
 		{"After: all", "release phases use `After: all`"},
 		{"QA phases", "`Type: qa`"},
+		{"QA phases at real seams", "Place QA phases at real seams, never per phase, to protect the human's time: at the end, " +
+			"and in a long plan at the end of a group of related phases that later work builds on, each `After:` everything it checks."},
+		{"scoped checks between them", "The phases between QA phases run scoped checks only (the tests of what they change, by name)"},
+		{"the gate rules asked at approval", "baton asks for this, with its gate rules, once at your first `ExitPlanMode`"},
 		{"sizing", "Size each phase to finish comfortably in one context window."},
 		{"standing rules", "`## Standing rules`"},
 		{"verification", "`## Verification`"},
@@ -58,6 +62,8 @@ func TestPlanTeachesTheShapeRules(t *testing.T) {
 		"Mark a phase independent of another only when it needs nothing that phase produces",
 		"Phases that would edit the same files go one after the other",
 		"multi-phase plan",
+		"one after several phases, and one before a release",
+		"focused checks only",
 	} {
 		if strings.Contains(plan, old) {
 			t.Errorf("the plan section still says %q", old)
