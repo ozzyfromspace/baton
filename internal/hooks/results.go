@@ -88,14 +88,15 @@ func jobResult(s *state.Store, pl plan.Plan, j state.Job, red []state.Job, aggre
 }
 
 // JobLog reads what a result shows of job j's log: its end, and the lines before that end that report a
-// failure, so that one early in a long log is never lost behind it.
+// failure, so that one early in a long log is never lost behind it; and, for a rerun of a red gate, what
+// it carried and narrowed (state.Store.Reran, which runs git).
 func JobLog(s *state.Store, j state.Job) decide.Log {
 	path := j.Log
 	if path == "" {
 		path = s.JobLog(j.ID)
 	}
 	e, _ := lane.ReadExcerpt(path, resultLines, resultBytes, resultFailures, resultClip)
-	return decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More}
+	return decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More, Rerun: s.Reran(j)}
 }
 
 // announced takes the lines the host left for the human (Runtime.Announce).
