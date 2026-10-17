@@ -4,7 +4,7 @@
 
 You plan in plan mode, approve, and walk away. From the approval on, baton keeps the session moving: at each phase boundary it compacts the context, gives the model a brief for the next phase, and wakes it. A long test run goes to baton, which runs it on a commit of its own while the model works on. A phase that doesn't need the one in hand starts as a background agent of your session, in a git worktree of its own, and baton lands its work on your branch when it's done. When something needs you, baton asks in the session and pushes a notification.
 
-> Status: **v0.8.5**. macOS and Linux. Windows is planned.
+> Status: **v0.8.6**. macOS and Linux. Windows is planned.
 
 ## Why
 
