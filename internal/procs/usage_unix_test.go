@@ -44,12 +44,29 @@ func usage(t *testing.T, pgid, n int) Usage {
 	return nil
 }
 
+// settled reads the tree of group pgid once it has n processes and two readings in a row agree: a child
+// still starting (forked, not yet exec'd, or its binary loading) uses CPU before it waits.
+func settled(t *testing.T, pgid, n int) Usage {
+	t.Helper()
+	last := usage(t, pgid, n)
+	for range 50 {
+		time.Sleep(50 * time.Millisecond)
+		u := usage(t, pgid, n)
+		if equal(last, u) {
+			return u
+		}
+		last = u
+	}
+	t.Fatalf("group %d never settled: last read %v", pgid, last)
+	return nil
+}
+
 // A tree that waits reads the same twice; one at work reads more the second time. A platform binary's
 // time reads too (macOS hides its environment, not its time).
 func TestTreeUsage(t *testing.T) {
 	idle := group(t, "/bin/sleep 60 & wait")
 	busy := group(t, "while :; do :; done")
-	first := usage(t, idle, 2)
+	first := settled(t, idle, 2)
 	if !slices.Contains(keys(first), idle) {
 		t.Fatalf("the group's leader is not in its tree: %v", first)
 	}
