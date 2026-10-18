@@ -46,10 +46,10 @@ func TestTheRunFollowsTheLeadsBranch(t *testing.T) {
 	if x.has("land_off_branch") || x.has("run_branch_unfollowed") || x.has("land_deferred", "not on the run's branch") {
 		t.Errorf("the landing waited on the branch:\n%s", x.events())
 	}
-	if !strings.Contains(x.announced(), decide.BranchFollowed("main", "fix")) {
+	if !strings.Contains(x.announced(), decide.BranchFollowed("main", "fix", true)) {
 		t.Errorf("announced %q", x.announced())
 	}
-	if st.BranchNote != decide.BranchFollowedNote("main", "fix") {
+	if st.BranchNote != decide.BranchFollowedNote("main", "fix", true) {
 		t.Errorf("the lead's note: %q", st.BranchNote)
 	}
 	for range 4 {
@@ -136,5 +136,38 @@ func TestTheRunFollowsABranchOnceItHoldsTheRuns(t *testing.T) {
 	x.landUntil("P1")
 	if st := x.state(); st.RunBranch != "elsewhere" || !landedOn(t, x.repo, "elsewhere", tip) || !x.has("run_branch_followed", `"from":"main"`, `"to":"elsewhere"`) {
 		t.Fatalf("run's branch %q\n%s", st.RunBranch, x.events())
+	}
+}
+
+// A plan whose first phase cuts the lead a branch of its own from elsewhere (a fresh branch off the remote's
+// main, the run's branch being an older plan's) before any of the plan's work is on the run's branch: the
+// run follows it, though it lacks the run's branch's commits, and a finished phase lands there. Once it
+// followed, only a branch that holds it is followed.
+func TestTheRunFollowsANewBranchBeforeAnyWorkIsOnIt(t *testing.T) {
+	x := landingCrew(t)
+	x.leadCommits(map[string]string{"old.txt": "the older plan's\n"})
+	if _, err := x.lead.Update(func(st *state.State) error { st.BranchFrom = gitx.Head(x.repo); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Git(t, x.repo, "checkout", "-q", "-b", "fresh", "HEAD~1")
+	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	x.landUntil("P1")
+	st := x.state()
+	if st.RunBranch != "fresh" || st.BranchFrom != "" || !landedOn(t, x.repo, "fresh", tip) {
+		t.Fatalf("run's branch %q, from %q\n%s", st.RunBranch, st.BranchFrom, x.events())
+	}
+	if !x.has("run_branch_followed", `"from":"main"`, `"to":"fresh"`, `"holds":false`) || x.has("land_off_branch") || x.has("run_branch_unfollowed") {
+		t.Errorf("events:\n%s", x.events())
+	}
+	if st.BranchNote != decide.BranchFollowedNote("main", "fresh", false) {
+		t.Errorf("the lead's note: %q", st.BranchNote)
+	}
+	gittest.Git(t, x.repo, "checkout", "-q", "-b", "other", "HEAD~1")
+	x.finish("P2", map[string]string{"two.txt": "two\n"}, false)
+	for range 3 {
+		x.tick(overlapRetry)
+	}
+	if st := x.state(); st.RunBranch != "fresh" || !x.has("run_branch_unfollowed", `"branch":"other"`) {
+		t.Errorf("followed a branch lacking the plan's work: %q\n%s", st.RunBranch, x.events())
 	}
 }

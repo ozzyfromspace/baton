@@ -36,20 +36,28 @@ func TestSeeBranch(t *testing.T) {
 		{"on a detached HEAD", "--detach", BranchSeen{Run: "main"}, false},
 	} {
 		gittest.Git(t, repo, "checkout", "-q", c.checkout)
-		seen, ok := SeeBranch(ctx, repo, "main")
+		seen, ok := SeeBranch(ctx, repo, "main", "")
 		if !ok || seen != c.want || seen.Followable() != c.followable {
 			t.Errorf("%s: %+v, %v (followable %v)", c.name, seen, ok, seen.Followable())
 		}
 	}
 	gittest.Git(t, repo, "checkout", "-q", "made")
 	gittest.Git(t, repo, "merge", "-q", "--ff-only", "main")
-	if seen, ok := SeeBranch(ctx, repo, "main"); !ok || seen != (BranchSeen{Run: "main", On: "made", Holds: true}) || !seen.Followable() {
+	if seen, ok := SeeBranch(ctx, repo, "main", ""); !ok || seen != (BranchSeen{Run: "main", On: "made", Holds: true}) || !seen.Followable() {
 		t.Errorf("on a branch made from the run's: %+v, %v", seen, ok)
 	}
-	if _, ok := SeeBranch(ctx, repo, "gone"); ok {
+	gittest.Git(t, repo, "checkout", "-q", "behind")
+	main := gittest.Git(t, repo, "rev-parse", "main")
+	if seen, ok := SeeBranch(ctx, repo, "main", main); !ok || seen != (BranchSeen{Run: "main", On: "behind", Fresh: true}) || !seen.Followable() {
+		t.Errorf("beside a run's branch none of the plan's work is on: %+v, %v", seen, ok)
+	}
+	if seen, _ := SeeBranch(ctx, repo, "main", "0123abc"); seen.Fresh || seen.Followable() {
+		t.Errorf("beside a run's branch that moved since the plan attached: %+v", seen)
+	}
+	if _, ok := SeeBranch(ctx, repo, "gone", ""); ok {
 		t.Error("a run's branch that is not there was read")
 	}
-	if _, ok := SeeBranch(ctx, t.TempDir(), "main"); ok {
+	if _, ok := SeeBranch(ctx, t.TempDir(), "main", ""); ok {
 		t.Error("no repository was read")
 	}
 }
@@ -72,16 +80,21 @@ func TestFollowAndTellBranch(t *testing.T) {
 		{"a detached HEAD", "main", BranchSeen{Run: "main", Holds: true}, false},
 		{"the run's branch itself", "main", BranchSeen{Run: "main", On: "main", Holds: true}, false},
 		{"a worker's branch", "main", BranchSeen{Run: "main", On: "baton/sess-1/P1", Holds: true}, false},
+		{"a branch while none of the plan's work is on the run's", "main", BranchSeen{Run: "main", On: "fix", Fresh: true}, true},
 	} {
-		st := State{RunBranch: c.run, BranchTold: "main old"}
+		st := State{RunBranch: c.run, BranchTold: "main old", BranchFrom: "abc"}
 		want := c.run
 		if c.followed {
 			want = c.seen.On
 		}
 		got := FollowBranch(&st, c.seen, "note")
-		if got != c.followed || st.RunBranch != want || c.followed != (st.BranchNote == "note") || c.followed == (st.BranchTold != "") {
+		if got != c.followed || st.RunBranch != want || c.followed != (st.BranchNote == "note") || c.followed == (st.BranchTold != "") || c.followed == (st.BranchFrom != "") {
 			t.Errorf("%s: followed %v, state %+v", c.name, got, st)
 		}
+	}
+
+	if st := (State{RunBranch: "main"}); FollowBranch(&st, BranchSeen{Run: "main", On: "fix", Fresh: true}, "note") {
+		t.Error("followed on a fresh run's branch whose tip at the attach is no longer known")
 	}
 
 	st := State{RunBranch: "main"}

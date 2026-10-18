@@ -4,6 +4,20 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-10-18
+
+### Fixed
+
+- **A plan that starts by cutting a fresh branch no longer holds its phases' work off it.** A new plan in a
+  session keeps the branch checked out as it attaches as the run's, often the last plan's branch, merged
+  and done with. When the plan's first phase then cut a new branch from the remote's main, v0.8.7 would not
+  follow it, since it lacks the old branch's commits: phase agents started from the old branch, and their
+  work waited to land until the lead cherry-picked it by hand and moved the old branch itself, an hour in a
+  real run. baton now records the run's branch's tip as the plan attaches, and while that branch is still
+  there, none of the plan's work is on it, so the run follows the lead's checkout to any branch it moves to
+  (`run_branch_followed` with `holds: false`). Once the run followed, or once any of the plan's work is on
+  its branch, only a branch that holds it is followed, as before.
+
 ## [0.8.8] - 2026-10-18
 
 ### Fixed
@@ -1445,7 +1459,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...HEAD
+[0.8.9]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...v0.8.6

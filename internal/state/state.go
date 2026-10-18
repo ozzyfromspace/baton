@@ -192,6 +192,10 @@ type State struct {
 	// last told the run's cannot follow (TellBranch), so it is told once a branch.
 	BranchNote string `json:"branch_note,omitempty"`
 	BranchTold string `json:"branch_told,omitempty"`
+	// BranchFrom is the run's branch's tip when the plan attached, "" once the run followed another branch:
+	// while that branch is still there, none of the plan's work is on it, and the run follows the lead's
+	// checkout to any branch it moves to (BranchSeen.Fresh).
+	BranchFrom string `json:"branch_from,omitempty"`
 	// Generation counts the plans attached to the run (attachKeeping). A worker belongs to the plan it was
 	// assigned under (Worker.Generation): one of an earlier plan is retired, and never counts as the
 	// worker on a phase of the plan attached now, which may use the same ids.

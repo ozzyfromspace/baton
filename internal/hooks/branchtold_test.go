@@ -12,7 +12,7 @@ import (
 // or prompt, after any compaction owed; never with a subagent's call.
 func TestTheLeadIsToldTheRunFollowsItsBranch(t *testing.T) {
 	f := newFixture(t, true)
-	note := decide.BranchFollowedNote("main", "fix")
+	note := decide.BranchFollowedNote("main", "fix", true)
 	f.set(func(st *state.State) { st.BranchNote, st.BoundaryOwed = note, true })
 	if out := f.fire("PostToolUse", bash("ls")); feedback(out) != "" {
 		t.Fatalf("told with a compaction owed: %v", out)

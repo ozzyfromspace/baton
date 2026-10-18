@@ -2,20 +2,29 @@ package decide
 
 import "fmt"
 
-// The run's branch follows the lead's checkout to a branch that holds its tip (state.FollowBranch), and
+// The run's branch follows the lead's checkout to a branch that holds its tip, or to any while none of the
+// plan's work is on it (state.FollowBranch), and
 // the lead's model is told how to let work land when it moved to one that does not (state.TellBranch).
 
 // BranchFollowed is announced to the human as the run's branch follows the checkout from one branch to
-// another.
-func BranchFollowed(from, to string) string {
-	return fmt.Sprintf("baton: the lead's checkout moved to %s, which holds the run's branch %s → the run follows it: phases' work lands on %s, and new phase agents start from it", to, from, to)
+// another: one that holds it, or (holds false) any while none of the plan's work was on from.
+func BranchFollowed(from, to string, holds bool) string {
+	why := "which holds the run's branch " + from
+	if !holds {
+		why = "before any of the plan's work was on the run's branch " + from
+	}
+	return fmt.Sprintf("baton: the lead's checkout moved to %s, %s → the run follows it: phases' work lands on %s, and new phase agents start from it", to, why, to)
 }
 
 // BranchFollowedNote is what the lead's model hears at its next hook of the run's branch following its
 // checkout's, from one branch to another. It asks nothing of it.
-func BranchFollowedNote(from, to string) string {
-	return fmt.Sprintf("[baton] The run's branch is now %s, where your checkout is: it holds everything %s had. Phases' work lands on %s from now on, "+
-		"and new phase agents start from it. Nothing to do: carry on.", to, from, to)
+func BranchFollowedNote(from, to string, holds bool) string {
+	had := "it holds everything " + from + " had"
+	if !holds {
+		had = "none of the plan's work was on " + from + " yet"
+	}
+	return fmt.Sprintf("[baton] The run's branch is now %s, where your checkout is: %s. Phases' work lands on %s from now on, "+
+		"and new phase agents start from it. Nothing to do: carry on.", to, had, to)
 }
 
 // BranchUnfollowed tells the lead's model that phase's work waits to land on its checkout, which is on the

@@ -19,7 +19,7 @@ func FollowBranch(ctx context.Context, s *state.Store) (seen state.BranchSeen, f
 	if err != nil || st.RunBranch == "" {
 		return state.BranchSeen{}, false
 	}
-	seen, ok := state.SeeBranch(ctx, s.Checkout, st.RunBranch)
+	seen, ok := state.SeeBranch(ctx, s.Checkout, st.RunBranch, st.BranchFrom)
 	if !ok {
 		return state.BranchSeen{}, false
 	}
@@ -27,15 +27,15 @@ func FollowBranch(ctx context.Context, s *state.Store) (seen state.BranchSeen, f
 		return seen, false
 	}
 	if _, err := s.Update(func(st *state.State) error {
-		if followed = state.FollowBranch(st, seen, decide.BranchFollowedNote(seen.Run, seen.On)); followed {
-			st.Run.Announce = append(st.Run.Announce, decide.BranchFollowed(seen.Run, seen.On))
+		if followed = state.FollowBranch(st, seen, decide.BranchFollowedNote(seen.Run, seen.On, seen.Holds)); followed {
+			st.Run.Announce = append(st.Run.Announce, decide.BranchFollowed(seen.Run, seen.On, seen.Holds))
 		}
 		return nil
 	}); err != nil {
 		return seen, false
 	}
 	if followed {
-		s.Event("run_branch_followed", map[string]any{"from": seen.Run, "to": seen.On})
+		s.Event("run_branch_followed", map[string]any{"from": seen.Run, "to": seen.On, "holds": seen.Holds})
 	}
 	return seen, followed
 }

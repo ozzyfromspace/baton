@@ -32,8 +32,10 @@ func TestALandingThatWaits(t *testing.T) {
 			[]string{"[baton] P3's work waits to land: your checkout is on the branch fix, which lacks commits of the run's branch main", "merge main into fix (git merge main, never a rebase)",
 				"the run then follows fix", "Or check out main again"}, []string{"rebase main", "reset"}},
 		{"the lead on a detached HEAD", BranchUnfollowed("P3", "", "main"), []string{"your checkout is on a detached HEAD", "check out a branch: main, the run's branch, or one that holds all of main"}, []string{"merge"}},
-		{"the lead told the run follows its branch", BranchFollowedNote("main", "fix"), []string{"The run's branch is now fix", "everything main had", "Nothing to do"}, nil},
-		{"the human told the run follows it", BranchFollowed("main", "fix"), []string{"baton: the lead's checkout moved to fix, which holds the run's branch main → the run follows it"}, nil},
+		{"the lead told the run follows its branch", BranchFollowedNote("main", "fix", true), []string{"The run's branch is now fix", "everything main had", "Nothing to do"}, nil},
+		{"the human told the run follows it", BranchFollowed("main", "fix", true), []string{"baton: the lead's checkout moved to fix, which holds the run's branch main → the run follows it"}, nil},
+		{"the lead told the run follows a fresh branch", BranchFollowedNote("main", "fix", false), []string{"The run's branch is now fix", "none of the plan's work was on main yet", "Nothing to do"}, []string{"everything main had"}},
+		{"the human told the run follows a fresh branch", BranchFollowed("main", "fix", false), []string{"moved to fix, before any of the plan's work was on the run's branch main → the run follows it"}, []string{"which holds"}},
 		{"the typed branch line", MailTyped([]string{state.MessageBranch}), []string{"waits to land on your checkout's branch"}, nil},
 	} {
 		for _, w := range c.want {

@@ -238,6 +238,10 @@ func cmdAttach(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: warning: could not add .baton/ to .git/info/exclude: %v\n", err)
 	}
 	origin, branch := state.OriginOf(root), gitx.Branch(root) // read before the lock, as is whether it is hosted
+	tip := ""
+	if branch != "" {
+		tip = gitx.RevParse(root, "refs/heads/"+branch)
+	}
 	inSession, isHosted := io.Env("CLAUDE_CODE_SESSION_ID") != "", hosted(io)
 	aside := lookAside(io, s, cur, file)
 	var boundary, moved bool
@@ -268,7 +272,7 @@ func cmdAttach(args []string, io IO) int {
 		} else {
 			*st = state.Reattach(*st, pl, io.Now(), origin)
 		}
-		st.RunBranch = branch // workers branch off it, and their work lands on it
+		st.RunBranch, st.BranchFrom = branch, tip // workers branch off it, and their work lands on it
 		st.PlanLooked = true
 		return nil
 	})

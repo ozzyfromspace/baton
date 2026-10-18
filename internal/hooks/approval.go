@@ -117,7 +117,7 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 	}
 	if fresh {
 		*st = state.Reattach(*st, pl, c.Now, *g.origin)
-		st.RunBranch, st.PlanLooked = branch, true
+		st.RunBranch, st.BranchFrom, st.PlanLooked = branch, g.tip, true
 		v.say = fmt.Sprintf("baton: attached %q (%s; %s) → %s starts now", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 		v.tell = w.AttachedNow(pl.Title, len(pl.Phases), pl.File, first.ID, first.Title)
 		v.also = append(v.also, event{"phase_started", map[string]any{"phase": first.ID}})
@@ -125,7 +125,7 @@ func attach(st *state.State, s *state.Store, c Context, pl plan.Plan, fresh bool
 		return v
 	}
 	*st = state.AttachAtBoundary(*st, pl, c.Now)
-	st.RunBranch, st.PlanLooked = branch, true
+	st.RunBranch, st.BranchFrom, st.PlanLooked = branch, g.tip, true
 	v.say = fmt.Sprintf("baton: attached %q (%s; %s) → compacting the planning conversation, then %s starts", pl.Title, decide.PhaseCount(len(pl.Phases)), pl.Dependencies(), first.ID) + workers
 	v.tell = decide.AttachedAtBoundary(pl.Title, len(pl.Phases), pl.File, first.ID)
 	v.movedAside(pl, g.aside, file, moved, unmoved, "approval")
@@ -159,6 +159,7 @@ func (v *valveAction) keep(s *state.Store) {
 type ground struct {
 	git    bool          // git is usable in the run's working tree
 	branch string        // the branch checked out there: workers branch off it, and their work lands on it
+	tip    string        // its tip (state.State.BranchFrom)
 	origin *state.Origin // where the repository stands, for a first phase that starts at once (nil: not read)
 	room   workerRoom
 	aside  state.Aside // what moving the plan file out of Claude Code's way needs (lookAside)
@@ -168,6 +169,9 @@ type ground struct {
 // stands as well, for a "clear context" approval, whose first phase starts at once.
 func readGround(c Context, s *state.Store, origin bool) *ground {
 	g := &ground{git: gitx.Usable(s.Root), branch: gitx.Branch(s.Root), room: readWorkerRoom(c, s.Checkout)}
+	if g.branch != "" {
+		g.tip = gitx.RevParse(s.Root, "refs/heads/"+g.branch)
+	}
 	if origin {
 		o := state.OriginOf(s.Root)
 		g.origin = &o

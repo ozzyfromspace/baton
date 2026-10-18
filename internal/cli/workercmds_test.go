@@ -183,10 +183,13 @@ func TestAWorkerDoneHandsItsWorkToBaton(t *testing.T) {
 func TestAttachRecordsTheRunsBranch(t *testing.T) {
 	gittest.Isolate(t)
 	s, planFile := newSession(t)
-	gittest.Git(t, filepath.Dir(planFile), "init", "-q", "-b", "trunk")
+	repo := filepath.Dir(planFile)
+	gittest.Git(t, repo, "init", "-q", "-b", "trunk")
+	gittest.Write(t, repo, "a.txt", "a\n")
+	gittest.Commit(t, repo, "first", "a.txt")
 	s.attach(planFile)
-	if st := s.state(); st.RunBranch != "trunk" || !s.logged("attached", map[string]any{"branch": "trunk"}) {
-		t.Errorf("run branch %q\n%s", st.RunBranch, s.events())
+	if st := s.state(); st.RunBranch != "trunk" || st.BranchFrom != gittest.Git(t, repo, "rev-parse", "trunk") || !s.logged("attached", map[string]any{"branch": "trunk"}) {
+		t.Errorf("run branch %q from %q\n%s", st.RunBranch, st.BranchFrom, s.events())
 	}
 }
 

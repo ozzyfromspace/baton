@@ -363,10 +363,13 @@ func TestAPlanApprovedInAWorkerIsNotAttached(t *testing.T) {
 func TestAnApprovedPlanRecordsTheRunsBranch(t *testing.T) {
 	gittest.Isolate(t)
 	f := newFixture(t, false)
-	gittest.Git(t, filepath.Dir(f.dir), "init", "-q", "-b", "trunk")
+	repo := filepath.Dir(f.dir)
+	gittest.Git(t, repo, "init", "-q", "-b", "trunk")
+	gittest.Write(t, repo, "a.txt", "a\n")
+	gittest.Commit(t, repo, "first", "a.txt")
 	f.approve(f.writePlan("p.md", approvedDoc))
-	if st := f.state(); st.RunBranch != "trunk" || !f.logged("attached", map[string]any{"branch": "trunk"}) {
-		t.Errorf("run branch %q\n%s", st.RunBranch, f.eventLog())
+	if st := f.state(); st.RunBranch != "trunk" || st.BranchFrom != gittest.Git(t, repo, "rev-parse", "trunk") || !f.logged("attached", map[string]any{"branch": "trunk"}) {
+		t.Errorf("run branch %q from %q\n%s", st.RunBranch, st.BranchFrom, f.eventLog())
 	}
 }
 

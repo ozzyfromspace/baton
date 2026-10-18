@@ -22,20 +22,24 @@ type BranchSeen struct {
 	Run   string
 	On    string
 	Holds bool
+	// Fresh reports the run's branch still at its tip when the plan attached (State.BranchFrom): none of
+	// the plan's work is on it, so the run loses nothing by following any branch.
+	Fresh bool
 }
 
 // Off reports a checkout that is not on the run's branch.
 func (b BranchSeen) Off() bool { return b.Run != "" && b.On != b.Run }
 
-// Followable reports a checkout on another branch than the run's that holds the run's branch's tip, and
-// is not a worker's own (baton/…).
+// Followable reports a checkout on another branch than the run's that holds the run's branch's tip, or
+// any other while none of the plan's work is on the run's (Fresh), and is not a worker's own (baton/…).
 func (b BranchSeen) Followable() bool {
-	return b.Off() && b.On != "" && b.Holds && !strings.HasPrefix(b.On, "baton/")
+	return b.Off() && b.On != "" && (b.Holds || b.Fresh) && !strings.HasPrefix(b.On, "baton/")
 }
 
-// SeeBranch reads checkout's branch beside run, the run's branch. ok is false when git could not tell:
+// SeeBranch reads checkout's branch beside run, the run's branch, whose tip was from when the plan
+// attached ("" when not known, or once the run followed another). ok is false when git could not tell:
 // checkout is no repository, or a branch is not there.
-func SeeBranch(ctx context.Context, checkout, run string) (seen BranchSeen, ok bool) {
+func SeeBranch(ctx context.Context, checkout, run, from string) (seen BranchSeen, ok bool) {
 	if run == "" || !gitx.Usable(checkout) {
 		return BranchSeen{}, false
 	}
@@ -54,7 +58,7 @@ func SeeBranch(ctx context.Context, checkout, run string) (seen BranchSeen, ok b
 	if err != nil {
 		return seen, false
 	}
-	seen.Holds = holds
+	seen.Holds, seen.Fresh = holds, from != "" && tip == from
 	return seen, true
 }
 
@@ -62,10 +66,10 @@ func SeeBranch(ctx context.Context, checkout, run string) (seen BranchSeen, ok b
 // seen.Run, and leaves the lead's model note at its next hook (TakeBranchNote), never waking it for it. It
 // reports whether it followed.
 func FollowBranch(st *State, seen BranchSeen, note string) bool {
-	if !seen.Followable() || st.RunBranch != seen.Run {
+	if !seen.Followable() || st.RunBranch != seen.Run || !seen.Holds && st.BranchFrom == "" {
 		return false
 	}
-	st.RunBranch, st.BranchNote, st.BranchTold = seen.On, note, ""
+	st.RunBranch, st.BranchNote, st.BranchTold, st.BranchFrom = seen.On, note, "", ""
 	return true
 }
 
