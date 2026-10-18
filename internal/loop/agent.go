@@ -38,12 +38,14 @@ type Agent struct {
 	from                 int64
 	contextAt            time.Time
 	rebriefed, rebriefAt time.Time
+	// advise is the advisor's part of its tick, the coordinator's (advisor.go; nil: none).
+	advise func(now time.Time, s *state.Store, st state.State) bool
 }
 
 // newAgent is the loop of the agent on phase, whose sub-run is sub, with the lead's settings.
 func (c *Coordinator) newAgent(phase string, sub *state.Store) *Agent {
 	lead := c.Lead
-	return &Agent{Phase: phase, Store: sub, lead: lead.Store, loop: &Loop{Store: sub, Notify: lead.Notify, Project: lead.Project + " · " + phase,
+	return &Agent{Phase: phase, Store: sub, lead: lead.Store, advise: c.advise, loop: &Loop{Store: sub, Notify: lead.Notify, Project: lead.Project + " · " + phase,
 		Timing: lead.Timing, Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
 		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }, owner: true}}
 }
@@ -77,6 +79,11 @@ func (a *Agent) tick(now time.Time) {
 	st = a.loop.settle(v, st)
 	st = a.loop.retake(v, st)
 	st = a.read(now, st)
+	if a.advise != nil && a.advise(now, a.Store, st) {
+		if fresh, err := a.Store.Load(); err == nil {
+			st = fresh // a look-in held for the advisor is not typed for (watch, deliver)
+		}
+	}
 	if a.in == nil || st.Mode != state.ModeRunning {
 		return
 	}

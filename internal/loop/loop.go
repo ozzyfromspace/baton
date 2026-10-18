@@ -70,6 +70,7 @@ type Timing struct {
 	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
 	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 	ReplanMax      time.Duration // a replan of the phases not started open this long lapses: its draft is dropped, and the plan goes on as it was (replanmax.go; 0: never)
+	AdvisorWait    time.Duration // a look-in held for the advisor's note goes without it this long after it was held, whatever the advisor does (advisor.go; 0: AdvisorWait)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -94,6 +95,7 @@ var DefaultTiming = Timing{
 	SlowAfter: 15 * time.Minute, HeldAfter: 20 * time.Minute, JobTimeout: config.DefaultVerifyTimeout,
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	ReplanMax:         replan.Max,
+	AdvisorWait:       AdvisorWait,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 
@@ -204,6 +206,11 @@ type Loop struct {
 	rateNotified   bool
 	errNudged      time.Time
 	errRetries     int
+
+	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
+	// and releases the run's look-ins, so it comes before anything is delivered, and reports whether it
+	// changed the run's state.
+	advise func(now time.Time, s *state.Store, st state.State) bool
 }
 
 // Tick runs once per host tick.
@@ -236,6 +243,11 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	l.jobs(v, st)
 	st = l.settle(v, st)
+	if l.advise != nil && l.advise(v.Now, l.Store, st) {
+		if fresh, err := l.Store.Load(); err == nil {
+			st = fresh // a look-in held for the advisor is not typed for (deliver)
+		}
+	}
 	l.lapseReplan(v, st)
 	if st.Mode == state.ModeComplete && len(st.Due()) > 0 {
 		// A verification completed the plan while the session was idle: it is told, and sums the run up.
