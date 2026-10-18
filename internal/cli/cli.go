@@ -19,6 +19,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
 	"github.com/ozzyfromspace/baton/internal/hostcheck"
+	"github.com/ozzyfromspace/baton/internal/leftover"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
@@ -40,13 +41,16 @@ type IO struct {
 	// tests, which run under no host): hosted by a live baton host above it, or a session that only
 	// inherited baton's environment (package hostcheck).
 	Hosted func() hostcheck.Status
+	// Leftovers reads what a phase left running, and stops it (zero: reads nothing): a phase agent's `baton
+	// done` asks once about what it leaves (leftover.go), and baton clean lists the containers it finds.
+	Leftovers leftover.Finder
 }
 
 // StdIO is the real process environment. It reads the processes above it once, at the first command that
 // asks whether the session is hosted.
 func StdIO() IO {
 	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Env: os.Getenv, Now: time.Now, Machine: machine.Read,
-		Hosted: sync.OnceValue(func() hostcheck.Status { return hostcheck.Of(os.Getenv) })}
+		Hosted: sync.OnceValue(func() hostcheck.Status { return hostcheck.Of(os.Getenv) }), Leftovers: leftover.Machine()}
 }
 
 // host is how baton stands to the session the command runs in (IO.Hosted).

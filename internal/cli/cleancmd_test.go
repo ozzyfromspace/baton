@@ -17,6 +17,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/leftover"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -49,7 +50,7 @@ type cleanRig struct {
 
 func newCleanRig(t *testing.T) *cleanRig {
 	gittest.Isolate(t)
-	x := &cleanRig{t: t, now: time.Now().Truncate(time.Second), repo: resolved(t.TempDir()), home: resolved(t.TempDir()),
+	x := &cleanRig{t: t, now: time.Now().Truncate(time.Second), repo: leftover.Resolved(t.TempDir()), home: leftover.Resolved(t.TempDir()),
 		runners: map[int]bool{4343: true, 7001: true, 8001: true}}
 	gittest.Init(t, x.repo)
 	gittest.Git(t, x.repo, "checkout", "-q", "-b", "main")

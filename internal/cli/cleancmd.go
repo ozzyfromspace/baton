@@ -18,6 +18,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/leftover"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -35,9 +36,11 @@ import (
 //     (loop.RemoveStray);
 //  4. the unfinished jobs of abandoned runs: marked interrupted, and each runner still running told to stop;
 //  5. the lanes nobody holds (lane.Pool.Sweep);
-//  6. processes that sessions which are gone left running (spike 28): those working under baton's home
-//     are stopped, those in the project listed with the command to stop each; one working elsewhere (a
-//     gpg-agent a hosted shell started) is the human's own, and left out;
+//  6. processes that sessions which are gone left running (spike 28), read as package leftover reads
+//     them: those working under baton's home are stopped, those in the project listed with the command to
+//     stop each; one working elsewhere (a gpg-agent a hosted shell started) is the human's own, and left
+//     out. Containers compose started in a worktree of a run not left alone are listed, with the command
+//     to remove them: baton removes no container itself;
 //  7. records of runs and sessions that are gone, and temporary files that interrupted writes left;
 //  8. elevation records older than a day.
 //
@@ -92,6 +95,9 @@ type cleaner struct {
 	alive     func(pid int) bool // where no process table is read: a run's owner may still run
 	snapshot  func(root string, at time.Time, phase, why string) (gitx.Saved, error)
 
+	// containers lists the containers compose started (docker's; nil: none).
+	containers func(ctx context.Context) ([]leftover.Container, error)
+
 	look    *look
 	actions []*cleanAction
 	alone   []string // runs (and workers) left alone, and why
@@ -110,7 +116,7 @@ func newCleaner(io IO, dir string) (*cleaner, error) {
 		}
 	}
 	c := &cleaner{proj: proj, home: batonRoot(io), now: io.Now(), quiet: abandonAfter(io), instance: instance(io),
-		procs: procs.List, stop: func(pids []int) []int { return procs.Stop(pids, stopGrace) },
+		procs: procs.List, containers: io.Leftovers.Containers, stop: func(pids []int) []int { return procs.Stop(pids, stopGrace) },
 		isRunner: lane.IsRunner, terminate: lane.Terminate, alive: lane.Alive, parent: os.Getppid(), group: procs.Group()}
 	if hosted(io) {
 		if s, ok := proj.Lookup(io.Env("CLAUDE_CODE_SESSION_ID"), c.instance); ok {
@@ -153,12 +159,15 @@ type look struct {
 	runs      []*cleanRun
 	table     []procs.Proc
 	tableErr  error
+	docker    []leftover.Container // the containers compose started, and why they could not be read
+	dockerErr error
 	baton     func(pid int) bool // pid is a running baton
 	protected map[string]bool    // instances of runs left alone
 	trees     []string           // worktrees and lanes of runs left alone
 	named     map[string]bool    // every worktree a sub-run or a roster entry names
-	jobPIDs   map[int]bool       // runners and process groups of unfinished jobs
-	jobGroups map[int]bool
+	// skip leaves out the runners and process groups of unfinished jobs, and the command line that runs
+	// baton clean.
+	skip leftover.Skip
 }
 
 // cleanRun is a run of the project as baton clean found it.
@@ -172,7 +181,7 @@ type cleanRun struct {
 // clean does it (or, dry, says what it would do) and reports to w.
 func (c *cleaner) clean(w goio.Writer) {
 	c.look = c.read()
-	for _, step := range []func(){c.workers, c.orphans, c.strays, c.jobs, c.lanes, c.processes, c.records, c.machine} {
+	for _, step := range []func(){c.workers, c.orphans, c.strays, c.jobs, c.lanes, c.processes, c.containersLeft, c.records, c.machine} {
 		step()
 	}
 	events := map[string]map[string]any{}
@@ -208,8 +217,11 @@ func (c *cleaner) clean(w goio.Writer) {
 
 // read takes the one look every step plans from.
 func (c *cleaner) read() *look {
-	l := &look{protected: map[string]bool{}, named: map[string]bool{}, jobPIDs: map[int]bool{}, jobGroups: map[int]bool{}}
+	l := &look{protected: map[string]bool{}, named: map[string]bool{}, skip: leftover.Skip{Parent: c.parent, Group: c.group}}
 	l.table, l.tableErr = c.procs()
+	if c.containers != nil {
+		l.docker, l.dockerErr = c.containers(context.Background())
+	}
 	batons := map[int]bool{}
 	for _, p := range l.table {
 		if p.Comm == "baton" {
@@ -233,19 +245,14 @@ func (c *cleaner) read() *look {
 		}
 		l.runs = append(l.runs, r)
 		for _, e := range info.State.Workers {
-			l.named[resolved(e.Worktree)] = true
+			l.named[leftover.Resolved(e.Worktree)] = true
 		}
 		for _, s := range r.subs {
-			l.named[resolved(s.Worktree)] = true
+			l.named[leftover.Resolved(s.Worktree)] = true
 		}
 		for _, st := range append([]state.State{info.State}, states(r.subs)...) {
 			for _, j := range st.Unfinished() {
-				if j.PID > 0 {
-					l.jobPIDs[j.PID] = true
-				}
-				if j.PGID > 0 {
-					l.jobGroups[j.PGID] = true
-				}
+				l.skip.Job(j.PID, j.PGID)
 			}
 		}
 		for _, s := range r.subs {
@@ -544,7 +551,7 @@ func (c *cleaner) strays() {
 		phases, _ := os.ReadDir(filepath.Join(base, rd.Name()))
 		for _, pd := range phases {
 			dir := filepath.Join(base, rd.Name(), pd.Name())
-			if !pd.IsDir() || c.look.named[resolved(dir)] {
+			if !pd.IsDir() || c.look.named[leftover.Resolved(dir)] {
 				continue
 			}
 			run := c.store(rd.Name())
@@ -573,7 +580,7 @@ func (c *cleaner) strays() {
 
 // worktrees is where baton keeps the workers' worktrees for the checkout, by its real path.
 func (c *cleaner) worktrees() string {
-	return filepath.Join(resolved(c.home), "worktrees", lane.Key(c.proj.Root))
+	return filepath.Join(leftover.Resolved(c.home), "worktrees", lane.Key(c.proj.Root))
 }
 
 // leftAlone reports a run on record that is not abandoned.
@@ -697,46 +704,43 @@ func (c *cleaner) processes() {
 		c.notes = append(c.notes, "leftover processes: "+why)
 		return
 	}
-	homes := []string{filepath.Clean(c.home), resolved(c.home)}
+	homes := []string{filepath.Clean(c.home), leftover.Resolved(c.home)}
 	ours := []string{filepath.Join(c.home, "worktrees", lane.Key(c.proj.Root)), c.pool().Dir()}
-	ours = append(ours, filepath.Join(resolved(c.home), "worktrees", lane.Key(c.proj.Root)), filepath.Join(resolved(c.home), "lanes", lane.Key(c.proj.Root)))
+	ours = append(ours, filepath.Join(leftover.Resolved(c.home), "worktrees", lane.Key(c.proj.Root)), filepath.Join(leftover.Resolved(c.home), "lanes", lane.Key(c.proj.Root)))
 	var trees []string
 	for _, t := range l.trees {
-		trees = append(trees, filepath.Clean(t), resolved(t))
+		trees = append(trees, filepath.Clean(t), leftover.Resolved(t))
 	}
-	project := resolved(c.proj.Dir)
+	project := leftover.Resolved(c.proj.Dir)
 	// Where a session's leftovers work: the project (with the model's own worktrees), the worktrees on
 	// record, the lanes and baton's home. A process working elsewhere, or where it cannot be told (a
 	// gpg-agent or ssh-agent a hosted shell started, in / or the home directory), is the human's own,
 	// though it carries a gone session's variables.
-	where := append([]string{filepath.Clean(c.proj.Root), resolved(c.proj.Root)}, homes...)
+	where := append([]string{filepath.Clean(c.proj.Root), leftover.Resolved(c.proj.Root)}, homes...)
 	where = append(append(where, ours...), slices.Collect(maps.Keys(l.named))...)
-	mine := c.ancestors()
-	skip := func(p procs.Proc) bool {
-		return l.jobPIDs[p.PID] || l.jobGroups[p.PGID] || mine[p.PID] || c.group > 1 && p.PGID == c.group
-	}
+	skip := l.skip.Of(l.table)
 	groups := map[int]int{} // a candidate's process group, and one of its processes
 	var stopped []procs.Proc
 	for _, p := range l.table {
 		inst := p.Env["BATON_INSTANCE"]
-		if skip(p) || p.Hidden() || inst == "" || l.protected[inst] || resolved(p.Env["BATON_DIR"]) != project || !under(p.Cwd, where) {
+		if skip(p) || p.Hidden() || inst == "" || l.protected[inst] || leftover.Resolved(p.Env["BATON_DIR"]) != project || !leftover.Under(p.Cwd, where) {
 			continue
 		}
 		groups[p.PGID] = p.PID
-		if under(p.Cwd, homes) {
+		if leftover.Under(p.Cwd, homes) {
 			stopped = append(stopped, p)
 			continue
 		}
 		c.listed = append(c.listed, fmt.Sprintf("process %d (%s) in %s, left by a session that is gone: kill %d", p.PID, p.Comm, cwdOr(p.Cwd), p.PID))
 	}
 	for _, p := range l.table {
-		if skip(p) || !p.Hidden() || under(p.Cwd, trees) {
+		if skip(p) || !p.Hidden() || leftover.Under(p.Cwd, trees) {
 			continue
 		}
 		switch pid, ok := groups[p.PGID]; {
 		case ok && pid != p.PID:
 			c.listed = append(c.listed, fmt.Sprintf("process %d (%s) in %s, whose environment is hidden, in the process group of %d: kill %d", p.PID, p.Comm, cwdOr(p.Cwd), pid, p.PID))
-		case under(p.Cwd, ours):
+		case leftover.Under(p.Cwd, ours):
 			c.listed = append(c.listed, fmt.Sprintf("process %d (%s) in %s, whose environment is hidden: kill %d", p.PID, p.Comm, p.Cwd, p.PID))
 		}
 	}
@@ -766,19 +770,6 @@ func (c *cleaner) processes() {
 	}
 }
 
-// ancestors are the processes that run baton clean: its parent, and theirs.
-func (c *cleaner) ancestors() map[int]bool {
-	parents := map[int]int{}
-	for _, p := range c.look.table {
-		parents[p.PID] = p.PPID
-	}
-	out := map[int]bool{}
-	for pid := c.parent; pid > 1 && !out[pid]; pid = parents[pid] {
-		out[pid] = true
-	}
-	return out
-}
-
 // runOf is the run whose host or worker ran as instance, if it is on record.
 func (c *cleaner) runOf(instance string) string {
 	for _, r := range c.look.runs {
@@ -798,30 +789,21 @@ func cwdOr(cwd string) string {
 	return cwd
 }
 
-// under reports a path inside (or equal to) one of dirs, compared as strings: a removed working
-// directory cannot be resolved.
-func under(path string, dirs []string) bool {
-	if path == "" {
-		return false
+// containersLeft: step 6 too, the containers compose started in a worktree of a run not left alone (one
+// whose label names a worktree that was removed among them): listed, with the command to remove each, since
+// baton removes no container itself.
+func (c *cleaner) containersLeft() {
+	l := c.look
+	if l.dockerErr != nil {
+		c.notes = append(c.notes, "leftover containers: "+l.dockerErr.Error())
 	}
-	path = filepath.Clean(path)
-	for _, d := range dirs {
-		if d != "" && d != "." && (path == d || strings.HasPrefix(path, d+string(filepath.Separator))) {
-			return true
+	trees := leftover.Spellings(filepath.Join(c.home, "worktrees", lane.Key(c.proj.Root)), c.worktrees())
+	alone := leftover.Spellings(l.trees...)
+	for _, k := range l.docker {
+		if leftover.Under(k.Dir, trees) && !leftover.Under(k.Dir, alone) {
+			c.listed = append(c.listed, fmt.Sprintf("container %s (%s), which compose started in %s: docker rm -f %s", k.Name, k.Status, k.Dir, k.Name))
 		}
 	}
-	return false
-}
-
-// resolved is path with its symbolic links resolved, or cleaned when it is gone.
-func resolved(path string) string {
-	if path == "" {
-		return ""
-	}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		return real
-	}
-	return filepath.Clean(path)
 }
 
 // records: step 7, records of runs and sessions that are gone, and temporary files.
