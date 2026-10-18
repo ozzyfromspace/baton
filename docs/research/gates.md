@@ -8,7 +8,9 @@ treadmill. A real 57-phase run had spent 43.7h of gate time in 59.5h of wall clo
 132 gates were red. QA passes ran past failures they already knew of and re-ran stages that had passed.
 Gates in the lead's checkout held landings for 9.4h. Gates went red on their environment before any test ran,
 and landings were verified again on a single lane, 17 of 18 green. A human who feels time runs scoped checks
-while working and the big check once, at the end. v0.8.7 steers plans, phases and gates toward that.
+while working and the big check once, at the end. v0.8.7 steers plans, phases and gates toward that. A real run
+since showed that asking alone changed nothing: models resubmitted every gate baton questioned, unchanged, within
+seconds, and never used `--failed`. v0.8.11 makes the cheap path the easy one ([below](#since-v087-asking-was-not-enough)).
 
 Studied 2026-10-17 from the runs' records (`state.json`, `events.jsonl`, job logs, read-only), for the two runs
 below. The second is a private project: only its numbers are given here.
@@ -140,3 +142,35 @@ A replay (`internal/risk/replay_test.go`, under the `replay` build tag, reading 
   would interrupt a live run for nothing. The gate rules go to every new plan at its first `ExitPlanMode`, and to
   every phase's brief.
 - **`decide.ShapeRules`** are unchanged.
+
+## Since v0.8.7: asking was not enough
+
+Read 2026-10-18 from a real run's record since its upgrade to v0.8.7 (`events.jsonl`, `state.json`, job logs,
+read-only). It is a private project: only its numbers are given here.
+
+- **Every question was resubmitted unchanged.** baton questioned 35 gates as they were queued (`gate_questioned`).
+  Every one traced was queued again with the same command, 0 to 12 seconds later. One phase agent got `repeat` and
+  `unstaged` seven times running and resubmitted each time, once in the same second.
+- **The cheap path went unused.** 0 of 32 gates used `baton verify --failed`. It needed a committed script of
+  `baton stage` steps, and the run's gates were scratchpad scripts and make targets.
+- **One gate, again and again.** The same agent started its 12-minute gate 11 times in 75 minutes, each time after
+  fixing one failure.
+- **Three full QA passes.** A QA checkpoint ran its 2h40m set in full three times, about 8 hours, where reruns of
+  what failed would have done.
+
+Why: the refusal said "run the same command again", so resubmitting was the cheapest move, and the questions read as
+rhetorical. The cheap path was hard to reach: `--failed` worked only on staged gates. A narrower check that passed
+cleared nothing, so the model had to run the full gate again anyway. And the cost was abstract. A model does not feel
+time pass: a 12-minute gate is one tool call to it, and its result arrives as if no time went by. The human feels
+every minute: they wait on the run, their usage drains, and the work they care about next sits behind it.
+
+| Finding | v0.8.11 |
+|---|---|
+| `--failed` only for staged gates | **Failure ids from any red log** (`lane.FailureIDs`): Go, pytest, vitest, jest and Playwright output and `::baton fail` lines, each with its runner's own rerun (`lane.Reruns`). **`baton verify --failed -- <command>`** reruns only what failed in a gate built from no stages, when the command names each failed test; it stands in for the gate, so its pass clears it. |
+| A narrower check that passes clears nothing | It still clears nothing, unless it is that narrowed rerun: baton checks that it names every test the red gate's log says failed, and refuses one that leaves any out, naming them. |
+| The cheap path hard to find | A red gate's result lists what failed by id and the command that reruns only that, ready to queue. |
+| "Run the same command again" | The question ends: "To run the whole gate anyway, queue it again with `--why "…"`: baton tells the human your reason." `--why` is announced (`gate_repeated`); a long repeat queued again without one still runs, and is told to the human (`gate_unexplained`) and opens its result. |
+| The cost abstract | Every gate's result ends with what the phase's gates have cost so far (`decide.GateCost`), and a gate of 10 minutes or more with what it spent of the human's time (`decide.TimeShort`); the question opens with both. `decide.TimeFelt`, the paragraph above in baton's words with this run's numbers, opens the gate rules at plan approval and every phase's brief. |
+
+To measure in the next real run, against these numbers: `gate_repeated` and `gate_unexplained` counts, narrowed
+reruns (`job_queued` with `reruns` and `narrows`), and gate time per phase.
