@@ -4,6 +4,75 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-10-18
+
+v0.8.7 asked models to respect the human's time, and a real run's record since shows that asking alone changed
+nothing. baton questioned 35 gates; every one traced was queued again unchanged, 0 to 12 seconds later. 0 of 32
+gates used `baton verify --failed`, which needed a gate built from `baton stage` steps, and the run's gates were
+scratchpad scripts and make targets. One agent started its 12-minute gate 11 times in 75 minutes, each time after
+fixing one failure, and a QA checkpoint ran its 2h40m set in full three times. The refusal had said "run the same
+command again", so resubmitting was the cheapest move; a narrower check that passed cleared nothing; and the cost
+was abstract. A model does not feel time pass: a 12-minute gate is one tool call to it. The human feels every
+minute. So the cheap path is now the easy one: baton reads what failed in any red gate, a rerun of only that
+clears it, and the result offers the command. A repeat states its reason, every result says what the phase's gates
+have cost, and wherever a gate is decided baton says plainly what the human's time is and that the model cannot
+feel it. The evidence is in [`docs/research/gates.md`](docs/research/gates.md).
+
+A session on v0.8.x moves to v0.8.11 by itself at its next restart point. The planning rules did not change
+(`plan.RulesVersion` stays 1), so no run is replanned for this upgrade.
+
+### Added
+
+- **Failure ids from any red gate.** baton reads the tests a gate's log says failed, staged or not: Go
+  (`--- FAIL: TestX`, with its package), pytest (node ids, with `-v` and xdist lines), vitest and jest
+  (`file > suite > test`), Playwright (`file:line`, with its project), and `::baton fail <id>` lines. A package or
+  file that failed with no test named (a build failure, a timeout, a file that did not load) is named whole. Each
+  runner knows its own rerun of what failed (`go test -run '^(TestA|TestB)$' ./pkg`, `pytest <ids>`,
+  `vitest run <files> -t '<names>'`, `playwright test <file:line>`). `baton stage --runner` takes `vitest`, `jest`
+  and `playwright` too.
+- **`baton verify --failed -- <command>` reruns only what failed in any red gate.** On a red gate built from no
+  stages, baton runs the given command when it names each test the gate's log says failed, by its id, its test
+  name or its `file:line`, as a whole word (`TestParse` inside `TestParseAll` names nothing). It stands in for the
+  gate: its pass clears it, as a staged `--failed` rerun does, and a red result makes it the phase's red gate
+  (`job_queued` logs `narrows`). As it queues, the model is told what it does not run (what a gate stopped before
+  its end never reached; what a make target or script never reached after its first failing command) and that the
+  QA phase runs the whole set. It is refused, saying why, for a command that leaves a failure out (naming those,
+  and offering one that names them all), no command, the gate's own command, a gate that ran out of time, or more
+  than 100 failures; a gate whose log names no test baton reads is rerun by name with `--replace`, as before.
+- **`--why "<what this run can show that the last could not>"`** on `baton verify` and `baton await` answers
+  baton's questions about a gate, and the human is told the reason: "P53 reruns `make test-degraded` (12m, run 8):
+  <why>" (`gate_repeated`; `job_queued` logs `why`, and `answered` for the questions it answered).
+- **A gate's result points at the cheap path.** A red gate's result lists what failed ("Failed (3): TestA, TestB
+  and internal/lane (failed whole).", at most 20), then "Rerun only these: `<command>`", to run as `baton verify
+  --failed -- <that command>`, which clears the gate when it passes. It offers none for a gate that ran out of
+  time, one built from stages (its own `--failed` stays), an environment failure, or more than 100 failures. Every
+  gate's result ends with what the phase's gates have cost so far ("P53 so far: 11 gate runs, 1h05m of gates in
+  its 1h45m; `make test-degraded` 7 of them, 50m."), and a gate that ran 10 minutes or more with what it spent of
+  the human's time: "This gate spends 12m of the human's time; to you it is one tool call."
+
+### Changed
+
+- **A repeat without a reason is told to the human.** baton's question about a gate no longer ends "run the same
+  command again". It opens with what the gate spends of the human's time and what the phase's gates have cost,
+  lists the failure ids of the last red run with the rerun of only them, and ends: "To run the whole gate anyway,
+  queue it again with `--why "…"`: baton tells the human your reason." A long repeat queued again without one
+  still runs, since nothing is refused twice, but the human is told ("P53 reran `make test-degraded` (12m, run 8,
+  1h20m so far) without saying why", `gate_unexplained`), and the job's result opens with that line. A phase
+  agent's line reaches the lead's session too.
+- **The human's time, said plainly.** The gate rules at plan approval and every phase's brief open with a
+  paragraph saying that the model does not feel a gate's minutes, that the human feels each one and is harmed by
+  a check that cannot change what ships, and what a real run spent that way. The brief's gate habits, the QA
+  lines and the skill name `baton verify --failed -- <narrower command>` and `--why`.
+- **`--failed` on a gate built from no stages** now offers the narrowed rerun instead of only how to stage the
+  gate; with no failure ids in its log, it says to rerun the failures by name with `--replace`.
+
+### Fixed
+
+- **A staged rerun no longer narrows past a package that failed whole.** A stage where a package or file failed
+  with no test named (a timeout, a build failure) records no ids, so `baton verify --failed` reruns it whole;
+  before, a timed-out package could pass a rerun narrowed to the tests that had reported. A stage's runner preset
+  also reads past colour codes and Windows line ends.
+
 ## [0.8.10] - 2026-10-18
 
 ### Changed
@@ -1466,7 +1535,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...HEAD
+[0.8.11]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...v0.8.11
 [0.8.10]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...v0.8.8

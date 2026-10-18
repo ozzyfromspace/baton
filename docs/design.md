@@ -275,7 +275,19 @@ before any test ran, and landings were verified again on one lane, 17 of 18 gree
 scoped checks while working and the big one once, at the end. The rest of this section is how baton steers toward
 that, and tells the model what a gate does while it still runs.
 
-**The gate rules** go to the model where plans are made and where phases start ([Plans](#plans)): QA phases at real
+**Asking alone did not change what models ran** (v0.8.11). In a real run after v0.8.7, baton questioned 35 gates,
+and every one traced was queued again unchanged, 0 to 12 seconds later; none of its 32 gates used `--failed`; one
+agent ran its 12-minute gate 11 times in 75 minutes, each time after fixing one failure. The refusal had said "run
+the same command again", so that was the cheapest answer; the cheap path, a rerun of what failed, needed a gate
+built from stages; a narrower check that passed cleared nothing; and the cost was abstract. A model does not feel
+time pass: a 12-minute gate is one tool call to it, and its result arrives as if no time went by. So the cheap path
+is now the easy one (a narrowed rerun of any red gate, offered in its result), a repeat states its reason, every
+result carries what the phase's gates cost, and wherever a gate is decided baton says plainly what the human's time
+is (`decide.TimeFelt`, and `decide.TimeShort` beside a long gate: "This gate spends 12m of the human's time; to you
+it is one tool call.").
+
+**The gate rules** go to the model where plans are made and where phases start ([Plans](#plans)), after
+`TimeFelt`: QA phases at real
 seams (the end, and in a long plan the end of a group of related phases later work builds on), never per phase;
 every other phase runs scoped checks that finish in seconds or minutes, by name; gate scripts are committed, built
 from `baton stage`, and tear down what they start; a gate stops at its first failure, and then only what failed runs
@@ -286,12 +298,15 @@ stops what it started before `baton done`.
 ### The gate protocol
 
 A gate reports as it runs (package `lane`'s protocol). Each step of a gate script is a stage:
-`baton stage <name> [--keep-going] [--runner go|pytest] -- <command>` prints `▶ <name> HH:MM:SS` and a start marker
+`baton stage <name> [--keep-going] [--runner go|pytest|vitest|jest|playwright] -- <command>` prints `▶ <name> HH:MM:SS` and a start marker
 (`::baton stage <name> start`), passes its command's output through line by line, prints how it ended and an end
 marker (`::baton stage <name> passed|failed|skipped|carried exit=<n> seconds=<n>`), appends the stage to the job's
 stages file (`jobs/<id>.stages`, beside its log) and exits with the command's code. What failed is named by
 `::baton fail <id>` lines, which any command may print, and by a runner preset: Go's top-level `--- FAIL: TestX`
-names, pytest's `FAILED path::name`.
+names, pytest's `FAILED path::name`, vitest's and jest's `file > suite > test`, Playwright's `file:line`. A package
+or file that failed with no test named (a build failure, a timeout, a file that did not load) is named whole, and a
+stage with one records no ids, so its rerun runs whole. Only the Go and pytest presets narrow a staged rerun
+themselves; the others leave it to `BATON_FAILED` and `BATON_FAILED_RE`.
 
 - **A gate stops at its first failure.** A stage reads the stages file, and when an earlier stage failed without
   `--keep-going`, it prints why and is skipped (exit 1), however the script goes on. A stage that collects every
@@ -322,19 +337,37 @@ names, pytest's `FAILED path::name`.
   `--stages a,b` brings carried stages back. What it reruns comes from baton's record (the red gate, with what a
   stopped run learned since, written beside the rerun's log as it is queued), never from a model's reading of a
   tail. Its result names each carried stage's job and commit and the files changed since, and each narrowed
-  stage's ids. It is refused, saying why, with nothing to rerun, or a gate that recorded no stages, with how to
-  stage it.
+  stage's ids. It is refused, saying why, with nothing to rerun.
+- **`baton verify --failed -- <command>`** reruns only what failed in a red gate that recorded no stages (a make
+  target, a test command, a script): baton reads the failure ids of every run the rerun draws on from their logs,
+  for Go, pytest, vitest, jest and Playwright and `::baton fail` lines (`lane.FailureIDs`), and runs the model's
+  command when it names each of them as a whole word: its id, its test name, or its `file:line` (`lane.Unnamed`;
+  `TestParse` inside `TestParseAll` names nothing). It stands in for the gate (`Job.Reruns`, `Job.Narrows`), so its
+  pass clears it, and it replaces a run of the gate still under way. As it queues, the model is told what it does
+  not run: what a gate stopped before its end never reached, and, for a gate that runs its tests through make or a
+  script, what came after its first failing command; the QA phase runs the whole set. It is refused, saying why,
+  for a command that leaves a failure out (naming those, and offering the runners' own rerun of them,
+  `lane.Reruns`, where every id has a runner), no command, the gate's own command, a gate that ran out of time
+  (what it never reached is unchecked), more failures than baton reads by name (100), or a log with no id baton
+  reads, which is rerun by name with `--replace` instead.
 - **A red gate stands until a gate that takes over from it passes:** the same command, in a lane or `--here`, its
-  `--failed` rerun, or another command the model makes the phase's gate with `baton verify --replace`, recorded as a
+  `--failed` rerun, staged or narrowed, or another command the model makes the phase's gate with `baton verify --replace`, recorded as a
   decision the human is told of. v0.8.4 shipped a regression its own full end-to-end gate had caught: the result
   showed the log's tail, which held only the last failure, the model gated again with a one-test `-run`, baton let
-  that narrower gate stand in for the red one, and the log was later pruned. So a narrower command's pass leaves
-  the phase red, and the model is told so as it queues it and when it passes; `baton done --despite-red` stays for
-  what is not the phase's to fix. With `--failed`, a flaky suite needs one full run and then minutes, never
-  another full run: v0.8.6's "the same command" alone had made one a treadmill.
+  that narrower gate stand in for the red one, and the log was later pruned. So any other narrower command's pass
+  leaves the phase red, and the model is told so as it queues it and when it passes; a narrowed `--failed` rerun
+  clears it only because baton checked that it names every test the red gate's log says failed. `baton done
+  --despite-red` stays for what is not the phase's to fix. With `--failed`, a flaky suite needs one full run and
+  then minutes, never another full run: v0.8.6's "the same command" alone had made one a treadmill.
 - A result lists the lines that report a failure anywhere in the log (`--- FAIL`, `FAILED`, `panic:`, `✗` and the
   like, at most 20) before its tail, and the log and stages of every red job are kept, and go with the plan's record
   when another plan replaces it.
+- **A result points at the cheap path.** A red gate's result names what failed by id ("Failed (n): …", at most 20,
+  then how many more) and, when a narrowed rerun could stand in for it (it failed rather than ran out of time,
+  recorded no stages, did not fail on its environment, and every id was read), the command that reruns only them,
+  to run as `baton verify --failed -- <that command>`. Every gate's result ends with what its phase's gates have
+  cost so far (`state.GateCost`: the phase's gate runs and their clock time, overlaps counted once; from the second
+  run on), and a gate that ran 10 minutes or more with `TimeShort`.
 - **A red gate its environment failed says so.** A log with no test failure and a known environment line (a port
   in use, the Docker daemon out of reach, an unhealthy container, a full disk, a registry's rate limit, a host name
   that does not resolve) reads as the environment's failure, not the change's. The result quotes the line, lists
@@ -386,10 +419,22 @@ and questioned once, with the narrower check named; the same call again queues i
 nothing waits:
 - a repeat: the command's latest run took 10 minutes or more. On the same code, it already passed, or, red, use
   `--failed`; on other code, the files changed since are listed, with whether a narrower check proves them; when
-  only tests and Markdown changed since a full green run, shipping on that evidence is named;
+  only tests and Markdown changed since a full green run, shipping on that evidence is named; a red run's failure
+  ids are listed, with the runners' own rerun of them as `baton verify --failed -- <command>` where every id has a
+  runner;
 - a script outside the repository (a scratchpad, `/tmp`): commit it first;
 - a long gate whose log held no stage marker: build it from `baton stage`;
 - a long gate before the plan's QA phase, folded into the QA question, with the time its last run cost the human.
+
+**A repeat states its reason** (v0.8.11). The question opens with what the gate would spend of the human's time
+(`TimeShort`, from its last run) and what the phase's gates have cost so far, and ends: "To run the whole gate
+anyway, queue it again with `--why "…"`: baton tells the human your reason." `--why` (on `verify` and `await`,
+`Job.Why`) answers every kind of question, and the human is told the reason: for a repeat, "P53 reruns `make
+test-degraded` (12m, run 8): <why>" (`gate_repeated`). A long repeat queued again without it still runs, since
+nothing is refused twice, but the human is told ("P53 reran `make test-degraded` (12m, run 8, 1h20m so far) without
+saying why", `gate_unexplained`), and the job's result opens with that line for the model. A phase agent's line
+goes to the lead's session as well, where the human is. A silent resubmit was the cheapest answer to the question;
+now the reason costs a sentence, and its absence is seen.
 
 A check the model starts as a background shell task (`run_in_background`) is refused once and pointed to `baton
 verify`, where it is recorded, holds a lane, and its failures reach the model as they happen. In a real run the
