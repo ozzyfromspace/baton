@@ -262,21 +262,27 @@ func (w Words) Closing(id string) string {
 
 // QAFocus tells a phase that is not a QA phase how to check its work while the plan aggregates its heavy
 // checks: qa is the next QA phase ("P5 (QA after the parser)"). It protects the human's time: dense
-// checks at every phase burn hours and hold everything behind them.
+// checks at every phase burn hours and hold everything behind them, and the model does not feel them
+// (TimeFelt).
 func QAFocus(qa string) string {
 	return "QA: this plan runs its heavy checks in QA phases, to spare the human's time; the next is " + qa + ". " +
 		"In this phase, run checks that finish in seconds or minutes: the tests of what you changed, by name. " +
 		"No full suite, end-to-end run or whole-project lint before " + qa + ", even where a convention says to run them before every commit; " +
-		"commit work in progress all the same. A full check now only for a particular reason, flagged: `baton verify --qa \"<why now>\" --notes \"…\" -- <command>`."
+		"commit work in progress all the same. " +
+		"A full run is one tool call to you; the human feels every minute of it, and " + qa + " runs it anyway. " +
+		"A full check now only for a particular reason, flagged: `baton verify --qa \"<why now>\" --notes \"…\" -- <command>`."
 }
 
-// QAPhase tells a QA phase what it is for: since lists the phases it checks.
+// QAPhase tells a QA phase what it is for: since lists the phases it checks. The heavy checks run once:
+// a real run's QA phase spent 8 hours on three full passes of one set (TimeFelt).
 func QAPhase(since string) string {
 	s := "QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find"
 	if since != "" {
 		s += " in the work of " + since + ", which ran scoped checks only: expect things that do not fit together yet"
 	}
-	return s + ". The heavy checks run here, once: after a red, rerun only what failed. Push to CI early, batching fixes per round trip. Finish when they pass."
+	return s + ". The heavy checks run here, once: after a red, rerun only what failed. " +
+		"A full pass costs the human its whole length, though to you it is one tool call: never run the set again to re-prove what passed. " +
+		"Push to CI early, batching fixes per round trip. Finish when they pass."
 }
 
 // QAAsk is baton's standard question to a phase that queues a job of kind (state.JobVerify, state.JobAwait)

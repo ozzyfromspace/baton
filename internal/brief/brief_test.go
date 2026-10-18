@@ -498,6 +498,7 @@ func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 					t.Errorf("brief lacks %q:\n%s", want, b)
 				}
 			}
+			timeFeltFirst(t, b)
 			for _, not := range c.not {
 				if strings.Contains(b, not) {
 					t.Errorf("brief has %q:\n%s", not, b)
@@ -511,8 +512,64 @@ func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 	}
 	st := state.Attach(only, now, state.Origin{})
 	st.Current = "P1"
-	if b := Write(Input{Kind: Worker, Plan: only, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Worker: true, Git: true}}); !strings.Contains(b, "the next is P2 (Check it all)") ||
-		!strings.Contains(b, focus) || !strings.Contains(b, habits) {
+	b := Write(Input{Kind: Worker, Plan: only, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Worker: true, Git: true}})
+	if !strings.Contains(b, "the next is P2 (Check it all)") || !strings.Contains(b, focus) || !strings.Contains(b, habits) {
 		t.Errorf("a phase agent's brief:\n%s", b)
+	}
+	timeFeltFirst(t, b)
+}
+
+// Every brief says what the human's time is and that the model does not feel it (decide.TimeFelt),
+// before the QA line and the gate habits: a phase before a QA phase, a QA phase (above), and a phase of a
+// plan with no QA phase, the lead's and a phase agent's alike.
+func TestEveryBriefSaysTheHumanFeelsTheTime(t *testing.T) {
+	doc := []byte("# Demo\n\n## P0 — Parser\n\nAfter: none\n\nParse.\n\n## P1 — Printer\n\nPrint.\n\n## Verification\n")
+	pl, err := plan.Build("/work/plan.md", doc, plan.Suggest(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	st := state.Attach(pl, now, state.Origin{})
+	st.Current = "P1"
+	only, err := pl.Only("P1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := state.Attach(only, now, state.Origin{})
+	sub.Current = "P1"
+	for _, c := range []struct {
+		name string
+		in   Input
+	}{
+		{"the lead's boundary", Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Words: decide.Words{AggregateQA: true, Git: true}}},
+		{"aggregate_qa off", Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Words: decide.Words{Git: true}}},
+		{"no repository", Input{Kind: Boundary, Plan: pl, Doc: doc, State: st, Words: decide.Words{AggregateQA: true}}},
+		{"a phase agent", Input{Kind: Worker, Plan: only, Doc: doc, State: sub, Words: decide.Words{AggregateQA: true, Worker: true, Git: true}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := Write(c.in)
+			if strings.Contains(b, "QA:") {
+				t.Errorf("a plan with no QA phase has a QA line:\n%s", b)
+			}
+			timeFeltFirst(t, b)
+		})
+	}
+}
+
+// timeFeltFirst checks that brief b carries decide.TimeFelt once, followed by the QA line where it has
+// one, then the gate habits.
+func timeFeltFirst(t *testing.T, b string) {
+	t.Helper()
+	at := strings.Index(b, decide.TimeFelt+"\n\n")
+	if at < 0 || strings.Count(b, decide.TimeFelt) != 1 {
+		t.Errorf("the brief does not carry TimeFelt once:\n%s", b)
+		return
+	}
+	next := b[at+len(decide.TimeFelt)+2:]
+	if !strings.HasPrefix(next, "QA: ") && !strings.HasPrefix(next, "Gates: ") {
+		t.Errorf("TimeFelt is not followed by the QA line or the gate habits:\n%s", b)
+	}
+	if strings.Index(next, "Gates: ") < 0 {
+		t.Errorf("no gate habits after TimeFelt:\n%s", b)
 	}
 }

@@ -15,15 +15,17 @@ import (
 // phase whose second and third passes reran what had passed. A human who feels the time would not.
 
 // GateRules are baton's rules for a plan's gates: when a phase checks its work, how, and where the full
-// checks run. The skill's planning guidance (internal/skill/skill.md) says the same in short.
-const GateRules = "Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end. " +
-	"Every minute a check runs that could not change what ships is the human's, spent for nothing.\n" +
+// checks run, opened by what the human's time is (TimeFelt). The skill's planning guidance
+// (internal/skill/skill.md) says the same in short.
+const GateRules = TimeFelt + "\n\n" +
+	"Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end.\n" +
 	"1. QA phases sit at real seams, never per phase: at the end, and, in a long plan, at the end of a group of related phases that later work builds on. " +
 	"Each comes `After:` everything it checks. A short plan usually needs one.\n" +
 	"2. Every other phase runs scoped checks that finish in seconds or minutes: the tests of what it changed, by name. " +
 	"Its \"done when\" is a commit, never a green full suite.\n" +
 	"3. Gate scripts are committed in the repo, built from `baton stage <name> -- <command>` steps, and stream every stage.\n" +
-	"4. A gate stops at its first failure. After a red, `baton verify --failed` reruns only what failed: the full suite never runs again for it.\n" +
+	"4. A gate stops at its first failure. After a red, `baton verify --failed` reruns only what failed, " +
+	"or `baton verify --failed -- <narrower command>` naming the failed tests: the full suite never runs again for it.\n" +
 	"5. A setup phase proves the lane recipe (`.baton-lane`) before phases run in parallel.\n" +
 	"6. Timings on a shared machine are warnings; bytes and counts gate.\n" +
 	"7. No file many phases edit: records per phase, or the plan's `Record:` file.\n" +
@@ -124,11 +126,12 @@ func phaseCount(n int) string {
 	return fmt.Sprintf("%d %s", n, plural(n, "phase", "phases"))
 }
 
-// GateHabits is the gate rules in short, for every phase's brief, after QAFocus or QAPhase where the plan
-// has a QA phase: a gate stops at its first failure and only what failed runs again; a long gate is a
-// committed script of baton stages, run through baton verify; and a gate's environment is recorded where
-// every phase sees it. Without git (git false) there is no lane, so no verify and no stages: long checks
-// go through baton await.
+// GateHabits is the gate rules in short, for every phase's brief, after TimeFelt and QAFocus or QAPhase
+// where the plan has a QA phase: a gate stops at its first failure and only what failed runs again, by
+// `baton verify --failed`, staged or given the narrower command; the whole gate again takes a reason the
+// human is told (`--why`); a long gate is a committed script of baton stages, run through baton verify;
+// and a gate's environment is recorded where every phase sees it. Without git (git false) there is no
+// lane, so no verify and no stages: long checks go through baton await.
 func GateHabits(git bool) string {
 	env := "When a gate fails on its environment rather than the change (a port in use, a daemon down), " +
 		"record what it needs with `baton env \"<what it needs>\"`, so every phase sees it."
@@ -137,7 +140,7 @@ func GateHabits(git bool) string {
 			"Long checks go through `baton await`, never a background shell. " + env
 	}
 	return "Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, " +
-		"then rerun only what failed (`baton verify --failed`), never the whole suite again. " +
-		"A long gate is a script committed in the repo, built from `baton stage <name> -- <command>` steps so it streams every stage, " +
-		"and runs through `baton verify`, never a background shell. " + env
+		"then rerun only what failed (`baton verify --failed [-- <narrower command>]`), " +
+		"never the whole gate again without `--why \"…\"`, which baton tells the human. " +
+		"A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell. " + env
 }

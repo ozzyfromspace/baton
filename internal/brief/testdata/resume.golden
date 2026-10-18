@@ -23,7 +23,9 @@ After: P0
 
 Index the records and query them.
 
-Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, then rerun only what failed (`baton verify --failed`), never the whole suite again. A long gate is a script committed in the repo, built from `baton stage <name> -- <command>` steps so it streams every stage, and runs through `baton verify`, never a background shell. When a gate fails on its environment rather than the change (a port in use, a daemon down), record what it needs with `baton env "<what it needs>"`, so every phase sees it.
+You do not feel time pass. A gate that runs 12 minutes is one tool call to you, and its result arrives as if no time went by. The human feels every one of those minutes: they wait on the run, their usage and money drain, and the work they care about next sits behind it. A check that cannot change what ships is not caution: it harms them. A real run started one 12-minute gate 11 times in 75 minutes, each time after fixing a single failure, and spent 8 hours on three full passes of a 2h40m QA set that mostly re-proved what had passed. Before any check, ask what it can tell you that you do not already know, and run only that.
+
+Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, then rerun only what failed (`baton verify --failed [-- <narrower command>]`), never the whole gate again without `--why "…"`, which baton tells the human. A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell. When a gate fails on its environment rather than the change (a port in use, a daemon down), record what it needs with `baton env "<what it needs>"`, so every phase sees it.
 
 This phase's park notes (where P2 stood when it was set aside):
 
