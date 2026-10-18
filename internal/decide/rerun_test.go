@@ -120,8 +120,9 @@ func TestRerunAndStopWords(t *testing.T) {
 			"or was stopped after it showed a failure (`baton stop`). To check the phase, queue its gate itself: `baton verify --notes \"…\" -- <command>`."},
 		{NoRedGate("P3", &running), "not queued — --failed reruns what failed in P3's red gate, and P3 has none: no gate of P3 went red since its last pass, " +
 			"or was stopped after it showed a failure (`baton stop`). Its gate, job j8 (`make e2e` on 4f2a9c1b04de), is running and has shown no failure: baton gives you its result when it ends."},
-		{NoStages("P3", red), "not queued — job j4 (`make e2e` on 3f2a9c1b04de), the gate --failed would rerun for P3, recorded no stages, so baton has no record of what passed in it " +
-			"and what failed, and --failed reruns only from that record. Fix what failed, then verify again with `make e2e`. " +
+		{NoStages("P3", red), "not queued — job j4 (`make e2e` on 3f2a9c1b04de), the gate --failed would rerun for P3, recorded no stages, and baton reads no failed test in its log, " +
+			"so it cannot tell that a narrower command reruns what failed. Rerun the failures by name and make that P3's gate: " +
+			"`baton verify --replace --notes \"…\" -- <command>` (a decision without the human, and they are told); or fix what failed, then verify again with `make e2e`. " +
 			"For the gates to come, build the gate from stages: a committed script whose steps each run as `baton stage <name> -- <command>` " +
 			"(a failed stage stops the ones after it, and --failed then reruns only what failed)."},
 		{UnknownStages(red, []string{"tow"}, stages), "not queued — --stages names `tow`, which job j4 did not record: its stages are `unit`, `e2e`."},

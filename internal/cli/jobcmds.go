@@ -28,7 +28,8 @@ func init() {
 		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace. "+
 		"baton questions a gate out of proportion once; --why answers it, and baton tells the human your reason. "+
 		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told). "+
-		"verify --failed [--stages <name>,<name>] --notes \"…\" reruns what failed in a red gate built from stages: the stages that passed are carried, and a pass clears it", cmdVerify)
+		"verify --failed [--stages <name>,<name>] --notes \"…\" reruns what failed in a red gate built from stages: the stages that passed are carried, and a pass clears it; "+
+		"of a red gate built from none, verify --failed --notes \"…\" -- <a command that names each test that failed> reruns only them, and a pass clears it", cmdVerify)
 	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
@@ -57,7 +58,7 @@ func queueJob(args []string, io IO, kind string) int {
 	if err != nil || command == "" && !failed || len(bring) > 0 && !failed {
 		rerun := ""
 		if kind == state.JobVerify {
-			rerun = ", or baton verify --failed [--stages <name>,<name>] --notes \"<where the phase stands>\" to rerun what failed in the red gate"
+			rerun = ", or baton verify --failed [--stages <name>,<name>] --notes \"<where the phase stands>\" [-- <a command that names each test that failed>] to rerun what failed in the red gate"
 		}
 		return fail(io, "usage: baton %s \"<command>\"%s --notes \"<where the phase stands>\", or baton %s%s --notes \"<where the phase stands>\" -- <the command's words>%s%s", kind, usage, kind, usage, rerun, errSuffix(err))
 	}
@@ -85,7 +86,7 @@ func queueJob(args []string, io IO, kind string) int {
 		if err != nil {
 			return refused(io, s, kind, err)
 		}
-		command, here, re = a.r.Of.Command, here || a.r.Of.Here, &a
+		command, here, re = a.command(), here || a.r.Of.Here, &a
 	}
 	var commit string
 	var work workLeft
@@ -143,16 +144,16 @@ func queueJob(args []string, io IO, kind string) int {
 			if err := re.still(*st, phase); err != nil {
 				return err
 			}
-			j.Reruns = re.r.Of.ID
+			j.Reruns, j.Narrows = re.r.Of.ID, re.names()
 		}
-		if c := st.Clash(j); c != nil && !replace {
+		if c := st.Clash(j); c != nil && !replace && !re.standsIn(*c) {
 			x := *c
 			clash = &x
 			return refusal{"another check runs", decide.Clash(kind, command, x)}
 		}
 		// A red gate stands until the same command passes: a gate of another command clears it only when the
 		// model makes it the phase's gate in its place (--replace), a decision without the human.
-		if g := st.RedGate(phase); kind == state.JobVerify && g != nil && g.Command != command {
+		if g := st.RedGate(phase); kind == state.JobVerify && g != nil && g.Command != command && !re.standsIn(*g) {
 			x := *g
 			red = &x
 			if replace {
@@ -229,6 +230,9 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	if re != nil {
 		queuedEvent["reruns"] = re.r.Of.ID
+		if ids := re.names(); len(ids) > 0 {
+			queuedEvent["narrows"] = ids
+		}
 		if len(re.bring) > 0 {
 			queuedEvent["stages"] = re.bring
 		}
@@ -290,7 +294,7 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	fmt.Fprintf(io.Out, "baton: queued %s — `%s` (%s), %s. baton starts it within seconds; its output goes to %s.\n", queued.ID, command, phase, where, s.JobLog(queued.ID))
 	if re != nil {
-		re.say(io, s, queued)
+		re.say(io, s, queued, qaAhead(io, pl, phase))
 	}
 	if said.line != "" {
 		fmt.Fprintln(io.Out, "baton: "+decide.HumanTold(said.line))

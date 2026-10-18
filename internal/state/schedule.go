@@ -69,6 +69,9 @@ type Job struct {
 	// Unexplained is the line the human was told of a long gate queued again over baton's question with no
 	// --why (decide.RepeatUnexplained); its result opens with it.
 	Unexplained string `json:"unexplained,omitempty"`
+	// Narrows are the failures of the gate it reruns (Reruns) that a narrowed rerun names: of a gate with no
+	// stages, rerun by a command of the model's that names each of them (verify --failed -- <command>).
+	Narrows []string `json:"narrows,omitempty"`
 }
 
 // Failing is the first failure a job's output showed while it ran: a failure line (lane.Failure), a fail

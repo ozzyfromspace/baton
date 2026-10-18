@@ -40,6 +40,8 @@ func TestARedGateStandsUntilTheSameCommandPasses(t *testing.T) {
 		{"a rerun runs", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobRunning}}, []string{"j2"}, "j1", nil},
 		{"a rerun was stopped", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobInterrupted}}, []string{"j1"}, "j1", []string{"j1"}},
 		{"a rerun by its record alone", []Job{red, {ID: "j2", Phase: "P0", Command: "make test-all", Reruns: "j1", Status: JobPassed}}, []string{"j2"}, "", nil},
+		{"a narrowed rerun passed", []Job{red, {ID: "j2", Phase: "P0", Command: "go test -run '^TestA$' ./x", Reruns: "j1", Narrows: []string{"TestA"}, Status: JobPassed}}, []string{"j2"}, "", nil},
+		{"a narrowed rerun failed", []Job{red, {ID: "j2", Phase: "P0", Command: "go test -run '^TestA$' ./x", Reruns: "j1", Narrows: []string{"TestA"}, Status: JobFailed}}, []string{"j2"}, "j2", []string{"j2"}},
 		{"a rerun of another red", []Job{red, {ID: "j2", Phase: "P0", Command: "make lint", Reruns: "j9", Status: JobPassed}}, []string{"j1"}, "j1", []string{"j1"}},
 		{"a red rerun, then a narrower gate passed", []Job{red, {ID: "j2", Phase: "P0", Command: "make test", Reruns: "j1", Status: JobFailed},
 			{ID: "j3", Phase: "P0", Command: "go test -run X ./x", Status: JobPassed}}, []string{"j2"}, "j2", []string{"j2"}},

@@ -13,7 +13,8 @@ import (
 // that passed in it are carried, each failed one runs narrowed to its failures, and a pass clears it. What
 // it reruns is worked out from the stages records read before the run's lock (askRerun), and again under
 // it (still), with the same records; the record it runs from is written beside its log once it is queued
-// (state.Store.SaveRerun).
+// (state.Store.SaveRerun). A red gate built from no stages is rerun by a command of the model's that names
+// what failed in it (narrow.go).
 
 // rerunAsk is what a --failed rerun reruns, as worked out before the run's lock.
 type rerunAsk struct {
@@ -22,6 +23,8 @@ type rerunAsk struct {
 	record []lane.Stage            // the record it runs from (state.RerunRecord)
 	stages map[string][]lane.Stage // the phase's gates' stages, as read
 	saved  error                   // why the record could not be written (save)
+	narrow []lane.FailedTest       // a narrowed rerun's: the failures it names (askNarrowed)
+	given  string                  // the command a narrowed rerun runs
 }
 
 // askRerun works out what --failed reruns for phase, as st stands: command is the one given with it, if
@@ -46,7 +49,7 @@ func askRerun(s *state.Store, st state.State, phase, command string, bring []str
 		}
 		return a, refusal{"no red gate", decide.NoRedGate(phase, running)}
 	case state.RerunNoStages:
-		return a, refusal{"no stages", decide.NoStages(phase, r.Of)}
+		return askNarrowed(s, a, r, phase, command, bring)
 	}
 	if command != "" && command != r.Of.Command {
 		return a, refusal{"another command", decide.FailedCommand(r.Of, command)}
@@ -69,7 +72,11 @@ func (a rerunAsk) of(j state.Job) []lane.Stage {
 // still turns down the rerun when, under the run's lock, phase's record no longer gives the gate askRerun
 // found.
 func (a rerunAsk) still(st state.State, phase string) error {
-	if r, why := st.RerunOf(phase, a.of); why != "" || r.Of.ID != a.r.Of.ID {
+	r, why := st.RerunOf(phase, a.of)
+	if why == state.RerunNoStages && a.narrow != nil {
+		why = ""
+	}
+	if why != "" || r.Of.ID != a.r.Of.ID {
 		return refusal{"jobs changed", decide.RerunChanged(phase)}
 	}
 	return nil
@@ -89,11 +96,19 @@ func stageList(v string) []string {
 // save writes the record rerun j runs from, as soon as j is queued: its runner reads it as each stage
 // starts, well after. One that could not be written is said (say), and the rerun runs every stage whole.
 func (a *rerunAsk) save(s *state.Store, j state.Job) {
+	if a.narrow != nil {
+		return // it runs the command given, and carries nothing
+	}
 	a.saved = s.SaveRerun(j.ID, a.record)
 }
 
-// say tells the model what rerun j carries, narrows and runs whole.
-func (a rerunAsk) say(io IO, s *state.Store, j state.Job) {
+// say tells the model what rerun j carries, narrows and runs whole, or, narrowed, what it stands in for; qa
+// is the QA phase ahead, "" for none.
+func (a rerunAsk) say(io IO, s *state.Store, j state.Job, qa string) {
+	if a.narrow != nil {
+		fmt.Fprintln(io.Out, "baton: "+decide.NarrowedQueued(j.Phase, a.r.Of, a.names(), j.Command, qa))
+		return
+	}
 	if a.saved != nil {
 		fmt.Fprintf(io.Out, "baton: note — the record %s runs from could not be written (%v), so it carries nothing and runs every stage whole.\n", j.ID, a.saved)
 		return

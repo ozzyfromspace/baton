@@ -63,7 +63,7 @@ func RerunQueued(phase string, v state.RerunView) string {
 // rerunRan is what the result of rerun j says it carried and narrowed (state.RanRerun), "" for a job that
 // reran nothing.
 func rerunRan(j state.Job, v *state.RerunView) string {
-	if v == nil || j.Reruns == "" {
+	if v == nil || j.Reruns == "" || len(j.Narrows) > 0 { // a narrowed rerun's are narrowedRan's
 		return ""
 	}
 	var b strings.Builder
@@ -153,12 +153,13 @@ func NoRedGate(phase string, running *state.Job) string {
 	return s + " To check the phase, queue its gate itself: `baton verify --notes \"…\" -- <command>`."
 }
 
-// NoStages turns down --failed for the gate of phase it would rerun, of, which recorded no stages.
+// NoStages turns down --failed for the gate of phase it would rerun, of, which recorded no stages and
+// whose log names no failed test baton reads: a narrowed rerun could not be checked against it.
 func NoStages(phase string, of state.Job) string {
-	return fmt.Sprintf("not queued — job %s (%s), the gate --failed would rerun for %s, recorded no stages, so baton has no record of what passed in it "+
-		"and what failed, and --failed reruns only from that record. Fix what failed, then verify again with `%s`. "+
+	return fmt.Sprintf("not queued — job %s (%s), the gate --failed would rerun for %s, recorded no stages, and baton reads no failed test in its log, "+
+		"so it cannot tell that a narrower command reruns what failed. %s "+
 		"For the gates to come, build the gate from stages: a committed script whose steps each run as `baton stage <name> -- <command>` "+
-		"(a failed stage stops the ones after it, and --failed then reruns only what failed).", of.ID, Ran(of), phase, of.Command)
+		"(a failed stage stops the ones after it, and --failed then reruns only what failed).", of.ID, Ran(of), phase, byNameInstead(of))
 }
 
 // UnknownStages turns down --stages naming names, which job of did not record among stages.

@@ -102,6 +102,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	b.WriteString(unexplainedFirst(j))
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
 	b.WriteString(rerunRan(j, log.Rerun))
+	b.WriteString(narrowedRan(j, qa))
 	b.WriteString(failedTests(j, log))
 	if len(log.Failures) > 0 && j.Status != state.JobPassed {
 		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))

@@ -285,7 +285,7 @@ func TestFailedRefusals(t *testing.T) {
 		{"a red gate with no stages", func(s *session) {
 			s.must("", "verify", "make", "e2e", "--notes", "x")
 			s.ended("j1", state.JobFailed, 1)
-		}, []string{"verify", "--failed", "--notes", "x"}, "recorded no stages, so baton has no record of what passed in it", "no stages"},
+		}, []string{"verify", "--failed", "--notes", "x"}, "recorded no stages, and baton reads no failed test in its log", "no stages"},
 		{"a stage it did not record", func(s *session) {
 			s.must("", "verify", "make", "e2e", "--notes", "x")
 			s.staged("j1", state.JobFailed, 1, passedOne, failedTwo)
