@@ -62,6 +62,9 @@ type Worker struct {
 	Started  time.Time `json:"started,omitzero"`
 	Ended    time.Time `json:"ended,omitzero"`
 	Finished time.Time `json:"finished,omitzero"`
+	// Tip is its branch's tip as the merge queue took it: its own work, before baton merged the run's
+	// branch into it ("" for none yet). The lead's done counts its commits from Base to it.
+	Tip string `json:"tip,omitempty"`
 	// Generation is the run's generation it was assigned under (State.Generation).
 	Generation int `json:"generation,omitempty"`
 	// Retiring is when Retirer (a host's instance, or a command) began to retire it (loop.RetireWorker).

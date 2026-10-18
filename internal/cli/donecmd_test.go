@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -232,7 +233,7 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 			}
 			if !c.merged {
 				errs := s.fails("done", "P1")
-				if want := "baton: " + decide.WorkerPhaseOpen("P1", branch, into, 1); !strings.Contains(errs, want) {
+				if want := "baton: " + decide.WorkerPhaseOpen("P1", branch, into, "", 1); !strings.Contains(errs, want) {
 					t.Fatalf("refusal:\n%s\nwant %q", errs, want)
 				}
 				if st := s.state(); st.Phases["P1"].Status != state.PhaseWorking || st.Workers[0].Status != state.WorkerWorking || len(st.Decisions) > 0 {
@@ -244,15 +245,15 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 				return
 			}
 			out := s.must("", "done", "P1", "--notes", "the human merged it")
-			want, current := decide.DoneLanded("d1", "P1", branch, into)+" Carry on with P0.", "P0"
+			want, current := decide.DoneLanded("d1", "P1", branch, into, c.dirty)+" Carry on with P0.", "P0"
 			if c.none {
-				want, current = decide.DoneLanded("d1", "P1", branch, into)+" Next phase: P2 (The API). End your turn now: baton compacts the context, then starts P2 with a fresh brief.", "P2"
+				want, current = decide.DoneLanded("d1", "P1", branch, into, c.dirty)+" Next phase: P2 (The API). End your turn now: baton compacts the context, then starts P2 with a fresh brief.", "P2"
 			}
 			if !strings.Contains(out, want) {
 				t.Fatalf("done says:\n%s\nwant %q", out, want)
 			}
 			st := s.state()
-			what, undo := decide.DoneByLead("P1", branch, into, 1)
+			what, undo := decide.DoneByLead("P1", branch, into, 1, c.dirty)
 			if st.Phases["P1"].Status != state.PhaseDone || st.Workers[0].Status != state.WorkerLanded || st.Current != current {
 				t.Fatalf("after done: P1 %+v, worker %+v, in hand %q", st.Phases["P1"], st.Workers[0], st.Current)
 			}
@@ -279,6 +280,72 @@ func TestTheLeadsDoneOfAWorkersPhase(t *testing.T) {
 			}
 			if b, _ := os.ReadFile(filepath.Join(tree, "notes.txt")); c.dirty && string(b) != "not committed\n" {
 				t.Errorf("its uncommitted work was touched: %q", b)
+			}
+		})
+	}
+}
+
+// The lead's checkout moved to a branch of its own once the plan was attached, where the lead merged P1's
+// branch by hand, after baton had merged the run's branch into it: the lead's done has the run's branch
+// follow the checkout's first, and records P1 landed there with its own commit alone, as its branch was
+// when it finished. On a branch that lacks the run's commits, done is refused, naming that branch and how
+// to let the run follow it.
+func TestTheLeadsDoneFollowsItsBranch(t *testing.T) {
+	for _, followable := range []bool{true, false} {
+		t.Run(fmt.Sprintf("followable %v", followable), func(t *testing.T) {
+			s := afterSession(t)
+			root := s.store().Root
+			into, base := gitx.Branch(root), gitx.Head(root)
+			tree, branch := filepath.Join(t.TempDir(), "P1"), "baton/sess-1/P1"
+			gittest.Git(t, root, "worktree", "add", "-q", "-b", branch, tree, base)
+			gittest.Write(t, tree, "schema.sql", "create table widgets;\n")
+			gittest.Commit(t, tree, "the schema")
+			own := gitx.Head(tree)
+			ident := []string{"-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"}
+			if !followable {
+				gittest.Git(t, root, "branch", "fix")
+			}
+			for _, name := range []string{"one.txt", "two.txt"} {
+				gittest.Write(t, root, name, name+"\n")
+				gittest.Commit(t, root, "the lead's "+name, name)
+			}
+			if followable {
+				gittest.Git(t, tree, append(ident, "merge", "-q", "--no-edit", into)...) // baton's merge-in
+				gittest.Git(t, root, "checkout", "-q", "-b", "fix")
+			} else {
+				gittest.Git(t, root, "checkout", "-q", "fix") // made before the lead's commits on the run's branch
+			}
+			gittest.Git(t, root, append(ident, "merge", "-q", "--no-edit", branch)...)
+			s.set(func(x *state.State) {
+				x.RunBranch = into
+				x.Workers = []state.Worker{{Phase: "P1", Ref: "sess-1/P1", Worktree: tree, Branch: branch, Base: base, Tip: own, Status: state.WorkerLanding,
+					Assigned: s.now.Add(-time.Hour), Since: s.now.Add(-time.Hour), Generation: x.Generation, Merge: &state.Merge{Queued: s.now}}}
+				x.Phases["P1"] = &state.PhaseState{Status: state.PhaseWorking, Worker: "sess-1/P1"}
+			})
+			if !followable {
+				errs := s.fails("done", "P1")
+				if want := "baton: " + decide.WorkerPhaseOpen("P1", branch, into, "fix", 1); !strings.Contains(errs, want) {
+					t.Fatalf("refusal:\n%s\nwant %q", errs, want)
+				}
+				if st := s.state(); st.RunBranch != into || st.Phases["P1"].Status != state.PhaseWorking || s.logged("run_branch_followed", nil) {
+					t.Errorf("after the refusal: run's branch %q, P1 %+v", st.RunBranch, st.Phases["P1"])
+				}
+				return
+			}
+			out := s.must("", "done", "P1", "--notes", "merged by hand")
+			if want := decide.DoneLanded("d1", "P1", branch, "fix", false); !strings.Contains(out, want) {
+				t.Fatalf("done says:\n%s\nwant %q", out, want)
+			}
+			st := s.state()
+			what, _ := decide.DoneByLead("P1", branch, "fix", 1, false)
+			if st.RunBranch != "fix" || st.Phases["P1"].Status != state.PhaseDone || len(st.Decisions) != 1 || st.Decisions[0].What != what {
+				t.Fatalf("run's branch %q, P1 %+v, decisions %+v", st.RunBranch, st.Phases["P1"], st.Decisions)
+			}
+			if l := st.Landed; len(l) != 1 || !slices.Equal(l[0].Commits, []string{own}) || !slices.Equal(l[0].Files, []string{"schema.sql"}) || l[0].Head != gitx.Head(root) {
+				t.Errorf("landed %+v", l)
+			}
+			if !s.logged("run_branch_followed", map[string]any{"from": into, "to": "fix"}) || st.BranchNote == "" {
+				t.Errorf("note %q, events:\n%s", st.BranchNote, s.events())
 			}
 		})
 	}

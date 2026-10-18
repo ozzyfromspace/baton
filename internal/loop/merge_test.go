@@ -888,13 +888,28 @@ func TestAWaitingLandingHoldsUpNoOther(t *testing.T) {
 	}
 }
 
-// The lead's checkout on another branch than the run's lands nothing, until it is back.
+// offRunsBranch moves the lead's checkout to the branch elsewhere, which lacks a commit of the run's
+// branch main and has one of its own: the run cannot follow it.
+func (x *crew) offRunsBranch() {
+	t := x.t
+	t.Helper()
+	gittest.Git(t, x.repo, "checkout", "-q", "-b", "elsewhere")
+	gittest.Write(t, x.repo, "b.txt", "elsewhere's\n")
+	gittest.Commit(t, x.repo, "elsewhere's", "b.txt")
+	gittest.Git(t, x.repo, "checkout", "-q", "main")
+	x.leadCommits(map[string]string{"c.txt": "main's\n"})
+	gittest.Git(t, x.repo, "checkout", "-q", "elsewhere")
+}
+
+// The lead's checkout on another branch than the run's, which lacks its commits, lands nothing, until it
+// is back.
 func TestALandingWaitsForTheRunsBranch(t *testing.T) {
 	x := landingCrew(t)
-	gittest.Git(t, x.repo, "checkout", "-q", "-b", "elsewhere")
+	x.offRunsBranch()
 	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
+	x.tick(time.Second) // main is merged into its branch
 	x.tick(time.Second)
-	if gitx.RevParse(x.repo, "refs/heads/elsewhere") == tip || gitx.RevParse(x.repo, "refs/heads/main") == tip {
+	if landedOn(t, x.repo, "elsewhere", tip) || landedOn(t, x.repo, "main", tip) {
 		t.Fatal("landed with the checkout on another branch")
 	}
 	if !x.has("land_deferred", `the lead's checkout is on \"elsewhere\"`) {
@@ -902,16 +917,17 @@ func TestALandingWaitsForTheRunsBranch(t *testing.T) {
 	}
 	gittest.Git(t, x.repo, "checkout", "-q", "main")
 	x.tick(overlapRetry)
-	if gitx.Head(x.repo) != tip {
+	x.tick(time.Second)
+	if !landedOn(t, x.repo, "main", tip) {
 		t.Fatalf("not landed once the checkout was back on main\n%s", x.events())
 	}
 }
 
-// A landing held by the lead's checkout on another branch pushes the human, once a landing however long
-// it waits: only a human moves the checkout back.
+// A landing held by the lead's checkout on another branch the run cannot follow pushes the human once a
+// landing, and tells the lead's model once a branch, however long it waits: only they move the checkout.
 func TestALandingOffTheRunsBranchPushesTheHumanOnce(t *testing.T) {
 	x := landingCrew(t)
-	gittest.Git(t, x.repo, "checkout", "-q", "-b", "elsewhere")
+	x.offRunsBranch()
 	tip := x.finish("P1", map[string]string{"one.txt": "one\n"}, false)
 	for range 10 {
 		x.tick(overlapRetry)
@@ -925,11 +941,22 @@ func TestALandingOffTheRunsBranchPushesTheHumanOnce(t *testing.T) {
 	if m := x.worker("P1").Merge; m == nil || m.OffBranch.IsZero() {
 		t.Errorf("the push is not on record: %+v", m)
 	}
+	if n := strings.Count(x.events(), `"kind":"run_branch_unfollowed"`); n != 1 || x.has("run_branch_followed") {
+		t.Errorf("the lead was told %d times\n%s", n, x.events())
+	}
 	gittest.Git(t, x.repo, "checkout", "-q", "main")
 	x.tick(overlapRetry)
-	if gitx.Head(x.repo) != tip {
+	x.tick(time.Second)
+	if !landedOn(t, x.repo, "main", tip) {
 		t.Fatalf("not landed once the checkout was back on main\n%s", x.events())
 	}
+}
+
+// landedOn reports that branch holds tip in repo.
+func landedOn(t *testing.T, repo, branch, tip string) bool {
+	t.Helper()
+	ok, err := gitx.IsAncestor(context.Background(), repo, tip, "refs/heads/"+branch)
+	return err == nil && ok
 }
 
 // The lead's uncommitted changes that hold a landing for LandNudge get its model a message, once a

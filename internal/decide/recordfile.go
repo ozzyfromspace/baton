@@ -123,7 +123,7 @@ func RecordDirty(path string) string {
 // RecordOffBranch is why a record waits on the lead's checkout, which is on the branch on rather than the
 // run's branch, run.
 func RecordOffBranch(on, run string) string {
-	return fmt.Sprintf("the lead's checkout is on %q, not on the run's branch %s; it writes the record once the checkout is back on it", on, run)
+	return fmt.Sprintf("the lead's checkout is on %q, which lacks commits of the run's branch %s; it writes the record once the checkout is back on it, or on a branch that holds it", on, run)
 }
 
 // RecordFailed tells the human that phase's record could not be written to path, and why.

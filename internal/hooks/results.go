@@ -175,17 +175,19 @@ func lines(parts ...string) string {
 }
 
 // news is what else a hook took for the model under the state's lock: baton's messages (state.Message)
-// and, in the lead, the work that landed underneath it (state.Landing) and the records baton committed
-// to the plan's record file (state.RecordNote).
+// and, in the lead, the work that landed underneath it (state.Landing), the records baton committed to
+// the plan's record file (state.RecordNote), and the run's branch following its checkout's (branch).
 type news struct {
 	text     string
 	mail     []state.Message
 	landings []state.Landing
 	records  []state.RecordNote
+	branch   bool
 }
 
-// takeNews takes the messages, landings and records due (state.TakeMail, state.TakeLandings,
-// state.TakeRecords). Nothing wakes the lead for a record: it hears of it with its next tool call or prompt.
+// takeNews takes the messages, landings, records and the note of the run's branch due (state.TakeMail,
+// state.TakeLandings, state.TakeRecords, state.TakeBranchNote). Nothing wakes the lead for a record or
+// that note: it hears of them with its next tool call or prompt.
 func takeNews(st *state.State, s *state.Store) news {
 	var n news
 	var parts []string
@@ -199,6 +201,9 @@ func takeNews(st *state.State, s *state.Store) news {
 		}
 		if n.records = state.TakeRecords(st); len(n.records) > 0 {
 			parts = append(parts, decide.RecordsTold(n.records))
+		}
+		if note := state.TakeBranchNote(st); note != "" {
+			parts, n.branch = append(parts, note), true
 		}
 	}
 	n.text = strings.Join(parts, "\n\n")
@@ -225,5 +230,8 @@ func (n news) event(s *state.Store, via string) {
 			phases = append(phases, r.Phase)
 		}
 		s.Event("record_told", map[string]any{"phases": phases, "via": via})
+	}
+	if n.branch {
+		s.Event("run_branch_told", map[string]any{"via": via})
 	}
 }

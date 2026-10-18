@@ -25,10 +25,11 @@ import (
 // work, staged or not, stays as it was. It is the one commit baton makes into a project, and only for a
 // plan that names the file. Like a landing (merge.go), it holds the project's landing lock, and goes only
 // while no tool call of a lead in the checkout runs, nor a gate a lead runs there; a checkout off the run's
-// branch, or a record file with uncommitted changes, holds it (record_held), and nothing touches the file
-// until it is clean again. Records are written one at a time, in the order the phases were done, each
-// logged record_written; the lead's model is told of them at its next tool call or prompt
-// (state.TakeRecords), never woken for one. No model edits the file (hooks' recordEdit).
+// branch (on one that holds it, the run's branch follows it: follow.go), or a record file with uncommitted
+// changes, holds it (record_held), and nothing touches the file until it is clean again. Records are
+// written one at a time, in the order the phases were done, each logged record_written; the lead's model is
+// told of them at its next tool call or prompt (state.TakeRecords), never woken for one. No model edits the
+// file (hooks' recordEdit).
 
 // How often the record step may run, and how long it waits after the record file or the checkout held a
 // record, or git failed.
@@ -99,7 +100,7 @@ func (c *Coordinator) record(now time.Time, s *state.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 	if usable && st.RunBranch != "" {
-		if br := gitx.Branch(root); br != st.RunBranch {
+		if br := gitx.Branch(root); br != st.RunBranch && c.follow(now, s, st).RunBranch != br {
 			c.recordHeld(now, s, id, path, "off_branch", decide.RecordOffBranch(br, st.RunBranch))
 			return
 		}

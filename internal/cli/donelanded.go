@@ -8,18 +8,22 @@ import (
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // doneLanded is `baton done` of id from the lead, id being a worker's phase (state.PhaseWorking), with the
-// lead's notes. Once every commit of the worker's branch is on the run's branch already (the human or the
-// lead merged it there, or the phase's work was done there), baton records its work landed (state.Landed,
-// by the lead), as a decision without the human with its undo; the run's host then ends the worker's agent
-// and retires it as its work landed (loop's watch and retireLanded): what it had not committed is saved
-// as a snapshot first, and its branch is removed, with nothing on it left to land. A phase the lead takes
-// up so starts after a boundary its stop queues, as after any done. Otherwise done is refused, saying how
-// to finish the phase. git is only read here: nothing is merged or moved.
+// lead's notes. The run's branch first follows the lead's checkout to a branch that holds it
+// (loop.FollowBranch). Once every commit of the worker's branch is on the run's branch already (the human
+// or the lead merged it there, or the phase's work was done there), baton records its work landed
+// (state.Landed, by the lead), as a decision without the human with its undo; the run's host then ends the
+// worker's agent and retires it as its work landed (loop's watch and retireLanded): what it had not
+// committed is saved as a snapshot first, and its branch is removed, with nothing on it left to land. Its
+// commits and files are its branch's from its base to its tip as it finished (Worker.Tip), not what a
+// merge of the run's branch brought it since. A phase the lead takes up so starts after a boundary its
+// stop queues, as after any done. Otherwise done is refused, saying how to finish the phase. git is only
+// read here: nothing is merged or moved.
 func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes string, followed bool) int {
 	isHosted := hosted(io) // read before the run's lock: it reads processes
 	e := cur.WorkerOn(id)
@@ -28,7 +32,11 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	seen, moved := loop.FollowBranch(ctx, s)
 	co, into := s.Checkout, cur.RunBranch
+	if moved {
+		into = seen.On
+	}
 	tip, onto := gitx.RevParse(co, "refs/heads/"+e.Branch), gitx.RevParse(co, "refs/heads/"+into)
 	on := false
 	if tip != "" && onto != "" {
@@ -41,16 +49,30 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 				ahead = n
 			}
 		}
+		off := ""
+		if seen.Off() && !seen.Followable() && seen.Run == into {
+			off = seen.On
+		}
 		s.Event("refused", map[string]any{"command": "done", "phase": id, "why": "a worker's phase", "branch": e.Branch, "unlanded": ahead})
-		return fail(io, "%s", decide.WorkerPhaseOpen(id, e.Branch, into, ahead))
+		return fail(io, "%s", decide.WorkerPhaseOpen(id, e.Branch, into, off, ahead))
 	}
-	commits, _ := gitx.Commits(ctx, co, e.Base, tip)
-	changes, _ := gitx.Changes(ctx, co, e.Base, tip)
+	own := tip
+	if e.Tip != "" && e.Tip != tip {
+		if ok, err := gitx.IsAncestor(ctx, co, e.Tip, tip); err == nil && ok {
+			own = e.Tip
+		}
+	}
+	commits, _ := gitx.Commits(ctx, co, e.Base, own)
+	changes, _ := gitx.Changes(ctx, co, e.Base, own)
 	var files []string
 	for _, ch := range changes {
 		files = append(files, ch.Path)
 	}
-	what, undo := decide.DoneByLead(id, e.Branch, into, len(commits))
+	dirty := false
+	if paths, err := gitx.Dirty(e.Worktree); err == nil {
+		dirty = len(paths) > 0
+	}
+	what, undo := decide.DoneByLead(id, e.Branch, into, len(commits), dirty)
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	now := io.Now()
 	var next string
@@ -95,7 +117,7 @@ func doneLanded(io IO, s *state.Store, pl plan.Plan, cur state.State, id, notes 
 		landed["next"] = next
 	}
 	s.Event("landed", landed)
-	line := decide.DoneLanded(note.ID, id, e.Branch, into)
+	line := decide.DoneLanded(note.ID, id, e.Branch, into, dirty)
 	switch {
 	case st.ReviewDue != "":
 		s.Event("review_due", map[string]any{"phase": id, "decisions": count})

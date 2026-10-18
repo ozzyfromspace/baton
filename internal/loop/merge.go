@@ -39,8 +39,9 @@ import (
 //  4. holding the project's landing lock, and only while no tool call of a lead in the checkout runs, nor
 //     a gate a lead runs there (baton verify --here, state.HereGate), the checkout fast-forwards to the
 //     branch (git merge --ff-only), all or nothing. The run's branch moving on meanwhile sends it back
-//     to 1; a locked index tries again shortly. A checkout on another branch than the run's lands
-//     nothing, and the human is told once a landing (offBranch): baton never moves it back itself;
+//     to 1; a locked index tries again shortly. A checkout on another branch that holds the run's
+//     branch's tip has the run's branch follow it (follow.go); one on any other lands nothing, and the
+//     human is told once a landing, the lead's model once a branch (offBranch): baton never moves it;
 //  5. HEAD must be the branch's tip, and the lead's local changes as they were: anything else is
 //     reported (land_check);
 //  6. the phase is done (state.Landed), the lead is told what landed at its next hook, and the worker is
@@ -158,10 +159,12 @@ func (c *Coordinator) session(e state.Worker) *worker {
 	return nil
 }
 
-// queue puts worker e, whose phase its sub-run finished at finished, in the merge queue.
+// queue puts worker e, whose phase its sub-run finished at finished, in the merge queue, with its
+// branch's tip as it finished (Worker.Tip).
 func (c *Coordinator) queue(now time.Time, s *state.Store, w *worker, e state.Worker, finished time.Time) {
+	tip := c.Fleet.gitx().RevParse(s.Checkout, "refs/heads/"+e.Branch)
 	c.setEntry(s, e, func(x *state.Worker) {
-		x.Status, x.Since, x.Merge, x.Finished = state.WorkerLanding, now, &state.Merge{Queued: now}, finished
+		x.Status, x.Since, x.Merge, x.Finished, x.Tip = state.WorkerLanding, now, &state.Merge{Queued: now}, finished, tip
 	})
 	s.Event("land_queued", map[string]any{"phase": e.Phase, "branch": e.Branch})
 	c.announce(s, fmt.Sprintf("baton: %s is finished → its work waits to land on the run's branch", e.Phase))
@@ -361,8 +364,9 @@ func (c *Coordinator) reverify(now time.Time, s *state.Store, st state.State, w 
 
 // fastForward lands worker e's branch, at tip, with the run's branch at onto merged in, over the commits
 // there its verification did not see (over): the checkout fast-forwards to it, unless the lead's local
-// changes are in its way, or a tool call or a gate of a lead in the checkout is running. It reports
-// whether it landed.
+// changes are in its way, or a tool call or a gate of a lead in the checkout is running. A checkout on
+// another branch that holds the run's has the run's branch follow it (FollowBranch). It reports whether
+// it landed, or the run's branch followed the checkout's, which ends the step: it lands at the next.
 func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.Store, st state.State, e state.Worker, onto, tip string, over unverified) bool {
 	g := c.Fleet.gitx()
 	if c.busy(now, s) != "" {
@@ -373,8 +377,12 @@ func (c *Coordinator) fastForward(ctx context.Context, now time.Time, s *state.S
 		return false
 	}
 	if br := g.Branch(s.Checkout); br != st.RunBranch {
+		seen, followed := FollowBranch(ctx, s)
+		if followed {
+			return true // the run's branch is the checkout's now: the next step lands on it
+		}
 		c.deferLanding(now, s, e, fmt.Sprintf("the lead's checkout is on %q, not on the run's branch %s", br, st.RunBranch), nil, overlapRetry)
-		c.offBranch(now, s, e, br)
+		c.offBranch(now, s, e, br, seen)
 		return false
 	}
 	changes, err := g.Changes(ctx, s.Checkout, onto, tip)
@@ -648,14 +656,14 @@ func (c *Coordinator) nudge(now time.Time, s *state.Store, e state.Worker, paths
 }
 
 // offBranch pushes the human, once a landing, that worker e's work waits for the checkout, on the branch
-// on, to be back on the run's branch: nothing of baton's moves a checkout from one branch to another.
-func (c *Coordinator) offBranch(now time.Time, s *state.Store, e state.Worker, on string) {
-	if !e.Merge.OffBranch.IsZero() {
-		return
-	}
+// on, to be back on the run's branch or on one that holds it: nothing of baton's moves a checkout from one
+// branch to another. The lead's model is told once a branch how to let it land (state.TellBranch), seen
+// being the checkout as git said it: its model may merge, which the human need not.
+func (c *Coordinator) offBranch(now time.Time, s *state.Store, e state.Worker, on string, seen state.BranchSeen) {
 	var branch string
-	pushed := false
+	pushed, told := false, false
 	s.Update(func(st *state.State) error {
+		told = state.TellBranch(st, seen, decide.BranchUnfollowed(e.Phase, seen.On, seen.Run), now)
 		x := st.Entry(e)
 		if x == nil || x.Merge == nil || !x.Merge.OffBranch.IsZero() {
 			return nil
@@ -666,6 +674,9 @@ func (c *Coordinator) offBranch(now time.Time, s *state.Store, e state.Worker, o
 	})
 	if pushed {
 		s.Event("land_off_branch", map[string]any{"phase": e.Phase, "branch": on, "run_branch": branch})
+	}
+	if told {
+		s.Event("run_branch_unfollowed", map[string]any{"phase": e.Phase, "branch": seen.On, "run_branch": seen.Run})
 	}
 }
 

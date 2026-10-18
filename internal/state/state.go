@@ -175,10 +175,11 @@ type State struct {
 	// replans baton has looked at, each once ("qa:P9", "marked:P3"; replan.go).
 	RulesVersion int      `json:"rules_version,omitempty"`
 	ReplanCued   []string `json:"replan_cued,omitempty"`
-	// RunBranch is the branch checked out when the plan was attached: workers branch off it, and their
-	// work lands on it. Workers, Relay, Landed, Usage and Hold are the run's worker sessions and what they
-	// need of the lead (fleet.go). Conflicts counts the workers' landings in a row that conflicted with the
-	// run's branch since one last landed: while they keep conflicting, no new worker starts.
+	// RunBranch is the branch checked out when the plan was attached, or the one the checkout moved to
+	// since that holds its tip (branch.go): workers branch off it, and their work lands on it. Workers,
+	// Relay, Landed, Usage and Hold are the run's worker sessions and what they need of the lead
+	// (fleet.go). Conflicts counts the workers' landings in a row that conflicted with the run's branch
+	// since one last landed: while they keep conflicting, no new worker starts.
 	RunBranch string    `json:"run_branch,omitempty"`
 	Workers   []Worker  `json:"workers,omitempty"`
 	Relay     []Relay   `json:"relay,omitempty"`
@@ -186,6 +187,11 @@ type State struct {
 	Usage     *Usage    `json:"usage,omitempty"`
 	Hold      *Hold     `json:"hold,omitempty"`
 	Conflicts int       `json:"conflicts,omitempty"`
+	// BranchNote is what the lead's model is to hear at its next hook of the run's branch following its
+	// checkout's (FollowBranch), "" once told; BranchTold is the checkout's branch, after the run's, it was
+	// last told the run's cannot follow (TellBranch), so it is told once a branch.
+	BranchNote string `json:"branch_note,omitempty"`
+	BranchTold string `json:"branch_told,omitempty"`
 	// Generation counts the plans attached to the run (attachKeeping). A worker belongs to the plan it was
 	// assigned under (Worker.Generation): one of an earlier plan is retired, and never counts as the
 	// worker on a phase of the plan attached now, which may use the same ids.

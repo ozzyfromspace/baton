@@ -113,14 +113,14 @@ func LandNudged(phase string, paths []string, waited time.Duration) string {
 }
 
 // LandOffBranch is the notice pushed to the human when phase's work cannot land because the checkout is
-// on another branch (on; "" for a detached HEAD) than the run's (branch): it lands once the checkout is
-// back.
+// on the branch on ("" for a detached HEAD), which lacks commits of branch, the run's branch: the run
+// follows only a branch that holds them.
 func LandOffBranch(phase, on, branch string) string {
-	where := fmt.Sprintf("on the branch %s", on)
+	where := fmt.Sprintf("on the branch %s, which lacks commits of the run's branch %s", on, branch)
 	if on == "" {
 		where = "on a detached HEAD"
 	}
-	return fmt.Sprintf("%s's work waits to land: the checkout is %s, not on the run's branch %s. baton lands it once the checkout is back on %s", phase, where, branch, branch)
+	return fmt.Sprintf("%s's work waits to land: the checkout is %s. The lead was told how to let it land; baton lands it once the checkout is back on %s, or on a branch that holds it", phase, where, branch)
 }
 
 // MailTyped is the line baton types to give an idle session the messages it has for it, which come
@@ -136,6 +136,8 @@ func MailTyped(kinds []string) string {
 			return "[baton] A phase's work waits to land on your uncommitted changes: baton's message, attached, says which files to commit."
 		case state.MessageWords:
 			return "[baton] The human wrote something for a phase's agent that did not reach it: baton's message, attached, has their words."
+		case state.MessageBranch:
+			return MailBranch
 		}
 	}
 	return "[baton] baton has a message for you, attached."

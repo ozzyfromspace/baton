@@ -387,6 +387,7 @@ func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) s
 // phase; then its sub-run is made, and only then is the mod asked to start its agent (issue). Its worktree
 // is made by the worktree hook, as the agent starts.
 func (c *Coordinator) spawn(now time.Time, s *state.Store, b *bridge.Bridge, st state.State, pl plan.Plan, phase string) {
+	st = c.follow(now, s, st) // its agent starts from the branch the lead's checkout is on, if it holds the run's
 	base := gitx.RevParse(s.Checkout, "refs/heads/"+st.RunBranch)
 	if base == "" {
 		c.later(now, s, phase, fmt.Sprintf("the run's branch %s is not there", st.RunBranch))
