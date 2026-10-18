@@ -234,7 +234,7 @@ func TestAGateBeforeTheQAPhaseIsAskedAbout(t *testing.T) {
 		asks    bool
 		flagged string
 	}{
-		{"a QA phase ahead", last, false, []string{"verify", "make test", "--notes", "n"}, true, ""},
+		{"a QA phase ahead", last, false, []string{"verify", "go test ./src", "--notes", "n"}, true, ""},
 		{"flagged as early QA", last, false, []string{"verify", "make test", "--qa", "the parser touches every package", "--notes", "n"}, false, "the parser touches every package"},
 		{"aggregate_qa off", last, true, []string{"verify", "make test", "--notes", "n"}, false, ""},
 		{"no QA phase ahead", none, false, []string{"verify", "make test", "--notes", "n"}, false, ""},

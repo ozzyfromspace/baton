@@ -73,7 +73,7 @@ func TestGather(t *testing.T) {
 		Landed:    []state.Landing{{Phase: "P2", Commits: []string{agents, merge}, Head: merge, At: t0.Add(30 * time.Minute)}},
 		Decisions: []state.Decision{{ID: "d1", Kind: state.Note, Phase: "P1"}, {ID: "d2", Kind: state.Note, Phase: "P0"}},
 	}
-	state.CountConflict(&lead, "P2")
+	state.CountReturned(&lead, "P2")
 	sub := state.State{
 		Phases:    map[string]*state.PhaseState{"P2": {Status: state.PhaseDone, Deviation: "none"}},
 		Decisions: []state.Decision{{ID: "P2.d1", Kind: state.Note, Phase: "P2"}, {ID: "P2.d2", Kind: state.Proposal, Phase: "P2"}},

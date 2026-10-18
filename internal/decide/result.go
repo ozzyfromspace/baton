@@ -74,6 +74,12 @@ type Log struct {
 	Tail     string
 	Failures []string
 	More     int
+	// Rerun is what a rerun of a red gate (verify --failed) carried and narrowed (state.RanRerun); nil for
+	// any other job.
+	Rerun *state.RerunView
+	// Env is what the log of a red gate says of its environment, when it shows an environment failure and
+	// no test failure (lane.Environment); nil otherwise.
+	Env *Env
 }
 
 // JobResult is a finished job's result for the model: what ran and how it ended, the lines of its log that
@@ -86,6 +92,7 @@ type Log struct {
 func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
+	b.WriteString(rerunRan(j, log.Rerun))
 	if len(log.Failures) > 0 && j.Status != state.JobPassed {
 		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))
 		if log.More > 0 {
@@ -119,14 +126,16 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		b.WriteString("Nothing was checked. Hand it to baton again, or run it in place.")
 	case j.Kind == state.JobAwait:
 		b.WriteString("What it waited on did not succeed: look into it, then await it again or carry on without it.")
+	case log.Env != nil:
+		b.WriteString(EnvFailed(j, *log.Env))
 	default:
 		if j.Status == state.JobTimeout {
 			b.WriteString("It ran past verify_timeout, so baton stopped it: that counts as a failure. ")
 		}
-		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and verify again with the same command, `%s`: %s "+
-			"`baton done %s` is refused until then.", j.Command, gateRule(j.Phase), j.Phase)
+		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and %s: %s "+
+			"`baton done %s` is refused until then.", again(j, true), gateRule(j), j.Phase)
 	}
-	if j.Red() && qa != "" {
+	if j.Red() && qa != "" && log.Env == nil {
 		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))
 	}
 	if red := RedPhases(others, j.Phase); red != "" {
@@ -280,16 +289,16 @@ func RedRefusal(j state.Job, after []state.Job) string {
 		}
 		fmt.Fprintf(&b, " Since then, %s; that does not clear it.", strings.Join(since, "; "))
 	}
-	rule := gateRule(j.Phase)
-	fmt.Fprintf(&b, " %s%s Fix what failed, commit, and verify again with `%s`; `baton done %s` then waits for it. %s",
-		strings.ToUpper(rule[:1]), rule[1:], j.Command, j.Phase, despite)
+	rule := gateRule(j)
+	fmt.Fprintf(&b, " %s%s Fix what failed, commit, and %s; `baton done %s` then waits for it. %s",
+		strings.ToUpper(rule[:1]), rule[1:], again(j, false), j.Phase, despite)
 	return b.String()
 }
 
-// gateRule is how a red gate of phase is cleared.
-func gateRule(phase string) string {
+// gateRule is how red gate g of its phase is cleared, with --failed once it recorded its stages.
+func gateRule(g state.Job) string {
 	return fmt.Sprintf("a red gate stands until the same command passes, and a narrower check that passes does not clear it "+
-		"(to make another command %s's gate instead, verify it with --replace: a decision without the human, and they are told).", phase)
+		"(to make another command %s's gate instead, verify it with --replace: a decision without the human, and they are told).", g.Phase) + failedRule(g)
 }
 
 // ownRedGate is the red gate j's phase stands on, among red (state.Red), when it is not j: a gate of
@@ -306,14 +315,14 @@ func ownRedGate(red []state.Job, j state.Job) *state.Job {
 // NotCleared says that red gate g of its phase stands although a check of another command passed.
 func NotCleared(g state.Job) string {
 	return fmt.Sprintf("It does not clear %s's gate, job %s (`%s`), which is red: %s",
-		g.Phase, g.ID, g.Command, gateRule(g.Phase))
+		g.Phase, g.ID, g.Command, gateRule(g))
 }
 
 // RedGateStands is what the model is told as it queues gate j for a phase whose gate, red, runs another
 // command: j does not clear it, whatever its result.
 func RedGateStands(red, j state.Job) string {
 	return fmt.Sprintf("note — %s's gate, job %s (`%s`), is red, and %s runs another command, so it does not clear it, whatever its result: %s",
-		red.Phase, red.ID, red.Command, j.ID, gateRule(red.Phase))
+		red.Phase, red.ID, red.Command, j.ID, gateRule(red))
 }
 
 // GateReplaced is the decision, and its undo, of making gate j its phase's gate in place of red, a red gate

@@ -209,6 +209,9 @@ func cmdAttach(args []string, io IO) int {
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return fail(io, "the spec is not valid JSON: %v", err)
 	}
+	if proj, err := project(io); err == nil {
+		spec.Root = proj.Root // where its record file, if it names one, is checked
+	}
 	pl, err := plan.Build(file, doc, spec)
 	if err != nil {
 		return fail(io, "the spec does not match the plan document:\n%v", err)

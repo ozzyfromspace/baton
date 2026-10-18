@@ -105,8 +105,8 @@ func MarkDespiteRed(st *State, phase string) {
 	}
 }
 
-// CountConflict records that a landing of phase came back to it for conflicts.
-func CountConflict(st *State, phase string) {
+// CountReturned records that a landing of phase came back to it for conflicts.
+func CountReturned(st *State, phase string) {
 	r := st.ledger()
 	if r.Conflicts == nil {
 		r.Conflicts = map[string]int{}
@@ -127,8 +127,8 @@ func (st State) FinishedDespiteRed(phase string) bool {
 	return st.Risk != nil && slices.Contains(st.Risk.DespiteRed, phase)
 }
 
-// Conflicted is how many of phase's landings came back to it for conflicts (CountConflict).
-func (st State) Conflicted(phase string) int {
+// LandingsReturned is how many of phase's landings came back to it for conflicts (CountReturned).
+func (st State) LandingsReturned(phase string) int {
 	if st.Risk == nil {
 		return 0
 	}

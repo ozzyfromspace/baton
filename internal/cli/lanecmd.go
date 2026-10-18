@@ -83,9 +83,9 @@ func cmdLaneRun(args []string, io IO) int {
 
 	res, stages := runJob(s, job, io)
 	ended := finishJob(s, job, res, stages, io.Now())
-	s.Event("job_finished", map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
+	s.Event("job_finished", withEnvironment(job, ended, map[string]any{"job": id, "phase": job.Phase, "status": ended.Status, "exit": ended.Exit,
 		"lane": ended.Lane, "reason": ended.Reason, "seconds": int(res.Took.Seconds()),
-		"waited_seconds": int(res.Waited.Seconds()), "ran_seconds": int((res.Took - res.Waited).Seconds())})
+		"waited_seconds": int(res.Waited.Seconds()), "ran_seconds": int((res.Took - res.Waited).Seconds())}))
 	return 0
 }
 
@@ -177,7 +177,9 @@ func runJob(s *state.Store, job state.Job, io IO) (lane.Result, []lane.Stage) {
 	}
 	lj := lane.Job{ID: job.ID, Command: job.Command, Commit: job.Commit, Here: job.Here, Stages: s.JobStages(job.ID)}
 	if job.Reruns != "" {
-		lj.Rerun = s.JobStages(job.Reruns)
+		// The record the rerun runs from, written as it was queued (verify --failed): the red gate's stages,
+		// with what later runs of its command learned and less what --stages brings back.
+		lj.Rerun = s.JobRerun(job.ID)
 	}
 	res := r.Run(ctx, lj)
 	return res, watch.finish(out)

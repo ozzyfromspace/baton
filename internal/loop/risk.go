@@ -194,16 +194,6 @@ func factorLog(factors []state.RiskFactor) map[string]int {
 	return out
 }
 
-// landingOf is the latest landing of phase on record in st, or nil.
-func landingOf(st state.State, phase string) *state.Landing {
-	for i := len(st.Landed) - 1; i >= 0; i-- {
-		if st.Landed[i].Phase == phase {
-			return &st.Landed[i]
-		}
-	}
-	return nil
-}
-
 // riskReset starts the ledger again for a full check that passed (kind "qa": QA phase what done; "job": the
 // --qa gate what), once (by), at at on commit, covering the phases done before covered. A hold standing
 // goes with it.
@@ -355,7 +345,7 @@ func (c *Coordinator) riskHold(now time.Time, s *state.Store) {
 	if !r.Told.IsZero() || !st.InHand() {
 		return
 	}
-	text := decide.RiskHeld(r, landingPhases(st), workingPhases(st), deadline)
+	text := decide.RiskHeld(r, st.LandingPhases(), workingPhases(st), deadline)
 	told := false
 	s.Update(func(st *state.State) error {
 		if told = st.RiskHeld() && st.Risk.Told.IsZero() && st.InHand(); told {
@@ -392,18 +382,8 @@ func noted(st state.State, told time.Time) *state.Decision {
 	return nil
 }
 
-// landingPhases are the phases of run st whose work waits in the merge queue; workingPhases those whose
-// agents are at work, whose work would wait too behind a check in the checkout.
-func landingPhases(st state.State) []string {
-	var out []string
-	for _, w := range st.LiveWorkers() {
-		if w.Status == state.WorkerLanding {
-			out = append(out, w.Phase)
-		}
-	}
-	return out
-}
-
+// workingPhases are the phases of run st whose agents are at work: their work would wait too behind a check
+// in the checkout.
 func workingPhases(st state.State) []string {
 	var out []string
 	for _, w := range st.LiveWorkers() {

@@ -62,6 +62,9 @@ type Timing struct {
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
+	SlowAfter      time.Duration // a gate running past 1.5× its command's slowest earlier pass, and this much more, is a look-in for its owner (lookin.go; 0: never)
+	HeldAfter      time.Duration // landings waiting this long behind a gate in the lead's checkout are a look-in for the lead (lookin.go; 0: never)
+	JobTimeout     time.Duration // verify_timeout: a gate at 80% of it is a look-in for its owner (lookin.go; 0: never)
 	HoldLapse      time.Duration // a proposal held for the human (Wait for me) with no word from them this long: baton lifts the hold (lapseHold)
 	BlockLook      time.Duration // a block with no word from the human this long: baton lifts it, and the model looks again (block.go; 0: decide.BlockLook)
 	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)
@@ -88,6 +91,7 @@ var DefaultTiming = Timing{
 	RecoverAfter: 5 * time.Minute, RecoverEvery: 15 * time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
 	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
+	SlowAfter: 15 * time.Minute, HeldAfter: 20 * time.Minute, JobTimeout: config.DefaultVerifyTimeout,
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	ReplanMax:         replan.Max,
 	EscalationTimeout: config.DefaultEscalationTimeout,

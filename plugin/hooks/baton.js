@@ -2,16 +2,19 @@
 // messages phase agents, asks the human, keeps phase agents' reports from the lead's model, compacts the
 // lead's conversation and submits baton's lines to it (so that baton types nothing into the session, and
 // the human's draft stays in the input box: spike 35), empties the box of a prompt baton sent on to a
-// phase agent (spike 40), and reports what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge). It does
-// nothing unless baton hosts this session and answers its hello, and every hook lets its event through
-// when anything goes wrong.
+// phase agent (spike 40), makes a model call for the host with the session's own client (spike 41), and
+// reports what it sees. It decides nothing and words nothing: the baton host does both (internal/bridge).
+// It does nothing unless baton hosts this session and answers its hello, and every hook lets its event
+// through when anything goes wrong.
 //
 // The host writes numbered commands to <dir>/out/<id>.json, each for the host instance it runs as; the
 // mod runs those of its own claude's host, in order, one at a time, from its poll timer. It reports by
 // running `baton mod report` with one numbered report on stdin, and keeps each report until the host has
 // recorded it. In the store it keeps, per host instance, the last command it ran, the one it is running,
 // the compaction it holds for the lead's turn's end, and the reports not recorded yet, so that once
-// reloaded it neither repeats nor skips one.
+// reloaded it neither repeats nor skips one. A model call (a complete command) takes seconds: the poll
+// starts it and goes on, and acks it with the answer once it is over; the calls running are kept in the
+// store too, and one found there when the mod is loaded is acked as interrupted.
 //
 // Claude Code compacts between turns only, and refuses a compaction asked for while the lead's turn runs:
 // the host asks for one once the lead's Stop hook has run, and the turn ends a moment later. A refusal
@@ -40,6 +43,7 @@ const HELLO_SLOW_MS = 10000 // and then
 const REPORT_TIMEOUT_MS = 15000
 const KEEP_MS = 7 * 24 * 3600 * 1000 // the store forgets a host instance unused this long
 const CUT = 1000 // the most of an agent's last words a turn report carries
+const ANSWER_CUT = 4000 // the most of a model's answer a complete command's ack carries (bridge.AnswerCut)
 const AT_ONCE_MS = 250 // how long a compaction or a line is watched for a refusal at once (a turn running), which its ack carries
 const HOLD_MS = 30000 // how long a compaction refused while the lead's turn runs waits for that turn's end (within the host's modAckWait)
 const VIEW_MS = 1000 // how often the band, and the board while its pane is open, are read again
@@ -129,6 +133,9 @@ async function load($) {
   const kept = await $.store.get(M.key)
   M.keep = kept && typeof kept === 'object' ? kept : { last: 0, running: 0, seq: 0, outbox: [] }
   if (!Array.isArray(M.keep.outbox)) M.keep.outbox = []
+  const calls = Array.isArray(M.keep.calls) ? M.keep.calls : []
+  M.keep.calls = []
+  for (const id of calls) await report($, { kind: 'ack', command: id, interrupted: true }) // the call ended with the mod that made it
   if (M.keep.running > M.keep.last) {
     const id = M.keep.running
     M.keep.last = id
@@ -187,6 +194,7 @@ async function hello($) {
       M.keep.last = 0
       M.keep.running = 0
       M.keep.outbox = []
+      M.keep.calls = [] // their acks are the other run's: complete drops them
       forsake()
     }
     M.keep.run = run
@@ -359,11 +367,12 @@ async function poll($) {
       }
       M.keep.running = id
       await save($)
-      const { later, held, ...result } = await run($, c)
+      const { later, held, calling, ...result } = await run($, c)
       M.keep.last = id
       M.keep.running = 0
       await save($)
       if (held) continue // acked once it runs at the lead's turn's end, or with its refusal past HOLD_MS
+      if (calling) continue // acked with the answer once the call is over
       if (c.kind === 'spawn' && result.agent) M.agents[result.agent] = { phase: c.phase, drop: c.drop } // until the host lists it
       await report($, { kind: 'ack', command: id, ...result })
       if (c.kind === 'ask') queueAsk($, c)
@@ -398,6 +407,8 @@ async function run($, c) {
         return await started($, $.prompt.submit({ text: c.text, asUser: true }), () => null, (err) => ({ kind: 'failed', command: c.id, error: cut(String(err), CUT) }), 'submitted')
       case 'empty':
         return await empty($, c)
+      case 'complete':
+        return await complete($, c)
       default:
         return { ok: false, error: 'no such command: ' + c.kind }
     }
@@ -414,6 +425,48 @@ async function empty($, c) {
   if (String((box && box.text) || '').trim() !== String(c.text || '').trim()) return { ok: true, result: 'left' }
   const f = await $.prompt.fill({ text: '', mode: 'replace' })
   return f && f.isFilled ? { ok: true, result: 'emptied' } : { ok: false, error: String((f && f.refusal) || 'the box was not emptied') }
+}
+
+// complete runs baton's complete command c: one model call through the session's own client, with no
+// history and no tools, which nothing of reaches the lead's conversation (spike 41). The poll does not wait
+// for it (it takes seconds) and resolves { calling: true }: the call is kept in the store while it runs,
+// and its ack, once it is over, carries the answer or why there is none (answered). A call Claude Code will
+// not send rejects, and its ack says so. A call made for another run's bridge is acked nowhere (hello).
+async function complete($, c) {
+  const req = { model: String(c.model || ''), prompt: String(c.prompt || '') }
+  if (c.system) req.system = String(c.system)
+  if (c.max_tokens > 0) req.maxTokens = c.max_tokens
+  if (c.timeout_ms > 0) req.timeoutMs = c.timeout_ms
+  const run = M.keep.run
+  const t0 = await $.clock.now()
+  M.keep.calls = [...(M.keep.calls || []), c.id]
+  await save($)
+  let reply
+  try {
+    reply = $.model.complete(req)
+  } catch (err) {
+    reply = Promise.reject(err)
+  }
+  Promise.resolve(reply)
+    .then(answered, (err) => ({ ok: false, reason: 'refused', error: cut(String(err), CUT) }))
+    .then(async (result) => {
+      const ms = (await $.clock.now()) - t0
+      if (M.keep.run !== run) return
+      M.keep.calls = (M.keep.calls || []).filter((id) => id !== c.id)
+      await report($, { kind: 'ack', command: c.id, ...result, ms })
+    })
+    .catch(() => {})
+  return { calling: true }
+}
+
+// answered is the ack's say of what a model call resolved to (r): the answer, cut, and what it used; or
+// why there is none: an API error (its status and kind), a reply with no text, or the call cut short.
+function answered(r) {
+  const usage = r && r.usage && typeof r.usage === 'object' ? r.usage : undefined
+  if (r && r.isAnswered) return { ok: true, result: cut(String(r.text ?? ''), ANSWER_CUT), usage }
+  const reason = String((r && r.reason) || 'no answer')
+  const error = reason === 'api-error' ? `api-error ${r.status ?? 'no status'} ${r.error || 'unknown'}` : reason
+  return { ok: false, reason, error, usage }
 }
 
 // started acks a call the poll does not wait for: a compaction runs for seconds or minutes, and a line

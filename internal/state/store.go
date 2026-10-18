@@ -136,15 +136,16 @@ func (s *Store) JobLog(id string) string { return filepath.Join(s.Dir, "jobs", i
 // JobStages is job id's stages file (lane.ReadStages), beside its log.
 func (s *Store) JobStages(id string) string { return filepath.Join(s.Dir, "jobs", id+jobStagesExt) }
 
-// The files a job keeps in jobs/: its log and its stages file.
+// The files a job keeps in jobs/: its log, its stages file, and a rerun's record (JobRerun).
 const (
 	jobLogExt    = ".log"
 	jobStagesExt = ".stages"
+	jobRerunExt  = ".rerun"
 )
 
 // JobFileID is the job whose file in jobs/ name is, or "" for a file no job keeps.
 func JobFileID(name string) string {
-	for _, ext := range []string{jobLogExt, jobStagesExt} {
+	for _, ext := range []string{jobLogExt, jobStagesExt, jobRerunExt} {
 		if id, ok := strings.CutSuffix(name, ext); ok && id != "" {
 			return id
 		}

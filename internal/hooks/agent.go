@@ -91,6 +91,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	path := agentTranscript(c.Input)
 	brief, started, checkpointed := false, false, false
 	var result *state.Job
+	var looks lookIns
 	_, st, err := h.update(c, func(st *state.State, _ *state.Store) error {
 		st.Run.TurnOpen, st.Run.TurnStarted, st.Run.TurnBy = true, c.Now, "baton"
 		if st.Mode == state.ModeIdle || st.Run.Briefed == s.Agent {
@@ -98,6 +99,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 		}
 		checkpointed, brief = state.Fresh(st, state.Started(s.Agent, c.Now), path, c.Now), true
 		state.DropMail(st, state.MessagePlan) // its brief reads the plan as it is now
+		state.DropMail(st, state.MessageFact) // and lists the run's environment facts
 		if ps := st.Phases[st.Current]; st.Mode == state.ModeRunning && (ps == nil || ps.Status == state.PhasePending) {
 			state.Start(st, c.Now, origin)
 			started = true
@@ -107,6 +109,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 			given := *j
 			result = &given
 		}
+		looks = takeBriefLookIns(st, c.Now)
 		return nil
 	})
 	if err != nil {
@@ -125,7 +128,7 @@ func (h *handlers) agentStart(c Context, s *state.Store) (Result, error) {
 	if started {
 		s.Event("phase_started", map[string]any{"phase": st.Current, "agent": s.Agent})
 	}
-	text := h.workerBrief(c, s, pl, st, !started, checkpointed, result)
+	text := briefLookIns(s, h.workerBrief(c, s, pl, st, !started, checkpointed, result), looks)
 	return Result{Output: map[string]any{
 		"hookSpecificOutput": map[string]any{"hookEventName": "SubagentStart", "additionalContext": text},
 	}}, nil

@@ -95,6 +95,10 @@ type Coordinator struct {
 	// jobs' logs as it saw them (stall.go). Only the lead's tick touches them.
 	stallAt time.Time
 	logs    map[string]logSeen
+	// lookAt is when the lead's tick last looked for look-ins at the run's gates and landings (lookin.go).
+	lookAt time.Time
+
+	rec recorder // the record step's (record.go)
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
@@ -128,9 +132,11 @@ func (c *Coordinator) duties(v host.View) {
 		return
 	}
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
+	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
+	c.lookIns(v, s, st)
 	c.riskLedger(v, s, st)
 }
 

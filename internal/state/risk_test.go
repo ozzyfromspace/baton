@@ -86,15 +86,15 @@ func TestRiskVerdictAndRelease(t *testing.T) {
 func TestRiskRecordAndUnscored(t *testing.T) {
 	t0 := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
 	var st State
-	if st.Checks("P1") != 0 || st.FinishedDespiteRed("P1") || st.Conflicted("P1") != 0 || st.RiskTotal() != 0 {
+	if st.Checks("P1") != 0 || st.FinishedDespiteRed("P1") || st.LandingsReturned("P1") != 0 || st.RiskTotal() != 0 {
 		t.Error("an empty record says something")
 	}
 	CountCheck(&st, "P1")
 	CountCheck(&st, "P1")
 	MarkDespiteRed(&st, "P1")
 	MarkDespiteRed(&st, "P1")
-	CountConflict(&st, "P2")
-	if st.Checks("P1") != 2 || !st.FinishedDespiteRed("P1") || len(st.Risk.DespiteRed) != 1 || st.Conflicted("P2") != 1 || st.Conflicted("P1") != 0 {
+	CountReturned(&st, "P2")
+	if st.Checks("P1") != 2 || !st.FinishedDespiteRed("P1") || len(st.Risk.DespiteRed) != 1 || st.LandingsReturned("P2") != 1 || st.LandingsReturned("P1") != 0 {
 		t.Errorf("record = %+v", *st.Risk)
 	}
 

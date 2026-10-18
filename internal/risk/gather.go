@@ -40,7 +40,7 @@ func Gather(ctx context.Context, rec Record) Facts {
 			f.Decisions++
 		}
 	}
-	f.Conflicts = rec.Lead.Conflicted(rec.Phase)
+	f.Conflicts = rec.Lead.LandingsReturned(rec.Phase)
 	f.Checks = own.Checks(rec.Phase)
 	for _, j := range own.Jobs {
 		if j.Phase == rec.Phase && !j.Requeue { // the merge queue's verification again is not the phase's own check

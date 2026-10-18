@@ -24,7 +24,12 @@ type Opts = {
   // (undefined: as Claude Code would, between turns)
   compact?: ($: any, e: any) => any
   submit?: ($: any, e: any) => any
+  // model answers the mod's $.model.complete in Claude Code's place, with the call's result ({ value }) or
+  // a refusal to send it ({ deny }) (undefined: the model answers 'Advice.')
+  model?: ($: any, e: any) => any
 }
+
+const USAGE = { input_tokens: 6959, output_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
 const SUMMARY = [{ role: 'user', text: 'The summary.', toolUses: [] }]
 
@@ -62,9 +67,20 @@ function world(on: any, o: Opts = {}) {
     submitted: [] as any[], // the prompts the mod submitted itself
     box: '', // the lead's prompt box
     fills: [] as any[], // what the mod put in it
+    completions: [] as any[], // the model calls the mod made
+    kept: JSON.parse(JSON.stringify(o.store ?? {})) as Record<string, any>, // the mod's store, as it saved it last
   }
   mock.env(on, o.env ?? HOSTED)
-  mock.store(on, o.store ?? {})
+  on('store.get', async ($: any, e: any) => ({ value: e.key in w.kept ? JSON.parse(JSON.stringify(w.kept[e.key])) : undefined }))
+  on('store.set', async ($: any, e: any) => {
+    w.kept[e.key] = JSON.parse(JSON.stringify(e.value))
+    return { value: undefined }
+  })
+  on('store.delete', async ($: any, e: any) => {
+    delete w.kept[e.key]
+    return { value: undefined }
+  })
+  on('store.keys', async () => ({ value: Object.keys(w.kept) }))
   w.clock = mock.clock(on, { now: 1_000_000 })
   on('session.id', async () => ({ value: 'sess' }))
   on('session.start', async ($: any, e: any) => ({ cwd: e.cwd }))
@@ -144,6 +160,11 @@ function world(on: any, o: Opts = {}) {
     w.beneath.push(`compact ${e.agentId ?? 'lead'} after ${w.runs.filter((k) => k === 'compacting').length} compacting reports`)
     if (o.compact) return o.compact($, e)
     return { messages: e.messages?.length ? e.messages : SUMMARY, tokensBefore: 2, tokensAfter: 1 }
+  })
+  on('model.complete', async ($: any, e: any) => {
+    w.completions.push(e)
+    if (o.model) return o.model($, e)
+    return { value: { isAnswered: true, text: 'Advice.', usage: USAGE } }
   })
   on('agent.offer', async ($: any, e: any) => ({ isOffered: true }))
   on('command.register', async ($: any, e: any) => {
@@ -800,4 +821,83 @@ test('the prompt box is emptied of a prompt baton sent on to a phase agent, and 
   expect(w.box).toBe('a draft of my own')
   expect(w.fills).toHaveLength(1)
   expect(w.reports[1]).toEqual(expect.objectContaining({ kind: 'ack', command: 2, ok: true, result: 'left' }))
+})
+
+const ASK = { kind: 'complete', model: 'haiku', system: 'You advise.', prompt: 'Why did the gate fail?', max_tokens: 400, timeout_ms: 60000 }
+
+test("baton's model call runs from the poll with what the host asked, and its ack carries the answer, cut", async ($, on) => {
+  const w = world(on, {
+    files: { ...command({ id: 1, ...ASK }), ...command({ id: 2, ...ASK, prompt: 'And at length?', system: '', max_tokens: 0, timeout_ms: 0 }) },
+    model: ($: any, e: any) => ({ value: { isAnswered: true, text: e.prompt === 'And at length?' ? 'x'.repeat(5000) : 'Advice.', usage: USAGE } }),
+  })
+  await start($, w)
+  expect(w.completions[0]).toEqual(expect.objectContaining({ model: 'haiku', system: 'You advise.', prompt: 'Why did the gate fail?', maxTokens: 400, timeoutMs: 60000 }))
+  expect(w.completions[1]).toEqual(expect.objectContaining({ model: 'haiku', prompt: 'And at length?' }))
+  expect([w.completions[1].system, w.completions[1].maxTokens, w.completions[1].timeoutMs]).toEqual([undefined, undefined, undefined]) // Claude Code's defaults
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: true, result: 'Advice.', usage: USAGE, ms: 0 }))
+  expect(w.reports[1].result).toBe('x'.repeat(4000) + '…')
+  expect(w.beneath).toEqual([]) // no prompt, no turn
+})
+
+test('the poll does not wait for a model call: the commands after it run meanwhile, and its ack follows', async ($, on) => {
+  const answer = later()
+  const w = world(on, {
+    files: { ...command({ id: 1, ...ASK }), ...command({ id: 2, kind: 'ask', question: 'May P3 commit unsigned?' }) },
+    model: () => answer.p, // a model call takes seconds
+  })
+  await start($, w)
+  expect(kinds(w)).toEqual(['ack 2'])
+  expect(w.kept['baton:inst']).toEqual(expect.objectContaining({ last: 2, calls: [1] }))
+  await w.clock.advance(2500)
+  answer.settle({ value: { isAnswered: true, text: 'Advice.', usage: USAGE } })
+  await w.clock.advance(500)
+  expect(kinds(w)).toEqual(['ack 2', 'ack 1'])
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: true, result: 'Advice.' }))
+  expect(w.reports[1].ms).toBeGreaterThanOrEqual(2500) // from the poll's start of it to its answer
+  expect(w.kept['baton:inst'].calls).toEqual([])
+})
+
+test('a model call with no answer is acked with why: the API error, a reply with no text, the call cut short, or a call Claude Code would not send', async ($, on) => {
+  const results: Record<string, any> = {
+    a: { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE } },
+    b: { value: { isAnswered: false, reason: 'empty-reply', usage: USAGE } },
+    c: { value: { isAnswered: false, reason: 'aborted', usage: USAGE } },
+    d: { deny: 'maxTokens 200000 is past what claude-haiku-5-5 can produce in one reply (64000)' },
+  }
+  const w = world(on, {
+    files: Object.assign({}, ...['a', 'b', 'c', 'd'].map((p, i) => command({ id: i + 1, ...ASK, prompt: p }))),
+    model: ($: any, e: any) => results[e.prompt],
+  })
+  await start($, w)
+  expect(kinds(w)).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4'])
+  expect(w.reports[0]).toEqual(expect.objectContaining({ ok: false, reason: 'api-error', error: 'api-error 529 overloaded', usage: USAGE }))
+  expect(w.reports[1]).toEqual(expect.objectContaining({ ok: false, reason: 'empty-reply', error: 'empty-reply' }))
+  expect(w.reports[2]).toEqual(expect.objectContaining({ ok: false, reason: 'aborted', error: 'aborted' }))
+  expect(w.reports[3]).toEqual(expect.objectContaining({ ok: false, reason: 'refused' }))
+  expect(w.reports[3].error).toContain('maxTokens 200000 is past')
+})
+
+test('reloaded while a model call runs, the mod acks it as interrupted, and makes it no more', async ($, on) => {
+  const w = world(on, { store: { 'baton:inst': { last: 3, running: 0, seq: 2, outbox: [], calls: [3], at: 1_000_000 } }, files: command({ id: 3, ...ASK }) })
+  w.seen = 2
+  await start($, w)
+  expect(kinds(w)).toEqual(['ack 3 interrupted'])
+  expect(w.completions).toEqual([])
+})
+
+test("a model call made for another run's bridge is acked nowhere once the host drives another run", async ($, on) => {
+  const OTHER = '/proj/.baton/runs/other/mod'
+  const answer = later()
+  let hellos = 0
+  const w = world(on, {
+    files: { ...command({ id: 1, ...ASK }), ...command({ id: 2, kind: 'moved' }) },
+    reply: (rep) => (rep.kind === 'hello' && hellos++ > 0 ? { ok: true, run: 'other', dir: OTHER, seen: 0, agent: AGENT, board: BOARD } : undefined),
+    model: () => answer.p,
+  })
+  await start($, w, 5_000)
+  answer.settle({ value: { isAnswered: true, text: 'Advice.', usage: USAGE } })
+  await w.clock.advance(1000)
+  expect(w.runs.filter((k) => k === 'hello').length).toBe(2)
+  expect(kinds(w)).toEqual([])
 })
