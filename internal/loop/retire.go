@@ -11,7 +11,9 @@ import (
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/lane"
+	"github.com/ozzyfromspace/baton/internal/leftover"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/procs"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -26,6 +28,11 @@ import (
 //  1. its uncommitted work is saved (gitx.Snapshot). If that fails, its worktree stays, and is named;
 //  2. its jobs are marked interrupted, and each runner that is still a `baton lane-run` is told to stop,
 //     which stops its own gate's process group;
+//  2b. what it left running in its worktree (package leftover) is stopped: each process started under
+//     baton, as baton clean stops those under baton's home. Containers compose started there, and
+//     processes it cannot tell are the worker's or could not stop, are named to the lead in a look-in
+//     (the run's own host only), with the command to stop each: baton removes no container itself
+//     (leftover.go);
 //  3. its worktree is removed, only from under baton's worktrees for the project;
 //  4. its branch is removed when nothing on it is left to land; otherwise it is kept, and renamed under
 //     kept/ when the run's plan was replaced or the run dropped, so that no later worker on a phase with
@@ -54,6 +61,8 @@ type Retirement struct {
 	// Snapshot saves uncommitted work (gitx.Snapshot when nil). Logf is the host's log (nil: none).
 	Snapshot func(root string, at time.Time, phase, why string) (gitx.Saved, error)
 	Logf     func(format string, a ...any)
+	// Leftovers reads and stops what the worker left running in its worktree (zero: nothing is read).
+	Leftovers leftover.Finder
 
 	// isRunner and stop find and stop a job's runner (nil: lane.IsRunner, lane.Terminate); between is
 	// called after each step (tests).
@@ -71,6 +80,10 @@ type Retired struct {
 	Unlanded int
 	Jobs     []string // the jobs it stopped
 	Next     string   // the phase the run's lead took up (the run's own host only)
+	// Stopped are the processes it left running in its worktree that were stopped, and Left what it left
+	// running there that was not: containers, and processes not stopped (leftover.go).
+	Stopped []procs.Proc
+	Left    leftover.Left
 }
 
 // errKept leaves the run's state as it was: the worker is not retired by this caller.
@@ -86,7 +99,7 @@ func RetireWorker(r Retirement) Retired {
 	steps := []struct {
 		name string
 		fn   func()
-	}{{"snapshot", x.snapshot}, {"jobs", x.stopJobs}, {"worktree", x.removeWorktree}, {"branch", x.branch}, {"forget", x.forget}, {"release", x.release}}
+	}{{"snapshot", x.snapshot}, {"jobs", x.stopJobs}, {"leftovers", x.leftovers}, {"worktree", x.removeWorktree}, {"branch", x.branch}, {"forget", x.forget}, {"release", x.release}}
 	if x.out.Skipped = x.mark(); x.out.Skipped != "" {
 		return x.out
 	}
@@ -132,6 +145,9 @@ type retirement struct {
 	into     string       // the run's branch
 	fields   map[string]any
 	out      Retired
+
+	// jobProcs are the runners and process groups of the jobs it stopped, which stop by themselves.
+	jobProcs leftover.Skip
 }
 
 // mark claims the worker for this caller, or says why it is left alone.
@@ -230,6 +246,7 @@ func (x *retirement) stopJobs() {
 		if j.PID != 0 && isRunner(j.PID) {
 			stop(j.PID) // the runner stops its gate's process group, and brings its lane down
 		}
+		x.jobProcs.Job(j.PID, j.PGID)
 		x.out.Jobs = append(x.out.Jobs, j.ID)
 	}
 	if len(jobs) > 0 {

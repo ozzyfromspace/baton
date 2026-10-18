@@ -65,12 +65,13 @@ func (c *Coordinator) sweep(now time.Time, s *state.Store) {
 				continue
 			}
 			got := RetireWorker(Retirement{Project: c.Project, Home: c.Home, Run: run, Entry: e, Why: whyNewRun, By: s.Instance, Now: now,
-				Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, between: c.retireStep})
+				Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, Leftovers: c.Leftovers, between: c.retireStep})
 			if got.Skipped != "" {
 				c.Lead.logf("loop: run %s: its worker on %s is left alone: %s", r.ID, e.Phase, got.Skipped)
 				continue
 			}
 			left = append(left, decide.Left{Phase: e.Phase, Branch: got.Branch, Unlanded: got.Unlanded, Worktree: e.Worktree, Kept: got.Kept})
+			c.stoppedLeftovers(s, e.Phase, got)
 		}
 		if len(left) == 0 {
 			continue

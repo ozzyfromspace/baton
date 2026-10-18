@@ -24,7 +24,9 @@ import (
 //   - landings that have waited Timing.HeldAfter behind a gate in the lead's checkout (landings_held): to
 //     the lead, which and since when;
 //   - a file in a second landing conflict of the run (conflicting_file): to the lead, as the merge queue
-//     hands the landing back (conflicted), once a file.
+//     hands the landing back (conflicted), once a file;
+//   - what finished phases left running, while the machine has no room and a gate runs past its history
+//     (leftovers): to the gate's owner (leftover.go).
 //
 // Each goes to its session by the hooks a result takes (a tool call, a stop, a hand-back, a prompt, a
 // brief), whatever phase the run is on, and an idle session is woken for it (Loop.deliver); never through
@@ -63,6 +65,7 @@ func (c *Coordinator) lookIns(v host.View, s *state.Store, st state.State) {
 			}
 		}
 	}
+	c.leftoverLookIns(v.Now, s, st, loops, passes)
 	c.heldLookIn(v.Now, s, st)
 }
 
@@ -110,15 +113,12 @@ func (c *Coordinator) gateLookIns(now time.Time, lead *state.Store, x lookLoop, 
 		log = x.store.JobLog(j.ID)
 	}
 	still := stillFor(now, log)
-	if t.SlowAfter > 0 && len(earlier) > 0 && !slices.Contains(j.LookedIn, state.LookSlow) {
-		slowest := slices.Max(earlier)
-		if ran >= time.Duration(float64(slowest)*decide.LookSlowFactor) && ran >= slowest+t.SlowAfter {
-			named := earlier[max(0, len(earlier)-maxEarlier):]
-			c.leaveLookIn(lead, x, state.LookIn{Kind: state.LookSlow, Job: j.ID, At: now,
-				Text: decide.GateSlow(j, ran, named, still, log, t.JobTimeout), Say: decide.GateSlowSaid(j, ran, slowest)},
-				map[string]any{"phase": j.Phase, "command": j.Command, "seconds": int(ran.Seconds()), "slowest_seconds": int(slowest.Seconds()),
-					"runs": len(earlier), "log_still_seconds": lookSeconds(still)})
-		}
+	if pastHistory(t, ran, earlier) && !slices.Contains(j.LookedIn, state.LookSlow) {
+		slowest, named := slices.Max(earlier), earlier[max(0, len(earlier)-maxEarlier):]
+		c.leaveLookIn(lead, x, state.LookIn{Kind: state.LookSlow, Job: j.ID, At: now,
+			Text: decide.GateSlow(j, ran, named, still, log, t.JobTimeout), Say: decide.GateSlowSaid(j, ran, slowest)},
+			map[string]any{"phase": j.Phase, "command": j.Command, "seconds": int(ran.Seconds()), "slowest_seconds": int(slowest.Seconds()),
+				"runs": len(earlier), "log_still_seconds": lookSeconds(still)})
 	}
 	if t.JobTimeout > 0 && !slices.Contains(j.LookedIn, state.LookTimeout) && ran >= time.Duration(float64(t.JobTimeout)*decide.LookTimeoutShare) {
 		c.leaveLookIn(lead, x, state.LookIn{Kind: state.LookTimeout, Job: j.ID, At: now,

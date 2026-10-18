@@ -876,7 +876,7 @@ func (c *Coordinator) retireLanded(now time.Time, s *state.Store, st state.State
 // run still has it working, goes back to the scheduler (state.Unassign).
 func (c *Coordinator) retire(now time.Time, s *state.Store, e state.Worker, why string) {
 	r := RetireWorker(Retirement{Project: c.Project, Home: c.Home, Run: s, Entry: e, Why: why, By: s.Instance, Host: true, Now: now,
-		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, between: c.retireStep})
+		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, Leftovers: c.Leftovers, between: c.retireStep})
 	if r.Skipped != "" {
 		c.Lead.logf("loop: %s: not retired: %s", e.Phase, r.Skipped)
 		return
@@ -889,6 +889,7 @@ func (c *Coordinator) retire(now time.Time, s *state.Store, e state.Worker, why 
 		line += fmt.Sprintf("; its worktree %s was kept, as %s", e.Worktree, r.Kept)
 	}
 	c.announce(s, line)
+	c.stoppedLeftovers(s, e.Phase, r)
 }
 
 // Ended suspends the run's phase agents as the host ends: they end with the lead's claude. stop (nil: none)

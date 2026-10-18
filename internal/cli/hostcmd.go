@@ -201,7 +201,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
 	}
-	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io)}
+	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
+		Leftovers: io.Leftovers}
 	if coordinator.Risk, err = riskLines(io); err != nil { // the risk ledger's lines (risk, risk_review, risk_full)
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}

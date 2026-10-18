@@ -311,7 +311,7 @@ func (c *Coordinator) takeBack(now time.Time, s *state.Store, b *bridge.Bridge, 
 		w.agent.Ended()
 	}
 	got := RetireWorker(Retirement{Project: c.Project, Home: c.Home, Run: s, Entry: e, Why: decide.StoppedTakenWhy, By: s.Instance, Host: true, Now: now,
-		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, between: c.retireStep})
+		Snapshot: c.Lead.Snapshot, Logf: c.Lead.Logf, Leftovers: c.Leftovers, between: c.retireStep})
 	if got.Skipped != "" {
 		c.Lead.logf("loop: %s: not taken back yet: %s", r.Phase, got.Skipped)
 		return // the question stays open, answered for nobody: the next step tries again
@@ -344,6 +344,7 @@ func (c *Coordinator) takeBack(now time.Time, s *state.Store, b *bridge.Bridge, 
 		fields["unlanded"] = got.Unlanded
 	}
 	s.Event("stopped_phase_taken", fields)
+	c.stoppedLeftovers(s, r.Phase, got)
 	if got.Next != "" {
 		s.Event("compact_queued", map[string]any{"reason": "boundary", "next": got.Next, "by": "stopped_phase_taken"})
 	}

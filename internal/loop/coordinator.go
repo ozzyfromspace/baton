@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/leftover"
 	"github.com/ozzyfromspace/baton/internal/risk"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -34,6 +35,11 @@ type Coordinator struct {
 	// no Fleet still retires the workers its run has on record (fleet.go).
 	Project *state.Project
 	Home    string
+	// Leftovers reads what phases left running, and stops it (zero: reads nothing): retiring a worker stops
+	// what it left in its worktree, and a gate slow on a busy machine is told what finished phases left
+	// (leftover.go). leftAt is when a step last read the machine for that.
+	Leftovers leftover.Finder
+	leftAt    time.Time
 
 	mu      sync.Mutex
 	workers map[string]*worker // by phase: the phase agents this host started
