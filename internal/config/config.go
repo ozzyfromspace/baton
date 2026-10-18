@@ -57,6 +57,13 @@ type Config struct {
 	// remainder that is mostly one chain, and once a phase marked `Replan: after` is done. On unless set to
 	// false (BATON_AUTO_REPLAN=0); `/baton replan` works either way.
 	AutoReplan *bool `json:"auto_replan,omitempty"`
+	// Advisor has baton ask a small model (AdvisorModel) for a short note on each look-in at a gate before
+	// the session is given it, through baton's mod: advice only, which nothing waits on for more than a
+	// minute. On unless set to false (BATON_ADVISOR=0); a serial run has none.
+	Advisor *bool `json:"advisor,omitempty"`
+	// AdvisorModel is the advisor's model: an alias Claude Code knows (haiku, sonnet, opus) or a full model
+	// id; "haiku" by default (BATON_ADVISOR_MODEL).
+	AdvisorModel string `json:"advisor_model,omitempty"`
 	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
