@@ -73,10 +73,11 @@ func TestText(t *testing.T) {
 // only up to 30,000 characters (BASH_MAX_OUTPUT_LENGTH's default, counted in UTF-16 units): past that it
 // saves the output to a file and gives /baton a 2KB preview, and the model must read the rest from the file
 // first (v0.8.6's grew to 30,351 and an e2e scenario's model ran awk on that file, held by a permission
-// prompt). So the instructions stay under 29,500, with room to spare; trim the wording to make room.
+// prompt). So the instructions stay under 29,500, with room to spare; trim the wording to make room. They
+// are counted with LF line ends, as a release embeds them: a Windows checkout has CRLF.
 func TestTextFitsClaudeCodesInlineOutput(t *testing.T) {
 	const most = 29_500
-	if n := len(utf16.Encode([]rune(Text))); n > most {
+	if n := len(utf16.Encode([]rune(strings.ReplaceAll(Text, "\r\n", "\n")))); n > most {
 		t.Errorf("the instructions are %d characters, over %d: Claude Code would save them to a file instead of giving them inline", n, most)
 	}
 }

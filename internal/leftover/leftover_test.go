@@ -176,7 +176,11 @@ func TestUnderAndSpellings(t *testing.T) {
 		{"", []string{"/w/P3"}, false},
 		{"/w/P3", []string{"", "."}, false},
 	} {
-		if got := Under(c.path, c.dirs); got != c.want {
+		var dirs []string
+		for _, d := range c.dirs {
+			dirs = append(dirs, filepath.FromSlash(d))
+		}
+		if got := Under(filepath.FromSlash(c.path), dirs); got != c.want {
 			t.Errorf("Under(%q, %q) = %v", c.path, c.dirs, got)
 		}
 	}

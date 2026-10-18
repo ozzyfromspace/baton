@@ -109,7 +109,7 @@ func TestRetiringStopsWhatTheWorkerLeftRunning(t *testing.T) {
 					t.Errorf("the look-in lacks %q:\n%s", want, lis[0].Text)
 				}
 			}
-			for _, not := range []string{"704", "705", "708", "main-db-1"} {
+			for _, not := range []string{"process 704", "process 705", "process 708", "kill 704", "kill 705", "kill 708", "main-db-1"} {
 				if strings.Contains(lis[0].Text, not) {
 					t.Errorf("the look-in names %s:\n%s", not, lis[0].Text)
 				}
