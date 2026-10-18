@@ -225,10 +225,10 @@ func StartProgram(t *testing.T, dir string, env []string, prog string, args ...s
 	// Tests never notify the developer, and run one session at a time, as before v0.5, unless a scenario
 	// starts phase agents itself; then whatever else the machine is doing does not hold them back
 	// (BATON_TEST_LOAD), and each starts 5 seconds after the one before, not baton's 2 minutes
-	// (BATON_AGENT_RAMP).
+	// (BATON_AGENT_RAMP). No scenario asks the advisor for a note, which unit tests cover (BATON_ADVISOR).
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color", "PATH="+filepath.Dir(batonBin)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BATON_HOME="+t.TempDir(), "GNUPGHOME="+t.TempDir(), "BATON_WORKERS=0", "BATON_NOTIFY_DESKTOP=0", "BATON_NTFY_TOPIC=", "BATON_TEST_LOAD=0",
-		"BATON_AGENT_RAMP=5s")
+		"BATON_AGENT_RAMP=5s", "BATON_ADVISOR=0")
 	cmd.Env = append(cmd.Env, env...) // later entries win
 	p, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: 50, Cols: 160})
 	if err != nil {

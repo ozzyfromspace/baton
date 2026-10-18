@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/elevate"
+	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -79,6 +81,7 @@ func cmdSetup(_ []string, io IO) int {
 	} else {
 		note(contextSummary(flag, vs))
 	}
+	note(decide.AdvisorSetup(cfg.Advises(io.Env), cfg.AdvisorModelFor(io.Env), loop.AdvisorWait, config.Path(root)))
 	note("permissions: sessions started with `baton` allow baton's own CLI automatically; for plain sessions (/baton start), add the rule Bash(baton:*) with /permissions")
 	if ok {
 		fmt.Fprintln(io.Out, "ready: start a session with `baton` (same arguments as `claude`), then /baton plan <goal> or /baton run <plan>.")

@@ -201,7 +201,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
 		controller.Newer = w.Newer
 	}
-	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io)}
+	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
+		Advisor: loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)}} // a small model's note on each look-in (advisor, advisor_model)
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
 		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Ramp: agentRamp(io), Machine: machineFor(io),
