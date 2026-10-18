@@ -4,6 +4,154 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-10-18
+
+A study of every gate in two real runs found where their hours went: in checks that could not change what
+shipped. baton's own v0.8.6 plan ran 12h19m, and its lead gated for 10.5h of them, including six full end-to-end
+runs of about 90 minutes, of which one of the five that ran to the end was clean. About 3 to 4 of those hours
+were avoidable: a full rerun after a test-only fix, a minute before the next full run began; a run that went red
+at minute 8 and ran on for 24 more; a rerun of 73 scenarios that had passed on the same shipped code, after edits
+to two test files. v0.8.6's "a red gate stands until the same command passes" made a flaky suite a treadmill. A
+real 57-phase run had spent 43.7h of gate time in 59.5h by its 42nd phase, and 58% of its 132 gates were red: QA
+passes ran past failures they already knew of (one took four passes and 7h35m; another ran 2.5 hours past a lint
+failure at minute 2), gates in the checkout held landings for 9.4h, 14 or more gates went red on their
+environment before any test ran while at least 8 agents found the same fix, and 18 landing re-verifications took
+5.5h on one lane, 17 of them green. A person who feels time runs scoped checks while working and the big check
+once, at the end; models don't feel it pass. So gates now report as they run, a red gate is rerun for what
+failed, landings are verified again only when what came since could touch them, baton tells the model what its
+gates do while they run, and plans are steered toward scoped checks with full checks at real seams, with a risk
+ledger that says when that trade stops paying. The study is in
+[`docs/research/gates.md`](docs/research/gates.md).
+
+A session on v0.8.x moves to v0.8.7 by itself at its next restart point; `baton update` updates baton's host
+and its mod together. The planning rules did not change (`plan.RulesVersion` stays 1), so no run is replanned for
+this upgrade: the gate rules reach a running plan through each phase's brief. A run carried onto v0.8.7 has the
+phases it finished scored for the risk ledger once, in the order they were done (a QA phase done starts the
+ledger again), so its ledger may cross a line soon after the move; `risk: false` turns the ledger off. The
+advisor and the risk assessment run only where baton's mod runs.
+
+### Added
+- **Gates that report as they run.** `baton stage <name> [--keep-going] [--runner go|pytest] -- <command>`, one
+  line per step of a gate script, prints when the stage starts and how it ended (`▶ unit 14:02:11`, `■ unit
+  failed (exit 1) in 2m14s`), marks both in the gate's log (`::baton stage …` lines), records the stage beside the
+  job's log (`jobs/<id>.stages`), and exits with its command's code. A gate stops at its first failed stage across
+  the script's commands, unless that stage says `--keep-going`. What failed is named by `::baton fail <id>` lines
+  any command prints, or by the runner preset (Go's `--- FAIL: TestX`, pytest's `FAILED path::name`). It acts on
+  no run, so a script run by hand prints its stages and records nothing. The runner reads the markers as they are
+  printed: each stage's end (`stage_finished`) and the gate's first failure (`job_failing`) are recorded on the
+  job while it runs.
+- **A gate's first failure is told at once.** The gate's owner, the lead or the phase agent that queued it, hears
+  of it with its next hook, or is woken: the line, its stage, how long in, that the gate runs on, and for a gate in
+  the checkout the landings it holds. The model decides: stop it and rerun what failed, or let it finish to
+  collect every failure. baton never kills a gate for a failure line.
+- **`baton stop <job> [--why "…"]`** stops a job of the caller's own, queued or running. It ends interrupted, so it
+  checked nothing, and a red gate stands as it was (`job_stopped`).
+- **`baton verify --failed [--stages a,b]`** reruns the phase's red gate, or its latest gate stopped after a
+  failure: the stages that passed are carried (the result names the job and commit each passed on, and the files
+  changed since), each failed stage runs narrowed to its failure ids where it recorded them (`GOFLAGS=-run=…`,
+  `PYTEST_ADDOPTS=-k …`, or `$BATON_FAILED` and `$BATON_FAILED_RE` for a custom command), and the rest run whole;
+  `--stages` brings carried stages back. Its pass clears the red gate, so a flaky suite needs one full run and then
+  minutes. What it reruns comes from baton's record, written as it is queued, never from a model's reading of a
+  log's tail (v0.8.4's regression came from that).
+- **Look-ins.** About once a minute baton looks at the run's gates and landings, and tells the session each
+  concerns, once, as information that waits on nothing (`look_in`, `look_in_told`): a gate past 1.5 times its
+  command's slowest earlier pass and 15 minutes more, or at 80% of `verify_timeout`, with how long its log has been
+  still; landings waiting 20 minutes behind a gate in the lead's checkout; a file in a second landing conflict,
+  with the advice to give each phase its own file. A look-in reaches its session whatever phase the run is on,
+  since after `baton done` a gate's phase is no longer in hand, and an idle session is woken for it.
+- **The advisor.** Where baton's mod runs, each look-in about a gate, and a red result its environment failed,
+  goes with a short note from a small model (`advisor_model`, Haiku by default): the change's failure or the
+  environment's, whether the rest of the run is worth waiting for, the smallest next check. baton writes every
+  word it reads (at most 12,000 characters, logs marked as data) and the note is a suggestion; the look-in is held
+  for it at most 60 seconds, whatever the mod or the model does, and a later answer is dropped (`advisor_asked`,
+  `advisor_said`, `advisor_skipped`, `advisor_late`). It routes none of the session's work, so baton still never
+  switches models. `advisor: false` (`BATON_ADVISOR=0`) turns it off. Spike 41 found the mod's model call
+  (`$.model.complete`) answers in about a second, while the lead's turn runs or not, and reaches neither the
+  transcript nor a turn.
+- **Environment failures named as such.** A red gate whose log has no test failure and a line of a known
+  environment failure (a port in use, the Docker daemon out of reach, an unhealthy container, a full disk, a
+  registry's rate limit, a host name that does not resolve) says it looks like the environment, not the change,
+  and quotes the line (`job_finished` logs `environment`). **`baton env "<what the environment needs>"`** records
+  a fact every later brief of the run carries, and a phase agent at work hears once (`env_fact`), with the hint to
+  make it permanent in `.baton-lane`.
+- **Gates questioned once, in proportion.** As a gate is queued, baton questions it once (`gate_questioned`),
+  naming the narrower check: a repeat of a gate that took 10 minutes or more on the same or nearly the same code
+  (the files changed since, `--failed`, or shipping on an earlier full green run when only tests and Markdown
+  changed), a script outside the repository, a long gate not built from stages, and a long gate before the plan's
+  QA phase, with the time its last run cost. The same command again runs it: nothing waits, and the model decides.
+  A check started as a background shell task is pointed to `baton verify` once (`background_questioned`).
+- **Landing re-verification sized to the change.** A phase agent's landing that shares no file with what landed
+  since its gate (Markdown aside), with a QA phase not started ahead and `aggregate_qa` on, lands without being
+  verified again, and the QA phase checks those commits together (`reverify_skipped`). Otherwise it is verified
+  again with **`baton done <phase> --land-check "<command>"`**, a focused command for a phase whose gate is long,
+  or with its last passing gate as before.
+- **A record file baton writes.** A plan may name one in its standing rules (`Record: <path>`). No model of the
+  run may edit it (`record_edit_refused`); as each phase is done or lands, baton appends its record (heading, date,
+  `baton done` notes, commits) and commits that file alone with `git commit --only`, while no tool call of the
+  lead runs, and never over changes of yours to it (`record_written`, `record_held`). It is the one commit baton
+  makes into a project, and only for a plan that names the file: one progress file every phase edits made a real
+  run's landings conflict.
+- **`baton watch`**, a live view for a second terminal: every live run of the project, its phases as the board
+  shows them, each running job's stage, its time against earlier runs of its command, how long its log has been
+  still, its first failure and its wait for a lane, the landings waiting and what holds them, and the latest
+  events in words. It only reads, takes no lock, and redraws every 2 seconds; `--once` prints once.
+- **The risk ledger.** Each phase is scored as it is done (a lead phase) or lands (an agent's), from facts baton
+  has, never from the phase's own rating: the lines and areas its commits changed, files other phases' sections
+  name, manifests, lockfiles and migrations, code changed with no test changed, tests deleted, a finish over red,
+  its decisions, landings returned for conflicts, no check run at all, and how it departed from the plan in its
+  own words (**`baton done --deviation "<…, or none>"`**, which briefs ask for up front). The points add up until a
+  full check passes (a QA phase done, or a `--qa` gate), and `baton status`, the board and `baton watch` show the
+  total (`risk_scored`, `risk_reset`). At `risk_review` (56 points) once, and at `risk_full` (90) again, an
+  independent model (`risk_model`, Opus by default) assesses the exposure from what baton prepares (the plan's
+  goal, the phases since the last full check with their notes, deviations, decisions and factors, the diff since)
+  and answers continue, targeted checks, or a full check now (`risk_assessed`). Only "full now" holds anything: no
+  new phase agent starts, and the lead is told to queue the full check (`baton verify --qa`, in a lane rather
+  than `--here`) or `baton note` why not; either lifts the hold, and so does `escalation_timeout` (`risk_held`,
+  `risk_released`). With no assessment (no mod, `risk_model: off`, a call that fails or outlasts `risk_wait`, 5
+  minutes), the lead is told the score and its factors. A replay of both studied runs set the points and lines:
+  phases whose files the next full check had to fix averaged 14.2 points, the rest 7.8. Settings `risk`,
+  `risk_review`, `risk_full`, `risk_model`, `risk_wait`, and `BATON_RISK`, `BATON_RISK_REVIEW`,
+  `BATON_RISK_FULL`, `BATON_RISK_MODEL`, `BATON_RISK_WAIT`.
+- **What a phase starts, it stops.** A real run's phase agent kept its own test stack up after its work, and the
+  QA gate competed with it for the machine. A phase agent's `baton done` is now refused once over processes or
+  Compose containers it left running in its worktree or a lane it used, listed with the command to stop each
+  (`leftover_asked`); the same call again goes through. Retiring an agent stops the processes left in its
+  worktree, and names its containers to the lead with the command to remove them; baton removes no container
+  (`leftover_stopped`, `leftover_told`). While the machine has no room and a gate runs past its history, the
+  gate's owner is told what finished phases left running.
+- **The gate rules.** At a plan's first `ExitPlanMode`, beside the check of competing instructions, every plan is
+  asked to check its gates against baton's rules: QA phases at real seams (the end, and in a long plan the end of
+  a group of related phases later work builds on), each listed with the phases it covers, and never per phase;
+  scoped checks that finish in seconds or minutes everywhere else; gate scripts committed and built from `baton
+  stage`; stop at the first failure, then `--failed`; a setup phase that proves the lane recipe first; timings on a
+  shared machine as warnings; no file many phases edit; long checks through `verify` or `await`, never a
+  background shell; CI early in the QA phase; and tear down what a gate or phase starts (`directives_asked` logs
+  `gates`, `qa_phases` and `extra_qa`). Every phase's brief carries them in short.
+- **Records baton lacked.** `lane_acquired` logs when a job gets its lane and how long it waited, and
+  `job_finished` gains `waited_seconds` and `ran_seconds`. `background_told` logs the command and description of
+  the model's own background work, and `background_ended` how long it ran.
+
+### Changed
+- **`verify_timeout` counts from when a gate gets its lane,** so a wait for one no longer times a gate out, and a
+  result says both: "passed after 12m, 31m waiting for a lane". In v0.8.6's own plan, a one-scenario gate took 52 minutes,
+  nearly all of them behind the full suite in the project's one lane.
+- **A red gate is also cleared by its `--failed` rerun passing,** beside the same command and `--replace`. A
+  staged red gate's result and `baton done`'s refusal name `--failed`.
+- **QA phases at real seams.** Briefs and the skill ask for checks that finish in seconds or minutes in every
+  phase but a QA phase, the tests of what changed by name, and QA phases at the end and at the end of a group
+  later work builds on, rather than "one after several phases".
+- **`baton verify --here` names the landings it will hold,** and says they land once it ends.
+- A gate's runner lines carry the time (`[baton 14:02:11] …`), and a lane's `PATH` starts with the directory of
+  the baton running it, so `baton stage` resolves in every lane.
+- `baton clean` reads processes through the same code as a phase's `baton done` and retiring, and also lists
+  Compose containers left in the worktrees of runs it does not leave alone.
+
+### Fixed
+- **The band's step no longer lags behind a late landing.** A phase verifying or landing now counts as through,
+  so a plan whose last phases still land no longer shows "step 1/18".
+- **"Nothing is needed from you" no longer reads as an answer to the model's own question.** A wait on a gate,
+  and a stop with no phase yet, now say "baton needs nothing from you for this wait".
+
 ## [0.8.6] - 2026-10-16
 
 A read-only review of a real run's last 15½ hours (a 57-phase plan, hosted by v0.8.4 and then v0.8.5) found
@@ -1275,7 +1423,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/ozzyfromspace/baton/compare/v0.8.3...v0.8.4
