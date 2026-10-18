@@ -1311,6 +1311,7 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	s, st, err := h.updateRead(c, attaching, func(st *state.State, s *state.Store) error {
 		st.Run.ToolEnded(str(c.Input, "tool_use_id"), c.Agent, tool)
 		closed, _ := st.Run.Dialogs.CloseExact(c.Agent, tool, dialogKey(c.Input))
+		countCheck(st, tool, c.Input) // the risk ledger's (riskcheck.go)
 		if c.Event == "PostToolUse" {
 			if path := editedPath(c.Input, s.Root); path != "" {
 				st.Touched(path)
