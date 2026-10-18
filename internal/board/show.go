@@ -183,6 +183,9 @@ func (b Board) Lines(width int) []string {
 	if l := b.Limit; l != nil {
 		out = append(out, clip(decide.BoardLimit(l.By, l.Until), width))
 	}
+	if r := b.Risk; r != nil {
+		out = append(out, clip(decide.RiskLine(r.Total, r.Held), width))
+	}
 	if handles {
 		for _, line := range decide.BoardWrite {
 			out = append(out, wrap(line, width)...)
