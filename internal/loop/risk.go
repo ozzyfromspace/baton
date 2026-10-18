@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,9 +23,10 @@ import (
 // either takes out the phases whose work it checked, those done before the check began.
 //
 // When the total crosses a line (Coordinator.Risk: risk_review, then risk_full), the coordinator hands over
-// (handOver): with no assessment to ask, the lead is told the score and its factors as a look-in, and nothing
-// is held (risk_crossed). A look-in waits for the lead to hold a phase: with none in hand it could queue no
-// check.
+// (handOver, risk_crossed): an independent model assesses the exposure (assess.go), and the lead is told what
+// it says; with no assessment to ask, or none answering, the lead is told the score and its factors as a
+// look-in, and nothing is held. A look-in waits for the lead to hold a phase: with none in hand it could
+// queue no check.
 //
 // Only an assessment's "full now" verdict (riskVerdict) holds anything (risk_held): no new phase agent starts
 // (Fleet.next's start gate, worker_deferred), and the lead is told why, as soon as it holds a phase (at its
@@ -45,6 +47,11 @@ const riskBatch = 8
 type ledger struct {
 	busy atomic.Bool
 	at   time.Time
+	// The assessment's (assess.go): the crossing whose call runs in this host (its Risk.Asking, in Unix ns;
+	// 0: none), the calls under way, and how a call is made (tests stub it; nil: Complete).
+	asking atomic.Int64
+	calls  sync.WaitGroup
+	call   func(ctx context.Context, s *state.Store, c Completion) (Answer, error)
 }
 
 // riskLedger starts the ledger's step, off the lead's tick, when it has something to do (riskDue). A paused
@@ -86,7 +93,7 @@ func riskDue(st state.State, pl plan.Plan) bool {
 		return true
 	}
 	r := st.Risk
-	return r != nil && (r.Owed != "" && st.InHand() || !r.Held.IsZero())
+	return r != nil && (r.Owed != "" && st.InHand() || !r.Held.IsZero() || !r.Asking.IsZero())
 }
 
 // passedFull lists the lead's full checks (--qa gates) that passed and have not reset the ledger.
@@ -128,6 +135,7 @@ func (c *Coordinator) riskStep(now time.Time, s *state.Store) {
 		c.riskReset(now, s, "job", j.ID, j.ID, j.Ended, j.Commit, j.Queued)
 	}
 	c.riskCrossing(now, s)
+	c.riskAsking(now, s)
 	c.riskHold(now, s)
 	c.riskOwed(now, s)
 }
@@ -246,29 +254,44 @@ func (c *Coordinator) riskCrossing(now time.Time, s *state.Store) {
 	}
 }
 
-// handOver is what crossing line does, with the ledger r: with no assessment to ask, the lead is told the
-// score and its factors as a look-in, once it holds a phase, and nothing is held.
+// handOver is what crossing line does, with the ledger r: the score and its factors are kept as the lead's
+// look-in, given once it holds a phase. With an assessment to ask (assess.go), the look-in waits for its
+// answer, which takes its place, until the call's deadline; with none, it goes as it is, and nothing is
+// held.
 func (c *Coordinator) handOver(now time.Time, s *state.Store, r state.Risk, line string) {
 	points := c.Risk.Line(line)
 	lookIn := decide.RiskLookIn(r, line, points)
+	why := c.assessable(s)
+	if why == "" {
+		c.rsk.asking.Store(now.UnixNano())
+	}
 	s.Update(func(st *state.State) error {
 		if st.Risk != nil {
-			st.Risk.Owed = lookIn
+			st.Risk.Owed, st.Risk.Asking = lookIn, time.Time{}
+			if why == "" {
+				st.Risk.Asking = now
+			}
 		}
 		return nil
 	})
-	s.Event("risk_crossed", map[string]any{"line": line, "points": points, "total": r.Total, "assessed": false})
-	c.announce(s, decide.RiskCrossedSay(r.Total, line, points))
+	s.Event("risk_crossed", map[string]any{"line": line, "points": points, "total": r.Total, "assessed": why == ""})
+	if why != "" {
+		s.Event("risk_assess_skipped", map[string]any{"why": why, "line": line})
+		c.announce(s, decide.RiskCrossedSay(r.Total, line, points))
+		return
+	}
+	c.announce(s, decide.RiskAssessingSay(r.Total, line, points, c.Risk.Model))
+	c.assess(now, s, line, points)
 }
 
-// riskOwed gives the lead the look-in owed to it, once it holds a phase.
+// riskOwed gives the lead the look-in owed to it, once it holds a phase and no assessment is asked of it.
 func (c *Coordinator) riskOwed(now time.Time, s *state.Store) {
-	if st, err := s.Load(); err != nil || st.Risk == nil || st.Risk.Owed == "" || !st.InHand() {
+	if st, err := s.Load(); err != nil || st.Risk == nil || st.Risk.Owed == "" || !st.Risk.Asking.IsZero() || !st.InHand() {
 		return
 	}
 	told := false
 	s.Update(func(st *state.State) error {
-		if r := st.Risk; r != nil && r.Owed != "" && st.InHand() {
+		if r := st.Risk; r != nil && r.Owed != "" && r.Asking.IsZero() && st.InHand() {
 			state.Tell(st, state.Message{Kind: state.MessageRisk, Text: r.Owed, About: riskLookIn}, now)
 			r.Owed, told = "", true
 		}
