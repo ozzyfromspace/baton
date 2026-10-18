@@ -86,8 +86,8 @@ func (h *handlers) handedBack(c Context) (Result, bool) {
 // not reported with nothing it waits on, refused with the stop's own words (Words.NoStatus) and counted with
 // the stop's refusals, so that past MaxStopBlocks it goes through as the stop would (the agent's loop
 // watchdog nudges it). Everything else lets it through: the plan is not running, a compaction or the
-// human's answer is owed, or it waits on a job, its proposal, its block or its own background work, each of
-// which wakes it. title is how the phase is named.
+// human's answer is owed, or it waits on a job, its proposal, its block, its own background work or a look-in
+// held for the advisor, each of which wakes it. title is how the phase is named.
 func heldHandback(st *state.State, now time.Time, w decide.Words, title string) (handbackAnswer, bool) {
 	var hb handbackAnswer
 	if st.Mode == state.ModeIdle || st.Mode == state.ModePaused {
@@ -105,7 +105,7 @@ func heldHandback(st *state.State, now time.Time, w decide.Words, title string) 
 		hb.mail = state.TakeMail(st)
 		return hb, true
 	case st.Current == "", st.Compacting(), st.ReviewDue != "", st.Run.Escalation != nil, st.Blocked != nil,
-		st.OwnProposal() != nil, st.PendingProposal() != nil, len(st.CurrentJobs()) > 0, len(st.Run.BusyBackground()) > 0:
+		st.OwnProposal() != nil, st.PendingProposal() != nil, len(st.CurrentJobs()) > 0, len(st.Run.BusyBackground()) > 0, st.AdviceHeld():
 		return hb, false
 	}
 	if st.Run.StopBlocks++; st.Run.StopBlocks > MaxStopBlocks {

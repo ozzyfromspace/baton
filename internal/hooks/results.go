@@ -28,19 +28,25 @@ const (
 // delivery is the results a hook took for the model under the state's lock; the logs are read after.
 type delivery struct {
 	jobs     []state.Job
-	red      []state.Job // the phases red now (state.Red)
-	complete bool        // the plan is complete: these results are the last of it
-	looks    lookIns     // the look-ins taken with them (takeLookIns)
+	red      []state.Job       // the phases red now (state.Red)
+	complete bool              // the plan is complete: these results are the last of it
+	looks    lookIns           // the look-ins taken with them (takeLookIns)
+	advice   map[string]string // the advisor's notes on red results their environment failed (state.LookEnv), by adviceKey
 }
 
-// take takes the results due (state.TakeDue), and the look-ins due beside them (takeLookIns).
+// take takes the results due (state.TakeDue), with the advisor's notes on them, and the look-ins due beside
+// them (takeLookIns).
 func take(st *state.State, now time.Time) delivery {
 	looks := takeLookIns(st, now)
 	jobs := state.TakeDue(st, now)
 	if len(jobs) == 0 {
 		return delivery{looks: looks}
 	}
-	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete, looks: looks}
+	var notes map[string]string
+	for _, j := range jobs {
+		notes = takeAdvice(st, notes, state.LookEnv, j.ID)
+	}
+	return delivery{jobs: jobs, red: st.Red(), complete: st.Mode == state.ModeComplete, looks: looks, advice: notes}
 }
 
 // takeLookIns takes the look-ins due to this store's session, whatever phase the run is on: the first
@@ -49,7 +55,14 @@ func take(st *state.State, now time.Time) delivery {
 // the host types to an idle session among them, Loop.deliver) and a brief.
 func takeLookIns(st *state.State, now time.Time) lookIns {
 	failing, left := state.TakeLookIns(st, now)
-	return lookIns{failing: failing, left: left}
+	var notes map[string]string
+	for _, j := range failing {
+		notes = takeAdvice(st, notes, state.LookFailing, j.ID)
+	}
+	for _, li := range left {
+		notes = takeAdvice(st, notes, li.Kind, li.Job)
+	}
+	return lookIns{failing: failing, left: left, advice: notes}
 }
 
 func (d delivery) any() bool { return len(d.jobs) > 0 || d.looks.any() }
@@ -59,7 +72,7 @@ func (d delivery) text(s *state.Store, aggregate bool) string {
 	pl, _ := s.LoadPlan()
 	var parts []string
 	for _, j := range d.jobs {
-		parts = append(parts, jobResult(s, pl, j, d.red, aggregate))
+		parts = append(parts, withNote(jobResult(s, pl, j, d.red, aggregate), d.advice[adviceKey(state.LookEnv, j.ID)]))
 	}
 	if d.looks.any() {
 		parts = append(parts, d.looks.text(s))
@@ -76,7 +89,11 @@ func (d delivery) text(s *state.Store, aggregate bool) string {
 func (d delivery) says() string {
 	var lines []string
 	for _, j := range d.jobs {
-		lines = append(lines, fmt.Sprintf("baton: job %s (`%s`, %s) %s → told Claude", j.ID, j.Command, j.Phase, decide.Outcome(j)))
+		line := fmt.Sprintf("baton: job %s (`%s`, %s) %s → told Claude", j.ID, j.Command, j.Phase, decide.Outcome(j))
+		if d.advice[adviceKey(state.LookEnv, j.ID)] != "" {
+			line = decide.WithAdvisorNote(line)
+		}
+		lines = append(lines, line)
 	}
 	if d.looks.any() {
 		lines = append(lines, d.looks.says())
@@ -90,11 +107,18 @@ func (d delivery) event(s *state.Store, via string) {
 	if len(d.jobs) == 0 {
 		return
 	}
-	var ids []string
+	var ids, advised []string
 	for _, j := range d.jobs {
 		ids = append(ids, j.ID)
+		if d.advice[adviceKey(state.LookEnv, j.ID)] != "" {
+			advised = append(advised, j.ID)
+		}
 	}
-	s.Event("results_delivered", map[string]any{"jobs": ids, "via": via})
+	fields := map[string]any{"jobs": ids, "via": via}
+	if len(advised) > 0 {
+		fields["advised"] = advised // with the advisor's note
+	}
+	s.Event("results_delivered", fields)
 }
 
 // jobResult is one job's result for the model (decide.JobResult), with what it shows of its log (JobLog).
