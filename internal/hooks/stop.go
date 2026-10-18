@@ -349,6 +349,12 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			idle["beside"] = jobs[0].ID
 		}
 		d.emit("idle_on_job", idle)
+	case st.AdviceHeld():
+		// A look-in waits on the advisor's note, a minute at most: the host gives it then, and wakes the
+		// session for it (loop/advisor.go).
+		st.Run.StopBlocks = 0
+		d.say(decide.AdvisorWaits(cur, adviceDue(*st, now)))
+		d.emit("idle_on_advisor", map[string]any{"phase": st.Current, "held": len(st.Holds())})
 	case len(st.Run.BusyBackground()) > 0:
 		// Background work of the model's own runs: a long command Claude Code moved there, a subagent.
 		// The model is told to keep working meanwhile as the work starts, with the result of the call that

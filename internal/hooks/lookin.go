@@ -14,6 +14,7 @@ import (
 type lookIns struct {
 	failing []state.Job // each with the failure it is told of (state.UntoldFailures)
 	left    []state.LookIn
+	advice  map[string]string // the advisor's notes on them (state.TakeAdvice), by adviceKey
 }
 
 func (l lookIns) any() bool { return len(l.failing) > 0 || len(l.left) > 0 }
@@ -29,10 +30,10 @@ func (l lookIns) text(s *state.Store) string {
 		if j.Here && s.Worker() == "" {
 			landing, others = heldHere(s)
 		}
-		parts = append(parts, decide.FirstFailure(j, *j.Failing, failedIn(j), landing, others))
+		parts = append(parts, withNote(decide.FirstFailure(j, *j.Failing, failedIn(j), landing, others), l.advice[adviceKey(state.LookFailing, j.ID)]))
 	}
 	for _, li := range l.left {
-		parts = append(parts, li.Text)
+		parts = append(parts, withNote(li.Text, l.advice[adviceKey(li.Kind, li.Job)]))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -41,28 +42,47 @@ func (l lookIns) text(s *state.Store) string {
 func (l lookIns) says() string {
 	var lines []string
 	for _, j := range l.failing {
-		lines = append(lines, decide.FirstFailureSaid(j, *j.Failing, failedIn(j)))
+		lines = append(lines, l.noted(decide.FirstFailureSaid(j, *j.Failing, failedIn(j)), state.LookFailing, j.ID))
 	}
 	for _, li := range l.left {
 		if li.Say != "" {
-			lines = append(lines, li.Say+" → told Claude")
+			lines = append(lines, l.noted(li.Say+" → told Claude", li.Kind, li.Job))
 		}
 	}
 	return strings.Join(lines, "\n")
 }
 
+// noted is line, which tells the human of the look-in of kind about job, saying whether the advisor's note
+// went with it.
+func (l lookIns) noted(line, kind, job string) string {
+	if l.advice[adviceKey(kind, job)] == "" {
+		return line
+	}
+	return decide.WithAdvisorNote(line)
+}
+
 // event logs the look-ins given, and how.
 func (l lookIns) event(s *state.Store, via string) {
 	for _, j := range l.failing {
-		s.Event("look_in_told", map[string]any{"type": state.LookFailing, "job": j.ID, "phase": j.Phase, "line": j.Failing.Line,
-			"stage": j.Failing.Stage, "seconds": int(failedIn(j).Seconds()), "via": via})
+		fields := map[string]any{"type": state.LookFailing, "job": j.ID, "phase": j.Phase, "line": j.Failing.Line,
+			"stage": j.Failing.Stage, "seconds": int(failedIn(j).Seconds()), "via": via}
+		l.advised(fields, state.LookFailing, j.ID)
+		s.Event("look_in_told", fields)
 	}
 	for _, li := range l.left {
 		fields := map[string]any{"type": li.Kind, "via": via}
 		if li.Job != "" {
 			fields["job"] = li.Job
 		}
+		l.advised(fields, li.Kind, li.Job)
 		s.Event("look_in_told", fields)
+	}
+}
+
+// advised marks fields, a told look-in's event, when the advisor's note went with it.
+func (l lookIns) advised(fields map[string]any, kind, job string) {
+	if l.advice[adviceKey(kind, job)] != "" {
+		fields["advised"] = true
 	}
 }
 

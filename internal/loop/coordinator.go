@@ -40,6 +40,8 @@ type Coordinator struct {
 	// (leftover.go). leftAt is when a step last read the machine for that.
 	Leftovers leftover.Finder
 	leftAt    time.Time
+	// Advisor is the advisor's settings (advisor.go): a small model's note on each look-in at a gate.
+	Advisor Advisor
 
 	mu      sync.Mutex
 	workers map[string]*worker // by phase: the phase agents this host started
@@ -105,6 +107,7 @@ type Coordinator struct {
 	lookAt time.Time
 
 	rec recorder // the record step's (record.go)
+	adv advising // the advisor's calls, in memory (advisor.go)
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
@@ -116,6 +119,7 @@ type Coordinator struct {
 // Tick is the lead's tick: its Loop, then the run's duties.
 func (c *Coordinator) Tick(v host.View, in host.Injector) {
 	c.Lead.Workers = c.Fleet != nil
+	c.Lead.advise = c.advise // the lead's look-ins, before its loop delivers them (advisor.go)
 	guarded(c.Lead, v, "lead", &c.leadPanic, func() { c.Lead.Tick(v, in) })
 	if c.Lead.quit {
 		c.stopping.Store(true)

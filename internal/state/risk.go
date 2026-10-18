@@ -22,9 +22,15 @@ type Risk struct {
 	Since  time.Time   `json:"since,omitzero"`
 	Commit string      `json:"commit,omitempty"`
 	Phases []PhaseRisk `json:"phases,omitempty"` // the phases scored since, oldest first
-	// Reviewed is when the exposure was last assessed since Since, and Verdict what the assessment said.
-	Reviewed time.Time `json:"reviewed,omitzero"`
-	Verdict  string    `json:"verdict,omitempty"`
+	// Reviewed is when the exposure was last assessed since Since, and Verdict what the assessment said;
+	// Assessment is its words, its verdict first, and Assessor the model that gave them.
+	Reviewed   time.Time `json:"reviewed,omitzero"`
+	Verdict    string    `json:"verdict,omitempty"`
+	Assessment string    `json:"assessment,omitempty"`
+	Assessor   string    `json:"assessor,omitempty"`
+	// Asking is since when an assessment of the last line crossed is asked (zero: none): Owed, the score's
+	// look-in, waits for its answer meanwhile, and is given in its place if none comes.
+	Asking time.Time `json:"asking,omitzero"`
 	// Held is since when new phases are held for a full check; zero while none are.
 	Held time.Time `json:"held,omitzero"`
 	// Crossed is the highest of the plan's lines the total crossed since Since (RiskReview, RiskFull; ""
@@ -191,6 +197,7 @@ func ResetRisk(st *State, by string, at time.Time, commit string, covered time.T
 	}
 	r.Phases, r.Total, r.Since, r.Commit = kept, total, at, commit
 	r.Crossed, r.Reviewed, r.Verdict, r.Held, r.Told, r.Owed = "", time.Time{}, "", time.Time{}, time.Time{}, ""
+	r.Assessment, r.Assessor, r.Asking = "", "", time.Time{}
 	return true
 }
 

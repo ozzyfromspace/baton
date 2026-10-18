@@ -202,7 +202,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		controller.Newer = w.Newer
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
-		Leftovers: io.Leftovers}
+		Leftovers: io.Leftovers,
+		Advisor:   loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)}} // a small model's note on each look-in (advisor, advisor_model)
 	if coordinator.Risk, err = riskLines(io); err != nil { // the risk ledger's lines (risk, risk_review, risk_full)
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}

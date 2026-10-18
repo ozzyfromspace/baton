@@ -45,14 +45,15 @@ func (st State) lookable() bool { return st.Mode == ModeRunning && !st.Compactin
 // whatever phase they are for, each with the failure it is told of (Failing). A failure in a stage run with
 // --keep-going does not count, as the gate chose to collect every failure: a later stage that failed
 // without it does, and with none the job's result tells. A stage says it ran with --keep-going only as it
-// ends (lane.Stage), so a failure in a stage still running counts.
+// ends (lane.Stage), so a failure in a stage still running counts. One held for the advisor is left out
+// until the host releases it (Advising).
 func (st State) UntoldFailures() []Job {
 	if !st.lookable() {
 		return nil
 	}
 	var out []Job
 	for _, j := range st.Jobs {
-		if j.Status != JobRunning || j.Failing == nil || !j.FailTold.IsZero() {
+		if j.Status != JobRunning || j.Failing == nil || !j.FailTold.IsZero() || st.Advising(LookFailing, j.ID) {
 			continue
 		}
 		if f, ok := toldFailure(j); ok {
@@ -88,14 +89,14 @@ func toldFailure(j Job) (Failing, bool) {
 }
 
 // LeftLookIns lists the look-ins the host left that the session can be given now: those about a job that has
-// ended are left out.
+// ended are left out, and so are those held for the advisor (Advising).
 func (st State) LeftLookIns() []LookIn {
 	if !st.lookable() {
 		return nil
 	}
 	var out []LookIn
 	for _, li := range st.LookIns {
-		if li.Job == "" || st.jobRuns(li.Job) {
+		if li.Job == "" || st.jobRuns(li.Job) && !st.Advising(li.Kind, li.Job) {
 			out = append(out, li)
 		}
 	}
@@ -113,11 +114,14 @@ func (st State) LookInsDue() bool { return len(st.UntoldFailures()) > 0 || len(s
 
 // TakeLookIns returns the look-ins the session is to be given now, and records them as given: the first
 // failures of its gates that run on (UntoldFailures; FailTold, and LookFailing among the job's LookedIn),
-// and the look-ins the host left (State.LookIns). Those about a job that has ended are dropped untold.
+// and the look-ins the host left (State.LookIns). Those about a job that has ended are dropped untold. Those
+// held for the advisor stay, unless their hold is past its deadline (LapseAdvice); the advisor's words on
+// those given are TakeAdvice's.
 func TakeLookIns(st *State, now time.Time) (failing []Job, left []LookIn) {
 	if !st.lookable() {
 		return nil, nil
 	}
+	LapseAdvice(st, now)
 	failing, left = st.UntoldFailures(), st.LeftLookIns()
 	for _, f := range failing {
 		if j := st.Job(f.ID); j != nil {
@@ -127,7 +131,10 @@ func TakeLookIns(st *State, now time.Time) (failing []Job, left []LookIn) {
 			}
 		}
 	}
-	st.LookIns = nil
+	st.LookIns = slices.DeleteFunc(st.LookIns, func(li LookIn) bool { return li.Job == "" || !st.Advising(li.Kind, li.Job) })
+	if len(st.LookIns) == 0 {
+		st.LookIns = nil
+	}
 	return failing, left
 }
 
