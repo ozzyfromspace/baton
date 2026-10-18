@@ -65,6 +65,7 @@ type Timing struct {
 	SlowAfter      time.Duration // a gate running past 1.5× its command's slowest earlier pass, and this much more, is a look-in for its owner (lookin.go; 0: never)
 	HeldAfter      time.Duration // landings waiting this long behind a gate in the lead's checkout are a look-in for the lead (lookin.go; 0: never)
 	JobTimeout     time.Duration // verify_timeout: a gate at 80% of it is a look-in for its owner (lookin.go; 0: never)
+	RiskWait       time.Duration // the risk assessment's answer is waited for this long at most; then the lead is told the score in its place (assess.go; 0: RiskWait)
 	HoldLapse      time.Duration // a proposal held for the human (Wait for me) with no word from them this long: baton lifts the hold (lapseHold)
 	BlockLook      time.Duration // a block with no word from the human this long: baton lifts it, and the model looks again (block.go; 0: decide.BlockLook)
 	LandNudge      time.Duration // a landing the lead's uncommitted changes have held this long: the lead's model is asked to commit them (merge.go)

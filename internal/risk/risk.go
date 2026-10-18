@@ -194,12 +194,13 @@ func NoDeviation(d string) bool {
 }
 
 // Lines are the plan's lines for its ledger (config.Risk: risk, risk_review and risk_full, calibrated by a
-// replay of two real runs, replay_test.go): crossing either hands over to an assessment, and On false turns
-// the ledger off.
+// replay of two real runs, replay_test.go): crossing either hands over to an assessment by Model
+// (risk_model; "" for none: the lead is told the score alone), and On false turns the ledger off.
 type Lines struct {
 	On     bool
 	Review int
 	Full   int
+	Model  string
 }
 
 // Crossed is the line a ledger's total crosses, given the highest it crossed since its last reset (prev:
