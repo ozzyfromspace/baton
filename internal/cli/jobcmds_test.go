@@ -40,7 +40,7 @@ func TestVerifyAndAwaitRefusals(t *testing.T) {
 		want  string
 		why   string // the refused event's, if one is logged
 	}{
-		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] [--qa "<why a full check now>"] [--replace] --notes`, ""},
+		{"no command", nil, []string{"verify", "--notes", "x"}, `usage: baton verify "<command>" [--here] [--qa "<why a full check now>"] [--replace] [--why "<what this run can show that the last could not>"] --notes`, ""},
 		{"not hosted", func(s *session, _ string) { delete(s.env, "BATON_HOST") }, []string{"verify", "make test", notes}, "not queued — the baton host runs jobs, and this session is not hosted", ""},
 		{"no notes", nil, []string{"verify", "make test"}, `not queued — say where P0 stands with --notes "<what is done, what is left, what this job checks>"`, "no notes"},
 		{"blank notes", nil, []string{"await", "gh run watch", "--notes", " "}, "not queued — say where P0 stands", "no notes"},

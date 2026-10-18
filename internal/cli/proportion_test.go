@@ -84,9 +84,9 @@ func TestAGateOutOfProportionIsQuestionedOnce(t *testing.T) {
 			s.must("", "verify", "make e2e", notes)
 			s.ranFor("j1", state.JobPassed, 31*m, staged...)
 		}, args: []string{"make e2e"}, want: []string{"repeat"},
-			says: []string{"not queued, this once — baton questions `make e2e` before it runs",
+			says: []string{"not queued, this once. This gate spends 31m of the human's time; to you it is one tool call.\nbaton questions `make e2e` before it runs:\n",
 				"- A repeat: job j1 ran `make e2e` for 31m on this same code, and it passed. Running it again proves nothing new",
-				"To run this gate as it is, run the same command again"}},
+				"To run the whole gate anyway, queue it again with `--why \"…\"`: baton tells the human your reason."}},
 		{name: "a red repeat on this commit", setup: func(s *session, root string) {
 			s.must("", "verify", "make e2e", notes)
 			s.ranFor("j1", state.JobFailed, 31*m, lane.Stage{Name: "unit", Status: lane.StageFailed, Failures: []string{"TestParse"}})
@@ -121,7 +121,8 @@ func TestAGateOutOfProportionIsQuestionedOnce(t *testing.T) {
 		}, args: []string{"make e2e"}, want: []string{"repeat"},
 			says: []string{"Since then 25 files changed: src/f00.go, src/f01.go", "src/f19.go and 5 more. Does a narrower check prove the change: the tests of those files?"}},
 		{name: "a script outside the repository", args: []string{"sh /tmp/gate.sh"}, want: []string{"outside_script"},
-			says: []string{"- A script outside the repository: `/tmp/gate.sh` is in no commit", "Commit it in the repository first"}},
+			says: []string{"not queued, this once — baton questions `sh /tmp/gate.sh` before it runs, as a long gate spends the human's time:\n",
+				"- A script outside the repository: `/tmp/gate.sh` is in no commit", "Commit it in the repository first"}},
 		{name: "a script in the repository, and a program", args: []string{"sh scripts/gate.sh && /usr/local/bin/golangci-lint run ./src"}},
 		{name: "a long gate not built from stages", setup: func(s *session, root string) {
 			s.must("", "verify", "./scripts/gate.sh", notes)

@@ -21,13 +21,19 @@ import (
 // what it could prove, from the run's record of earlier runs of its command and from git, and questions a
 // gate out of proportion to the change once (decide.GateQuestioned). Each question is asked once per
 // command and commit (Run.GatesQuestioned), so the same call again queues the gate: nothing waits on the
-// human, and the model decides.
+// human, and the model decides. Since v0.8.11 the questions lead with what the gate spends of the human's
+// time and what the phase spent so far, and --why answers them, the reason told to the human; a long repeat
+// queued again without one is queued too, flagged (why.go).
 
 // gateAsk is what baton asks of a gate as it is queued (questionGate).
 type gateAsk struct {
-	types, questions, keys []string // the questions not asked before, of each kind, and their records
-	job                    string   // the earlier run they draw on, if any
-	qaAsked                bool     // the QA question was put to this command on this commit, or is put now
+	types, questions, keys []string      // the questions not asked before, of each kind, and their records
+	applies                []string      // the kinds that apply, asked before or not: what a --why answers
+	job                    string        // the earlier run they draw on, if any
+	took                   time.Duration // how long that run took
+	repeat                 bool          // the gate repeats a long run of its command (GateRepeat), asked now or before
+	cost                   state.Cost    // the phase's gates so far, and its runs of the command
+	qaAsked                bool          // the QA question was put to this command on this commit, or is put now
 }
 
 // questionGate is what baton asks of gate command, about to be queued on commit for phase (qa: the --qa
@@ -37,14 +43,16 @@ func questionGate(io IO, s *state.Store, st state.State, pl plan.Plan, phase, co
 	var a gateAsk
 	asked := func(kind string) bool { return slices.Contains(st.Run.GatesQuestioned, gateKey(kind, command, commit)) }
 	add := func(kind, question string) {
+		a.applies = append(a.applies, kind)
 		if !asked(kind) {
 			a.types, a.questions, a.keys = append(a.types, kind), append(a.questions, question), append(a.keys, gateKey(kind, command, commit))
 		}
 	}
 
+	a.cost = state.GateCost(st, phase, command, io.Now())
 	last, long := commandRuns(st, command)
 	if last != nil && ranFor(*last) >= decide.GateLong {
-		a.job = last.ID
+		a.job, a.took, a.repeat = last.ID, ranFor(*last), true
 		add(decide.GateRepeat, repeatOf(s, st, phase, *last, command, commit).Question(phase))
 	}
 	if paths := outsideScripts(command, s, io.Env); len(paths) > 0 {
@@ -52,6 +60,9 @@ func questionGate(io IO, s *state.Store, st state.State, pl plan.Plan, phase, co
 	}
 	if long != nil && unstaged(s, *long) {
 		a.job = long.ID
+		if a.took == 0 {
+			a.took = ranFor(*long)
+		}
 		add(decide.GateUnstaged, decide.Unstaged(*long, ranFor(*long)))
 	}
 	if next := qaAhead(io, pl, phase); next != "" && qa == "" {
@@ -88,7 +99,7 @@ func (a gateAsk) refuse(io IO, s *state.Store, phase, command, commit string) in
 		}
 		s.Event("gate_questioned", ev)
 	}
-	return fail(io, "%s", decide.GateQuestioned(command, a.questions))
+	return fail(io, "%s", decide.GateQuestioned(command, decide.GateLead(phase, a.took, a.cost), a.questions))
 }
 
 // gateKey is a question's record in Run.GatesQuestioned: its kind, the command and the commit.
@@ -157,6 +168,7 @@ func repeatOf(s *state.Store, st state.State, phase string, prev state.Job, comm
 	if rr, why := st.RerunOf(phase, s.StagesOf); why == "" && prev.Red() && rr.Of.Command == command {
 		r.Failed = true
 	}
+	r.Failures, r.MoreFailures = failuresOf(s, prev)
 	var green *state.Job
 	for i := range st.Jobs {
 		if j := &st.Jobs[i]; j.Kind == state.JobVerify && j.Command == command && j.Status == state.JobPassed && (green == nil || j.Ended.After(green.Ended)) {

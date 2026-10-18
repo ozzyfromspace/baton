@@ -24,11 +24,12 @@ import (
 // starts a runner for each (hostRunners), and `baton lane-run` runs it to its end.
 
 func init() {
-	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
+	register("verify", "run a gate on HEAD in a lane of its own while you work on: verify \"<command>\" [--here] [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One gate at a time, beside one await: the same command again replaces the gate that runs, and another command only with --replace. "+
+		"baton questions a gate out of proportion once; --why answers it, and baton tells the human your reason. "+
 		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told). "+
 		"verify --failed [--stages <name>,<name>] --notes \"…\" reruns what failed in a red gate built from stages: the stages that passed are carried, and a pass clears it", cmdVerify)
-	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] --notes \"<where the phase stands>\", or the command's words after --. "+
+	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
 
@@ -40,8 +41,8 @@ func cmdAwait(args []string, io IO) int  { return queueJob(args, io, state.JobAw
 // does only with --replace (state.Clash).
 func queueJob(args []string, io IO, kind string) int {
 	bools := []string{"replace"}
-	usage := " [--qa \"<why a full check now>\"] [--replace]"
-	vals := []string{"notes", "qa"}
+	usage := " [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"]"
+	vals := []string{"notes", "qa", "why"}
 	if kind == state.JobVerify {
 		bools, vals, usage = append(bools, "here", "failed"), append(vals, "stages"), " [--here]"+usage
 	}
@@ -69,7 +70,7 @@ func queueJob(args []string, io IO, kind string) int {
 	if !ok {
 		return 1
 	}
-	notes, qa := strings.TrimSpace(p.vals["notes"]), decide.Sanitize(p.vals["qa"])
+	notes, qa, why := strings.TrimSpace(p.vals["notes"]), decide.Sanitize(p.vals["qa"]), decide.Sanitize(p.vals["why"])
 	st, err := s.Load()
 	if err != nil {
 		return fail(io, "%v", err)
@@ -113,12 +114,14 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 	}
 	qaAsked := false // the QA question went with baton's questions about this gate, so it is not put again
+	var asked gateAsk
+	var said gateSaid // what the human is told of a gate queued over baton's questions
 	if kind == state.JobVerify && re == nil {
-		a := questionGate(io, s, st, pl, phase, command, commit, qa)
-		if len(a.questions) > 0 {
-			return a.refuse(io, s, phase, command, commit)
+		asked = questionGate(io, s, st, pl, phase, command, commit, qa)
+		if len(asked.questions) > 0 && why == "" {
+			return asked.refuse(io, s, phase, command, commit)
 		}
-		qaAsked = a.qaAsked
+		qaAsked, said = asked.qaAsked, asked.said(phase, command, why)
 	}
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var queued state.Job
@@ -132,7 +135,10 @@ func queueJob(args []string, io IO, kind string) int {
 		if st.Current != phase {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
-		j := state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa}
+		j := state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa, Why: why}
+		if said.event == "gate_unexplained" {
+			j.Unexplained = said.line
+		}
 		if re != nil {
 			if err := re.still(*st, phase); err != nil {
 				return err
@@ -193,6 +199,14 @@ func queueJob(args []string, io IO, kind string) int {
 			line += "; " + decide.BesideShort(*beside)
 		}
 		st.Run.Announce = append(st.Run.Announce, line)
+		if said.line != "" {
+			st.Run.Announce = append(st.Run.Announce, "baton: "+said.line)
+		}
+		for _, k := range asked.keys { // answered by --why: asked, as a refusal would have recorded them
+			if !slices.Contains(st.Run.GatesQuestioned, k) {
+				st.Run.GatesQuestioned = append(st.Run.GatesQuestioned, k)
+			}
+		}
 		if qa != "" {
 			st.Run.Announce = append(st.Run.Announce, decide.QAEarly(phase, queued.ID, qa))
 		}
@@ -233,7 +247,17 @@ func queueJob(args []string, io IO, kind string) int {
 	} else if red != nil {
 		queuedEvent["red_gate"] = red.ID // stands, whatever this job's result
 	}
+	if why != "" {
+		queuedEvent["why"] = why
+		if len(asked.applies) > 0 {
+			queuedEvent["answered"] = asked.applies // the questions --why answered
+		}
+	}
 	s.Event("job_queued", queuedEvent)
+	said.logged(s, asked, queued)
+	if said.line != "" {
+		tellLead(s, said.line)
+	}
 	if gateNote != nil {
 		s.Event("note", map[string]any{"id": gateNote.ID, "phase": phase, "what": gateNote.What, "undo": gateNote.Undo, "replaces_gate": red.ID})
 		if st.ReviewDue != "" {
@@ -267,6 +291,9 @@ func queueJob(args []string, io IO, kind string) int {
 	fmt.Fprintf(io.Out, "baton: queued %s — `%s` (%s), %s. baton starts it within seconds; its output goes to %s.\n", queued.ID, command, phase, where, s.JobLog(queued.ID))
 	if re != nil {
 		re.say(io, s, queued)
+	}
+	if said.line != "" {
+		fmt.Fprintln(io.Out, "baton: "+decide.HumanTold(said.line))
 	}
 	if replaced != nil {
 		fmt.Fprintln(io.Out, "baton: "+decide.Replaced(*replaced, !replaced.Same(queued)))

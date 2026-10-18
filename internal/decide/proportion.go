@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -29,16 +30,21 @@ const (
 	GateQAAsk    = "qa_ask"         // QAAsk, put with the questions above rather than after the job is queued
 )
 
-// GateQuestioned is the refusal that puts questions to the model about gate command before it runs, once:
-// the same call again queues it.
-func GateQuestioned(command string, questions []string) string {
+// GateQuestioned is the refusal that puts questions to the model about gate command before it runs, once,
+// led by lead (GateLead: what it spends of the human's time, and what the phase spent so far) when there is
+// one. Queued again with --why, it runs, and the human is told the reason (GateAnswered, RepeatSaid).
+func GateQuestioned(command, lead string, questions []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "not queued, this once — baton questions `%s` before it runs, as a long gate spends the human's time:\n", command)
+	if lead != "" {
+		fmt.Fprintf(&b, "not queued, this once. %s\nbaton questions `%s` before it runs:\n", lead, command)
+	} else {
+		fmt.Fprintf(&b, "not queued, this once — baton questions `%s` before it runs, as a long gate spends the human's time:\n", command)
+	}
 	for _, q := range questions {
 		b.WriteString("- " + q + "\n")
 	}
-	b.WriteString("Queue the narrower check if one proves the change. To run this gate as it is, run the same command again: " +
-		"baton queues it then, and asks nothing more of it on this commit.")
+	b.WriteString("Queue the narrower check if one proves the change. " +
+		"To run the whole gate anyway, queue it again with `--why \"…\"`: baton tells the human your reason.")
 	return b.String()
 }
 
@@ -56,6 +62,10 @@ type Repeat struct {
 	// Failed is set when `baton verify --failed` would rerun what failed in Prev (a red gate built from
 	// stages).
 	Failed bool
+	// Failures are the tests a red Prev's log says failed (lane.FailureIDs), at most GateListed of them, and
+	// MoreFailures the rest.
+	Failures     []lane.FailedTest
+	MoreFailures int
 	// Green is the command's latest run that passed, when only tests and documents changed since its commit:
 	// the code it checked is the code the gate would check.
 	Green *state.Job
@@ -76,8 +86,8 @@ func (r Repeat) Question(phase string) string {
 	default:
 		s = fmt.Sprintf("A repeat: %s on %s, and it %s. Since then %s. Does a narrower check prove the change: the tests of %s",
 			ran, short7(p.Commit), verdict(p), changedSince(r.Changed, r.More), those(r.Changed, r.More))
-		if r.Failed {
-			s += ", or `baton verify --failed --notes \"…\"`, which reruns only what failed in " + p.ID + ", carrying the stages that passed"
+		if o := r.onlyFailed(); o != "" {
+			s += ", or " + o
 		}
 		s += "?"
 	}
@@ -93,8 +103,11 @@ func (r Repeat) Question(phase string) string {
 
 // again is how to rerun only what failed in a red gate on the same code.
 func (r Repeat) again() string {
-	if r.Failed {
+	switch {
+	case r.Failed:
 		return "`baton verify --failed --notes \"…\"` reruns only what failed, carrying the stages that passed."
+	case len(r.Failures) > 0:
+		return "rerun " + r.onlyFailed() + "."
 	}
 	return "rerun only what failed, by name (its result lists the failures), and the gate once the fix is in."
 }
