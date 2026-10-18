@@ -40,6 +40,7 @@ The end of its log (/work/.baton/runs/r1/jobs/j2.log):
 FAIL
 
 Fix what failed (quick checks in place help), commit, and verify again with the same command, `make test`: a red gate stands until the same command passes, and a narrower check that passes does not clear it (to make another command P2's gate instead, verify it with --replace: a decision without the human, and they are told). `baton done P2` is refused until then.
+This gate spends 14m of the human's time; to you it is one tool call.
 
 Red now: P0 (job j0, `make lint` on 1a2b3c4d5e6f failed (exit 2) after 3m). Failures in their area are theirs, not this phase's: leave them to it.
 
