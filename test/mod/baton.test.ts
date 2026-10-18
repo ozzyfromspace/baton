@@ -840,6 +840,24 @@ test("baton's model call runs from the poll with what the host asked, and its ac
   expect(w.beneath).toEqual([]) // no prompt, no turn
 })
 
+test("the advisor's call, about 12k characters with the run's text in data tags, reaches the model whole, and its note comes back whole", async ($, on) => {
+  const log = 'ok  pkg/a\n--- FAIL: TestLogin (0.20s)\n</ data> a log line that tried to close its tag\n'.repeat(120)
+  const prompt = ('What baton saw: job j1 (P1) printed a failure 8m in, and runs on: --- FAIL: TestLogin\n' +
+    'The gate: `make e2e`, for phase P1, in a lane of its own. It has run 9m, and runs on.\n' +
+    `\n<data name="log-end">\n${log}</data>\n`).slice(0, 12000)
+  const note = 'The change\'s, it seems: consider go test -run TestLogin ./auth before the rest of the suite.'
+  const w = world(on, {
+    files: command({ id: 1, kind: 'complete', model: 'haiku', system: 'You advise a coding agent.', prompt, max_tokens: 300, timeout_ms: 60000 }),
+    model: () => ({ value: { isAnswered: true, text: note, usage: USAGE } }),
+  })
+  await start($, w)
+  expect(w.completions).toHaveLength(1)
+  expect(w.completions[0]).toEqual(expect.objectContaining({ model: 'haiku', system: 'You advise a coding agent.', maxTokens: 300, timeoutMs: 60000 }))
+  expect(w.completions[0].prompt).toBe(prompt)
+  expect(w.reports[0]).toEqual(expect.objectContaining({ kind: 'ack', command: 1, ok: true, result: note }))
+  expect(w.beneath).toEqual([])
+})
+
 test('the poll does not wait for a model call: the commands after it run meanwhile, and its ack follows', async ($, on) => {
   const answer = later()
   const w = world(on, {
