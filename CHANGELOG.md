@@ -4,6 +4,16 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-10-18
+
+### Fixed
+
+- **A phase agent whose work landed no longer holds a session on the older baton.** A running plan restarts on
+  a newer baton at a phase boundary, once no phase agent is at work, and baton read the agents at work from the
+  lead's last stop. A lead idle while its last agent worked had last stopped with that agent at work, so at the
+  boundary that agent's landing made, the agent still counted, and in a real run the session stayed on the
+  older baton past it. An agent whose worker landed or failed now counts as ended.
+
 ## [0.8.11] - 2026-10-18
 
 v0.8.7 asked models to respect the human's time, and a real run's record since shows that asking alone changed
@@ -1535,7 +1545,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...HEAD
+[0.8.12]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...v0.8.12
 [0.8.11]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...v0.8.11
 [0.8.10]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...v0.8.9
