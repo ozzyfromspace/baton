@@ -50,7 +50,7 @@ func (x *fake) finder() Finder {
 // A phase's processes are those started under baton that work in its directories, and those whose
 // environment is hidden in the process group of one of them. The human's own (no BATON_ variable, or hidden
 // alone, as their shell is on macOS), what works elsewhere or beside the worktree under a name that starts
-// the same, the command that looks and the jobs still running are left out.
+// the same, the command that looks, the jobs still running and baton's own processes are left out.
 func TestWhatAPhaseLeftRunning(t *testing.T) {
 	tree, lane := filepath.Join(t.TempDir(), "P3"), filepath.Join(t.TempDir(), "lanes", "1")
 	x := &fake{table: []procs.Proc{
@@ -67,6 +67,8 @@ func TestWhatAPhaseLeftRunning(t *testing.T) {
 		{PID: 300, PPID: 1, PGID: 300, Comm: "zsh", Cwd: tree, Env: baton},                                     // the shell that looks
 		{PID: 301, PPID: 300, PGID: 301, Comm: "baton", Cwd: tree, Env: baton},                                 // its parent: the command that looks
 		{PID: 302, PPID: 300, PGID: 301, Comm: "cat", Cwd: tree, Env: baton},                                   // in the command's own group
+		{PID: 400, PPID: 1, PGID: 400, Comm: "baton", Cwd: tree, Env: baton},                                   // a hook of the agent's, at work beside it
+		{PID: 401, PPID: 400, PGID: 400, Comm: "sh", Cwd: tree},                                                // hidden, in the hook's group
 	}, containers: []Container{
 		{ID: "a1", Name: "p3-db-1", Status: "Up 3 minutes", Project: "p3", Dir: tree},
 		{ID: "a2", Name: "p3-web-1", Status: "Exited (0) 2 minutes ago", Project: "p3", Dir: tree},

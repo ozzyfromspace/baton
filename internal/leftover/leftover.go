@@ -10,7 +10,9 @@
 //     started it); one whose environment is hidden (macOS hides a platform binary's: sh, zsh, sleep)
 //     counts only in the process group of such a process, since alone it may be the human's own shell; one
 //     whose environment holds none is the human's. The command that looks (its ancestors and its process
-//     group) and the jobs still running (their runners and process groups) are left out (Skip).
+//     group) and the jobs still running (their runners and process groups) are left out (Skip), and so is
+//     every process of baton's own (a hook, a report of its mod, a command), at work in the worktree while
+//     the phase's agent runs.
 //   - docker, when its CLI is on the PATH: `docker ps -a` lists the containers compose started, and those
 //     whose com.docker.compose.project.working_dir label is inside a phase's directory are its own. With
 //     no docker, or none that answers, there are none.
@@ -157,7 +159,8 @@ func (f Finder) Find(ctx context.Context, dirs []string, skip Skip) Left {
 		case err != nil:
 			l.Notes = append(l.Notes, "processes: the process table could not be read: "+err.Error())
 		default:
-			l.Procs, l.Hidden = Working(table, where, skip.Of(table))
+			mine := skip.Of(table)
+			l.Procs, l.Hidden = Working(table, where, func(p procs.Proc) bool { return mine(p) || batons(p) })
 		}
 	}
 	if f.Containers != nil {
@@ -173,6 +176,11 @@ func (f Finder) Find(ctx context.Context, dirs []string, skip Skip) Left {
 	}
 	return l
 }
+
+// batons reports a process of baton's own: a hook of the phase's agent, a report of its mod or a command,
+// which work in its worktree while it runs, beside the command that looks. None is what the phase left
+// running, and a stale one is baton clean's.
+func batons(p procs.Proc) bool { return strings.TrimSuffix(p.Comm, ".exe") == "baton" }
 
 // Working sorts the processes of table that work in where (Spellings) and skip leaves in: those started
 // under baton (a BATON_ variable in their environment), and those whose environment is hidden in the
