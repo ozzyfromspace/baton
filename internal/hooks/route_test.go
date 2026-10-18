@@ -202,7 +202,7 @@ func TestPhaseAgentsAreNotTheLeadsBackgroundWork(t *testing.T) {
 		t.Fatalf("stop: %v", out)
 	}
 	st := f.state()
-	if st.Run.Subagents != 0 || len(st.Run.BusyBackground()) != 0 || len(st.Run.PhaseAgents()) != 1 || st.Run.Background[0].AgentType != state.PhaseAgent {
+	if st.Run.Subagents != 0 || len(st.Run.BusyBackground()) != 0 || len(st.PhaseAgents()) != 1 || st.Run.Background[0].AgentType != state.PhaseAgent {
 		t.Fatalf("background %+v subagents %d", st.Run.Background, st.Run.Subagents)
 	}
 	// The model's own subagent is its background work, as before.
