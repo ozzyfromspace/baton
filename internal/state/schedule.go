@@ -414,7 +414,8 @@ func ids(jobs []Job) []string {
 
 // Due lists the results the model has not been given and should be given now: those of the phase in
 // hand, or, once the plan is complete and before the human is told, of the verification that completed
-// it. None is due while a compaction is owed or underway: the result comes after it.
+// it. None is due while a compaction is owed or underway: the result comes after it. A red gate's result
+// held for the advisor is not due until the host releases it (Advising, LookEnv).
 func (st State) Due() []Job {
 	switch {
 	case st.Compacting():
@@ -430,15 +431,17 @@ func (st State) Due() []Job {
 	}
 	var out []Job
 	for _, j := range st.Jobs {
-		if j.Finished() && j.Delivered.IsZero() && (st.Mode == ModeComplete || j.Phase == st.Current) {
+		if j.Finished() && j.Delivered.IsZero() && (st.Mode == ModeComplete || j.Phase == st.Current) && !st.Advising(LookEnv, j.ID) {
 			out = append(out, j)
 		}
 	}
 	return out
 }
 
-// TakeDue returns the results due (Due) and records them as given.
+// TakeDue returns the results due (Due) and records them as given. A hold for the advisor past its deadline
+// is released first (LapseAdvice); the advisor's words on a result given are TakeAdvice's.
 func TakeDue(st *State, now time.Time) []Job {
+	LapseAdvice(st, now)
 	due := st.Due()
 	for _, d := range due {
 		if j := st.Job(d.ID); j != nil {

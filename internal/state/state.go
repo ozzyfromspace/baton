@@ -200,6 +200,9 @@ type State struct {
 	// phases whose landings conflicted with the run's branch in it, one entry a landing (lookin.go).
 	LookIns    []LookIn            `json:"look_ins,omitempty"`
 	Conflicted map[string][]string `json:"conflicted,omitempty"`
+	// Advice is the advisor's part in the look-ins the host asked it about: each held from the session
+	// until the host releases it, then the advisor's words, until the look-in is told (advice.go).
+	Advice []Advice `json:"advice,omitempty"`
 	// Records are the phases' records baton wrote to the plan's record file (plan.Plan.Record), oldest
 	// first, each committed alone in the lead's checkout (recordfile.go).
 	Records []RecordNote `json:"records,omitempty"`
