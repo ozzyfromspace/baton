@@ -1,7 +1,6 @@
 package lane
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -201,23 +200,17 @@ func ReadExcerpt(path string, lines, maxBytes, fails, clip int) (Excerpt, error)
 	if e.Tail, start, err = tailOf(f, lines, maxBytes); err != nil {
 		return e, err
 	}
-	r := bufio.NewReaderSize(io.NewSectionReader(f, 0, start), 64<<10)
-	for {
-		line, long, err := r.ReadLine()
-		if text := string(line); Failure(text) {
-			if len(e.Failures) < fails {
-				e.Failures = append(e.Failures, clipLine(strings.TrimRight(text, " \t\r"), clip))
-			} else {
-				e.More++
-			}
+	eachLine(io.NewSectionReader(f, 0, start), func(text string) {
+		if !Failure(text) {
+			return
 		}
-		for long && err == nil { // the rest of a line longer than the reader's buffer
-			_, long, err = r.ReadLine()
+		if len(e.Failures) < fails {
+			e.Failures = append(e.Failures, clipLine(strings.TrimRight(text, " \t\r"), clip))
+		} else {
+			e.More++
 		}
-		if err != nil {
-			return e, nil
-		}
-	}
+	})
+	return e, nil
 }
 
 // Failure reports whether line, from a command's output, reports a failure in a way common test runners

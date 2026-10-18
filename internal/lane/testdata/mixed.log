@@ -1,0 +1,21 @@
+pytest -q tests
+..F.                                                                     [100%]
+=========================== short test summary info ============================
+FAILED tests/test_api.py::test_logout - AssertionError: assert 'ok' == 'bye'
+1 failed, 3 passed in 0.10s
+make: [Makefile:4: test-api] Error 1 (ignored)
+::baton fail lint:unused-import
+npx playwright test
+Running 2 tests using 1 worker
+
+  ✘  1 e2e/login.spec.ts:4:5 › logs in (3.0s)
+  ✓  2 e2e/login.spec.ts:9:5 › logs out (1.0s)
+
+  1) e2e/login.spec.ts:4:5 › logs in ───────────────────────────────────────────────
+
+    Error: expect(page).toHaveURL(expected) failed
+
+  1 failed
+    e2e/login.spec.ts:4:5 › logs in ────────────────────────────────────────────────
+  1 passed (4.0s)
+make: *** [Makefile:7: test-e2e] Error 1

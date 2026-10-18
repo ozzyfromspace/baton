@@ -22,11 +22,20 @@ import (
 )
 
 func init() {
-	register("stage", "run one stage of a gate script: stage <name> [--keep-going] [--runner go|pytest] -- <command…>. "+
+	register("stage", "run one stage of a gate script: stage <name> [--keep-going] [--runner "+runnerNames("|")+"] -- <command…>. "+
 		"It marks the stage in the gate's log, stops the gate at its first failed stage, and on a rerun runs only what failed", cmdStage)
 }
 
-const stageUsage = "usage: baton stage <name> [--keep-going] [--runner go|pytest] -- <command…>"
+var stageUsage = "usage: baton stage <name> [--keep-going] [--runner " + runnerNames("|") + "] -- <command…>"
+
+// runnerNames are the runners --runner takes, joined by sep.
+func runnerNames(sep string) string {
+	var names []string
+	for _, p := range lane.Presets {
+		names = append(names, p.Name)
+	}
+	return strings.Join(names, sep)
+}
 
 // stageDrain is how long a stage reads its command's output after the command ended, for what a process it
 // left running still writes; past it the stage ends all the same.
@@ -56,17 +65,18 @@ func cmdStage(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: a stage's name is 1 to %d characters with no spaces, not %q\n", lane.MaxStageName, name)
 		return 2
 	}
-	var preset *stagePreset
+	var preset *lane.Preset
+	presets := []lane.Preset{}
 	if r := p.vals["runner"]; r != "" {
-		pr, ok := stagePresets[r]
+		pr, ok := lane.PresetFor(r)
 		if !ok {
-			fmt.Fprintf(io.Err, "baton: --runner is go or pytest, not %q\n", r)
+			fmt.Fprintf(io.Err, "baton: --runner is one of %s, not %q\n", runnerNames(", "), r)
 			return 2
 		}
-		preset = &pr
+		preset, presets = &pr, append(presets, pr)
 	}
 	s := &stageRun{name: name, argv: p.pos[1:], keepGoing: p.bools["keep-going"], preset: preset, io: io,
-		stages: io.Env(lane.EnvStages), commit: io.Env("BATON_COMMIT")}
+		stages: io.Env(lane.EnvStages), commit: io.Env("BATON_COMMIT"), reading: lane.NewReading(lane.MaxFailures, presets...)}
 	return s.run()
 }
 
@@ -75,7 +85,7 @@ type stageRun struct {
 	name      string
 	argv      []string
 	keepGoing bool
-	preset    *stagePreset
+	preset    *lane.Preset
 	io        IO
 	stages    string // the job's stages file ("": outside a job)
 	commit    string
@@ -83,8 +93,7 @@ type stageRun struct {
 	mu      sync.Mutex
 	open    bool // the output so far ends mid-line
 	stopped bool // the stage no longer reads its command's output
-	ids     []string
-	over    bool // more than lane.MaxFailures ids
+	reading *lane.Reading
 }
 
 func (s *stageRun) run() int {
@@ -133,9 +142,7 @@ func (s *stageRun) run() int {
 	if exit != 0 {
 		st.Status = lane.StageFailed
 		s.mu.Lock()
-		if !s.over {
-			st.Failures = s.ids
-		}
+		st.Failures = narrowTo(s.reading.Failed())
 		s.mu.Unlock()
 	}
 	s.say(decide.StageEnd(s.name, exit, st.Took()))
@@ -186,8 +193,8 @@ func (s *stageRun) env(ids []string) (env []string, cleanup func(), err error) {
 		return env, cleanup, err
 	}
 	set := [][2]string{{lane.EnvFailed, f.Name()}, {lane.EnvFailedRE, lane.FailedRE(ids)}}
-	if s.preset != nil {
-		k, v := s.preset.narrow(ids)
+	if s.preset != nil && s.preset.Narrow != nil {
+		k, v := s.preset.Narrow(ids)
 		if was := s.io.Env(k); was != "" {
 			v = was + " " + v
 		}
@@ -277,21 +284,26 @@ func (s *stageRun) pass(chunk []byte, whole bool) {
 	if !whole {
 		return
 	}
-	line := string(chunk)
-	id := ""
-	if m, ok := lane.ParseMarker(line); ok && m.Kind == lane.MarkFail {
-		id = m.ID
-	} else if s.preset != nil {
-		id = s.preset.failure(strings.TrimRight(line, "\r\n"))
+	s.reading.Line(string(chunk))
+}
+
+// narrowTo is the ids a rerun of a failed stage runs, of the tests its reading kept (fs) with more past
+// them: none, so that it runs whole, when there are too many, or a file or package failed whole, which no
+// test's name reruns.
+func narrowTo(fs []lane.FailedTest, more int) []string {
+	var ids []string
+	for _, f := range fs {
+		if f.Whole {
+			return nil
+		}
+		if !slices.Contains(ids, f.ID) {
+			ids = append(ids, f.ID)
+		}
 	}
-	if id == "" || s.over || slices.Contains(s.ids, id) {
-		return
+	if more > 0 {
+		return nil
 	}
-	if len(s.ids) == lane.MaxFailures {
-		s.over, s.ids = true, nil // too many to narrow a rerun to: it runs whole
-		return
-	}
-	s.ids = append(s.ids, id)
+	return ids
 }
 
 // say prints one of the stage's own lines, on a line of its own.
@@ -313,74 +325,4 @@ func (s *stageRun) record(st lane.Stage) {
 	if err := lane.AppendStage(s.stages, st); err != nil {
 		fmt.Fprintf(s.io.Err, "baton: stage %s was not recorded: %v\n", s.name, err)
 	}
-}
-
-// A stagePreset knows a test runner: the lines of its output that name a failed test, and how to run only
-// some tests.
-type stagePreset struct {
-	failure func(line string) string                // the id of the test a line says failed, or ""
-	narrow  func(ids []string) (name, value string) // the variable that runs only ids
-}
-
-var stagePresets = map[string]stagePreset{
-	"go":     {failure: goFailure, narrow: goNarrow},
-	"pytest": {failure: pytestFailure, narrow: pytestNarrow},
-}
-
-// goFailure reads go test's `--- FAIL: TestX/sub (0.01s)` as its top-level test, TestX: go test -run splits
-// its pattern at slashes, and a top-level test runs its subtests.
-func goFailure(line string) string {
-	rest, ok := strings.CutPrefix(strings.TrimLeft(line, " \t"), "--- FAIL: ")
-	if !ok {
-		return ""
-	}
-	name, _, _ := strings.Cut(rest, " ")
-	name, _, _ = strings.Cut(name, "/")
-	if !lane.ValidFailID(name) {
-		return ""
-	}
-	return name
-}
-
-// goNarrow runs only the top-level tests ids, through GOFLAGS, which go test reads and go build and go vet
-// pass over.
-func goNarrow(ids []string) (string, string) { return "GOFLAGS", "-run=" + lane.FailedRE(ids) }
-
-// pytestFailure reads pytest's summary line `FAILED tests/test_x.py::test_a[p] - AssertionError` as the
-// test's node id, which ends where its message starts: at the first " - " past its parameters, if any.
-func pytestFailure(line string) string {
-	rest, ok := strings.CutPrefix(line, "FAILED ")
-	if !ok {
-		return ""
-	}
-	from := 0
-	if open := strings.IndexByte(rest, '['); open >= 0 && !strings.Contains(rest[:open], " - ") {
-		if end := strings.IndexByte(rest[open:], ']'); end >= 0 {
-			from = open + end
-		}
-	}
-	id := rest
-	if i := strings.Index(rest[from:], " - "); i >= 0 {
-		id = rest[:from+i]
-	}
-	if id = strings.TrimSpace(id); !strings.Contains(id, "::") || !lane.ValidFailID(id) {
-		return ""
-	}
-	return id
-}
-
-// pytestNarrow runs only the tests ids, by their names (-k matches names, not paths) through
-// PYTEST_ADDOPTS: a test of the same name in another file runs too.
-func pytestNarrow(ids []string) (string, string) {
-	var names []string
-	for _, id := range ids {
-		name := id[strings.LastIndex(id, "::")+2:]
-		if i := strings.IndexByte(name, '['); i > 0 {
-			name = name[:i]
-		}
-		if !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	return "PYTEST_ADDOPTS", `-k "` + strings.Join(names, " or ") + `"`
 }

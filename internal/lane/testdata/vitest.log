@@ -1,0 +1,43 @@
+
+ [46m[30m RUN [39m[49m [36mv3.2.4 [39m[90m/home/u/app[39m
+
+ [32m✓[39m src/utils.test.ts [2m(4 tests)[22m [2m3ms[22m
+ [31m❯[39m src/board.test.ts [2m(5 tests | [22m[31m2 failed[39m[2m)[22m [2m14ms[22m
+   [32m✓[39m Board[2m > [22mrenders[32m 2[2mms[22m[39m
+   [31m×[39m Board[2m > [22mmoves[2m > [22mrejects a move off the grid[32m 5[2mms[22m[39m
+     [31m→ expected false to be true // Object.is equality[39m
+   [31m×[39m Board[2m > [22mkeeps score[32m 1[2mms[22m[39m
+     [31m→ expected 3 to be 2[39m
+ [31m❯[39m [34m|browser|[39m src/view.test.tsx [2m(2 tests | [22m[31m1 failed[39m[2m)[22m [2m40ms[22m
+   [31m×[39m View[2m > [22mdraws the band[33m 30[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯[39m
+
+ [31m[41m[1m FAIL [22m[49m[39m src/broken.test.ts[2m [ src/broken.test.ts ][22m
+[31mSyntaxError: Unexpected token ')'[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯[39m
+
+ [31m[41m[1m FAIL [22m[49m[39m src/board.test.ts[2m > [22mBoard[2m > [22mmoves[2m > [22mrejects a move off the grid
+[31mAssertionError[39m: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ [36m❯ src/board.test.ts:[2m22:31[22m[39m
+     20|     const b = new Board(3)
+     21|     expect(b.move(4, 4)).toBe(true)
+       |                               [31m^[39m
+
+ [31m[41m[1m FAIL [22m[49m[39m src/board.test.ts[2m > [22mBoard[2m > [22mkeeps score
+[31mAssertionError[39m: expected 3 to be 2
+ [36m❯ src/board.test.ts:[2m30:20[22m[39m
+
+ [31m[41m[1m FAIL [22m[49m[39m [34m|browser|[39m src/view.test.tsx[2m > [22mView[2m > [22mdraws the band
+[31mError[39m: element not found
+
+[2m Test Files [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (4)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m8 passed[39m[22m[90m (11)[39m

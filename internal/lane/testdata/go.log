@@ -1,0 +1,35 @@
+=== RUN   TestRanking
+=== RUN   TestRanking/ties
+    rank_test.go:41: want 2, got 3
+--- FAIL: TestRanking (0.02s)
+    --- FAIL: TestRanking/ties (0.00s)
+=== RUN   TestBoard
+--- PASS: TestBoard (0.00s)
+=== RUN   TestParse
+    parse_test.go:9: unexpected EOF
+--- FAIL: TestParse (0.00s)
+FAIL
+FAIL	example.com/m/internal/rank	0.412s
+=== RUN   TestStage
+    stage_test.go:12: the child said:
+        --- FAIL: TestChild (0.00s)
+--- PASS: TestStage (0.10s)
+PASS
+ok  	example.com/m/internal/stage	0.311s
+?   	example.com/m/cmd/m	[no test files]
+# example.com/m/internal/broken
+internal/broken/x.go:3:1: undefined: y
+FAIL	example.com/m/internal/broken [build failed]
+=== RUN   TestSlow
+panic: test timed out after 2m0s
+	running tests:
+		TestSlow (2m0s)
+
+goroutine 1 [running]:
+testing.(*M).startAlarm.func1()
+FAIL	example.com/m/internal/slow	120.021s
+=== RUN   TestParse
+--- FAIL: TestParse (0.00s)
+FAIL
+FAIL	example.com/m/internal/other	0.100s
+FAIL

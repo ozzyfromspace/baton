@@ -116,6 +116,10 @@ func TestAFailedStageRecordsWhatFailed(t *testing.T) {
 		{"pytest", []string{"unit", "--runner=pytest"}, []string{"out:FAILED tests/test_x.py::test_a[a b] - AssertionError: x",
 			"out:FAILED tests/test_x.py::TestC::test_m", "out:ERROR tests/test_y.py - ImportError", "exit:2"},
 			2, []string{"tests/test_x.py::test_a[a b]", "tests/test_x.py::TestC::test_m"}},
+		{"vitest", []string{"unit", "--runner", "vitest"}, []string{"out: FAIL  src/a.test.ts > Suite > adds", "out: FAIL  src/a.test.ts > Suite > adds", "exit:1"},
+			1, []string{"src/a.test.ts > Suite > adds"}},
+		{"a package that failed whole runs whole", []string{"unit", "--runner", "go"}, []string{"out:--- FAIL: TestA (0.00s)",
+			"out:FAIL\tex.com/a\t0.1s", "out:FAIL\tex.com/b [build failed]", "exit:1"}, 1, nil},
 		{"no runner reads only fail lines", []string{"unit"}, []string{"out:--- FAIL: TestA (0.00s)", "err:  ::baton fail TestZ", "exit:1"},
 			1, []string{"TestZ"}},
 		{"a fail line mid-line", []string{"unit"}, []string{"long:70000:::baton fail hidden", "exit:1"}, 1, nil},
@@ -325,47 +329,6 @@ func TestARerunsRecordNamesWhereEachStageCameFrom(t *testing.T) {
 	}
 }
 
-func TestStagePresets(t *testing.T) {
-	failures := []struct {
-		runner, line, want string
-	}{
-		{"go", "--- FAIL: TestA (0.01s)", "TestA"},
-		{"go", "        --- FAIL: TestA/sub/deeper (0.00s)", "TestA"},
-		{"go", "--- FAIL: TestA", "TestA"},
-		{"go", "--- PASS: TestA (0.01s)", ""},
-		{"go", "FAIL\tgithub.com/x/y\t0.4s", ""},
-		{"go", "FAIL: TestA", ""},
-		{"go", "--- FAIL: ", ""},
-		{"pytest", "FAILED tests/test_x.py::test_a - assert 1 == 2", "tests/test_x.py::test_a"},
-		{"pytest", "FAILED tests/test_x.py::test_a[a b - c] - assert 0", "tests/test_x.py::test_a[a b - c]"},
-		{"pytest", "FAILED tests/test_x.py::test_a - assert x[0] - 1", "tests/test_x.py::test_a"},
-		{"pytest", "FAILED tests/test_x.py::TestC::test_m", "tests/test_x.py::TestC::test_m"},
-		{"pytest", "FAILED tests/test_x.py - collection error", ""},
-		{"pytest", "ERROR tests/test_x.py::test_a - fixture", ""},
-		{"pytest", "tests/test_x.py::test_a FAILED [ 50%]", ""},
-		{"pytest", "  FAILED tests/test_x.py::test_a", ""},
-	}
-	for _, c := range failures {
-		if got := stagePresets[c.runner].failure(c.line); got != c.want {
-			t.Errorf("%s reads %q as %q, want %q", c.runner, c.line, got, c.want)
-		}
-	}
-	narrows := []struct {
-		runner      string
-		ids         []string
-		name, value string
-	}{
-		{"go", []string{"TestA"}, "GOFLAGS", "-run=^(TestA)$"},
-		{"go", []string{"TestA", "TestB"}, "GOFLAGS", "-run=^(TestA|TestB)$"},
-		{"pytest", []string{"tests/x.py::test_a[1]", "tests/x.py::test_a[2]", "tests/y.py::TestC::test_m"}, "PYTEST_ADDOPTS", `-k "test_a or test_m"`},
-	}
-	for _, c := range narrows {
-		if name, value := stagePresets[c.runner].narrow(c.ids); name != c.name || value != c.value {
-			t.Errorf("%s narrows %q by %s=%s, want %s=%s", c.runner, c.ids, name, value, c.name, c.value)
-		}
-	}
-}
-
 // A stage exits with its command's code; one whose command cannot start fails with 127; a call baton cannot
 // read is a usage error, 2, and runs nothing.
 func TestStageExitCodes(t *testing.T) {
@@ -403,7 +366,7 @@ func TestStageExitCodes(t *testing.T) {
 		{"unit", "extra", "--", os.Args[0]},
 		append([]string{"a b"}, child...),
 		append([]string{strings.Repeat("x", lane.MaxStageName+1)}, child...),
-		append([]string{"unit", "--runner", "jest"}, child...),
+		append([]string{"unit", "--runner", "mocha"}, child...),
 		append([]string{"unit", "--runner"}, "--", os.Args[0]),
 		append([]string{"unit", "--fast"}, child...),
 	} {

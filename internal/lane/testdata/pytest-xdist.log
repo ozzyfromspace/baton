@@ -1,0 +1,8 @@
+============================= test session starts ==============================
+created: 2/2 workers
+2 workers [4 items]
+
+[gw1] [ 25%] PASSED tests/test_api.py::test_login 
+[gw0] [ 50%] FAILED tests/test_api.py::test_logout 
+[gw1] [ 75%] FAILED tests/test_calc.py::test_add[a b-c] 
+[gw0] [100%] PASSED tests/test_calc.py::test_big 

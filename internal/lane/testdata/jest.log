@@ -1,0 +1,42 @@
+[1m[31m[7m FAIL [27m[39m[22m [2msrc/[22m[1mcart.test.js[22m ([0;41m[1m5.212 s[22m[0m)
+  Cart
+    [32m✓[39m [2madds an item (3 ms)[22m
+    totals
+      [31m✕[39m [2mapplies the discount (4 ms)[22m
+  [31m✕[39m [2mempties (1 ms)[22m
+
+[1m[31m  [1m● [22m[1mCart › totals › applies the discount[39m[22m
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32m90[39m
+    Received: [31m100[39m
+
+    [0m [90m 12 |[39m     cart[33m.[39madd(item([35m100[39m))
+     [31m[1m>[22m[39m[90m 13 |[39m     expect(cart[33m.[39mtotal())
+
+      [2mat Object.toBe ([22msrc/cart.test.js[2m:13:26)[22m
+
+[1m[31m  [1m● [22m[1mempties[39m[22m
+
+    TypeError: cart.clear is not a function
+
+[1m[32m[7m PASS [27m[39m[22m [2msrc/[22m[1mutil.test.js[22m
+  [1m● [22mConsole
+
+    [2mconsole.log[22m
+      hello
+
+[1m[31m[7m FAIL [27m[39m[22m [2msrc/[22m[1mlegacy.test.js[22m
+[1m[31m  [1m● [22m[1mTest suite failed to run[39m[22m
+
+    Cannot find module './gone' from 'src/legacy.test.js'
+
+[1mSummary of all failing tests[22m
+[1m[31m[7m FAIL [27m[39m[22m [2msrc/[22m[1mcart.test.js[22m
+[1m[31m  [1m● [22m[1mCart › totals › applies the discount[39m[22m
+
+    Expected: 90
+
+[1mTest Suites: [22m[1m[31m2 failed[39m[22m, [1m[32m1 passed[39m[22m, 3 total
+[1mTests:       [22m[1m[31m2 failed[39m[22m, [1m[32m1 passed[39m[22m, 3 total

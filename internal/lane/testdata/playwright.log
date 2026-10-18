@@ -1,0 +1,34 @@
+
+Running 6 tests using 2 workers
+
+  ✓  1 [chromium] › tests/home.spec.ts:5:7 › home › has a title (1.1s)
+  ✘  2 [chromium] › tests/home.spec.ts:12:7 › home › opens the menu (5.2s)
+  ✓  3 [firefox] › tests/home.spec.ts:5:7 › home › has a title (1.4s)
+  ✘  4 [firefox] › tests/cart.spec.ts:8:5 › checkout (30.0s)
+  ✘  5 [firefox] › tests/cart.spec.ts:8:5 › checkout (retry #1) (30.0s)
+  ✓  6 [chromium] › tests/cart.spec.ts:8:5 › checkout (2.0s)
+
+
+  1) [chromium] › tests/home.spec.ts:12:7 › home › opens the menu ──────────────────────────────────
+
+    Error: Timed out 5000ms waiting for expect(locator).toBeVisible()
+
+      10 |   await page.click('#menu');
+      11 |
+    > 12 |   await expect(page.locator('nav')).toBeVisible();
+         |                                     ^
+
+        at /home/u/app/tests/home.spec.ts:12:39
+
+  2) [firefox] › tests/cart.spec.ts:8:5 › checkout ─────────────────────────────────────────────
+
+    Test timeout of 30000ms exceeded.
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────
+
+    Test timeout of 30000ms exceeded.
+
+  2 failed
+    [chromium] › tests/home.spec.ts:12:7 › home › opens the menu ───────────────────────────────────
+    [firefox] › tests/cart.spec.ts:8:5 › checkout ──────────────────────────────────────────────
+  4 passed (40.2s)

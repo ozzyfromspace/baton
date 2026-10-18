@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.2, pluggy-1.5.0
+collected 6 items
+
+tests/test_api.py::test_login PASSED                                     [ 16%]
+tests/test_api.py::test_logout FAILED                                    [ 33%]
+tests/test_calc.py::test_add[1-2-3] PASSED                               [ 50%]
+tests/test_calc.py::test_add[a b-c] FAILED                               [ 66%]
+tests/test_calc.py::TestDiv::test_zero FAILED                            [ 83%]
+tests/test_calc.py::test_big PASSED                                      [100%]
+
+=================================== FAILURES ===================================
+_________________________________ test_logout __________________________________
+
+    def test_logout():
+>       assert logout() == "FAILED"
+E       AssertionError: assert 'ok' == 'FAILED'
+
+tests/test_api.py:12: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_api.py::test_logout - AssertionError: assert 'ok' == 'FAILED'
+FAILED tests/test_calc.py::test_add[a b-c] - TypeError: unsupported operand type(s) for +: 'int' and 'str'
+FAILED tests/test_calc.py::TestDiv::test_zero - ZeroDivisionError: division by zero
+ERROR tests/test_db.py - ModuleNotFoundError: No module named 'psycopg'
+==================== 3 failed, 3 passed, 1 error in 0.12s =====================
