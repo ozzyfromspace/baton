@@ -4,6 +4,18 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-10-18
+
+### Fixed
+
+- **The risk ledger no longer asks its reviewer again and again after an upgrade.** A job runner of the older
+  baton, still running after the upgrade to v0.8.7, wrote the run's state without the ledger every few seconds,
+  so the new host scored every phase done again, crossed the full line again and asked the reviewer again: in a
+  real run, 412 calls in 34 minutes, each about 12k tokens, until the old job ended. The host now keeps what it
+  scored and which full checks reset the ledger, and restores that record when it is lost, so nothing is scored,
+  reset or assessed twice; and it asks for an assessment of a line at most once in 10 minutes
+  (`risk_assess_skipped` with `why: recent`).
+
 ## [0.8.7] - 2026-10-18
 
 A study of every gate in two real runs found where their hours went: in checks that could not change what
@@ -1433,7 +1445,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...HEAD
+[0.8.8]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/ozzyfromspace/baton/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/ozzyfromspace/baton/compare/v0.8.4...v0.8.5

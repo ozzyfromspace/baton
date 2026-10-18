@@ -52,6 +52,7 @@ const (
 	assessNoVerdict = "no-verdict" // the answer's first word is no verdict
 	assessRestart   = "restart"    // the host that asked is gone: no call in this host's memory stands for it
 	assessPanic     = "panic"
+	assessRecent    = "recent" // this host asked for an assessment of the line less than assessAgain ago
 )
 
 // riskWait is how long the assessment's answer is waited for.

@@ -317,3 +317,45 @@ func TestLedgerOff(t *testing.T) {
 		t.Errorf("an off ledger scored: %+v", st.Risk)
 	}
 }
+
+// A job runner of an older baton, left running across an upgrade, writes the run's state without the
+// ledger at every beat: nothing this host scored is scored again, no full check resets it again, the record
+// of each comes back, and no line is assessed again within assessAgain.
+func TestLedgerOutlivesAnOlderBatonsWrites(t *testing.T) {
+	x := newAssessRig(t, says("continue."))
+	drop := func() {
+		x.update(func(st *state.State) { st.Risk = nil })
+		for range 3 {
+			x.step(x.now.Add(riskEvery))
+			x.c.rsk.calls.Wait()
+		}
+	}
+	x.work("P0", "internal/a/a.go", 1000)
+	x.step(x.now)
+	x.c.rsk.calls.Wait()
+	x.work("P1", "internal/b/b.go", 1000)
+	x.step(x.now.Add(riskEvery))
+	x.c.rsk.calls.Wait()
+	drop()
+	st := x.state()
+	if n := strings.Count(x.events(), `"kind":"risk_scored"`); n != 2 || len(x.asked) != 2 || strings.Count(x.events(), `"kind":"risk_crossed"`) != 2 {
+		t.Fatalf("scored %d times, assessed %d times\n%s", n, len(x.asked), x.events())
+	}
+	if !st.Scored("P0") || !st.Scored("P1") || st.RiskTotal() != 0 {
+		t.Errorf("the record after it was dropped: %+v", st.Risk)
+	}
+
+	x.work("P2", "internal/c/c.go", 10)
+	x.work("P3", "docs/qa.md", 5)
+	x.step(x.now.Add(riskEvery))
+	drop()
+	if n := strings.Count(x.events(), `"kind":"risk_reset"`); n != 1 || !x.state().Cleared("qa:P3") || !x.state().Scored("P3") {
+		t.Errorf("reset %d times: %+v\n%s", n, x.state().Risk, x.events())
+	}
+
+	x.c.handOver(x.now, x.s, state.Risk{Total: 30}, state.RiskFull)
+	x.c.rsk.calls.Wait()
+	if len(x.asked) != 2 || !hasEvent(x.events(), "risk_assess_skipped", map[string]any{"why": assessRecent, "line": state.RiskFull}) {
+		t.Errorf("the hard line assessed again at once: %d calls\n%s", len(x.asked), x.events())
+	}
+}

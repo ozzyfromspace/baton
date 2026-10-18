@@ -201,6 +201,14 @@ func ResetRisk(st *State, by string, at time.Time, commit string, covered time.T
 	return true
 }
 
+// MarkCleared records a full check that reset the ledger already, with nothing reset: the ledger's record
+// of it was lost (an older baton wrote the run's state without it).
+func MarkCleared(st *State, by string) {
+	if r := st.ledger(); !slices.Contains(r.Cleared, by) {
+		r.Cleared = append(r.Cleared, by)
+	}
+}
+
 // Cleared reports a full check (a job's id, a QA phase's) that reset the ledger already.
 func (st State) Cleared(by string) bool {
 	return st.Risk != nil && slices.Contains(st.Risk.Cleared, by)

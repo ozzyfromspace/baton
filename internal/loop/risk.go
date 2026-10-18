@@ -43,10 +43,19 @@ const riskEvery = 2 * time.Second
 // phase it did before to score once.
 const riskBatch = 8
 
+// assessAgain is how soon this host asks for an assessment of a line it asked for before, at the soonest.
+const assessAgain = 10 * time.Minute
+
 // ledger is the ledger step's own state. Only the lead's tick touches at.
 type ledger struct {
 	busy atomic.Bool
 	at   time.Time
+	// What this host scored, the full checks that reset the ledger in it, and when it last asked for an
+	// assessment of each line, beside the run's record (Risk.Scored, Risk.Cleared): a job runner of an
+	// older baton, left running across an upgrade, writes the run's state without the ledger at every beat,
+	// and nothing it drops is scored, reset or assessed again. Only the step touches them.
+	scored, cleared map[string]bool
+	assessed        map[string]time.Time
 	// The assessment's (assess.go): the crossing whose call runs in this host (its Risk.Asking, in Unix ns;
 	// 0: none), the calls under way, and how a call is made (tests stub it; nil: Complete).
 	asking atomic.Int64
@@ -148,6 +157,15 @@ func (c *Coordinator) score(now time.Time, s *state.Store, st state.State, pl pl
 	if i < 0 || ps == nil {
 		return
 	}
+	if c.rsk.scored[id] { // the run's record of it was lost: it is scored again in the record alone
+		s.Update(func(st *state.State) error {
+			if state.MarkScored(st, id); c.rsk.cleared["qa:"+id] {
+				state.MarkCleared(st, "qa:"+id)
+			}
+			return nil
+		})
+		return
+	}
 	rec := risk.Record{Phase: id, Plan: pl, Doc: doc, Lead: st, Root: s.Checkout}
 	if ps.Worker != "" {
 		if sub, err := c.Project.ExistingRun(ps.Worker, ""); err == nil {
@@ -172,7 +190,9 @@ func (c *Coordinator) score(now time.Time, s *state.Store, st state.State, pl pl
 		if covered.IsZero() {
 			covered = at
 		}
-		s.Update(func(st *state.State) error { state.MarkScored(st, id); return nil })
+		if _, err := s.Update(func(st *state.State) error { state.MarkScored(st, id); return nil }); err == nil {
+			remember(&c.rsk.scored, id)
+		}
 		c.riskReset(now, s, "qa", id, "qa:"+id, at, commit, covered)
 		return
 	}
@@ -187,10 +207,21 @@ func (c *Coordinator) score(now time.Time, s *state.Store, st state.State, pl pl
 			total = state.AddRisk(st, pr)
 		}
 		return nil
-	}); err != nil || !scored {
+	}); err != nil {
+		return
+	}
+	if remember(&c.rsk.scored, id); !scored {
 		return
 	}
 	s.Event("risk_scored", map[string]any{"phase": id, "points": pr.Points, "factors": factorLog(factors), "total": total, "git": facts.GitKnown})
+}
+
+// remember adds key to the set *m, made if nil.
+func remember(m *map[string]bool, key string) {
+	if *m == nil {
+		*m = map[string]bool{}
+	}
+	(*m)[key] = true
 }
 
 // factorLog is factors as risk_scored logs them: name → points.
@@ -206,15 +237,21 @@ func factorLog(factors []state.RiskFactor) map[string]int {
 // --qa gate what), once (by), at at on commit, covering the phases done before covered. A hold standing
 // goes with it.
 func (c *Coordinator) riskReset(now time.Time, s *state.Store, kind, what, by string, at time.Time, commit string, covered time.Time) {
+	if c.rsk.cleared[by] { // the run's record of it was lost: nothing is reset again
+		s.Update(func(st *state.State) error { state.MarkCleared(st, by); return nil })
+		return
+	}
 	var reset, held bool
 	var total int
-	s.Update(func(st *state.State) error {
+	if _, err := s.Update(func(st *state.State) error {
 		held = st.RiskHeld()
 		reset = state.ResetRisk(st, by, at, commit, covered)
 		total = st.RiskTotal()
 		return nil
-	})
-	if !reset {
+	}); err != nil {
+		return
+	}
+	if remember(&c.rsk.cleared, by); !reset {
 		return
 	}
 	fields := map[string]any{"by": kind, "total": total}
@@ -262,8 +299,15 @@ func (c *Coordinator) handOver(now time.Time, s *state.Store, r state.Risk, line
 	points := c.Risk.Line(line)
 	lookIn := decide.RiskLookIn(r, line, points)
 	why := c.assessable(s)
+	if last, ok := c.rsk.assessed[line]; why == "" && ok && now.Sub(last) < assessAgain {
+		why = assessRecent
+	}
 	if why == "" {
 		c.rsk.asking.Store(now.UnixNano())
+		if c.rsk.assessed == nil {
+			c.rsk.assessed = map[string]time.Time{}
+		}
+		c.rsk.assessed[line] = now
 	}
 	s.Update(func(st *state.State) error {
 		if st.Risk != nil {
