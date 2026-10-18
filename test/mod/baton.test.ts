@@ -180,6 +180,10 @@ function world(on: any, o: Opts = {}) {
     return { value: o.placed === false ? { isPlaced: false, reason: 'too narrow' } : { isPlaced: true } }
   })
   on('ui.panes', async () => ({ value: w.panes.map((p: any) => ({ ...p, isShown: true, isFocused: false, isPlaced: o.placed !== false })) }))
+  on('ui.close', async ($: any, e: any) => {
+    w.panes = w.panes.filter((p: any) => p.id !== e.id)
+    return { value: undefined }
+  })
   on('ui.render', async ($: any, e: any) => {
     const { Text } = $.ui.resolve(e)
     return Text({ children: ["Claude Code's own"] })
@@ -453,7 +457,7 @@ test('with no plan, or a survey up, the band is not baton\'s', async ($, on) => 
   expect((await survey.find({ type: 'Text' }))?.text).toBe("Claude Code's own")
 })
 
-test('/baton board opens the pane with the board in it, and never reaches the skill or the model', async ($, on) => {
+test('/baton board opens the pane with the board in it, closes it when open, and never reaches the skill or the model', async ($, on) => {
   const w = world(on)
   await start($, w)
   expect(w.commands).toEqual(["/baton-board immediate: baton's board"])
@@ -466,6 +470,9 @@ test('/baton board opens the pane with the board in it, and never reaches the sk
   await w.clock.advance(1000)
   expect(w.boards.filter((a) => !a.includes('--band')).pop()).toEqual(['--width', '50']) // read again while open
   expect(await $.command.run({ command: 'baton-board', args: '' })).toEqual({})
+  expect(w.panes).toEqual([]) // open, it closes
+  expect(await $.command.run({ command: 'baton:baton', args: 'board' })).toEqual({})
+  expect(w.panes).toEqual([{ id: 'baton-board', title: 'baton' }]) // and opens again
   expect(await $.command.run({ command: 'baton:baton', args: 'status' })).toEqual(expect.objectContaining({ text: 'the skill ran' }))
   expect(w.beneath).toEqual(['command baton:baton status'])
 })

@@ -43,8 +43,8 @@ func HandbackKept(phase string) string {
 }
 
 // BoardCommand is the line of baton's board command (/baton-board) in Claude Code's list of commands. It
-// opens the board while Claude works; /baton board, the skill's, waits for the turn to end.
-const BoardCommand = "baton's board: the plan step by step, each phase and the lead (opens while Claude works)"
+// opens the board, or closes it, while Claude works; /baton board, the skill's, waits for the turn to end.
+const BoardCommand = "baton's board: the plan step by step, each phase and the lead (opens or closes, while Claude works)"
 
 // BoardTitle is the title of the board's pane.
 const BoardTitle = "baton"

@@ -4,6 +4,13 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-10-18
+
+### Changed
+
+- **`/baton board` and `/baton-board` toggle the board.** With the board's pane open, the same command closes
+  it, so closing it no longer needs Claude Code's pane keys.
+
 ## [0.8.9] - 2026-10-18
 
 ### Fixed
@@ -1459,7 +1466,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...HEAD
+[0.8.10]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/ozzyfromspace/baton/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/ozzyfromspace/baton/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/ozzyfromspace/baton/compare/v0.8.6...v0.8.7

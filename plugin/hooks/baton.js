@@ -858,11 +858,17 @@ async function pane($, e, next) {
   return Box({ flexDirection: 'column', children: lines.map((l) => Text({ children: [l], wrap: 'truncate-end' })) })
 }
 
-// /baton board, and the board's own command: the pane opens with the board in it, and nothing reaches
-// the model. Where the pane cannot be placed yet, the board is the command's output. Anything else typed
-// to /baton is the skill's.
+// /baton board, and the board's own command: the pane opens with the board in it, or, open, closes, and
+// nothing reaches the model. Where the pane cannot be placed yet, the board is the command's output.
+// Anything else typed to /baton is the skill's.
 async function boardCommand($, e, next) {
   if (!live() || (e.command === SKILL && String(e.args || '').trim().toLowerCase() !== 'board')) return next(e)
+  if (await paneUp($)) {
+    try {
+      await $.ui.close({ id: PANE })
+    } catch (err) {} // a hook kept it open
+    return {}
+  }
   if (!M.paneWidth && e.presentation) M.paneWidth = e.presentation.columns
   const text = await board($, ['--width', String(M.paneWidth || 80)])
   if (text === null) return next(e)

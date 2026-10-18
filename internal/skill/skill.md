@@ -10,7 +10,7 @@ Explain briefly:
 - `/baton start`: hand this session to baton, keeping the conversation. `/baton plan` and `/baton run` do it when they need to.
 - `/baton replan [what to consider]`: restructure the running plan's phases not started yet, so more can run at once, weighing what the user gives; baton checks the result, never changes a phase that started, and records the change with its undo.
 - `/baton status`: where the run stands.
-- `/baton board`: the plan step by step: how each phase stands and what the lead is doing (the line above the prompt says it in brief, and `/baton-board` opens the board while Claude works).
+- `/baton board`: the plan step by step: how each phase stands and what the lead is doing (the line above the prompt says it in brief, and `/baton-board` opens or closes the board while Claude works).
 - `/baton pause`: take the wheel; `/baton run` gives it back.
 - `/baton drop`: drop the run. Its plan is set aside, and baton does nothing more until the next plan.
 - `/baton clean`: end what no live session uses: phase agents, jobs, lanes, worktrees and leftover files (`--dry-run` only says what it would end).
@@ -28,7 +28,7 @@ Run `baton status` and show its output verbatim.
 
 ## board
 
-Run `baton board` and show its output verbatim, in a code block. (Where baton's mod runs, `/baton board` opens the board in a pane instead, and this is never asked of you.)
+Run `baton board` and show its output verbatim, in a code block. (Where baton's mod runs, `/baton board` opens or closes the board's pane instead, and this is never asked of you.)
 
 ## drafts
 
