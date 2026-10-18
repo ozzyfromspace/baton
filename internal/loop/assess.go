@@ -10,6 +10,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/brief"
+	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -23,7 +24,8 @@ import (
 // passed yet, through the mod (Complete). It reads what baton gathers (assessInput: the plan's goal, the
 // phases since the last full check with their notes, deviations, decisions and factors, the records of red
 // verifications finished over, and the diff since the full check's commit), at most decide.RiskInputMax
-// characters, marked as data, and answers in at most decide.RiskAnswerTokens tokens within Timing.RiskWait.
+// characters, marked as data, and answers in at most decide.RiskAnswerTokens tokens within risk_wait
+// (Lines.Wait, 5 minutes unless set).
 // Its first word is its verdict, and its answer a suggestion:
 //
 //   - continue or targeted goes to the lead as a look-in (Risk.Owed, given once it holds a phase), the
@@ -36,9 +38,9 @@ import (
 // host's memory stands for it (riskAsking: a restart). Each crossing logs risk_assessed{verdict, chars} or
 // risk_assess_skipped{why}.
 
-// RiskWait is how long the assessment's answer is waited for at most, unless Timing.RiskWait says
-// otherwise.
-const RiskWait = 2 * time.Minute
+// RiskWait is how long the assessment's answer is waited for at most, unless risk_wait says otherwise
+// (Coordinator.Risk.Wait).
+const RiskWait = config.DefaultRiskWait
 
 // riskLapse is how far past its deadline the ledger's step gives up on an assessment whose call never
 // returned: the call itself gives up at its deadline.
@@ -54,7 +56,7 @@ const (
 
 // riskWait is how long the assessment's answer is waited for.
 func (c *Coordinator) riskWait() time.Duration {
-	if w := c.Lead.Timing.RiskWait; w > 0 {
+	if w := c.Risk.Wait; w > 0 {
 		return w
 	}
 	return RiskWait

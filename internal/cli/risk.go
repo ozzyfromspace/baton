@@ -33,9 +33,9 @@ func printRisk(io IO, st state.State) {
 	fmt.Fprintln(io.Out, decide.RiskLine(st.RiskTotal(), st.RiskHeld()))
 }
 
-// riskLines is the ledger's lines, and the model that assesses it, as baton's config and the environment
-// set them (config.LoadRisk).
+// riskLines is the ledger's lines, and the model that assesses it and how long it is waited for, as baton's
+// config and the environment set them (config.LoadRisk).
 func riskLines(io IO) (risk.Lines, error) {
 	r, err := config.LoadRisk(batonRoot(io), io.Env)
-	return risk.Lines{On: r.On, Review: r.Review, Full: r.Full, Model: r.Model}, err
+	return risk.Lines{On: r.On, Review: r.Review, Full: r.Full, Model: r.Model, Wait: r.Wait}, err
 }

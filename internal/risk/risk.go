@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/ozzyfromspace/baton/internal/decide"
@@ -195,12 +196,14 @@ func NoDeviation(d string) bool {
 
 // Lines are the plan's lines for its ledger (config.Risk: risk, risk_review and risk_full, calibrated by a
 // replay of two real runs, replay_test.go): crossing either hands over to an assessment by Model
-// (risk_model; "" for none: the lead is told the score alone), and On false turns the ledger off.
+// (risk_model; "" for none: the lead is told the score alone), whose answer is waited for Wait at most
+// (risk_wait; 0 for loop.RiskWait), and On false turns the ledger off.
 type Lines struct {
 	On     bool
 	Review int
 	Full   int
 	Model  string
+	Wait   time.Duration
 }
 
 // Crossed is the line a ledger's total crosses, given the highest it crossed since its last reset (prev:

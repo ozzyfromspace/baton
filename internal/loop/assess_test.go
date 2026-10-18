@@ -115,7 +115,7 @@ func TestAssessmentFallsBackToTheScore(t *testing.T) {
 		{name: "the deadline", answer: func(ctx context.Context) (Answer, error) {
 			<-ctx.Done()
 			return Answer{}, &Unanswered{Why: TimedOut, Detail: ctx.Err().Error()}
-		}, setup: func(x *assessRig) { x.c.Lead.Timing.RiskWait = 50 * time.Millisecond }, why: TimedOut},
+		}, setup: func(x *assessRig) { x.c.Risk.Wait = 50 * time.Millisecond }, why: TimedOut},
 		{name: "a host that is gone", answer: says("continue."), after: func(x *assessRig) {
 			x.update(func(st *state.State) {
 				st.Risk.Asking, st.Risk.Owed = x.now, decide.RiskLookIn(*st.Risk, state.RiskReview, 10)
@@ -184,8 +184,8 @@ func TestAssessmentWhileItRuns(t *testing.T) {
 	}
 }
 
-// The assessment is asked as the plan says: opus, at most 800 tokens, a 2-minute deadline, baton's system
-// prompt, and an input of at most 30k characters with the phase's factors, notes and changes marked as data.
+// The assessment is asked as the plan says: opus, at most 800 tokens, a deadline of risk_wait (5 minutes
+// unless set), baton's system prompt, and an input of at most 30k characters with the phase's factors, notes and changes marked as data.
 func TestAssessmentInput(t *testing.T) {
 	x := newAssessRig(t, says("continue."))
 	x.cross()
