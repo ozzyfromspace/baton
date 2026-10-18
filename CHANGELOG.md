@@ -147,6 +147,16 @@ advisor and the risk assessment run only where baton's mod runs.
   Compose containers left in the worktrees of runs it does not leave alone.
 
 ### Fixed
+- **A lead that moves its checkout to a branch of its own no longer holds every landing.** A real run's plan had
+  its lead make a session branch at approval, the moment baton attached: five finished phases waited an hour to
+  land, the lead's model was told nothing, agents started after the switch lacked the lead's commits, and the
+  lead's `baton done` of the phases it then merged by hand was refused until it edited baton's state by hand. The
+  run's branch now follows the checkout to a branch that holds it (`run_branch_followed`), the lead's model is told
+  at its next hook, and new agents start from there. On a branch that lacks the run's commits, or a detached HEAD,
+  the lead's model is told once a branch to merge the run's branch in (never a rebase) or switch back. The lead's
+  `baton done` of a phase merged by hand follows first, counts the phase's own commits as its branch was when it
+  finished (not what baton's merge of the run's branch brought it), and mentions a snapshot only when its agent
+  left uncommitted work.
 - **The band's step no longer lags behind a late landing.** A phase verifying or landing now counts as through,
   so a plan whose last phases still land no longer shows "step 1/18".
 - **"Nothing is needed from you" no longer reads as an answer to the model's own question.** A wait on a gate,

@@ -115,7 +115,7 @@ running plan already has stand as they are.
   baton appends the phase's record (its heading, when, its `baton done` notes, its commits) in the lead's checkout,
   and commits that file alone (`git commit --only`): a new commit of the one path, so the lead's own work, staged or
   not, stays as it was. It holds the landing lock and waits for the lead's tool calls as a landing does, and a
-  record file with uncommitted changes, or a checkout off the run's branch, holds it until that clears. It is the one
+  record file with uncommitted changes, or a checkout on a branch the run cannot follow, holds it until that clears. It is the one
   commit baton makes into a project, and only for a plan that names the file: one progress file every phase edits
   makes their landings conflict, and this gives a plan one that none of them does.
 - **Out of Claude Code's way.** After every compaction, Claude Code adds the session's plan-mode file
@@ -534,8 +534,10 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   will check them together ([Gates](#landings-verified-again-sized-to-the-change)). Then the run's branch is fast-forwarded to it with `git merge --ff-only`
   between the lead's tool calls, never over a file the lead has uncommitted. The lead is told what moved, and never
   to rewrite it. A landing held for 10 minutes by the lead's uncommitted changes to the same files tells the lead's
-  model to commit those files by path; one held because the checkout is off the run's branch is pushed to the human
-  once.
+  model to commit those files by path. When the lead's checkout moved to another branch that holds the run's (a
+  session branch made at approval), the run's branch follows it, and the lead's model is told; one held because the
+  checkout is on a branch that lacks the run's commits, or on a detached HEAD, is pushed to the human once, and the
+  lead's model is told once a branch to merge the run's branch in, never rebase, or switch back.
 - **Landed some other way.** When every commit of a phase's branch is on the run's branch already (merged by hand),
   the lead's `baton done <phase>` records it landed, as a decision without the human with its undo, and the host
   retires the agent, saving what it had not committed as a snapshot first. Otherwise the refusal says how to finish
