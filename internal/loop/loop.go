@@ -382,7 +382,7 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // human reading its last answer is not interrupted. While a newer baton waits, no phase agent starts
 // (Coordinator.pending); one that is idle when the restart comes is taken up again after it.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
-	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.Run.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
+	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
 	}
 	switch st.Run.Compaction.Status {

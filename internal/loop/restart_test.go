@@ -227,3 +227,28 @@ func TestLeavingBatonStartsNoMoreWorkers(t *testing.T) {
 		t.Errorf("%d spawns; P1's worker %+v", len(x.spawns()), w)
 	}
 }
+
+// The landing that makes a boundary does not hold the restart there: the lead, idle while the phase agent
+// worked, last stopped with that agent at work, and its Stop's list still names it once its worker landed.
+func TestALandedAgentStillListedDoesNotHoldARestart(t *testing.T) {
+	for _, c := range []struct {
+		status  string
+		restart bool
+	}{
+		{state.WorkerLanded, true},
+		{state.WorkerFailed, true},
+		{state.WorkerWorking, false},
+	} {
+		t.Run(c.status, func(t *testing.T) {
+			r, _ := upgradeRig(t)
+			r.set(func(st *state.State) {
+				st.Workers = []state.Worker{{Phase: "P1", Ref: state.WorkerRef("r1", "P1"), AgentID: "agent-p1", Status: c.status}}
+				st.Run.Background = []state.Task{{ID: "agent-p1", Type: "subagent", AgentType: state.PhaseAgent}}
+			})
+			r.tick(time.Second)
+			if r.restarted() != c.restart {
+				t.Fatalf("restarted %v, want %v", r.restarted(), c.restart)
+			}
+		})
+	}
+}

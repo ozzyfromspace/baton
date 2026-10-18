@@ -535,3 +535,33 @@ func TestAbandoned(t *testing.T) {
 		})
 	}
 }
+
+// The lead's last Stop lists the phase agents at work then; one whose worker has since landed or failed has
+// ended, whatever that list still says, and one no worker holds, or a live worker holds, may be at work.
+func TestPhaseAgentsLeavesOutTheEnded(t *testing.T) {
+	held := func(id, status string) Worker {
+		w := worker("P1")
+		w.AgentID, w.Status = id, status
+		return w
+	}
+	for _, c := range []struct {
+		name    string
+		workers []Worker
+		want    int
+	}{
+		{"its worker at work", []Worker{held("a1", WorkerWorking)}, 1},
+		{"its work landing", []Worker{held("a1", WorkerLanding)}, 1},
+		{"its work landed", []Worker{held("a1", WorkerLanded)}, 0},
+		{"its worker failed", []Worker{held("a1", WorkerFailed)}, 0},
+		{"no worker holds it", []Worker{held("a2", WorkerLanded)}, 1},
+		{"a failed entry and a live one hold it", []Worker{held("a1", WorkerFailed), held("a1", WorkerWorking)}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := State{Workers: c.workers}
+			st.Run.Background = []Task{{ID: "a1", Type: "subagent", AgentType: PhaseAgent}, {ID: "b1", Type: "subagent"}}
+			if got := st.PhaseAgents(); len(got) != c.want {
+				t.Errorf("PhaseAgents() = %+v, want %d", got, c.want)
+			}
+		})
+	}
+}

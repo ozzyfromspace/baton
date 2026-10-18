@@ -273,6 +273,34 @@ func (st State) LiveWorkers() []Worker {
 	return out
 }
 
+// PhaseAgents reports baton's phase agents among the background work that may still be at work: they live
+// in the session's claude, and end with it. The lead's last Stop reported that work, and a lead idle while
+// an agent finished still lists it, so an agent whose worker has since landed or failed has ended: in a
+// real run one held the restart at the very boundary its landing made (v0.8.12).
+func (st State) PhaseAgents() []Task {
+	var out []Task
+	for _, t := range st.Run.Background {
+		if t.AgentType == PhaseAgent && !st.agentEnded(t.ID) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// agentEnded reports agent id as one of the roster's whose worker landed or failed, and of no live worker.
+func (st State) agentEnded(id string) bool {
+	ended := false
+	for _, w := range st.Workers {
+		if w.AgentID == id {
+			if w.Live() {
+				return false
+			}
+			ended = true
+		}
+	}
+	return ended
+}
+
 // Unretired lists the workers of the plan attached now whose work landed and whom nobody began to retire
 // yet: their agent, worktree and branch are still to go (loop.RetireWorker). The merge queue retires each
 // as it lands it; one the lead's `baton done` recorded as landed waits for its run's host to.

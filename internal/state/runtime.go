@@ -568,18 +568,6 @@ func (r Runtime) BusyBackground() []Task {
 	return out
 }
 
-// PhaseAgents reports baton's phase agents among the background work: they live in the session's claude,
-// and end with it.
-func (r Runtime) PhaseAgents() []Task {
-	var out []Task
-	for _, t := range r.Background {
-		if t.AgentType == PhaseAgent {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // Untold reports whether bg holds work the model has not been told about: work whose start baton did not
 // see (a subagent of its model's started it, or the call's result named no task) and that no stop was
 // refused over since.
