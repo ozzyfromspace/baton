@@ -80,13 +80,13 @@ func (c *Coordinator) riskLedger(v host.View, s *state.Store, st state.State) {
 }
 
 // riskDue reports something for the ledger's step: a phase done and not scored, a full check passed that has
-// not reset it, a look-in owed to the lead, or a hold to tell of or lift.
+// not reset it, a look-in owed to a lead that holds a phase, or a hold to tell of or lift.
 func riskDue(st state.State, pl plan.Plan) bool {
 	if len(st.Unscored(pl)) > 0 || len(passedFull(st)) > 0 {
 		return true
 	}
 	r := st.Risk
-	return r != nil && (r.Owed != "" || !r.Held.IsZero())
+	return r != nil && (r.Owed != "" && st.InHand() || !r.Held.IsZero())
 }
 
 // passedFull lists the lead's full checks (--qa gates) that passed and have not reset the ledger.
@@ -237,6 +237,9 @@ func (c *Coordinator) riskReset(now time.Time, s *state.Store, kind, what, by st
 
 // riskCrossing hands over once the ledger's total crosses one of the plan's lines (risk.Lines.Crossed).
 func (c *Coordinator) riskCrossing(now time.Time, s *state.Store) {
+	if st, err := s.Load(); err != nil || st.Risk == nil || c.Risk.Crossed(st.Risk.Crossed, st.Risk.Total) == "" {
+		return // read first: a step with nothing crossed takes no lock
+	}
 	var line string
 	var r state.Risk
 	s.Update(func(st *state.State) error {
@@ -270,6 +273,9 @@ func (c *Coordinator) handOver(now time.Time, s *state.Store, r state.Risk, line
 
 // riskOwed gives the lead the look-in owed to it, once it holds a phase.
 func (c *Coordinator) riskOwed(now time.Time, s *state.Store) {
+	if st, err := s.Load(); err != nil || st.Risk == nil || st.Risk.Owed == "" || !st.InHand() {
+		return
+	}
 	told := false
 	s.Update(func(st *state.State) error {
 		if r := st.Risk; r != nil && r.Owed != "" && st.InHand() {
