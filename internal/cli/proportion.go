@@ -213,7 +213,7 @@ func outsideScripts(command string, s *state.Store, env func(string) string) []s
 		switch {
 		case strings.HasPrefix(full, "$") || strings.HasPrefix(full, "~"):
 			continue
-		case !filepath.IsAbs(full):
+		case !filepath.IsAbs(full) && !strings.HasPrefix(filepath.ToSlash(full), "/"): // rooted, with no drive, on Windows
 			if !filepath.IsLocal(full) {
 				out = append(out, p)
 			}
@@ -230,6 +230,7 @@ func outsideScripts(command string, s *state.Store, env func(string) string) []s
 
 // systemProgram reports a path among the system's programs or in a bin folder.
 func systemProgram(p string) bool {
+	p = filepath.ToSlash(p)
 	for _, dir := range []string{"/usr/", "/bin/", "/sbin/", "/opt/", "/nix/", "/System/", "/Library/"} {
 		if strings.HasPrefix(p, dir) {
 			return true
