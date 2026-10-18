@@ -28,7 +28,8 @@ const GateRules = "Test the way a human who feels time does: scoped checks while
 	"6. Timings on a shared machine are warnings; bytes and counts gate.\n" +
 	"7. No file many phases edit: records per phase, or the plan's `Record:` file.\n" +
 	"8. Long checks go through `baton verify` or `baton await`, never a background shell.\n" +
-	"9. Push to CI early in the QA phase, batching fixes per round trip."
+	"9. Push to CI early in the QA phase, batching fixes per round trip.\n" +
+	"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`."
 
 // GateCheck is the part of baton's one turn-back at a plan's first ExitPlanMode for every plan, beside
 // CompetingDirectives and, for a plan that is mostly a chain, ShapeCheck: the gate rules, the plan's QA

@@ -30,11 +30,11 @@ func TestNoPollerForBackgroundWork(t *testing.T) {
 }
 
 // The skill gives the gate protocol in one sentence: a long gate is a committed script of baton stages,
-// which stops at its first failure, and after a red, baton stop ends it and --failed reruns only what
-// failed.
+// which stops at its first failure and tears down what it starts, and after a red, baton stop ends it and
+// --failed reruns only what failed.
 func TestLongGatesAreStagedAndRerunByWhatFailed(t *testing.T) {
 	section := longGates(t)
-	if want := "- Build a long gate as a committed script of `baton stage <name> -- <command>` steps, which streams each stage and stops at the first failure; " +
+	if want := "- Build a long gate as a committed script of `baton stage <name> -- <command>` steps, which streams each stage, stops at the first failure and tears down what it starts (`trap … EXIT`); " +
 		"when a gate fails, end it with `baton stop <job>` and rerun only what failed with `baton verify --failed`, never the full suite."; !strings.Contains(section, want) {
 		t.Errorf("the section lacks %q:\n%s", want, section)
 	}

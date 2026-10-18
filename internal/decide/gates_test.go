@@ -30,7 +30,7 @@ func gatePlan(t *testing.T, heads ...string) plan.Plan {
 	return pl
 }
 
-// The gate rules open with the frame, a human who feels time, and hold the nine rules in order.
+// The gate rules open with the frame, a human who feels time, and hold the ten rules in order.
 func TestGateRulesWords(t *testing.T) {
 	if !strings.HasPrefix(GateRules, "Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end.") {
 		t.Errorf("the rules open with %q", GateRules[:80])
@@ -48,6 +48,7 @@ func TestGateRulesWords(t *testing.T) {
 		"7. No file many phases edit: records per phase, or the plan's `Record:` file.",
 		"8. Long checks go through `baton verify` or `baton await`, never a background shell.",
 		"9. Push to CI early in the QA phase, batching fixes per round trip.",
+		"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`.",
 	} {
 		i := strings.Index(GateRules[at:], want)
 		if i < 0 {
