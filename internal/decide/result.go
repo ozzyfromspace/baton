@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/lane"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -80,19 +81,27 @@ type Log struct {
 	// Env is what the log of a red gate says of its environment, when it shows an environment failure and
 	// no test failure (lane.Environment); nil otherwise.
 	Env *Env
+	// Failed are the tests the log of a red gate says failed (lane.FailureIDs), at most lane.MaxFailures,
+	// and FailedMore how many more; nil for any other job.
+	Failed     []lane.FailedTest
+	FailedMore int
+	// Cost is what the job's phase has spent in gates so far (state.GateCost), for a gate.
+	Cost state.Cost
 }
 
-// JobResult is a finished job's result for the model: what ran and how it ended, the lines of its log that
-// report a failure before its end, the end of its log, and what to do about it. others are the phases red
-// now (state.Red); those of other phases are named, so the model leaves failures in their area to them,
-// and the job's own phase's red gate is named when a gate of another command passed, since that does not
-// clear it. qa is the QA phase ahead of the job's phase while the plan aggregates its heavy checks there
-// (plan.QAAhead, aggregate_qa), "" otherwise: a red result then may be other phases' work in progress,
-// which only the QA phase need make whole.
+// JobResult is a finished job's result for the model: what ran and how it ended, for a red gate the tests
+// that failed and the rerun of only them that clears it (failedTests), the lines of its log that report a
+// failure before its end, the end of its log, and what to do about it; a gate's ends with what its phase's
+// gates cost (spent). others are the phases red now (state.Red); those of other phases are named, so the
+// model leaves failures in their area to them, and the job's own phase's red gate is named when a gate of
+// another command passed, since that does not clear it. qa is the QA phase ahead of the job's phase while
+// the plan aggregates its heavy checks there (plan.QAAhead, aggregate_qa), "" otherwise: a red result then
+// may be other phases' work in progress, which only the QA phase need make whole.
 func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
 	b.WriteString(rerunRan(j, log.Rerun))
+	b.WriteString(failedTests(j, log))
 	if len(log.Failures) > 0 && j.Status != state.JobPassed {
 		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))
 		if log.More > 0 {
@@ -132,6 +141,10 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		if j.Status == state.JobTimeout {
 			b.WriteString("It ran past verify_timeout, so baton stopped it: that counts as a failure. ")
 		}
+		if narrowable(j, log) {
+			b.WriteString(narrowedFix(j))
+			break
+		}
 		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and %s: %s "+
 			"`baton done %s` is refused until then.", again(j, true), gateRule(j), j.Phase)
 	}
@@ -140,6 +153,9 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	}
 	if red := RedPhases(others, j.Phase); red != "" {
 		b.WriteString("\n" + red)
+	}
+	if s := spent(j, log.Cost); s != "" {
+		b.WriteString("\n" + s)
 	}
 	return b.String()
 }

@@ -57,7 +57,11 @@ func TestAResultReachesTheModelMidTurn(t *testing.T) {
 	}
 	out := bash("")
 	ctx := feedback(out)
-	for _, want := range []string{resultHead, "--- FAIL: TestRanking\nFAIL", "Fix what failed (quick checks in place help), commit, and verify again with the same command, `make test`"} {
+	for _, want := range []string{resultHead, "--- FAIL: TestRanking\nFAIL",
+		"\nFailed (1): TestRanking.\nRerun only these: `go test -run '^(TestRanking)$' ./...`, inside the gate's own way of running it (make, docker compose), " +
+			"as `baton verify --failed -- <that command>`, which clears this gate when it passes.\n",
+		"Fix what failed (quick checks in place help), commit, and rerun only what failed, as above",
+		"\nThis gate spends 12m of the human's time; to you it is one tool call."} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("result lacks %q:\n%s", want, ctx)
 		}
