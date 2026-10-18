@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/host"
+	"github.com/ozzyfromspace/baton/internal/risk"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -84,6 +85,10 @@ type Coordinator struct {
 	// AbandonAfter is how long another run must have been quiet before its workers count as abandoned
 	// (0: state.AbandonAfter; tests shorten it).
 	AbandonAfter time.Duration
+	// Risk is the plan's lines for its risk ledger (config.Risk; off unless set), and rsk the ledger step's
+	// own state (risk.go).
+	Risk risk.Lines
+	rsk  ledger
 
 	// retireStep and resumeStep are called after each step of retiring and resuming a worker (tests).
 	retireStep, resumeStep func(step string)
@@ -136,6 +141,7 @@ func (c *Coordinator) duties(v host.View) {
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
 	c.lookIns(v, s, st)
+	c.riskLedger(v, s, st)
 }
 
 // worker is a phase agent this host asked baton's mod to start in the lead's claude: its roster entry, its

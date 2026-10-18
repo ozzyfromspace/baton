@@ -76,13 +76,13 @@ func (w Words) Reporting() string {
 	if w.Git {
 		safePoint = "work committed"
 	}
-	done := "when the current phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — baton then compacts the context and starts the next phase with a fresh brief. "
+	done := "when the current phase is " + w.complete() + ", run `" + DoneCall + "` and end your turn — baton then compacts the context and starts the next phase with a fresh brief. "
 	blocked := ", and end your turn: " + lookAgainAfter + ". "
 	unattended := "The plan runs unattended, so do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. " +
 		"A question baton gives you to put to the human is the exception: ask it as given. "
 	pause := "(If the human wants to talk instead of running the plan, they can run /baton pause.)"
 	if w.Worker {
-		done = "when your phase is " + w.complete() + ", run `baton done <phase> --notes \"<what later phases need to know>\"` and end your turn — " + landing + " " + LandCheckHow + " "
+		done = "when your phase is " + w.complete() + ", run `" + DoneCall + "` and end your turn — " + landing + " " + LandCheckHow + " "
 		blocked = ", and end your turn: it stops only your phase, and baton asks the human; " + lookAgainAfter + ". "
 		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
 		pause = ""

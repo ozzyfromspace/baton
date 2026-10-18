@@ -29,6 +29,16 @@ type Board struct {
 	Serial string    `json:"serial,omitempty"`
 	Limit  *Limit    `json:"limit,omitempty"`
 	At     time.Time `json:"at"`
+
+	// Risk is the run's risk ledger, once it has scored a phase (state.Risk).
+	Risk *Risk `json:"risk,omitempty"`
+}
+
+// Risk is the risk ledger as the board shows it: its points since the last full check, and whether new
+// phases are held for one.
+type Risk struct {
+	Total int  `json:"total"`
+	Held  bool `json:"held,omitempty"`
 }
 
 // Step is one step of the plan: phases none of which waits for another, in document order.
@@ -99,6 +109,9 @@ func Build(in Input) Board {
 		}
 	}
 	b.Lead = lead(st, now)
+	if r := st.Risk; r != nil && (len(r.Scored) > 0 || st.RiskHeld()) {
+		b.Risk = &Risk{Total: r.Total, Held: st.RiskHeld()}
+	}
 	return b
 }
 

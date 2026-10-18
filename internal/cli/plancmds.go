@@ -27,7 +27,7 @@ import (
 func init() {
 	register("attach", "attach a plan document: --suggest shows the phases, --suggested or --spec '<json>' attaches them", leadOnly("attach", cmdAttach))
 	register("status", "show the attached plan and where the run is (--json for machines)", cmdStatus)
-	register("done", "mark the current phase finished (verifying while its job runs), or a worker's phase whose work is on the run's branch already: done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND]", cmdDone)
+	register("done", "mark the current phase finished (verifying while its job runs), or a worker's phase whose work is on the run's branch already: done <phase> [--notes TEXT] [--deviation \"<how it departed from the plan, or none>\"] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND]", cmdDone)
 	register("blocked", "stop until the human answers, or for 30 minutes before looking again, when every way forward is irreversible: blocked <reason> --tried TEXT [--keep-dirty WHY]", cmdBlocked)
 	register("checkpoint", "ask for a mid-phase compaction at this safe point [--notes TEXT]", cmdCheckpoint)
 	register("run", "run this session's plan: resumes it if paused or blocked; says when a plan file needs attaching: run [plan file]", leadOnly("run", cmdRun))
@@ -443,6 +443,7 @@ func cmdStatus(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "longest chain: %d of %d phases (%s)\n", k, len(pl.Phases), strings.Join(chain, " → "))
 	}
 	printSaved(io, st)
+	printRisk(io, st)
 	printReplans(io, s, st)
 	if st.Blocked != nil {
 		fmt.Fprintf(io.Out, "blocked: %s\n", st.Blocked.Reason)
@@ -841,9 +842,9 @@ func contextLine(cu state.ContextUse, io IO) string {
 }
 
 func cmdDone(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"notes", "keep-dirty", "despite-red", "land-check"}, []string{"force"})
+	p, err := parseArgs(args, []string{"notes", "keep-dirty", "despite-red", "land-check", "deviation"}, []string{"force"})
 	if err != nil || len(p.pos) != 1 {
-		return fail(io, "usage: baton done <phase> [--notes TEXT] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND] [--force]%s", errSuffix(err))
+		return fail(io, "usage: baton done <phase> [--notes TEXT] [%s] [--keep-dirty WHY] [--despite-red WHY] [--land-check COMMAND] [--force]%s", decide.DeviationHelp, errSuffix(err))
 	}
 	id := p.pos[0]
 	s, pl, ok := storeAndPlan(io)
@@ -878,6 +879,7 @@ func cmdDone(args []string, io IO) int {
 	}
 	despite := decide.Sanitize(p.vals["despite-red"])
 	landCheck := landCheckOf(s, p.vals["land-check"])
+	deviation := decide.Sanitize(p.vals["deviation"])
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var next, startHead string
 	var note *state.Decision
@@ -926,6 +928,7 @@ func cmdDone(args []string, io IO) int {
 			return err
 		}
 		recordLandCheck(st, id, landCheck)
+		recordDone(st, id, deviation, red) // the risk ledger's (risk.go)
 		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying {
 			if on := st.WaitsOn(id); len(on) > 0 {
 				st.Run.Announce = append(st.Run.Announce, decide.VerifyingOn(id, on))
@@ -961,6 +964,9 @@ func cmdDone(args []string, io IO) int {
 	}
 	if landCheck != "" {
 		done["land_check"] = landCheck
+	}
+	if deviation != "" {
+		done["deviation"] = deviation
 	}
 	if verifying {
 		done["job"] = on[len(on)-1].ID

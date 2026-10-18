@@ -597,6 +597,7 @@ func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, wh
 			x.Status, x.Since, x.Merge = state.WorkerWorking, now, nil
 			if len(paths) > 0 {
 				st.Conflicts++
+				state.CountReturned(st, e.Phase) // the risk ledger's (risk.go)
 			}
 		}
 		return nil

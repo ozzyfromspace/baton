@@ -112,6 +112,14 @@ func queueJob(args []string, io IO, kind string) int {
 				plural(len(work.fresh), "it", "them"), fileList(work.fresh))
 		}
 	}
+	qaAsked := false // the QA question went with baton's questions about this gate, so it is not put again
+	if kind == state.JobVerify && re == nil {
+		a := questionGate(io, s, st, pl, phase, command, commit, qa)
+		if len(a.questions) > 0 {
+			return a.refuse(io, s, phase, command, commit)
+		}
+		qaAsked = a.qaAsked
+	}
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var queued state.Job
 	var replaced, clash, beside, red *state.Job
@@ -245,7 +253,7 @@ func queueJob(args []string, io IO, kind string) int {
 	// baton cannot tell a focused check from a full one: it asks, once per job, and the model decides. A wait
 	// on CI is often a full check in disguise.
 	ask := ""
-	if next := qaAhead(io, pl, phase); qa == "" && next != "" {
+	if next := qaAhead(io, pl, phase); qa == "" && next != "" && !qaAsked {
 		ask = "baton: " + decide.QAAsk(kind, phase, next)
 	}
 

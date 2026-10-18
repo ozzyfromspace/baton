@@ -203,6 +203,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
 		Advisor: loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)}} // a small model's note on each look-in (advisor, advisor_model)
+	if coordinator.Risk, err = riskLines(io); err != nil { // the risk ledger's lines (risk, risk_review, risk_full)
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	if workers > 0 { // with auto, a machine too small for a worker beside the lead runs none
 		// Phases go ahead beside the lead as agents baton's mod starts in its claude.
 		coordinator.Fleet = &loop.Fleet{Max: workers, UsageMax: usageMax, MaxAuto: escalation.MaxAuto, Ramp: agentRamp(io), Machine: machineFor(io),
