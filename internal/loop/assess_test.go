@@ -119,11 +119,13 @@ func TestAssessmentFallsBackToTheScore(t *testing.T) {
 		{name: "a host that is gone", answer: says("continue."), after: func(x *assessRig) {
 			x.update(func(st *state.State) {
 				st.Risk.Asking, st.Risk.Owed = x.now, decide.RiskLookIn(*st.Risk, state.RiskReview, 10)
+				st.Inbox = nil // the answer may have reached the lead in the step that crossed
 			})
 		}, why: assessRestart},
 		{name: "a call that never returned", answer: says("continue."), after: func(x *assessRig) {
 			x.update(func(st *state.State) {
 				st.Risk.Asking, st.Risk.Owed = x.now, decide.RiskLookIn(*st.Risk, state.RiskReview, 10)
+				st.Inbox = nil // the answer may have reached the lead in the step that crossed
 			})
 			x.c.rsk.asking.Store(x.now.UnixNano())
 			x.step(x.now.Add(RiskWait)) // within riskLapse past its deadline: still waited for
