@@ -138,6 +138,9 @@ type Runtime struct {
 	// GatesQuestioned lists the gates baton questioned as they were queued, out of proportion to the change
 	// (each a command and the commit it would run on, once each): the same call again goes through.
 	GatesQuestioned []string `json:"gates_questioned,omitempty"`
+	// LeftoverAsked lists the phases whose `baton done` baton refused once over what they left running
+	// (AskLeftovers): the same call again goes through.
+	LeftoverAsked []string `json:"leftover_asked,omitempty"`
 	// DirectivesPending is the plan file asked about whose ExitPlanMode has not come again yet: a stop in
 	// plan mode before it is turned back once, so the plan still reaches the human.
 	DirectivesPending string      `json:"directives_pending,omitempty"`
