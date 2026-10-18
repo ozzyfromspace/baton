@@ -1,0 +1,142 @@
+# Gates: where two runs' hours went
+
+**In short:** in two real runs, checks that could not change what shipped took more of the wall clock than
+anything else. baton's own v0.8.6 plan ran 12h19m, and its lead gated for 10.5h of them. About 3 to 4 of those
+hours were full end-to-end reruns: after a test-only fix, on long past a first failure, and a minute before the
+next full run began. "A red gate stands until the same command passes" (v0.8.6) turned a flaky suite into a
+treadmill. A real 57-phase run had spent 43.7h of gate time in 59.5h of wall clock by phase 42, and 58% of its
+132 gates were red. QA passes ran past failures they already knew of and re-ran stages that had passed.
+Gates in the lead's checkout held landings for 9.4h. Gates went red on their environment before any test ran,
+and landings were verified again on a single lane, 17 of 18 green. A human who feels time runs scoped checks
+while working and the big check once, at the end. v0.8.7 steers plans, phases and gates toward that.
+
+Studied 2026-10-17 from the runs' records (`state.json`, `events.jsonl`, job logs, read-only), for the two runs
+below. The second is a private project: only its numbers are given here.
+
+The questions:
+
+- Where did each run's wall-clock time go, gate by gate?
+- Which of those hours could have changed nothing that shipped, and what would a human have done instead?
+- What did baton lack to see it: in its records, in what it tells the model, and in what it lets a model do
+  unseen?
+
+## baton's v0.8.6 plan (12h19m)
+
+The lead's jobs, from the plan's record (`gen-3`):
+
+| Job | Phase | Command | Minutes | Result |
+|---|---|---|---|---|
+| j9 | P7 | `go test ./internal/loop ./internal/hooks ./internal/cli` | 18.9 | red |
+| j10 | P7 | the same | 27.8 | green |
+| j11 | P11 (QA) | the full e2e suite (76 Haiku scenarios) | 92.5 | red |
+| j12 | P11 (QA) | the full e2e suite | 88.3 | green |
+| j13 | P17 | one scenario, most of it waiting for the lane j12 held | 51.9 | green |
+| j14 | P17 (QA) | the full e2e suite | 95.0 | red |
+| j15 | P17 | two scenarios | 5.6 | red |
+| j16 | P17 | the same two, twice | 1.3 | green |
+| j17 | P17 | the full e2e suite | 32.5 | red |
+| j18 | P17 | the full e2e suite | 90.4 | red |
+| j19 | P17 | the full e2e suite | 91.1 | red |
+| j20–j22 | P13 | `gh run watch` (CI) | 35.2 | red, then green |
+
+- **Six full e2e runs** of about 90 minutes each; of the five that ran to the end, one was clean (j12). The
+  scenarios drive real Haiku sessions, and a few of 76 flake on any run.
+- **j12 re-ran the whole suite after a test-only fix,** and P17's own full run (j14) started a minute after it
+  ended.
+- **j17 went red at minute 8 and ran on for 24 more minutes.** Nothing told the model of the failure until the
+  job ended.
+- **j19 re-ran 73 scenarios that had passed on the same shipped code,** after edits to two test files.
+- **j13 ended 1.6 minutes after j12:** its 51.9 minutes, and the timeout it ran under, counted the wait for the
+  lane j12 held, as every job's did.
+- **The rule behind it.** In v0.8.4 a model re-ran only the failure it read in a log's tail, and a regression
+  shipped that the full gate had caught; v0.8.6 answered that with "a red gate stands until the same command
+  passes". Against a flaky suite, that means a full run after every fix. The human's "ship now" ended it.
+
+About 3 to 4 hours of the 10.5 could not have changed what shipped.
+
+## A real 57-phase run (59.5h at phase 42)
+
+132 gates, 43.7h of gate time, 58% red.
+
+- **QA passes ran past known failures and re-ran what had passed.** One QA phase took four passes, 7h35m.
+  Another's gate failed its lint at minute 2 and ran on for 2.5 hours.
+- **Gates in the lead's checkout held landings.** `--here` gates held phase agents' landings for 9.4h, with about
+  2h more still under way, and then everything landed at once and conflicted.
+- **14 or more reds before any test ran.** The lane's stack collided with the developer's: host ports the dev
+  stack already held, stale containers and images, a lane database another phase had migrated. At least 8 agents found
+  the same fix again (an overlay with no published ports).
+- **Landing re-verification:** 18 runs took 5.5h on the project's single lane, and 17 were green.
+- **Timings gated on a loaded machine.** One performance phase went red 7 times in a row, on routes it never
+  touched.
+- **Shared files:** one file every phase edited came back in 11 landing conflicts (see the shape rules' "split by
+  files").
+- **The lead's own background shell tasks:** long checks run as background shell tasks left the lead idle for
+  8.4h on work baton could not see, and the lead polled them in loops.
+- **What baton's records lacked:** when a job got its lane (a job's seconds, and its timeout, included the wait),
+  and what background tasks ran and for how long.
+- **Already fixed by v0.8.6:** checkpoint churn (one phase's agent restarted 23 times; the lead checkpointed 18
+  times mid-phase on v0.8.5, and 2 times in 15 hours on v0.8.6), pollers' wording, and lock contention.
+
+## What a human does
+
+A human who feels time tests in scoped, partial runs that take seconds or minutes while working, and runs the big
+aggregate check once, at the very end, when presumably done. Not done? Fix it in real time, rerun what failed,
+ship. Models run long suites, full test runs and lints far more often, because they don't feel time pass. Every
+case above is one a human would have cut short: a gate stopped at its first red, a rerun of the two failed
+scenarios, a landing that touches nothing new let through to the QA phase, a port collision fixed once for
+everyone.
+
+## What v0.8.7 does with it
+
+| Finding | v0.8.7 |
+|---|---|
+| A failure known at minute 8 or 2, told at the end | **The gate protocol.** `baton stage <name> -- <command>` marks each stage of a gate script in its log (`::baton stage` lines) and records it in the job's stages file; `::baton fail <id>` lines, or a runner preset (`--runner go`, `--runner pytest`), name what failed. A gate stops at its first failed stage unless that stage says `--keep-going`. The runner reads the markers as they are printed (`stage_finished`, `job_failing`), and the gate's owner is told of the first failure at once, as a look-in: stop it (`baton stop <job>`) and rerun what failed, or let it finish to collect every failure. baton never kills a gate for a failure line. |
+| A full rerun after every fix | **`baton verify --failed`** reruns the red gate's failed and skipped stages, each narrowed to its failure ids where known, and carries the stages that passed (naming the commit they passed on and the files changed since). Its pass clears the red gate (`Job.Reruns`), so a flaky suite needs one full run and then minutes. The failure set comes from baton's record, never from a model's reading of a tail. |
+| Full runs repeated on nearly the same code; a long gate before the QA phase | **Questioned once as it is queued** (`gate_questioned`): a repeat of a gate that took 10 minutes or more, with the files changed since and the narrower check; a script outside the repository; a long gate not built from stages; a long gate before the plan's QA phase, with the time its last run cost. The same call again queues it. |
+| Long checks as background shell tasks | A check started as a background shell task is pointed to `baton verify` once (`background_questioned`), and each background task's command and how long it ran are recorded (`background_told`, `background_ended`). |
+| Gates red on their environment | A red gate whose log shows a known environment failure (a port in use, the Docker daemon out of reach, an unhealthy container, a full disk, a registry's rate limit, a host name that does not resolve) and no test failure says so; `baton env "<what it needs>"` records a fact every phase's brief carries. |
+| Landings verified again, 17 of 18 green | **Re-verification sized to the change:** a landing that shares no file with what landed since its gate (Markdown aside), with a QA phase not started ahead and `aggregate_qa` on, lands unverified for the QA phase to check (`reverify_skipped`); otherwise it runs the phase's `--land-check`, or its last passing gate. |
+| Landings held behind `--here` gates for hours | Look-ins: landings waiting 20 minutes behind a gate in the lead's checkout are told to the lead; `verify --here` names the landings it will hold as it is queued. |
+| A gate running far past its history | Look-ins at 1.5 times its command's slowest earlier pass (and 15 minutes more) and at 80% of `verify_timeout`, with how long its log has been still. |
+| The lane wait counted as the gate's time | `verify_timeout` counts from when the job gets its lane (`lane_acquired`), and a result says both: "passed after 12m, 31m waiting for a lane". |
+| One file every phase edits | A plan may name a record file (`Record: <path>` in its standing rules) that baton alone writes, a phase's record at a time, and commits alone. A file in a second landing conflict is a look-in for the lead. |
+| A phase's test stack left running beside the QA gate | A phase agent's `baton done` asks once about what it left running; retiring an agent stops its processes and names its containers. |
+| The model judges where full checks go | **The gate rules** at a plan's first `ExitPlanMode` and in short in every brief: QA phases at real seams, scoped checks elsewhere, gate scripts built from stages, stop at the first failure, then `--failed`. |
+
+And two that act on time, not on a single gate:
+
+- **The advisor.** When a look-in fires about a gate, a small model (Haiku by default) reads what baton prepares
+  (the look-in's facts, the command, the failure lines and the log's end, earlier runs, the phase's notes) and
+  adds a note: the change's failure or the environment's, whether the rest of the run is worth waiting for, the
+  smallest next check. It is advice, never an instruction, and the look-in goes without it after 60 seconds
+  whatever happens. The call goes through baton's mod ([spike 41](../../spikes/41-model-complete/README.md)), so
+  it runs only where the mod runs.
+- **The risk ledger.** Scoped testing trades early detection for speed; the ledger says when that trade stops
+  paying. Each phase is scored from facts baton has, never from the phase's own rating, and the points add up
+  until a full check passes. At each line the total crosses (review, then full), an independent model (Opus by
+  default) assesses the exposure: continue, targeted checks, or a full check now. Only its "full now" holds
+  anything: new phase starts, until the lead queues the full check or says why not, or for `escalation_timeout`.
+
+## Calibrating the ledger
+
+A replay (`internal/risk/replay_test.go`, under the `replay` build tag, reading run folders named in
+`BATON_REPLAY_RUNS`; no data is committed) scored the 61 phases of both runs:
+
+- **Per phase:** 10.6 points on average, at most 27. The 27 phases whose files the next full check had to fix
+  averaged 14.2; the other 34 averaged 7.8. The lines changed and the files other phases' sections name told them
+  apart best (6 and 4 points on average, against 4 and 2), and nearly every phase touches two or three areas of
+  the project, so only areas past three count.
+- **Per stretch before a full check:** the three whose check fixed the phases' own files reached 92, 145 and 181
+  points; the two whose check did not (a flaky suite's QA) reached 17 and 45.
+- **The lines:** review at 56 points crosses each troubled stretch after its 6th of 13, 5th of 7 and 4th of 11
+  phases, and neither quiet one; full at 90 after the 9th, 7th and 5th.
+- Not replayed: whether a phase ran any check, and its own account of how it departed from the plan; older
+  records lack both.
+
+## What stayed as it was
+
+- **`plan.RulesVersion` stays 1.** A bump gives every run carried across the upgrade one structural replan, which
+  pauses new agents and can only reorder phases and change `After:` lines: it could not apply the gate rules, and
+  would interrupt a live run for nothing. The gate rules go to every new plan at its first `ExitPlanMode`, and to
+  every phase's brief.
+- **`decide.ShapeRules`** are unchanged.
