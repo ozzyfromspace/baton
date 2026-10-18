@@ -30,19 +30,22 @@ func gatePlan(t *testing.T, heads ...string) plan.Plan {
 	return pl
 }
 
-// The gate rules open with the frame, a human who feels time, and hold the ten rules in order.
+// The gate rules open with what the human's time is (TimeFelt), then the frame, a human who feels time,
+// and hold the ten rules in order; a red gate's rerun names the narrower command too.
 func TestGateRulesWords(t *testing.T) {
-	if !strings.HasPrefix(GateRules, "Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end.") {
+	if !strings.HasPrefix(GateRules, TimeFelt+"\n\n") {
 		t.Errorf("the rules open with %q", GateRules[:80])
 	}
 	at := 0
 	for _, want := range []string{
+		"Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end.\n",
 		"1. QA phases sit at real seams, never per phase: at the end, and, in a long plan, at the end of a group of related phases that later work builds on.",
 		"Each comes `After:` everything it checks. A short plan usually needs one.",
 		"2. Every other phase runs scoped checks that finish in seconds or minutes: the tests of what it changed, by name.",
 		"Its \"done when\" is a commit, never a green full suite.",
 		"3. Gate scripts are committed in the repo, built from `baton stage <name> -- <command>` steps, and stream every stage.",
-		"4. A gate stops at its first failure. After a red, `baton verify --failed` reruns only what failed",
+		"4. A gate stops at its first failure. After a red, `baton verify --failed` reruns only what failed, " +
+			"or `baton verify --failed -- <narrower command>` naming the failed tests: the full suite never runs again for it.",
 		"5. A setup phase proves the lane recipe",
 		"6. Timings on a shared machine are warnings; bytes and counts gate.",
 		"7. No file many phases edit: records per phase, or the plan's `Record:` file.",
@@ -137,8 +140,10 @@ func TestGateCheckWords(t *testing.T) {
 }
 
 // A phase's brief gives the gate rules in short: scoped checks by name and no full suite before the QA
-// phase, stop at the first failure and rerun only what failed, long gates staged and through baton
-// verify, and the environment recorded for every phase; without git, no lane, so no verify or stages.
+// phase, which the model does not feel and the human does; a QA phase runs its set once; stop at the
+// first failure and rerun only what failed, staged or by the narrower command, and the whole gate again
+// only with a reason the human is told; long gates staged and through baton verify, and the environment
+// recorded for every phase; without git, no lane, so no verify or stages.
 func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 	focus := QAFocus("P9 (QA)")
 	for _, want := range []string{
@@ -146,6 +151,7 @@ func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 		"In this phase, run checks that finish in seconds or minutes: the tests of what you changed, by name.",
 		"No full suite, end-to-end run or whole-project lint before P9 (QA), even where a convention says to run them before every commit;",
 		"commit work in progress all the same.",
+		"A full run is one tool call to you; the human feels every minute of it, and P9 (QA) runs it anyway.",
 		"`baton verify --qa \"<why now>\" --notes \"…\" -- <command>`",
 	} {
 		if !strings.Contains(focus, want) {
@@ -156,6 +162,7 @@ func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 	for _, want := range []string{
 		"QA: this is a QA phase. Run the full test suites, lints and the other checks the plan names, and fix what they find in the work of P0 and P1, which ran scoped checks only",
 		"The heavy checks run here, once: after a red, rerun only what failed.",
+		"A full pass costs the human its whole length, though to you it is one tool call: never run the set again to re-prove what passed.",
 		"Push to CI early, batching fixes per round trip.",
 	} {
 		if !strings.Contains(qa, want) {
@@ -166,8 +173,9 @@ func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 	for _, want := range []string{
 		"Gates: a gate stops at its first failure.",
 		"stop it (`baton stop <job>`) unless every failure is worth the wait",
-		"rerun only what failed (`baton verify --failed`), never the whole suite again.",
-		"built from `baton stage <name> -- <command>` steps so it streams every stage, and runs through `baton verify`, never a background shell.",
+		"rerun only what failed (`baton verify --failed [-- <narrower command>]`),",
+		"never the whole gate again without `--why \"…\"`, which baton tells the human.",
+		"A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell.",
 		"record what it needs with `baton env \"<what it needs>\"`, so every phase sees it.",
 	} {
 		if !strings.Contains(habits, want) {

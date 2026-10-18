@@ -299,16 +299,22 @@ func tail(s string, n int) string {
 	return "…(earlier notes omitted)\n" + cut
 }
 
-// qaGuide says, in short, how phase id checks its work. While the plan aggregates its heavy checks in QA
-// phases (w.AggregateQA), a QA phase is told it runs them (decide.QAPhase), and a phase before one that it
-// runs scoped checks only (decide.QAFocus). Every phase then gets the gate rules in short
-// (decide.GateHabits): one with no QA phase after it, or with the setting off, checks itself as it ends,
-// by the same rules.
+// qaGuide says, in short, how phase id checks its work. It opens with what the human's time is and that
+// the model does not feel it (decide.TimeFelt), for every phase. While the plan aggregates its heavy
+// checks in QA phases (w.AggregateQA), a QA phase is told it runs them (decide.QAPhase), and a phase
+// before one that it runs scoped checks only (decide.QAFocus). Every phase then gets the gate rules in
+// short (decide.GateHabits): one with no QA phase after it, or with the setting off, checks itself as it
+// ends, by the same rules.
 func qaGuide(pl plan.Plan, id string, w decide.Words) string {
-	i := pl.Index(id)
-	if i < 0 {
+	if pl.Index(id) < 0 {
 		return ""
 	}
+	return decide.TimeFelt + "\n\n" + checksOf(pl, id, w)
+}
+
+// checksOf is qaGuide's part after decide.TimeFelt: the QA line, if any, and the gate habits.
+func checksOf(pl plan.Plan, id string, w decide.Words) string {
+	i := pl.Index(id)
 	habits := decide.GateHabits(w.Git)
 	if !w.AggregateQA {
 		return habits

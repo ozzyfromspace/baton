@@ -99,6 +99,7 @@ type Log struct {
 // may be other phases' work in progress, which only the QA phase need make whole.
 func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	var b strings.Builder
+	b.WriteString(unexplainedFirst(j))
 	fmt.Fprintf(&b, "[baton] Job %s (%s) %s: %s.\n", j.ID, j.Phase, Outcome(j), Ran(j))
 	b.WriteString(rerunRan(j, log.Rerun))
 	b.WriteString(failedTests(j, log))

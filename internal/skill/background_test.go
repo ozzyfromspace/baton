@@ -29,13 +29,18 @@ func TestNoPollerForBackgroundWork(t *testing.T) {
 	}
 }
 
-// The skill gives the gate protocol in one sentence: a long gate is a committed script of baton stages,
-// which stops at its first failure and tears down what it starts, and after a red, baton stop ends it and
-// --failed reruns only what failed.
+// The skill gives the gate protocol in one bullet, opened by what the human's time is: the model does not
+// feel a gate's time and the human does; a long gate is a committed script of baton stages, which stops at
+// its first failure and tears down what it starts; after a red, baton stop ends it and --failed reruns
+// only what failed, staged or by the narrower command; and the whole gate again takes a reason, told to
+// the human.
 func TestLongGatesAreStagedAndRerunByWhatFailed(t *testing.T) {
 	section := longGates(t)
-	if want := "- Build a long gate as a committed script of `baton stage <name> -- <command>` steps, which streams each stage, stops at the first failure and tears down what it starts (`trap … EXIT`); " +
-		"when a gate fails, end it with `baton stop <job>` and rerun only what failed with `baton verify --failed`, never the full suite."; !strings.Contains(section, want) {
+	if want := "- You do not feel the time a gate takes; the human does, and a check that cannot change what ships only spends it. " +
+		"Build a long gate as a committed script of `baton stage <name> -- <command>` steps, which streams each stage, stops at the first failure and tears down what it starts (`trap … EXIT`); " +
+		"when a gate fails, end it with `baton stop <job>` and rerun only what failed with `baton verify --failed` " +
+		"(a gate without stages: `baton verify --failed -- <narrower command>`), never the full suite. " +
+		"To run a whole gate again, say why with `--why \"…\"`: baton tells the human."; !strings.Contains(section, want) {
 		t.Errorf("the section lacks %q:\n%s", want, section)
 	}
 	if want := "A red gate stands until the same command, or its `baton verify --failed` rerun, passes"; !strings.Contains(Text, want) {

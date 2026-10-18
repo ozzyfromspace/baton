@@ -26,6 +26,7 @@ type Job struct {
 	Requeue bool   `json:"requeue,omitempty"` // a verify job the merge queue runs again on a worker's merged branch (Reverify)
 	Notes   string `json:"notes,omitempty"`   // where the phase stood when the job was queued, in the model's words
 	QA      string `json:"qa,omitempty"`      // why a full check runs ahead of the plan's QA phase (--qa), in the model's words
+	Why     string `json:"why,omitempty"`     // what this run can show that the last could not (--why), in the model's words
 	Status  string `json:"status"`
 	Exit    int    `json:"exit,omitempty"`   // the command's exit code once it ended; -1 if it did not exit by itself
 	Reason  string `json:"reason,omitempty"` // why, when the job ended without the command's own verdict
@@ -65,6 +66,9 @@ type Job struct {
 	FailTold time.Time `json:"fail_told,omitzero"`
 	// LookedIn are the kinds of look-in already sent about the job, each once.
 	LookedIn []string `json:"looked_in,omitempty"`
+	// Unexplained is the line the human was told of a long gate queued again over baton's question with no
+	// --why (decide.RepeatUnexplained); its result opens with it.
+	Unexplained string `json:"unexplained,omitempty"`
 }
 
 // Failing is the first failure a job's output showed while it ran: a failure line (lane.Failure), a fail
