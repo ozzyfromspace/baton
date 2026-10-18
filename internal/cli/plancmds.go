@@ -877,6 +877,9 @@ func cmdDone(args []string, io IO) int {
 		s.Event("refused", map[string]any{"command": "done", "phase": id, "why": "uncommitted work", "files": len(work.fresh)})
 		return fail(io, "%s", decide.UncommittedRefusal("done", id, fileList(work.fresh)))
 	}
+	if code, asked := askLeftovers(io, s, cur, id); asked {
+		return code
+	}
 	despite := decide.Sanitize(p.vals["despite-red"])
 	landCheck := landCheckOf(s, p.vals["land-check"])
 	deviation := decide.Sanitize(p.vals["deviation"])
