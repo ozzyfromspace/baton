@@ -222,6 +222,8 @@ func StartProgram(t *testing.T, dir string, env []string, prog string, args ...s
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
+	// The risk ledger's look-ins stay out of scenarios, which test none of it (BATON_RISK).
+	cmd.Env = append(cmd.Env, "BATON_RISK=0")
 	// Tests never notify the developer, and run one session at a time, as before v0.5, unless a scenario
 	// starts phase agents itself; then whatever else the machine is doing does not hold them back
 	// (BATON_TEST_LOAD), and each starts 5 seconds after the one before, not baton's 2 minutes
