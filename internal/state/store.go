@@ -317,5 +317,5 @@ func writeAtomic(path string, data []byte) error {
 		os.Remove(name)
 		return err
 	}
-	return os.Rename(name, path)
+	return rename(name, path)
 }
