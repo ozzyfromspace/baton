@@ -30,9 +30,9 @@ func TestScoreFactors(t *testing.T) {
 		{"a lockfile's lines are the manifest's, not the change's", with(func(f *Facts) {
 			f.Files = append(f.Files, gitx.FileStat{Path: "pnpm-lock.yaml", Added: 5000})
 		}), map[string]int{FactorManifests: w.Manifests}},
-		{"areas past two", with(func(f *Facts) {
+		{"areas past three", with(func(f *Facts) {
 			f.Files = append(f.Files, gitx.FileStat{Path: "internal/b/b.go"}, gitx.FileStat{Path: "cmd/x/main.go"}, gitx.FileStat{Path: "docs/x.md"}, gitx.FileStat{Path: "README.md"})
-		}), map[string]int{FactorAreas: 3}},
+		}), map[string]int{FactorAreas: 2}},
 		{"files other phases name", with(func(f *Facts) { f.Named = []string{"a/a.go", "internal/a/a_test.go", "other.go"} }), map[string]int{FactorShared: 2}},
 		{"a migration", with(func(f *Facts) {
 			f.Files = append(f.Files, gitx.FileStat{Path: "db/migrations/0042_add.sql", Added: 10})

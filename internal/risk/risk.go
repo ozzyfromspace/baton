@@ -64,10 +64,13 @@ type Weights struct {
 	DeviationUnknown, Deviated int // no --deviation given; a departure from the plan
 }
 
-// DefaultWeights are the points baton scores with, calibrated by a replay of two real runs (replay_test.go).
+// DefaultWeights are the points baton scores with, calibrated by a replay of two real runs (replay_test.go):
+// the lines changed and the files other phases name told apart best the phases whose files the next full
+// check had to fix (6 and 4 points on average, against 4 and 2 for the rest), and nearly every phase
+// touches two or three areas, so only those past three count.
 var DefaultWeights = Weights{
 	LinesPer: 200, LinesMost: 6,
-	AreasFree: 2, AreasMost: 4,
+	AreasFree: 3, AreasMost: 4,
 	SharedEach: 1, SharedMost: 4,
 	Manifests: 2, Migrations: 3,
 	Untested: 3, UntestedLines: 30,

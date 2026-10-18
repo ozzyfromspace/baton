@@ -18,10 +18,12 @@ type Risk struct {
 	Full   int
 }
 
-// The default lines, calibrated by a replay of two real runs (internal/risk's replay test).
+// The default lines, calibrated by a replay of two real runs (internal/risk's replay test): the stretches
+// whose full check then had to fix the phases' own files reached 92 to 181 points, those whose did not 17
+// and 45, so the review line sits clear of the quiet ones, and the hard line inside every troubled one.
 const (
-	DefaultRiskReview = 24
-	DefaultRiskFull   = 40
+	DefaultRiskReview = 56
+	DefaultRiskFull   = 90
 )
 
 // riskFile is the risk ledger's part of the config file.
