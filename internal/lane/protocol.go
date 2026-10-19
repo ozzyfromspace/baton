@@ -41,7 +41,11 @@ import (
 // it inherits), EnvJob (the job's id), EnvStages (this job's stages file) and, on a rerun of a red gate,
 // EnvRerun (the record of the red gate it reruns: a stages file, in which a stage names the job its record
 // comes from, Stage.From, when that is not the file's own). A stage narrowed to what failed in the red
-// gate also gets EnvFailed (a file of the ids, one a line) and EnvFailedRE (FailedRE of them).
+// gate also gets EnvFailed (a file of the ids, one a line) and EnvFailedRE (FailedRE of them); when its
+// record says which runner named them (Stage.Runner), that runner's own narrowing too (Preset.Narrow: go's
+// GOFLAGS, pytest's PYTEST_ADDOPTS) and EnvFailedArgs, the runner's own arguments for only those tests
+// (Preset.Args), which a command that runs the runner passes on: vitest, jest and Playwright read no variable
+// that selects tests, so `playwright test $BATON_FAILED_ARGS` is how a stage of theirs runs fewer.
 
 // Environment variables of the gate protocol.
 const (
@@ -50,6 +54,8 @@ const (
 	EnvRerun    = "BATON_RERUN"
 	EnvFailed   = "BATON_FAILED"
 	EnvFailedRE = "BATON_FAILED_RE"
+	// EnvFailedArgs is the runner's own arguments for only the tests a narrowed stage failed in (Preset.Args).
+	EnvFailedArgs = "BATON_FAILED_ARGS"
 )
 
 // How a stage ended. A carried stage is one a rerun did not run again, as it passed in the red gate the
@@ -171,6 +177,9 @@ type Stage struct {
 	KeepGoing bool `json:"keep_going,omitempty"`
 	// From is a carried stage's: the red gate's job it passed in.
 	From string `json:"from,omitempty"`
+	// Runner is the runner whose own lines named every one of Failures (Preset.Name), "" for the ids of fail
+	// lines: a rerun of the stage narrows by that runner's means (Preset.Narrow, Preset.Args).
+	Runner string `json:"runner,omitempty"`
 }
 
 // Took is how long the stage ran.

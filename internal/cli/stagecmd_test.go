@@ -109,23 +109,30 @@ func TestAFailedStageRecordsWhatFailed(t *testing.T) {
 		steps  []string
 		exit   int
 		failed []string
+		runner string
 	}{
 		{"go", []string{"unit", "--runner", "go"}, []string{"out:=== RUN   TestA", "out:    --- FAIL: TestA/sub (0.00s)",
 			"out:--- FAIL: TestA (0.00s)", "out:--- FAIL: TestB (0.01s)", "out:::baton fail custom one", "out:FAIL", "exit:1"},
-			1, []string{"TestA", "TestB", "custom one"}},
+			1, []string{"TestA", "TestB", "custom one"}, ""},
 		{"pytest", []string{"unit", "--runner=pytest"}, []string{"out:FAILED tests/test_x.py::test_a[a b] - AssertionError: x",
 			"out:FAILED tests/test_x.py::TestC::test_m", "out:ERROR tests/test_y.py - ImportError", "exit:2"},
-			2, []string{"tests/test_x.py::test_a[a b]", "tests/test_x.py::TestC::test_m"}},
+			2, []string{"tests/test_x.py::test_a[a b]", "tests/test_x.py::TestC::test_m"}, "pytest"},
 		{"vitest", []string{"unit", "--runner", "vitest"}, []string{"out: FAIL  src/a.test.ts > Suite > adds", "out: FAIL  src/a.test.ts > Suite > adds", "exit:1"},
-			1, []string{"src/a.test.ts > Suite > adds"}},
+			1, []string{"src/a.test.ts > Suite > adds"}, "vitest"},
 		{"a package that failed whole runs whole", []string{"unit", "--runner", "go"}, []string{"out:--- FAIL: TestA (0.00s)",
-			"out:FAIL\tex.com/a\t0.1s", "out:FAIL\tex.com/b [build failed]", "exit:1"}, 1, nil},
-		{"no runner reads only fail lines", []string{"unit"}, []string{"out:--- FAIL: TestA (0.00s)", "err:  ::baton fail TestZ", "exit:1"},
-			1, []string{"TestZ"}},
-		{"a fail line mid-line", []string{"unit"}, []string{"long:70000:::baton fail hidden", "exit:1"}, 1, nil},
-		{"a passed stage records none", []string{"unit"}, []string{"out:::baton fail flaky"}, 0, nil},
-		{"over the limit, none", []string{"unit", "--runner", "go"}, append(failLines(lane.MaxFailures+1), "exit:1"), 1, nil},
-		{"at the limit, all", []string{"unit", "--runner", "go"}, append(failLines(lane.MaxFailures), "exit:1"), 1, testNames(lane.MaxFailures)},
+			"out:FAIL\tex.com/a\t0.1s", "out:FAIL\tex.com/b [build failed]", "exit:1"}, 1, nil, ""},
+		{"with no runner, fail lines come first", []string{"unit"}, []string{"out:--- FAIL: TestA (0.00s)", "err:  ::baton fail TestZ", "exit:1"},
+			1, []string{"TestZ"}, ""},
+		{"with no runner, a runner's own lines", []string{"e2e"}, []string{"out:  ✘  3 [chromium] › test/a.spec.ts:36:3 › logs in (1.2s)",
+			"out:  1) [chromium] › test/a.spec.ts:36:3 › logs in ───", "out:  2) [chromium] › test/b.spec.ts:116:1 › searches ───", "exit:1"},
+			1, []string{"test/a.spec.ts:36", "test/b.spec.ts:116"}, "playwright"},
+		{"with no runner, go's", []string{"unit"}, []string{"out:--- FAIL: TestA (0.00s)", "out:FAIL", "exit:1"}, 1, []string{"TestA"}, "go"},
+		{"two runners name no one runner", []string{"unit"}, []string{"out:--- FAIL: TestA (0.00s)", "out:FAILED tests/test_x.py::test_a - x", "exit:1"},
+			1, []string{"TestA", "tests/test_x.py::test_a"}, ""},
+		{"a fail line mid-line", []string{"unit"}, []string{"long:70000:::baton fail hidden", "exit:1"}, 1, nil, ""},
+		{"a passed stage records none", []string{"unit"}, []string{"out:::baton fail flaky"}, 0, nil, ""},
+		{"over the limit, none", []string{"unit", "--runner", "go"}, append(failLines(lane.MaxFailures+1), "exit:1"), 1, nil, ""},
+		{"at the limit, all", []string{"unit", "--runner", "go"}, append(failLines(lane.MaxFailures), "exit:1"), 1, testNames(lane.MaxFailures), "go"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -135,14 +142,14 @@ func TestAFailedStageRecordsWhatFailed(t *testing.T) {
 				t.Errorf("exit %d, want %d", code, c.exit)
 			}
 			got := readStages(t, stages)
-			if len(got) != 1 || !reflect.DeepEqual(got[0].Failures, c.failed) {
-				t.Errorf("recorded %+v, want failures %q", got, c.failed)
+			if len(got) != 1 || !reflect.DeepEqual(got[0].Failures, c.failed) || got[0].Runner != c.runner {
+				t.Errorf("recorded %+v, want failures %q of runner %q", got, c.failed, c.runner)
 			}
 			status := lane.StagePassed
 			if c.exit != 0 {
 				status = lane.StageFailed
 			}
-			if end := lane.EndMarker("unit", status, c.exit, 67*time.Second); !strings.HasSuffix(out, "\n"+end+"\n") {
+			if end := lane.EndMarker(c.args[0], status, c.exit, 67*time.Second); !strings.HasSuffix(out, "\n"+end+"\n") {
 				t.Errorf("output does not end with %q:\n%s", end, tail(out))
 			}
 		})
@@ -240,6 +247,9 @@ func TestARerunCarriesNarrowsOrRunsEachStage(t *testing.T) {
 		{Name: "py", Status: lane.StageFailed, Exit: 1, Failures: []string{"tests/x.py::test_a[1]", "tests/x.py::test_a[2]", "tests/y.py::TestC::test_m"}},
 		{Name: "custom", Status: lane.StageFailed, Exit: 1, Failures: []string{"one", "two+"}},
 		{Name: "e2e", Status: lane.StageFailed, Exit: 1},
+		{Name: "pw", Status: lane.StageFailed, Exit: 1, Failures: []string{"test/a.spec.ts:36", "test/b.spec.ts:116"}, Runner: lane.RunPlaywright},
+		{Name: "vt", Status: lane.StageFailed, Exit: 1, Failures: []string{"src/a.test.ts > Suite > adds one", "src/b.test.ts > b"}, Runner: lane.RunVitest},
+		{Name: "gounit", Status: lane.StageFailed, Exit: 1, Failures: []string{"TestC"}, Runner: lane.RunGo},
 	} {
 		if err := lane.AppendStage(red, s); err != nil {
 			t.Fatal(err)
@@ -247,7 +257,7 @@ func TestARerunCarriesNarrowsOrRunsEachStage(t *testing.T) {
 	}
 	stages := filepath.Join(dir, "jobs", "P3.j81.stages")
 	env := map[string]string{lane.EnvStages: stages, lane.EnvRerun: red, "BATON_COMMIT": "9c0ffee1234", "GOFLAGS": "-count=1"}
-	show := []string{"env:GOFLAGS", "env:PYTEST_ADDOPTS", "env:" + lane.EnvFailedRE, "file:" + lane.EnvFailed, "out:ran"}
+	show := []string{"env:GOFLAGS", "env:PYTEST_ADDOPTS", "env:" + lane.EnvFailedRE, "env:" + lane.EnvFailedArgs, "file:" + lane.EnvFailed, "out:ran"}
 
 	cases := []struct {
 		args []string
@@ -259,11 +269,16 @@ func TestARerunCarriesNarrowsOrRunsEachStage(t *testing.T) {
 		{[]string{"build"}, []string{"■ build passed in P3.j70 on 5d1e2aa,"}, []string{"\nran\n"}},
 		{[]string{"unit", "--runner", "go"}, []string{"▶ unit 14:02:11 — only the 2 that failed in P3.j80: TestA, TestB\n",
 			"GOFLAGS=-count=1 -run=^(TestA|TestB)$\n", "BATON_FAILED_RE=^(TestA|TestB)$\n", `BATON_FAILED holds "TestA\nTestB\n"`, "\nran\n"},
-			[]string{"PYTEST_ADDOPTS=-k"}},
+			[]string{"PYTEST_ADDOPTS=-k", "BATON_FAILED_ARGS=-"}},
 		{[]string{"py", "--runner", "pytest"}, []string{`PYTEST_ADDOPTS=-k "test_a or test_m"` + "\n"}, []string{"-run="}},
 		{[]string{"custom"}, []string{`BATON_FAILED_RE=^(one|two\+)$` + "\n", `BATON_FAILED holds "one\ntwo+\n"`, "\nran\n"}, []string{"-run=", "PYTEST_ADDOPTS=-k"}},
 		{[]string{"e2e", "--runner", "go"}, []string{"▶ e2e 14:02:11\n", "BATON_FAILED_RE=\n", "\nran\n"}, []string{"-run="}},
 		{[]string{"docs"}, []string{"▶ docs 14:02:11\n", "BATON_FAILED_RE=\n", "\nran\n"}, nil},
+		// The runner that named a stage's failures narrows its rerun, --runner or not: by its variable where
+		// it reads one, and by its own arguments for a command that passes them on.
+		{[]string{"pw"}, []string{"BATON_FAILED_ARGS=test/a.spec.ts:36 test/b.spec.ts:116\n", "\nran\n"}, []string{"-run=", "PYTEST_ADDOPTS=-k"}},
+		{[]string{"vt"}, []string{`BATON_FAILED_ARGS=src/a.test.ts src/b.test.ts -t adds\s+one|b` + "\n"}, []string{"-run="}},
+		{[]string{"gounit"}, []string{"GOFLAGS=-count=1 -run=^(TestC)$\n", "BATON_FAILED_ARGS=-run=^(TestC)$\n"}, nil},
 	}
 	for _, c := range cases {
 		code, out, errOut := runStage(t, env, c.args, show...)
@@ -286,7 +301,8 @@ func TestARerunCarriesNarrowsOrRunsEachStage(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s:%s:%s:%s", s.Name, s.Status, s.Commit, s.From))
 	}
 	want := []string{"lint:carried:72b7740aaaaa:P3.j80", "build:carried:5d1e2aa0000:P3.j70", "unit:passed:9c0ffee1234:",
-		"py:passed:9c0ffee1234:", "custom:passed:9c0ffee1234:", "e2e:passed:9c0ffee1234:", "docs:passed:9c0ffee1234:"}
+		"py:passed:9c0ffee1234:", "custom:passed:9c0ffee1234:", "e2e:passed:9c0ffee1234:", "docs:passed:9c0ffee1234:",
+		"pw:passed:9c0ffee1234:", "vt:passed:9c0ffee1234:", "gounit:passed:9c0ffee1234:"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("recorded %v, want %v", got, want)
 	}

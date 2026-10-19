@@ -18,6 +18,13 @@ type Preset struct {
 	// Names are the ways a command can name the test f: its id, the name the runner selects it by, its file
 	// or package when it failed whole. A command that names a test by any of them runs it.
 	Names func(f FailedTest) []string
+	// Cmd is the runner's command line before its arguments.
+	Cmd string
+	// Args are the runner's own arguments that run only the tests ids (none of them failed whole), for a
+	// stage whose command runs the runner itself and passes them on (EnvFailedArgs): the one way to narrow a
+	// runner no variable narrows. Words are joined by spaces and none holds one, so that an unquoted
+	// $BATON_FAILED_ARGS passes them; "" where they cannot be.
+	Args func(ids []string) string
 
 	read func(r *Reading) reader // a fresh reader of the runner's output, adding to r
 }
@@ -33,11 +40,11 @@ const (
 
 // Presets are the runners baton knows, in the order a message lists them.
 var Presets = []Preset{
-	{Name: RunGo, Narrow: goNarrow, Rerun: goRerun, Names: goNames, read: readGo},
-	{Name: RunPytest, Narrow: pytestNarrow, Rerun: pytestRerun, Names: pytestNames, read: lineReader(RunPytest, pytestFailure)},
-	{Name: RunVitest, Rerun: jsRerun("vitest run"), Names: jsNames, read: readVitest},
-	{Name: RunJest, Rerun: jsRerun("jest"), Names: jsNames, read: readJest},
-	{Name: RunPlaywright, Rerun: playwrightRerun, Names: playwrightNames, read: readPlaywright},
+	{Name: RunGo, Narrow: goNarrow, Rerun: goRerun, Names: goNames, Cmd: "go test", Args: goArgs, read: readGo},
+	{Name: RunPytest, Narrow: pytestNarrow, Rerun: pytestRerun, Names: pytestNames, Cmd: "pytest", Args: plainWords, read: lineReader(RunPytest, pytestFailure)},
+	{Name: RunVitest, Rerun: jsRerun("vitest run"), Names: jsNames, Cmd: "vitest run", Args: jsArgs, read: readVitest},
+	{Name: RunJest, Rerun: jsRerun("jest"), Names: jsNames, Cmd: "jest", Args: jsArgs, read: readJest},
+	{Name: RunPlaywright, Rerun: playwrightRerun, Names: playwrightNames, Cmd: "playwright test", Args: plainWords, read: readPlaywright},
 }
 
 // PresetFor is the preset of the runner name, reporting whether baton knows it.

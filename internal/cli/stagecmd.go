@@ -65,15 +65,17 @@ func cmdStage(args []string, io IO) int {
 		fmt.Fprintf(io.Err, "baton: a stage's name is 1 to %d characters with no spaces, not %q\n", lane.MaxStageName, name)
 		return 2
 	}
+	// With no --runner, the stage reads every runner's failure lines, as a red gate's log is read
+	// (lane.FailureIDs): what failed in it is known, and a rerun narrows by the runner that named it.
 	var preset *lane.Preset
-	presets := []lane.Preset{}
+	presets := lane.Presets
 	if r := p.vals["runner"]; r != "" {
 		pr, ok := lane.PresetFor(r)
 		if !ok {
 			fmt.Fprintf(io.Err, "baton: --runner is one of %s, not %q\n", runnerNames(", "), r)
 			return 2
 		}
-		preset, presets = &pr, append(presets, pr)
+		preset, presets = &pr, []lane.Preset{pr}
 	}
 	s := &stageRun{name: name, argv: p.pos[1:], keepGoing: p.bools["keep-going"], preset: preset, io: io,
 		stages: io.Env(lane.EnvStages), commit: io.Env("BATON_COMMIT"), reading: lane.NewReading(lane.MaxFailures, presets...)}
@@ -116,6 +118,7 @@ func (s *stageRun) run() int {
 		from = prior.From
 	}
 	var narrow []string
+	runner := ""
 	switch {
 	case prior != nil && (prior.Status == lane.StagePassed || prior.Status == lane.StageCarried):
 		s.say(decide.StageCarried(s.name, from, prior.Commit))
@@ -123,10 +126,10 @@ func (s *stageRun) run() int {
 		s.record(lane.Stage{Name: s.name, Status: lane.StageCarried, Commit: prior.Commit, From: from, KeepGoing: s.keepGoing})
 		return 0
 	case prior != nil && prior.Status == lane.StageFailed:
-		narrow = prior.Failures
+		narrow, runner = prior.Failures, prior.Runner
 	}
 
-	env, cleanup, err := s.env(narrow)
+	env, cleanup, err := s.env(narrow, runner)
 	if err != nil {
 		fmt.Fprintf(s.io.Err, "baton: %v; stage %s runs whole\n", err, s.name)
 		narrow = nil
@@ -142,8 +145,12 @@ func (s *stageRun) run() int {
 	if exit != 0 {
 		st.Status = lane.StageFailed
 		s.mu.Lock()
-		st.Failures = narrowTo(s.reading.Failed())
+		fs, more := s.reading.Failed()
 		s.mu.Unlock()
+		if s.preset == nil {
+			fs = failLinesFirst(fs)
+		}
+		st.Failures, st.Runner = narrowTo(fs, more)
 	}
 	s.say(decide.StageEnd(s.name, exit, st.Took()))
 	s.say(lane.EndMarker(s.name, st.Status, exit, st.Took()))
@@ -173,9 +180,10 @@ func (s *stageRun) inRedGate() (*lane.Stage, string) {
 }
 
 // env is the command's environment: this process's, and when the stage is narrowed to ids, the file of them
-// (lane.EnvFailed), their pattern (lane.EnvFailedRE) and the runner's own narrowing. cleanup removes the
-// file.
-func (s *stageRun) env(ids []string) (env []string, cleanup func(), err error) {
+// (lane.EnvFailed), their pattern (lane.EnvFailedRE) and the narrowing of the runner that named them in the
+// red gate (its variable, Preset.Narrow, and its own arguments, lane.EnvFailedArgs), or else of the stage's
+// --runner. cleanup removes the file.
+func (s *stageRun) env(ids []string, runner string) (env []string, cleanup func(), err error) {
 	env, cleanup = os.Environ(), func() {}
 	if len(ids) == 0 {
 		return env, cleanup, nil
@@ -193,12 +201,21 @@ func (s *stageRun) env(ids []string) (env []string, cleanup func(), err error) {
 		return env, cleanup, err
 	}
 	set := [][2]string{{lane.EnvFailed, f.Name()}, {lane.EnvFailedRE, lane.FailedRE(ids)}}
-	if s.preset != nil && s.preset.Narrow != nil {
-		k, v := s.preset.Narrow(ids)
+	preset := s.preset
+	if p, ok := lane.PresetFor(runner); ok {
+		preset = &p
+	}
+	if preset != nil && preset.Narrow != nil {
+		k, v := preset.Narrow(ids)
 		if was := s.io.Env(k); was != "" {
 			v = was + " " + v
 		}
 		set = append(set, [2]string{k, v})
+	}
+	if preset != nil && preset.Args != nil && preset.Name == runner {
+		if args := preset.Args(ids); args != "" {
+			set = append(set, [2]string{lane.EnvFailedArgs, args})
+		}
 	}
 	for _, kv := range set {
 		env = append(withoutVar(env, kv[0]), kv[0]+"="+kv[1])
@@ -289,21 +306,41 @@ func (s *stageRun) pass(chunk []byte, whole bool) {
 
 // narrowTo is the ids a rerun of a failed stage runs, of the tests its reading kept (fs) with more past
 // them: none, so that it runs whole, when there are too many, or a file or package failed whole, which no
-// test's name reruns.
-func narrowTo(fs []lane.FailedTest, more int) []string {
-	var ids []string
-	for _, f := range fs {
+// test's name reruns; and the runner whose own lines named every one of them, "" for fail lines' or more
+// runners' than one.
+func narrowTo(fs []lane.FailedTest, more int) (ids []string, runner string) {
+	for i, f := range fs {
 		if f.Whole {
-			return nil
+			return nil, ""
 		}
 		if !slices.Contains(ids, f.ID) {
 			ids = append(ids, f.ID)
 		}
+		if i == 0 {
+			runner = f.Runner
+		} else if f.Runner != runner {
+			runner = ""
+		}
 	}
-	if more > 0 {
-		return nil
+	if more > 0 || len(ids) == 0 {
+		return nil, ""
 	}
-	return ids
+	return ids, runner
+}
+
+// failLinesFirst is what failed in a stage given no --runner: the ids of its command's ::baton fail lines,
+// when it printed any, else its runners' own.
+func failLinesFirst(fs []lane.FailedTest) []lane.FailedTest {
+	var lines []lane.FailedTest
+	for _, f := range fs {
+		if f.Runner == "" {
+			lines = append(lines, f)
+		}
+	}
+	if len(lines) > 0 {
+		return lines
+	}
+	return fs
 }
 
 // say prints one of the stage's own lines, on a line of its own.
