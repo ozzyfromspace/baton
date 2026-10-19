@@ -149,6 +149,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 		}
 		fmt.Fprintf(&b, "Fix what failed (quick checks in place help), commit, and %s: %s "+
 			"`baton done %s` is refused until then.", again(j, true), gateRule(j), j.Phase)
+		b.WriteString(passOn(j))
 	}
 	if j.Red() && qa != "" && log.Env == nil {
 		b.WriteString(" " + othersMayBeWhy(j.Phase, qa))

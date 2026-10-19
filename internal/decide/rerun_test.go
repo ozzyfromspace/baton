@@ -149,3 +149,40 @@ func TestRerunAndStopWords(t *testing.T) {
 		}
 	}
 }
+
+// A stage that failed in tests a runner named which reads no variable baton narrows it by (vitest, jest,
+// Playwright): the red result says what --failed gives it, how long it ran, and that it runs whole unless its
+// command passes that on; the rerun's words say so beside its ids. A stage go or pytest named, or fail lines
+// named, gets no such words.
+func TestAStageItsRunnerCannotNarrowSaysHow(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 19, 40, 0, 0, time.UTC)
+	drives := lane.Stage{Name: "drives", Status: lane.StageFailed, Exit: 2, Started: t0, Ended: t0.Add(32*time.Minute + 45*time.Second),
+		Failures: []string{"test/a.spec.ts:36", "test/b.spec.ts:116"}, Runner: lane.RunPlaywright}
+	red := state.Job{ID: "j102", Phase: "P49", Kind: state.JobVerify, Command: "bin/qa-set", Commit: "c165e1f751314b49", Status: state.JobFailed, Exit: 1,
+		Started: t0, Ended: t0.Add(45 * time.Minute), Stages: []lane.Stage{{Name: "stack", Status: lane.StagePassed}, drives}}
+	got := JobResult(red, Log{}, nil, "")
+	for _, w := range []string{
+		"Stage `drives` failed in 2 tests that playwright named, after 32m45s: `--failed` gives its rerun $BATON_FAILED_ARGS, playwright's own arguments for only those (`test/a.spec.ts:36 test/b.spec.ts:116`)",
+		"so the stage runs only those if its command passes them on, in place of its own choice of tests (`playwright test $BATON_FAILED_ARGS` when it is set); otherwise it runs whole again.",
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("the result lacks %q:\n%s", w, got)
+		}
+	}
+	if got := narrowed([]lane.Stage{drives}); got != "`drives` (test/a.spec.ts:36, test/b.spec.ts:116; playwright runs only these if the stage passes $BATON_FAILED_ARGS on)" {
+		t.Errorf("narrowed: %s", got)
+	}
+	for _, s := range []lane.Stage{
+		{Name: "unit", Status: lane.StageFailed, Failures: []string{"TestA"}, Runner: lane.RunGo},
+		{Name: "custom", Status: lane.StageFailed, Failures: []string{"one"}},
+		{Name: "e2e", Status: lane.StageFailed, Runner: lane.RunPlaywright},
+	} {
+		red.Stages = []lane.Stage{s}
+		if got := JobResult(red, Log{}, nil, ""); strings.Contains(got, "BATON_FAILED_ARGS") {
+			t.Errorf("stage %s (%q):\n%s", s.Name, s.Runner, got)
+		}
+		if got := narrowed([]lane.Stage{s}); strings.Contains(got, "BATON_FAILED_ARGS") {
+			t.Errorf("narrowed %s: %s", s.Name, got)
+		}
+	}
+}

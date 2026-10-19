@@ -128,6 +128,9 @@ func narrowed(stages []lane.Stage) string {
 		if len(ids) > maxIDs {
 			ids, more = ids[:maxIDs], fmt.Sprintf(" and %d more", len(s.Failures)-maxIDs)
 		}
+		if p, _, ok := passesOn(s); ok {
+			more += fmt.Sprintf("; %s runs only these if the stage passes $%s on", p.Name, lane.EnvFailedArgs)
+		}
 		out = append(out, fmt.Sprintf("`%s` (%s%s)", s.Name, strings.Join(ids, ", "), more))
 	}
 	return strings.Join(out, "; ")
