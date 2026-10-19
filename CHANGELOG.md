@@ -4,6 +4,26 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-10-18
+
+### Added
+
+- **A staged rerun narrows for vitest, jest and Playwright too.** A rerun of a stage that failed in some tests
+  gets `BATON_FAILED_ARGS`, its runner's own arguments for only those tests (`file:line` locations for
+  Playwright, files and `-t` for vitest and jest, `-run` for Go, node ids for pytest). Go and pytest were
+  already narrowed through their own variables; vitest, jest and Playwright read none, so a stage of theirs
+  runs fewer when its command passes the arguments on, in place of its own choice of tests: `npx playwright
+  test $BATON_FAILED_ARGS` when it is set. A red result of such a stage names it, how long it ran and the
+  arguments, and says it runs whole again otherwise: in a real run, a 33-minute Playwright stage reran whole
+  for 8 failures.
+
+### Changed
+
+- **A stage reads its runner's failure lines without `--runner`.** It reads every runner baton knows, as a
+  red gate's log is read, with a command's `::baton fail` lines first when it prints any, and records which
+  runner named its failures. Its rerun narrows by that runner, so a Go or pytest stage given no `--runner` is
+  narrowed as one given it was. `--runner` still limits a stage to one runner.
+
 ## [0.8.12] - 2026-10-18
 
 ### Fixed
@@ -1545,7 +1565,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...HEAD
+[0.8.13]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...v0.8.13
 [0.8.12]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...v0.8.12
 [0.8.11]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...v0.8.11
 [0.8.10]: https://github.com/ozzyfromspace/baton/compare/v0.8.9...v0.8.10

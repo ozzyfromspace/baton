@@ -305,8 +305,14 @@ stages file (`jobs/<id>.stages`, beside its log) and exits with the command's co
 `::baton fail <id>` lines, which any command may print, and by a runner preset: Go's top-level `--- FAIL: TestX`
 names, pytest's `FAILED path::name`, vitest's and jest's `file > suite > test`, Playwright's `file:line`. A package
 or file that failed with no test named (a build failure, a timeout, a file that did not load) is named whole, and a
-stage with one records no ids, so its rerun runs whole. Only the Go and pytest presets narrow a staged rerun
-themselves; the others leave it to `BATON_FAILED` and `BATON_FAILED_RE`.
+stage with one records no ids, so its rerun runs whole. A stage given no `--runner` reads every preset, a
+command's fail lines first, and records the runner whose lines named all its ids (`Stage.Runner`, v0.8.13), and
+its rerun narrows by that runner: the Go and pytest presets through their variables, and every preset through
+`BATON_FAILED_ARGS`, the runner's own arguments for only those tests (`Preset.Args`). Vitest, jest and Playwright
+read no variable that selects tests, so a stage of theirs runs fewer only when its command passes those on
+(`playwright test $BATON_FAILED_ARGS` when it is set); a red result of one names the stage, how long it ran and
+the arguments, and says that (`decide.passOn`): a real run's 33-minute Playwright stage reran whole for 8
+failures. A custom command reads `BATON_FAILED` and `BATON_FAILED_RE`.
 
 - **A gate stops at its first failure.** A stage reads the stages file, and when an earlier stage failed without
   `--keep-going`, it prints why and is skipped (exit 1), however the script goes on. A stage that collects every
@@ -333,7 +339,8 @@ themselves; the others leave it to `BATON_FAILED` and `BATON_FAILED_RE`.
 - **`baton verify --failed`** reruns the phase's red gate (`Job.Reruns`), or, with none red, its latest gate
   stopped after a failure (the common case: `baton stop` at the first failure). The stages that passed are
   carried, each failed stage runs narrowed to its failure ids where it recorded them (`GOFLAGS=-run=^(A|B)$`,
-  `PYTEST_ADDOPTS=-k`, or `BATON_FAILED` and `BATON_FAILED_RE` for a custom command), and the rest run whole;
+  `PYTEST_ADDOPTS=-k`, `BATON_FAILED_ARGS` for a command that passes them to its runner, or `BATON_FAILED` and
+  `BATON_FAILED_RE` for a custom command), and the rest run whole;
   `--stages a,b` brings carried stages back. What it reruns comes from baton's record (the red gate, with what a
   stopped run learned since, written beside the rerun's log as it is queued), never from a model's reading of a
   tail. Its result names each carried stage's job and commit and the files changed since, and each narrowed
