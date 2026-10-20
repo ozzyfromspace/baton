@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -342,23 +343,55 @@ func TestHostBinary(t *testing.T) {
 	}
 }
 
+// An artifact the session published, as Claude Code 2.1.303 lists its watch at Stop.
+const artifactWatch = `{"id":"w1","type":"monitor","status":"running","description":"live updates for artifact https://claude.ai/artifact/abc (watch)"}`
+
 // /baton start waits for background work in a plain session, a Monitor included: each would end with
-// claude, and Claude Code reports a Monitor as a shell (spike 19).
+// claude, and Claude Code reports a Monitor as a shell (spike 19). It names what it waits on, and leaves
+// out what never ends with the model's work.
 func TestElevateStopWaitsForBackgroundWork(t *testing.T) {
 	home := t.TempDir()
 	if err := elevate.Save(home, elevate.Record{SessionID: "sess-1", TTY: "ttys998", Created: time.Unix(0, 0)}); err != nil {
 		t.Fatal(err)
 	}
-	for _, task := range []string{
-		`{"id":"m1","type":"shell","status":"running","description":"tail -F app.log"}`,
-		`{"id":"s1","type":"subagent","status":"running"}`,
+	for _, c := range []struct{ tasks, says string }{
+		{`{"id":"m1","type":"shell","status":"running","description":"tail -F app.log"}`, ": tail -F app.log\""},
+		{`{"id":"s1","type":"subagent","status":"running"}`, ": a subagent\""},
+		{artifactWatch + `,{"id":"s2","type":"subagent","status":"running","description":"Forms audit"}`, ": Forms audit\""},
 	} {
-		io, out, _ := testIO(`{"session_id":"sess-1","background_tasks":[`+task+`]}`, map[string]string{"BATON_HOME": home})
-		if code := cmdElevateStop(nil, io); code != 0 || !strings.Contains(out.String(), "waits until background work finishes") {
-			t.Errorf("%s: code %d, said %q", task, code, out.String())
+		io, out, _ := testIO(`{"session_id":"sess-1","background_tasks":[`+c.tasks+`]}`, map[string]string{"BATON_HOME": home})
+		if code := cmdElevateStop(nil, io); code != 0 || !strings.Contains(out.String(), "waits until background work finishes (it would be stopped with claude)"+c.says) {
+			t.Errorf("%s: code %d, said %q", c.tasks, code, out.String())
 		}
 		if rec, _ := elevate.Load(home, "ttys998"); !rec.Stopped.IsZero() {
-			t.Fatalf("%s: claude was stopped", task)
+			t.Fatalf("%s: claude was stopped", c.tasks)
+		}
+	}
+}
+
+// Only the model's own work holds an elevation: Claude Code's housekeeping and the watch it keeps on an
+// artifact the session published, for as long as the session lives, never end with it, and a real
+// session's /baton start waited on that watch for good.
+func TestElevationIsHeldOnlyByTheModelsOwnWork(t *testing.T) {
+	for _, c := range []struct {
+		tasks string
+		want  []string
+	}{
+		{``, nil},
+		{artifactWatch, nil},
+		{`{"id":"p1","type":"monitor","status":"running","description":"presence on artifact https://claude.ai/artifact/abc"}`, nil},
+		{`{"id":"d1","type":"dream","status":"running","description":"dreaming"},{"id":"a1","type":"auto-mode scan","status":"running"},{"id":"i1","type":"memory import","status":"running"}`, nil},
+		{`{"id":"m1","type":"shell","status":"running","description":"tail -F app.log"}`, []string{"tail -F app.log"}},
+		{artifactWatch + `,{"id":"f1","type":"workflow","status":"running"},{"id":"t1","type":"MCP task","status":"running","description":"export"}`, []string{"a workflow", "export"}},
+	} {
+		var in struct {
+			BackgroundTasks []state.Task `json:"background_tasks"`
+		}
+		if err := json.Unmarshal([]byte(`{"background_tasks":[`+c.tasks+`]}`), &in); err != nil {
+			t.Fatal(err)
+		}
+		if got := heldBy(in.BackgroundTasks); !slices.Equal(got, c.want) {
+			t.Errorf("%s: held by %q, want %q", c.tasks, got, c.want)
 		}
 	}
 }

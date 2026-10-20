@@ -548,9 +548,13 @@ var humanDecides = map[string]bool{"blocked": true, "decision": true, "review": 
 
 // waitable are the background task types (as Claude Code reports them at Stop) that are the model's own
 // work and wake the session when they finish. Dream, auto-mode scan and memory import are Claude Code's
-// own housekeeping, and Monitors (reported as "shell") watch indefinitely: none of those may make an idle
-// session look busy.
+// own housekeeping, and Monitors watch indefinitely (the model's are reported as "shell"; the watch
+// Claude Code keeps on an artifact the session published, for as long as the session lives, as
+// "monitor"): none of those may make an idle session look busy.
 var waitable = map[string]bool{"shell": true, "subagent": true, "workflow": true, "MCP task": true, "teammate": true, "cloud session": true}
+
+// Waitable reports whether t is of a type that is the model's own work (waitable).
+func (t Task) Waitable() bool { return waitable[t.Type] }
 
 // PhaseAgent is the agent type of baton's phase agents, which the mod in baton's plugin registers and
 // spawns (docs/research/visible-workers.md).
@@ -561,7 +565,7 @@ const PhaseAgent = "baton:phase"
 func (r Runtime) BusyBackground() []Task {
 	var out []Task
 	for _, t := range r.Background {
-		if waitable[t.Type] && t.AgentType != PhaseAgent && !slices.Contains(r.Monitors, t.ID) {
+		if t.Waitable() && t.AgentType != PhaseAgent && !slices.Contains(r.Monitors, t.ID) {
 			out = append(out, t)
 		}
 	}

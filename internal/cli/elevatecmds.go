@@ -243,8 +243,8 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 	}
 	raw, _ := goio.ReadAll(goio.LimitReader(io.In, 1<<20))
 	var in struct {
-		SessionID       string            `json:"session_id"`
-		BackgroundTasks []json.RawMessage `json:"background_tasks"`
+		SessionID       string       `json:"session_id"`
+		BackgroundTasks []state.Task `json:"background_tasks"`
 	}
 	if json.Unmarshal(raw, &in) != nil || in.SessionID == "" {
 		return 0
@@ -254,11 +254,8 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 	if !ok || !rec.Stopped.IsZero() || rec.Plain {
 		return 0
 	}
-	// Any background task holds it, a Monitor included: each would end with claude. A plain session has
-	// no baton hooks to record Monitors by id, and Claude Code reports one as type "shell" (spike 19), so
-	// this hook could not tell one apart anyway.
-	if len(in.BackgroundTasks) > 0 {
-		say(io, "baton: starting baton waits until background work finishes (it would be stopped with claude)")
+	if held := heldBy(in.BackgroundTasks); len(held) > 0 {
+		say(io, decide.ElevateWaits(held))
 		return 0
 	}
 	rec.Stopped = io.Now()
@@ -273,6 +270,27 @@ func cmdElevateStop(_ []string, io IO) (code int) {
 		say(io, "baton: restarting this session under baton…")
 	}
 	return 0
+}
+
+// heldBy names the background work that holds a plain session's elevation: the model's own (Task.Waitable),
+// a Monitor included, since each would end with claude. A plain session has no baton hooks to record
+// Monitors by id, and Claude Code reports one as type "shell" (spike 19), so this hook could not tell one
+// apart anyway. Claude Code's housekeeping holds nothing, nor does the watch it keeps on an artifact the
+// session published (type "monitor", for as long as the session lives), which held it for good before
+// v0.8.14.
+func heldBy(tasks []state.Task) []string {
+	var names []string
+	for _, t := range tasks {
+		if !t.Waitable() {
+			continue
+		}
+		name := t.Description
+		if name == "" {
+			name = "a " + t.Type
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 func cmdElevateKill(args []string, io IO) int {
