@@ -4,6 +4,18 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-10-19
+
+### Fixed
+
+- **`/baton start` no longer waits for good on an artifact's watch.** In a plain session it restarts claude
+  under baton once a turn ends with no background work, since that work would end with claude. Any task held
+  it, and Claude Code lists the watch it keeps on an artifact the session published, for as long as the
+  session lives, as running background work: a real session's `/baton start` waited on it with nothing on
+  screen to say why. Only the model's own work holds it now (a shell, a Monitor, a subagent, a workflow, an
+  MCP task, a teammate, a cloud session), as hosted sessions already count it, and baton names what it waits
+  on.
+
 ## [0.8.13] - 2026-10-18
 
 ### Added
@@ -1565,7 +1577,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...HEAD
+[0.8.14]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...v0.8.14
 [0.8.13]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...v0.8.13
 [0.8.12]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...v0.8.12
 [0.8.11]: https://github.com/ozzyfromspace/baton/compare/v0.8.10...v0.8.11
