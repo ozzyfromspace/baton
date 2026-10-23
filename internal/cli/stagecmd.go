@@ -22,11 +22,12 @@ import (
 )
 
 func init() {
-	register("stage", "run one stage of a gate script: stage <name> [--keep-going] [--runner "+runnerNames("|")+"] -- <command…>. "+
-		"It marks the stage in the gate's log, stops the gate at its first failed stage, and on a rerun runs only what failed", cmdStage)
+	register("stage", "run one stage of a gate script: stage <name> [--keep-going | --halts] [--runner "+runnerNames("|")+"] [--log <file>] -- <command…>. "+
+		"It marks the stage in the gate's log, stops the gate at its first failed stage (in a QA phase, every stage runs, and only one with --halts stops it: a setup or a build the later stages need), "+
+		"reads what failed from its output and from --log, the file its command writes its output to, and on a rerun runs only what failed", cmdStage)
 }
 
-var stageUsage = "usage: baton stage <name> [--keep-going] [--runner " + runnerNames("|") + "] -- <command…>"
+var stageUsage = "usage: baton stage <name> [--keep-going | --halts] [--runner " + runnerNames("|") + "] [--log <file>] -- <command…>"
 
 // runnerNames are the runners --runner takes, joined by sep.
 func runnerNames(sep string) string {
@@ -48,16 +49,30 @@ const stageDrain = 2 * time.Second
 // rerun of a red gate ($BATON_RERUN) carries a stage that passed there and narrows one that failed to what
 // failed. It acts on no run, and needs no host: outside a job it prints and runs, and records nothing.
 //
+// In a QA phase's gate ($BATON_QA_PHASE) every stage keeps going, so that one run collects every red,
+// unless it says --halts: a stage the later ones need (a setup, a build) stops them when it fails.
+//
 // A process the command leaves running must write somewhere else than the stage's output: the stage stops
-// reading that output stageDrain after its command ends.
+// reading that output stageDrain after its command ends. A command that writes its output to a file of its
+// own names it with --log, relative to the stage's working directory, and a failed stage reads what failed
+// from that file too.
 func cmdStage(args []string, io IO) int {
-	p, err := parseArgs(args, []string{"runner"}, []string{"keep-going"})
+	p, err := parseArgs(args, []string{"runner", "log"}, []string{"keep-going", "halts"})
 	if err != nil {
 		fmt.Fprintf(io.Err, "baton: %v\n%s\n", err, stageUsage)
 		return 2
 	}
 	if p.dash != 1 || len(p.pos) < 2 {
 		fmt.Fprintln(io.Err, stageUsage)
+		return 2
+	}
+	if p.bools["keep-going"] && p.bools["halts"] {
+		fmt.Fprintf(io.Err, "baton: a stage keeps going (--keep-going) or halts the gate when it fails (--halts), not both\n%s\n", stageUsage)
+		return 2
+	}
+	logFile, hasLog := p.vals["log"]
+	if hasLog && strings.TrimSpace(logFile) == "" {
+		fmt.Fprintf(io.Err, "baton: --log names the file the stage's command writes its output to\n%s\n", stageUsage)
 		return 2
 	}
 	name := p.pos[0]
@@ -77,8 +92,10 @@ func cmdStage(args []string, io IO) int {
 		}
 		preset, presets = &pr, []lane.Preset{pr}
 	}
-	s := &stageRun{name: name, argv: p.pos[1:], keepGoing: p.bools["keep-going"], preset: preset, io: io,
-		stages: io.Env(lane.EnvStages), commit: io.Env("BATON_COMMIT"), reading: lane.NewReading(lane.MaxFailures, presets...)}
+	qa := io.Env(lane.EnvQAPhase) == "1"
+	s := &stageRun{name: name, argv: p.pos[1:], keepGoing: p.bools["keep-going"] || qa && !p.bools["halts"], qa: qa, preset: preset, io: io,
+		stages: io.Env(lane.EnvStages), commit: io.Env("BATON_COMMIT"), reading: lane.NewReading(lane.MaxFailures, presets...),
+		logName: logFile, log: stageLog(io, logFile)}
 	return s.run()
 }
 
@@ -87,10 +104,13 @@ type stageRun struct {
 	name      string
 	argv      []string
 	keepGoing bool
+	qa        bool // a QA phase's gate ($BATON_QA_PHASE)
 	preset    *lane.Preset
 	io        IO
 	stages    string // the job's stages file ("": outside a job)
 	commit    string
+	logName   string // --log as given ("": none)
+	log       string // the file it names
 
 	mu      sync.Mutex
 	open    bool // the output so far ends mid-line
@@ -105,7 +125,11 @@ func (s *stageRun) run() int {
 			fmt.Fprintf(s.io.Err, "baton: %v\n", err)
 		}
 		if failed, ok := lane.Halted(done); ok {
-			s.say(decide.StageHalted(s.name, failed))
+			if s.qa {
+				s.say(decide.StageHaltedQA(s.name, failed))
+			} else {
+				s.say(decide.StageHalted(s.name, failed))
+			}
 			s.say(lane.EndMarker(s.name, lane.StageSkipped, 1, 0))
 			s.record(lane.Stage{Name: s.name, Status: lane.StageSkipped, Exit: 1, Commit: s.commit, KeepGoing: s.keepGoing})
 			return 1
@@ -144,13 +168,14 @@ func (s *stageRun) run() int {
 	st := lane.Stage{Name: s.name, Status: lane.StagePassed, Exit: exit, Started: started, Ended: ended, Commit: s.commit, KeepGoing: s.keepGoing}
 	if exit != 0 {
 		st.Status = lane.StageFailed
+		s.readLog()
 		s.mu.Lock()
 		fs, more := s.reading.Failed()
 		s.mu.Unlock()
 		if s.preset == nil {
 			fs = failLinesFirst(fs)
 		}
-		st.Failures, st.Runner = narrowTo(fs, more)
+		st.Failures, st.Runner, st.Unnarrowed = narrowTo(fs, more)
 	}
 	s.say(decide.StageEnd(s.name, exit, st.Took()))
 	s.say(lane.EndMarker(s.name, st.Status, exit, st.Took()))
@@ -238,7 +263,7 @@ func (s *stageRun) command(env []string) int {
 	}
 	defer pr.Close()
 	cmd := exec.Command(s.argv[0], s.argv[1:]...)
-	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = env, s.io.In, pw, pw
+	cmd.Dir, cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = s.io.Dir, env, s.io.In, pw, pw
 	err = cmd.Start()
 	pw.Close()
 	if err != nil {
@@ -305,16 +330,21 @@ func (s *stageRun) pass(chunk []byte, whole bool) {
 }
 
 // narrowTo is the ids a rerun of a failed stage runs, of the tests its reading kept (fs) with more past
-// them: none, so that it runs whole, when there are too many, or a file or package failed whole, which no
-// test's name reruns; and the runner whose own lines named every one of them, "" for fail lines' or more
-// runners' than one.
-func narrowTo(fs []lane.FailedTest, more int) (ids []string, runner string) {
+// them, and the runner whose own lines named every one of them, "" for fail lines'. With none, the rerun
+// runs the stage whole, and why says why (lane.Stage.Unnarrowed): no test was named, a file or package
+// failed whole, which no test's name reruns, there are too many, or two runners named them, and no one
+// runner's narrowing runs both's.
+func narrowTo(fs []lane.FailedTest, more int) (ids []string, runner, why string) {
+	var runners []string
 	for i, f := range fs {
 		if f.Whole {
-			return nil, ""
+			return nil, "", lane.UnnarrowedWhole
 		}
 		if !slices.Contains(ids, f.ID) {
 			ids = append(ids, f.ID)
+		}
+		if f.Runner != "" && !slices.Contains(runners, f.Runner) {
+			runners = append(runners, f.Runner)
 		}
 		if i == 0 {
 			runner = f.Runner
@@ -322,10 +352,15 @@ func narrowTo(fs []lane.FailedTest, more int) (ids []string, runner string) {
 			runner = ""
 		}
 	}
-	if more > 0 || len(ids) == 0 {
-		return nil, ""
+	switch {
+	case len(ids) == 0:
+		return nil, "", lane.UnnarrowedNoIDs
+	case more > 0:
+		return nil, "", lane.UnnarrowedMany
+	case len(runners) > 1:
+		return nil, "", lane.UnnarrowedRunners
 	}
-	return ids, runner
+	return ids, runner, ""
 }
 
 // failLinesFirst is what failed in a stage given no --runner: the ids of its command's ::baton fail lines,
@@ -341,6 +376,31 @@ func failLinesFirst(fs []lane.FailedTest) []lane.FailedTest {
 		return lines
 	}
 	return fs
+}
+
+// readLog reads the file the stage's command wrote its output to (--log) for what failed, as its output is
+// read; a file it cannot read is said, and changes nothing else.
+func (s *stageRun) readLog() {
+	if s.log == "" {
+		return
+	}
+	s.mu.Lock()
+	err := lane.ReadInto(s.reading, s.log)
+	s.mu.Unlock()
+	if err != nil {
+		s.say(decide.StageLogUnread(s.name, s.logName, err))
+	}
+}
+
+// stageLog is the file --log names (name), relative to the directory the stage runs in; "" for none.
+func stageLog(io IO, name string) string {
+	if name == "" || filepath.IsAbs(name) {
+		return name
+	}
+	if wd, err := io.wd(); err == nil {
+		return filepath.Join(wd, name)
+	}
+	return name
 }
 
 // say prints one of the stage's own lines, on a line of its own.

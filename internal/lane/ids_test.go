@@ -52,6 +52,11 @@ func TestFailureIDs(t *testing.T) {
 			{Runner: RunPlaywright, ID: "tests/home.spec.ts:12", Scope: "chromium"},
 			{Runner: RunPlaywright, ID: "tests/cart.spec.ts:8", Scope: "firefox"},
 		}, []string{"playwright test tests/home.spec.ts:12 tests/cart.spec.ts:8 --project=chromium --project=firefox"}},
+		{"playwright-summary.log", true, []ft{ // its summary alone: no ✘ line, no failure's details
+			{Runner: RunPlaywright, ID: "tests/search.spec.ts:21", Scope: "chromium"},
+			{Runner: RunPlaywright, ID: "tests/account.spec.ts:9", Scope: "firefox"},
+			{Runner: RunPlaywright, ID: "tests/checkout/pay.spec.ts:44", Scope: "chromium"},
+		}, []string{"playwright test tests/search.spec.ts:21 tests/account.spec.ts:9 tests/checkout/pay.spec.ts:44 --project=chromium --project=firefox"}},
 		{"mixed.log", true, []ft{
 			{Runner: RunPytest, ID: "tests/test_api.py::test_logout"},
 			{ID: "lint:unused-import"},

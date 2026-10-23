@@ -142,6 +142,32 @@ func TestLaneRunTakesAStageFromItsStagesFile(t *testing.T) {
 	}
 }
 
+// In a QA phase's gate, a stage recorded from its markers alone keeps going, as `baton stage` records one
+// there, so that it stops no stage after it; in any other gate it stops them.
+func TestLaneRunRecordsAQAPhasesStagesKeepingGoing(t *testing.T) {
+	defer func(d time.Duration) { stageSettle = d }(stageSettle)
+	stageSettle = 50 * time.Millisecond
+	for _, qa := range []bool{false, true} {
+		s, env := laneProject(t, "echo '::baton stage lint start'; echo '::baton stage lint failed exit=1 seconds=0'; exit 1")
+		s.Update(func(st *state.State) error { st.Jobs[0].QAPhase = qa; return nil })
+		if code, errs := laneRun(env, "sess-1", "j1"); code != 0 {
+			t.Fatalf("qa %v: lane-run: exit %d: %s", qa, code, errs)
+		}
+		st, _ := s.Load()
+		want := []string{fmt.Sprintf("lint failed [] keep-going=%v", qa)}
+		if j := st.Job("j1"); !slices.Equal(stagesOf(j.Stages), want) {
+			t.Errorf("qa %v: job's stages %q, want %q", qa, stagesOf(j.Stages), want)
+		}
+		file, _ := lane.ReadStages(s.JobStages("j1"))
+		if !slices.Equal(stagesOf(file), want) {
+			t.Errorf("qa %v: the stages file: %q, want %q", qa, stagesOf(file), want)
+		}
+		if _, halted := lane.Halted(file); halted == qa {
+			t.Errorf("qa %v: halted %v", qa, halted)
+		}
+	}
+}
+
 // A failure seen as the gate printed it is kept, though the log's cap cuts it out of the log after.
 func TestLaneRunKeepsAFailureCutFromItsLog(t *testing.T) {
 	s, env := laneProject(t, fmt.Sprintf("yes filler | head -c %d; echo; echo '--- FAIL: TestCut'; yes filler | head -c %d; exit 1", lane.HeadBytes+40<<10, lane.MaxBytes+1<<20))

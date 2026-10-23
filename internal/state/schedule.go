@@ -72,6 +72,10 @@ type Job struct {
 	// Narrows are the failures of the gate it reruns (Reruns) that a narrowed rerun names: of a gate with no
 	// stages, rerun by a command of the model's that names each of them (verify --failed -- <command>).
 	Narrows []string `json:"narrows,omitempty"`
+
+	// QAPhase: the job is a QA phase's (plan.TypeQA), whose gate runs every stage (lane.EnvQAPhase), to
+	// collect every red at once.
+	QAPhase bool `json:"qa_phase,omitempty"`
 }
 
 // Failing is the first failure a job's output showed while it ran: a failure line (lane.Failure), a fail
