@@ -42,7 +42,7 @@ func again(j state.Job, same bool) string {
 }
 
 // RerunQueued tells the model, as it queues a rerun for phase, what the rerun carries, narrows and runs
-// whole (state.PlannedRerun).
+// whole, each whole stage with its last time and why (state.PlannedRerun).
 func RerunQueued(phase string, v state.RerunView) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "it reruns what failed in job %s:\n", v.Of)
@@ -53,7 +53,7 @@ func RerunQueued(phase string, v state.RerunView) string {
 		fmt.Fprintf(&b, "- narrowed to what failed there: %s\n", narrowed(v.Narrowed))
 	}
 	if len(v.Whole) > 0 {
-		fmt.Fprintf(&b, "- run whole: %s\n", stageNames(v.Whole))
+		fmt.Fprintf(&b, "- run whole: %s\n", wholeStages(v.Whole))
 	}
 	fmt.Fprintf(&b, "A stage %s's record does not name runs whole too. If it passes, it clears %s; if it fails, it is %s's red gate from then on, "+
 		"and `baton verify --failed` reruns what failed in it. To run a carried stage again, add --stages <name>,<name>.", v.Of, v.Of, phase)

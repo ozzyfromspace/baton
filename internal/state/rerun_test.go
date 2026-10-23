@@ -208,7 +208,8 @@ func TestARerunsView(t *testing.T) {
 	j := Job{ID: "j5", Commit: "c3", Reruns: "j1"}
 	v := PlannedRerun(j, r, record)
 	if v.Of != "j1" || v.Commit != "c3" || !slices.Equal(stageNames(carriedOf(v)), []string{"unit:carried@j1", "docs:passed@j3"}) ||
-		!slices.Equal(stageNames(v.Narrowed), []string{"e2e:failed[TestA]"}) || !slices.Equal(v.Whole, []string{"lint", "perf"}) {
+		!slices.Equal(stageNames(v.Narrowed), []string{"e2e:failed[TestA]"}) ||
+		!slices.Equal(v.Whole, []WholeStage{{Name: "lint", Why: WholeBroughtBack}, {Name: "perf", Why: lane.UnnarrowedNoIDs}}) {
 		t.Fatalf("planned %+v", v)
 	}
 	var many []string

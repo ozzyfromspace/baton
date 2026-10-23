@@ -47,7 +47,8 @@ func TestAStagedRedGateNamesFailed(t *testing.T) {
 }
 
 // As a rerun is queued, the model is told what it carries, with the commit each carried stage passed on
-// and the files changed since, what it narrows, with the ids, and what runs whole.
+// and the files changed since, what it narrows, with the ids, and what runs whole, with its last time and
+// why.
 func TestRerunQueued(t *testing.T) {
 	v := state.RerunView{Of: "j4", Commit: "9a9a9a9a9a9a9a9a",
 		Carried: []state.CarriedStage{
@@ -57,14 +58,14 @@ func TestRerunQueued(t *testing.T) {
 			{Stage: lane.Stage{Name: "vet", Commit: "11"}},
 		},
 		Narrowed: []lane.Stage{{Name: "e2e", Failures: []string{"TestA", "TestB/sub"}}},
-		Whole:    []string{"perf"},
+		Whole:    []state.WholeStage{{Name: "perf", Why: lane.UnnarrowedNoIDs, Took: 78 * time.Minute}, {Name: "smoke", Why: state.WholeSkipped("j4")}},
 	}
 	got := RerunQueued("P3", v)
 	want := "it reruns what failed in job j4:\n" +
 		"- carried, not run again: `unit`, passed in j4 on 72b7740c1d2e (changed since: a.go, b.go and 3 more); `lint`, passed in j2 on 72b7740c1d2e (no file changed since); " +
 		"`docs`, passed in j3 on 9a9a9a9a9a9a (this commit); `vet`, passed on 11\n" +
 		"- narrowed to what failed there: `e2e` (TestA, TestB/sub)\n" +
-		"- run whole: `perf`\n" +
+		"- run whole: `perf` (1h18m last time; baton read no failure ids from it); `smoke` (skipped in job j4)\n" +
 		"A stage j4's record does not name runs whole too. If it passes, it clears j4; if it fails, it is P3's red gate from then on, " +
 		"and `baton verify --failed` reruns what failed in it. To run a carried stage again, add --stages <name>,<name>."
 	if got != want {

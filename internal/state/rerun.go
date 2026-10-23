@@ -201,9 +201,10 @@ type RerunView struct {
 	Carried []CarriedStage
 	// Narrowed are the stages run narrowed to the failures they had (Failures).
 	Narrowed []lane.Stage
-	// Whole are the stages of the gate's record run whole: brought back (--stages), failed with no failures
-	// known, skipped. Any stage not on record runs whole too. Only as queued.
-	Whole []string
+	// Whole are the stages run whole, each with why and its last time (WholeStage): those of the gate's
+	// record brought back (--stages), failed with no failures known, or skipped, and those a gate it draws on
+	// showed a failure in and never ended. Any other stage not on record runs whole too. Only as queued.
+	Whole []WholeStage
 }
 
 // CarriedStage is a stage a rerun carries, with the files changed since the commit it passed on.
@@ -217,8 +218,8 @@ type CarriedStage struct {
 // MaxChanged is how many of the files changed since a carried stage passed a rerun's words name.
 const MaxChanged = 20
 
-// PlannedRerun is what rerun j of r will carry and narrow, running from record (RerunRecord): as it is
-// queued.
+// PlannedRerun is what rerun j of r will carry, narrow and run whole, running from record (RerunRecord): as
+// it is queued.
 func PlannedRerun(j Job, r Rerun, record []lane.Stage) RerunView {
 	v := RerunView{Of: r.Of.ID, Commit: j.Commit}
 	for _, s := range r.Stages {
@@ -229,9 +230,10 @@ func PlannedRerun(j Job, r Rerun, record []lane.Stage) RerunView {
 		case at >= 0 && Narrows(record[at]):
 			v.Narrowed = append(v.Narrowed, record[at])
 		default:
-			v.Whole = append(v.Whole, s.Name)
+			v.Whole = append(v.Whole, wholeStage(s, at >= 0))
 		}
 	}
+	v.Whole = append(v.Whole, unrecorded(r.From, r.Stages)...)
 	return v
 }
 
