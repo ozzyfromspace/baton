@@ -61,12 +61,14 @@ func MergeMessage(branch, phaseBranch string) string {
 }
 
 // LandConflict tells a worker on phase that the run's branch (branch) conflicts with its branch in paths,
-// so it merges it in and resolves that itself. Nothing it is asked to do rewrites a commit.
-func LandConflict(phase, branch string, paths []string) string {
-	return fmt.Sprintf("[baton] Your work on %s did not land yet: other work landed on %s, the run's branch, meanwhile, and it conflicts with yours in %s. "+
+// so it merges it in and resolves that itself, with, under each path, the commits of branch that changed
+// it since the two last met (history, newest first; conflict.go). Nothing it is asked to do rewrites a
+// commit.
+func LandConflict(phase, branch string, paths []string, history map[string][]ConflictCommit) string {
+	return fmt.Sprintf("[baton] Your work on %s did not land yet: other work landed on %s, the run's branch, meanwhile, and it conflicts with yours in %s. %s"+
 		"Merge it into your branch yourself: git merge %s, resolve each conflict so that both your change and the one already on %s keep working, git add the files, "+
 		"and git commit --no-edit. A merge keeps every commit as it is: never rebase or reset your branch to do it. Run the phase's checks again, then run baton done %s again.",
-		phase, branch, strings.Join(paths, ", "), branch, branch, phase)
+		phase, branch, strings.Join(paths, ", "), conflictHistory(branch, paths, history), branch, branch, phase)
 }
 
 // LandRefused tells a worker on phase that baton could not merge branch (the run's branch) into its

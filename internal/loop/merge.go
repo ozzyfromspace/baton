@@ -62,6 +62,7 @@ type landGit interface {
 	Dirty(root string) ([]string, error)
 	MergeBase(ctx context.Context, root, a, b string) (string, error)
 	ChangedBetween(ctx context.Context, root, base, to string) ([]string, error)
+	LogPaths(ctx context.Context, root, from, to string, paths []string) (map[string][]gitx.Commit, error)
 }
 
 type realGit struct{}
@@ -92,6 +93,9 @@ func (realGit) MergeBase(ctx context.Context, root, a, b string) (string, error)
 }
 func (realGit) ChangedBetween(ctx context.Context, root, base, to string) ([]string, error) {
 	return gitx.ChangedBetween(ctx, root, base, to)
+}
+func (realGit) LogPaths(ctx context.Context, root, from, to string, paths []string) (map[string][]gitx.Commit, error) {
+	return gitx.LogPaths(ctx, root, from, to, paths)
 }
 
 func (f *Fleet) gitx() landGit {
@@ -299,7 +303,7 @@ func (c *Coordinator) mergeIn(now time.Time, s *state.Store, st state.State, w *
 		}
 		text, why := decide.LandRefused(e.Phase, st.RunBranch, re.Msg), "baton could not merge the run's branch into its branch: "+re.Msg
 		if len(re.Paths) > 0 {
-			text, why = decide.LandConflict(e.Phase, st.RunBranch, re.Paths), "its branch conflicts with the run's in "+strings.Join(re.Paths, ", ")
+			text, why = decide.LandConflict(e.Phase, st.RunBranch, re.Paths, c.conflictHistory(ctx, s, st, onto, tip, re.Paths)), "its branch conflicts with the run's in "+strings.Join(re.Paths, ", ")
 		}
 		if _, err := w.store.Update(func(sub *state.State) error {
 			return state.Reopen(sub, e.Phase, state.Message{Kind: state.MessageLand, Text: text}, now)
