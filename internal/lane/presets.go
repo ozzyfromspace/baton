@@ -424,20 +424,54 @@ func jsNames(f FailedTest) []string {
 }
 
 // readPlaywright reads Playwright's failure lines, the list reporter's `✘  3 [project] › file:line:col ›
-// title (1.2s)` and the summary's `1) [project] › file:line:col › title ───`, as the test's `file:line`, in
-// its project. A test that failed and then passed on a retry is read as failed: it failed once.
+// title (1.2s)` and the failure details' `1) [project] › file:line:col › title ───`, as the test's
+// `file:line`, in its project. A test that failed and then passed on a retry is read as failed: it failed
+// once.
+//
+// It reads the end-of-run summary too, which every reporter prints and which is all a log's tail may hold:
+// under its `  2 failed` line, each indented `[project] › file:line:col › title` (or `file:line:col ›
+// title`) is a failed test, up to the next count line (`1 flaky`, `3 skipped`, `40 passed (1.3m)`, …) or a
+// line that is not indented. The tests under `N flaky` passed on a retry, and those under `N interrupted`
+// never ended: neither is read as failed from the summary.
 func readPlaywright(r *Reading) reader {
+	failed := false // in the summary's list of failed tests
 	return reader{line: func(line string) {
 		if f, ok := playwrightFailure(line); ok {
 			r.add(f)
+			return
+		}
+		t := strings.TrimSpace(line)
+		switch {
+		case playwrightFailedRE.MatchString(t):
+			failed = true
+		case !failed:
+		case playwrightCountRE.MatchString(t), t != "" && line[0] != ' ' && line[0] != '\t':
+			failed = false
+		default:
+			if f, ok := playwrightTest(playwrightListedRE.FindStringSubmatch(t)); ok {
+				r.add(f)
+			}
 		}
 	}}
 }
 
-var playwrightRE = regexp.MustCompile(`^(?:(?:✘|x)\s+(?:\d+\s+)?|\d+\)\s+)(?:\[([^\]]+)\] › )?(\S+):(\d+):\d+ › `)
+// playwrightHead is how Playwright names a test: its project, if any, and where it is, then its title.
+const playwrightHead = `(?:\[([^\]]+)\] › )?(\S+):(\d+):\d+ › `
+
+var (
+	playwrightRE       = regexp.MustCompile(`^(?:(?:✘|x)\s+(?:\d+\s+)?|\d+\)\s+)` + playwrightHead)
+	playwrightListedRE = regexp.MustCompile(`^` + playwrightHead)
+	// The summary's count lines: `2 failed` starts its list of failed tests, any other count ends it.
+	playwrightFailedRE = regexp.MustCompile(`^\d+ failed$`)
+	playwrightCountRE  = regexp.MustCompile(`^\d+ \S`)
+)
 
 func playwrightFailure(line string) (FailedTest, bool) {
-	m := playwrightRE.FindStringSubmatch(strings.TrimSpace(line))
+	return playwrightTest(playwrightRE.FindStringSubmatch(strings.TrimSpace(line)))
+}
+
+// playwrightTest is the test a match of playwrightHead names.
+func playwrightTest(m []string) (FailedTest, bool) {
 	if m == nil || !jsPath(m[2]) {
 		return FailedTest{}, false
 	}
