@@ -524,18 +524,20 @@ func TestAJobsCommandGetsItsEnvironment(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		rerun string
+		qa    bool
 		want  string
 	}{
-		{"a gate", "", "j7 /runs/s/jobs/j7.stages none /opt/baton/v1"},
-		{"a rerun", "/runs/s/jobs/j3.stages", "j7 /runs/s/jobs/j7.stages /runs/s/jobs/j3.stages /opt/baton/v1"},
+		{"a gate", "", false, "j7 /runs/s/jobs/j7.stages none none /opt/baton/v1"},
+		{"a rerun", "/runs/s/jobs/j3.stages", false, "j7 /runs/s/jobs/j7.stages /runs/s/jobs/j3.stages none /opt/baton/v1"},
+		{"a QA phase's gate", "", true, "j7 /runs/s/jobs/j7.stages none 1 /opt/baton/v1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root, head := project(t, false)
 			r := testRunner(t, root)
 			r.Pool.Bin = "/opt/baton/v1"
 			out := filepath.Join(t.TempDir(), "env.txt")
-			cmd := `echo "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${PATH%%:*}" > ` + out
-			res := r.Run(context.Background(), Job{ID: "j7", Command: cmd, Commit: head, Stages: "/runs/s/jobs/j7.stages", Rerun: c.rerun})
+			cmd := `echo "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${BATON_QA_PHASE-none}" "${PATH%%:*}" > ` + out
+			res := r.Run(context.Background(), Job{ID: "j7", Command: cmd, Commit: head, Stages: "/runs/s/jobs/j7.stages", Rerun: c.rerun, QAPhase: c.qa})
 			if res.Status != Passed {
 				t.Fatalf("%+v\n%s", res, logOf(t, r))
 			}

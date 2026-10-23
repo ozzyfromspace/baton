@@ -137,6 +137,7 @@ func queueJob(args []string, io IO, kind string) int {
 			return refusal{"phase changed", fmt.Sprintf("not queued — the phase in hand is %s now, not %s. Run it again if it is still wanted.", st.Current, phase)}
 		}
 		j := state.Job{Phase: phase, Kind: kind, Command: command, Commit: commit, Here: here, Notes: notes, QA: qa, Why: why}
+		j.QAPhase = slices.ContainsFunc(pl.Phases, func(ph plan.Phase) bool { return ph.ID == phase && ph.QA() })
 		if said.event == "gate_unexplained" {
 			j.Unexplained = said.line
 		}
@@ -227,6 +228,9 @@ func queueJob(args []string, io IO, kind string) int {
 	queuedEvent := map[string]any{"job": queued.ID, "phase": phase, "type": kind, "command": command, "commit": commit}
 	if here {
 		queuedEvent["here"] = true
+	}
+	if queued.QAPhase {
+		queuedEvent["qa_phase"] = true // every stage of its gate runs
 	}
 	if re != nil {
 		queuedEvent["reruns"] = re.r.Of.ID
