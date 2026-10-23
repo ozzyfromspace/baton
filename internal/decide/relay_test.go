@@ -35,7 +35,7 @@ func TestRelayQuestions(t *testing.T) {
 			"baton: the agent on P4 has made 3 decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let P4 go on? To write to the agent, use @P4 <your words> at the lead's prompt.",
 			"Continue|Pause baton|Wait for me", "Wait for me", "Leave P4 waiting; /baton run asks me again"},
 	} {
-		q := RelayQuestion(c.r, deadline)
+		q := RelayQuestion(c.r, deadline, RunWait{})
 		if q.Text != c.text {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, q.Text, c.text)
 		}

@@ -60,23 +60,53 @@ func MergeMessage(branch, phaseBranch string) string {
 	return fmt.Sprintf("Merge branch '%s' into %s", branch, phaseBranch)
 }
 
-// LandConflict tells a worker on phase that the run's branch (branch) conflicts with its branch in paths,
-// so it merges it in and resolves that itself, with, under each path, the commits of branch that changed
-// it since the two last met (history, newest first; conflict.go). Nothing it is asked to do rewrites a
-// commit.
+// LandConflict tells a worker on phase that the run's branch (branch) conflicts with its branch in paths:
+// baton's merge of branch into its branch, in its worktree, stopped there and is left in progress
+// (gitx.MergeError.Kept), so it resolves the files and commits the merge, with, under each path, the
+// commits of branch that changed it since the two last met (history, newest first; conflict.go). It never
+// runs git merge itself, which auto mode may refuse, nor anything that rewrites a commit or discards a
+// resolution.
 func LandConflict(phase, branch string, paths []string, history map[string][]ConflictCommit) string {
-	return fmt.Sprintf("[baton] Your work on %s did not land yet: other work landed on %s, the run's branch, meanwhile, and it conflicts with yours in %s. %s"+
-		"Merge it into your branch yourself: git merge %s, resolve each conflict so that both your change and the one already on %s keep working, git add the files, "+
-		"and git commit --no-edit. A merge keeps every commit as it is: never rebase or reset your branch to do it. Run the phase's checks again, then run baton done %s again.",
-		phase, branch, strings.Join(paths, ", "), conflictHistory(branch, paths, history), branch, branch, phase)
+	return fmt.Sprintf("[baton] Your work on %s did not land yet: other work landed on %s, the run's branch, meanwhile, and it conflicts with yours in %s. "+
+		"baton started merging %s into your branch, in your worktree, and the merge stopped at those conflicts: it is still under way, with git's conflict markers in %s. %s%s",
+		phase, branch, strings.Join(paths, ", "), branch, plural(len(paths), "that file", "those files"), conflictHistory(branch, paths, history), resolveMerge(phase, branch))
+}
+
+// LandUnfinished tells a worker on phase that it reported the phase done again while the merge baton
+// started in its worktree (LandConflict) is not committed yet, with unmerged, the paths still in conflict
+// (none when every one is resolved and added, and only the commit is left).
+func LandUnfinished(phase string, unmerged []string) string {
+	left := "Every conflict is resolved and added: finish the merge with git commit --no-edit. "
+	if len(unmerged) > 0 {
+		left = fmt.Sprintf("%s still %s. %s", strings.Join(unmerged, ", "), plural(len(unmerged), "conflicts", "conflict"), resolveSteps("the run's branch"))
+	}
+	return fmt.Sprintf("[baton] Your work on %s did not land yet: the merge baton started in your worktree is not committed yet, so there is nothing to land. %s%s",
+		phase, left, underWay(phase))
+}
+
+// resolveMerge is how a worker on phase finishes the merge of branch baton left in progress in its
+// worktree: resolve, add, commit, check, done; never a command that starts, undoes or rewrites a merge.
+func resolveMerge(phase, branch string) string { return resolveSteps(branch) + underWay(phase) }
+
+// resolveSteps are the steps that finish a merge of branch in progress.
+func resolveSteps(branch string) string {
+	return fmt.Sprintf("Resolve each conflict so that both your change and the one already on %s keep working, git add the files, and git commit --no-edit to finish the merge. ", branch)
+}
+
+// underWay says what never to run over a merge in progress, and what comes once it is committed.
+func underWay(phase string) string {
+	return fmt.Sprintf("The merge is already under way: never run git merge, rebase, reset or merge --abort, which would start another or undo the one in progress, "+
+		"and a merge keeps every commit as it is. Run the phase's checks again, then run baton done %s again.", phase)
 }
 
 // LandRefused tells a worker on phase that baton could not merge branch (the run's branch) into its
-// branch, for why (what git said), so it does it itself.
+// branch, for why (what git said; baton's merge starts only on a worktree with nothing uncommitted). It
+// commits what is uncommitted and reports the phase done again: baton merges as it lands. No model is
+// asked to run git merge, which auto mode may refuse.
 func LandRefused(phase, branch, why string) string {
 	return fmt.Sprintf("[baton] Your work on %s did not land yet: baton could not merge %s, the run's branch, into your branch (git said: %s). "+
-		"Commit any uncommitted changes in your worktree, never discarding them, then merge it yourself: git merge %s, resolving any conflicts so that both sides keep working, "+
-		"and git commit --no-edit. Never rebase or reset your branch to do it. Run the phase's checks again, then run baton done %s again.", phase, branch, why, branch, phase)
+		"Commit any uncommitted changes in your worktree by path (git add -- <paths>, then git commit), never discarding them, then run baton done %s again: "+
+		"baton merges %s into your branch itself as it lands your work. Never run git merge, rebase or reset for it.", phase, branch, why, phase, branch)
 }
 
 // ReverifyNotes are the notes of the verification baton runs again on a worker's branch, with branch (the

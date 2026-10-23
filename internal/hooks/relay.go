@@ -39,7 +39,8 @@ func relayFields(r state.Relay, more map[string]any) map[string]any {
 
 // relayAsked records that the phase agent's question the mod was told to ask reached Claude Code's dialog
 // queue, and pushes the human about a proposal (its question names the deadline). An agent's block or
-// review pushed them already, as it began.
+// review pushed them already, as it began. A block's event says whether its question said nothing else in
+// the run can move (run_waits).
 func relayAsked(st *state.State, now time.Time) (event, bool) {
 	r := st.RelayIssued()
 	if r == nil || r.Asked {
@@ -49,5 +50,9 @@ func relayAsked(st *state.State, now time.Time) (event, bool) {
 	if r.Kind == state.RelayProposal {
 		notice(st, "proposal", strings.TrimPrefix(r.Question, "baton: "), now)
 	}
-	return event{"relay_asked", relayFields(*r, map[string]any{"deadline": r.Deadline.UTC().Format(time.RFC3339)})}, true
+	fields := map[string]any{"deadline": r.Deadline.UTC().Format(time.RFC3339)}
+	if r.Kind == state.RelayBlocked {
+		fields["run_waits"] = r.RunWaits
+	}
+	return event{"relay_asked", relayFields(*r, fields)}, true
 }

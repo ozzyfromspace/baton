@@ -60,9 +60,10 @@ func TestAConflictIsToldWithItsHistory(t *testing.T) {
 		t.Fatalf("the agent's inbox: %+v\n%s", sst.Inbox, x.events())
 	}
 	text := sst.Inbox[0].Text
-	want := "it conflicts with yours in a.txt. What main did to that file since your branch last met it, newest first (git show <hash> shows a commit), " +
+	want := "it conflicts with yours in a.txt. baton started merging main into your branch, in your worktree, and the merge stopped at those conflicts: " +
+		"it is still under way, with git's conflict markers in that file. What main did to that file since your branch last met it, newest first (git show <hash> shows a commit), " +
 		"so you know whose change you merge with yours:\n\na.txt:\n  " + leads[:7] + " wip: the lead's change (made in the lead's checkout)\n  " +
-		landed[:7] + " feat: P2's change (P2's work)\n\nMerge it into your branch yourself: git merge main"
+		landed[:7] + " feat: P2's change (P2's work)\n\nResolve each conflict so that both your change and the one already on main keep working"
 	if !strings.Contains(text, want) || strings.Contains(text, first[:7]) {
 		t.Errorf("told:\n%s\nwant it to hold:\n%s", text, want)
 	}

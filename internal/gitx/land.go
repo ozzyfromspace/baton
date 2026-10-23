@@ -31,15 +31,20 @@ var (
 	ErrOverwrite = errors.New("local changes would be overwritten")
 	// ErrLocked: another git command holds the checkout's index; nothing was applied.
 	ErrLocked = errors.New("the index is locked")
-	// ErrConflict: the merge stopped on conflicts, and was aborted.
+	// ErrConflict: the merge stopped on conflicts, and was left in progress for its worktree's agent.
 	ErrConflict = errors.New("the merge conflicts")
+	// ErrNoMerge: CommitMerge found no merge in progress.
+	ErrNoMerge = errors.New("no merge is in progress")
 )
 
-// MergeError is a merge that did not go through. It was aborted, or never started, so the branch, its
-// index and its files are as they were. Paths are the paths that conflicted (none when git refused to
-// start, or stopped for another reason), and Msg is what git said.
+// MergeError is a merge that did not go through. One that stopped on conflicts is kept (Kept): it stays
+// in progress, with MERGE_HEAD and the conflict markers in the files, for the worktree's agent to resolve
+// and commit, and the branch's commits are as they were. Any other was aborted, or never started, so the
+// branch, its index and its files are as they were. Paths are the paths that conflicted (none when git
+// refused to start, or stopped for another reason), and Msg is what git said.
 type MergeError struct {
 	Paths []string
+	Kept  bool
 	Msg   string
 }
 
@@ -78,10 +83,12 @@ func IsAncestor(ctx context.Context, root, a, b string) (bool, error) {
 
 // Merge merges commit onto into the branch checked out in the worktree dir, as the commit message msg. It
 // rewrites nothing: every commit of the branch stays as it is. It starts only with no uncommitted change
-// to a tracked file, since aborting a merge cannot always give such a change back; an untracked file in
-// its way makes git refuse before it changes anything. A merge that stops (on a conflict, or a merge
-// commit that could not be signed) is aborted, and its MergeError says why. Local changes are never
-// stashed.
+// to a tracked file, so a merge it leaves in progress is undone exactly by `git merge --abort`; an
+// untracked file in its way makes git refuse before it changes anything. A merge that stops on conflicts
+// is left in progress (MergeError.Kept), for the worktree's agent to resolve and commit (CommitMerge): no
+// model ever runs git merge itself. Once a model may have resolved files, nothing of baton's aborts it. A
+// merge that stops for another reason (a merge commit that could not be signed) is aborted, and its
+// MergeError says why. Local changes are never stashed.
 func Merge(ctx context.Context, dir, onto, msg string) error {
 	if !Usable(dir) {
 		return ErrNoGit
@@ -98,11 +105,12 @@ func Merge(ctx context.Context, dir, onto, msg string) error {
 		return nil
 	}
 	e := &MergeError{Msg: firstLines(stderr, 3)}
-	if !merging(ctx, dir) {
+	if !Merging(ctx, dir) {
 		return e // git refused to start, and changed nothing
 	}
-	if out, _, _, err := runCode(ctx, dir, nil, "diff", "--name-only", "-z", "--diff-filter=U"); err == nil {
-		e.Paths = nulList(out)
+	if paths, err := Unmerged(ctx, dir); err == nil && len(paths) > 0 {
+		e.Paths, e.Kept = paths, true
+		return e
 	}
 	if _, stderr, _, err := runCode(ctx, dir, landEnv, "merge", "--abort"); err != nil {
 		return fmt.Errorf("%v, and aborting it failed: %s", e, firstLines(stderr, 3))
@@ -110,10 +118,110 @@ func Merge(ctx context.Context, dir, onto, msg string) error {
 	return e
 }
 
-// merging reports a merge stopped part way in the worktree dir.
-func merging(ctx context.Context, dir string) bool {
+// Merging reports a merge in progress in the worktree dir: one that stopped part way, or one an agent is
+// resolving.
+func Merging(ctx context.Context, dir string) bool {
 	_, _, code, _ := runCode(ctx, dir, nil, "rev-parse", "-q", "--verify", "MERGE_HEAD")
 	return code == 0
+}
+
+// Unmerged lists the paths of the worktree dir's index still in conflict: those of a merge in progress
+// not yet resolved and added.
+func Unmerged(ctx context.Context, dir string) ([]string, error) {
+	if !Usable(dir) {
+		return nil, ErrNoGit
+	}
+	out, err := run(ctx, dir, nil, nil, "diff", "--name-only", "-z", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	return nulList(out), nil
+}
+
+// UnresolvedError is a merge CommitMerge would not commit: Paths are still unmerged, and Markers
+// ("path:line") are conflict markers left in what is staged.
+type UnresolvedError struct {
+	Paths   []string
+	Markers []string
+}
+
+func (e *UnresolvedError) Error() string {
+	if len(e.Paths) > 0 {
+		return "the merge is not resolved: " + strings.Join(e.Paths, ", ") + " still conflict"
+	}
+	return "the merge is not resolved: conflict markers are left at " + strings.Join(e.Markers, ", ")
+}
+
+// CommitMerge commits the merge in progress in the worktree dir, with the message git prepared for it
+// (`git commit --no-edit`). It refuses, with an UnresolvedError, while a path is unmerged or a conflict
+// marker is left in what is staged, and with ErrNoMerge when no merge is in progress. ErrLocked says
+// another git command held the index. The project's commit hooks run, as for the agent's own commit.
+func CommitMerge(ctx context.Context, dir string) error {
+	if !Usable(dir) {
+		return ErrNoGit
+	}
+	if !Merging(ctx, dir) {
+		return ErrNoMerge
+	}
+	paths, err := Unmerged(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if len(paths) > 0 {
+		return &UnresolvedError{Paths: paths}
+	}
+	markers, err := leftMarkers(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if len(markers) > 0 {
+		return &UnresolvedError{Markers: markers}
+	}
+	if _, stderr, _, err := runCode(ctx, dir, landEnv, "commit", "-q", "--no-edit"); err != nil {
+		return commitError("commit", stderr, err)
+	}
+	return nil
+}
+
+// leftMarkers lists the conflict markers ("path:line") staged in the worktree dir that neither side of
+// its merge has: `git diff --cached --check` against each parent, where both report the line. A marker
+// one side already had (a test's fixture, a Markdown underline of seven '=') is no leftover.
+func leftMarkers(ctx context.Context, dir string) ([]string, error) {
+	ours, err := markersAgainst(ctx, dir, "HEAD")
+	if err != nil || len(ours) == 0 {
+		return nil, err
+	}
+	theirs, err := markersAgainst(ctx, dir, "MERGE_HEAD")
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(theirs))
+	for _, m := range theirs {
+		seen[m] = true
+	}
+	var left []string
+	for _, m := range ours {
+		if seen[m] {
+			left = append(left, m)
+		}
+	}
+	return left, nil
+}
+
+// markersAgainst lists the conflict markers ("path:line") that `git diff --cached --check` finds in the
+// index against commit; its whitespace errors are none of baton's business.
+func markersAgainst(ctx context.Context, dir, commit string) ([]string, error) {
+	out, stderr, code, err := runCode(ctx, dir, landEnv, "diff", "--cached", "--check", commit, "--")
+	if err != nil && code != 2 { // 2: --check found something
+		return nil, fmt.Errorf("git diff --check: %v: %s", err, firstLines(stderr, 3))
+	}
+	var markers []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if at, ok := strings.CutSuffix(l, ": leftover conflict marker"); ok {
+			markers = append(markers, at)
+		}
+	}
+	return markers, nil
 }
 
 // Change is a path a branch changes.

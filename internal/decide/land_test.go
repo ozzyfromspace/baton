@@ -50,3 +50,48 @@ func TestALandingThatWaits(t *testing.T) {
 		}
 	}
 }
+
+// A worker whose landing did not go through is never asked to run git merge, which auto mode may refuse:
+// a conflicted merge is under way in its worktree, and it resolves, adds and commits it; a merge baton
+// could not start leaves it to commit what is uncommitted, and baton merges as it lands.
+func TestAWorkerIsNeverAskedToMerge(t *testing.T) {
+	never := "never run git merge, rebase, reset or merge --abort"
+	for _, c := range []struct {
+		name string
+		got  string
+		want []string
+		not  []string
+	}{
+		{"a conflict", LandConflict("P6", "main", []string{"a.go"}, nil), []string{
+			"[baton] Your work on P6 did not land yet: other work landed on main, the run's branch, meanwhile, and it conflicts with yours in a.go. ",
+			"baton started merging main into your branch, in your worktree, and the merge stopped at those conflicts: it is still under way, with git's conflict markers in that file. ",
+			"Resolve each conflict so that both your change and the one already on main keep working, git add the files, and git commit --no-edit to finish the merge. ",
+			never, "Run the phase's checks again, then run baton done P6 again.",
+		}, []string{"Merge it into your branch yourself"}},
+		{"conflicts in two files", LandConflict("P6", "main", []string{"a.go", "b.go"}, nil), []string{"conflict markers in those files"}, nil},
+		{"done with paths still in conflict", LandUnfinished("P6", []string{"a.go", "b.go"}), []string{
+			"[baton] Your work on P6 did not land yet: the merge baton started in your worktree is not committed yet, so there is nothing to land. a.go, b.go still conflict. Resolve each conflict",
+			"the one already on the run's branch keep working", "git commit --no-edit", never, "baton done P6 again",
+		}, []string{"Every conflict is resolved"}},
+		{"done with one path in conflict", LandUnfinished("P6", []string{"a.go"}), []string{"a.go still conflicts. "}, nil},
+		{"done with the merge resolved, not committed", LandUnfinished("P6", nil), []string{
+			"nothing to land. Every conflict is resolved and added: finish the merge with git commit --no-edit. The merge is already under way", never, "baton done P6 again",
+		}, []string{"still conflict", "Resolve each"}},
+		{"a merge baton could not start", LandRefused("P6", "main", "uncommitted changes to a.go"), []string{
+			"[baton] Your work on P6 did not land yet: baton could not merge main, the run's branch, into your branch (git said: uncommitted changes to a.go). ",
+			"Commit any uncommitted changes in your worktree by path (git add -- <paths>, then git commit), never discarding them, then run baton done P6 again: ",
+			"baton merges main into your branch itself as it lands your work. Never run git merge, rebase or reset for it.",
+		}, []string{"merge it yourself"}},
+	} {
+		for _, w := range c.want {
+			if !strings.Contains(c.got, w) {
+				t.Errorf("%s lacks %q:\n%s", c.name, w, c.got)
+			}
+		}
+		for _, w := range append(c.not, "git merge main", "git rebase") {
+			if strings.Contains(c.got, w) {
+				t.Errorf("%s has %q:\n%s", c.name, w, c.got)
+			}
+		}
+	}
+}
