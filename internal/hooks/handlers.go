@@ -1751,17 +1751,20 @@ func refusalIn(path string, agent bool) (r *transcript.Refusal) {
 // the turn.
 func (h *handlers) stopFailure(c Context) (Result, error) {
 	e := state.StopError{Error: str(c.Input, "error"), Details: str(c.Input, "error_details"), Message: str(c.Input, "last_assistant_message"), At: c.Now}
+	tp, agent := str(c.Input, "transcript_path"), str(c.Input, "agent_id") != ""
+	if agent {
+		tp = agentTranscript(c.Input) // a phase agent's own
+	}
 	if e.Error == "invalid_request" && c.Agent == "" {
 		// Claude Code reports a turn the model's safeguards declined as a request it could not send; only
 		// the loop's own transcript says which it was (docs/research/recovery.md): the lead's, or a phase
 		// agent's.
-		tp, agent := str(c.Input, "transcript_path"), str(c.Input, "agent_id") != ""
-		if agent {
-			tp = agentTranscript(c.Input)
-		}
 		if r := refusalIn(tp, agent); r != nil {
 			e.Error, e.Category, e.Details = state.ErrRefusal, r.Category, r.Explanation
 		}
+	}
+	if e.Error == "rate_limit" && c.Agent == "" {
+		usageStop(&e, tp, agent) // which window, and when it resets: only the transcript says
 	}
 	var events []event
 	s, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
@@ -1790,6 +1793,12 @@ func (h *handlers) stopFailure(c Context) (Result, error) {
 		}
 		if c.Agent == "" && e.Afresh() {
 			fields["afresh"] = true // the API refused the conversation itself: a fresh session avoids it
+		}
+		if e.Window != "" {
+			fields["window"] = e.Window
+		}
+		if !e.Resets.IsZero() {
+			fields["resets"] = e.Resets.UTC().Format(time.RFC3339)
 		}
 		if c.Agent != "" {
 			fields["agent"] = c.Agent

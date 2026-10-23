@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // A Preset knows a test runner: the lines of its output that name a failed test (read through a Reading),
@@ -77,18 +78,24 @@ func lineReader(runner string, failure func(line string) string) func(r *Reading
 // readGo reads go test: `--- FAIL: TestX/sub` names its top-level test, whose package is the one the next
 // `FAIL<tab>pkg` line names; a package's `ok` line drops the failure lines before it, which its tests
 // printed of a run of their own. A package that fails with no test failed (it did not build, a test timed
-// out, TestMain exited) fails whole.
+// out, TestMain exited) fails whole. A test took the longest time its lines give (`--- FAIL: TestX
+// (300.00s)`): its own line's, which counts its subtests'.
 func readGo(r *Reading) reader {
 	type held struct {
-		id  string
-		seq int
+		id   string
+		seq  int
+		took time.Duration
 	}
 	var pending []held
 	return reader{
 		line: func(line string) {
 			if id := goFailure(line); id != "" {
-				if !slices.ContainsFunc(pending, func(h held) bool { return h.id == id }) {
-					pending = append(pending, held{id, r.next()})
+				took := parenTook(line)
+				switch i := slices.IndexFunc(pending, func(h held) bool { return h.id == id }); {
+				case i < 0:
+					pending = append(pending, held{id, r.next(), took})
+				case took > pending[i].took:
+					pending[i].took = took
 				}
 				return
 			}
@@ -97,7 +104,7 @@ func readGo(r *Reading) reader {
 					r.add(FailedTest{Runner: RunGo, ID: pkg, Scope: pkg, Whole: true})
 				}
 				for _, h := range pending {
-					r.addAt(h.seq, FailedTest{Runner: RunGo, ID: h.id, Scope: pkg})
+					r.addAt(h.seq, FailedTest{Runner: RunGo, ID: h.id, Scope: pkg, Took: h.took})
 				}
 				pending = nil
 				return
@@ -108,7 +115,7 @@ func readGo(r *Reading) reader {
 		},
 		flush: func() {
 			for _, h := range pending {
-				r.addAt(h.seq, FailedTest{Runner: RunGo, ID: h.id})
+				r.addAt(h.seq, FailedTest{Runner: RunGo, ID: h.id, Took: h.took})
 			}
 			pending = nil
 		},
@@ -295,7 +302,8 @@ const jsSep = " > "
 
 // readVitest reads vitest's summary line ` FAIL  file > suite > name` (` FAIL  file [ file ]` for a file that
 // did not load), and, for a gate stopped before its summary, a failed file's ` ❯ file (3 tests | 1 failed)`
-// and its tests' `× suite > name 5ms` under it. A project's `|name|` before the file is passed over.
+// and its tests' `× suite > name 5ms` under it, with the time each took. A project's `|name|` before the
+// file is passed over.
 func readVitest(r *Reading) reader {
 	file := ""
 	return reader{line: func(line string) {
@@ -320,8 +328,8 @@ func readVitest(r *Reading) reader {
 		}
 		for _, cross := range []string{"× ", "✕ "} {
 			if name, ok := strings.CutPrefix(t, cross); ok && file != "" {
-				if name = trimTook(name); name != "" {
-					r.add(FailedTest{Runner: RunVitest, ID: file + jsSep + name})
+				if name, took := cutTook(name); name != "" {
+					r.add(FailedTest{Runner: RunVitest, ID: file + jsSep + name, Took: took})
 				}
 				return
 			}
@@ -338,16 +346,6 @@ func skipProject(s string) string {
 	}
 	return s
 }
-
-// trimTook cuts the time a vitest test line ends with ("5ms", "1.2s").
-func trimTook(name string) string {
-	if i := strings.LastIndexByte(name, ' '); i > 0 && tookRE.MatchString(name[i+1:]) {
-		name = name[:i]
-	}
-	return strings.TrimSpace(name)
-}
-
-var tookRE = regexp.MustCompile(`^\d+(\.\d+)?m?s$`)
 
 // readJest reads jest: `FAIL file` starts a test file's results, and each `● suite › name` under it is a
 // failed test (`● Test suite failed to run`: the file failed whole); `PASS file` ends them.
@@ -426,7 +424,8 @@ func jsNames(f FailedTest) []string {
 // readPlaywright reads Playwright's failure lines, the list reporter's `✘  3 [project] › file:line:col ›
 // title (1.2s)` and the failure details' `1) [project] › file:line:col › title ───`, as the test's
 // `file:line`, in its project. A test that failed and then passed on a retry is read as failed: it failed
-// once.
+// once. A `✘` line gives the time the test took; of a test that failed more than once (its retries), the
+// Reading keeps the longest.
 //
 // It reads the end-of-run summary too, which every reporter prints and which is all a log's tail may hold:
 // under its `  2 failed` line, each indented `[project] › file:line:col › title` (or `file:line:col ›
@@ -467,7 +466,11 @@ var (
 )
 
 func playwrightFailure(line string) (FailedTest, bool) {
-	return playwrightTest(playwrightRE.FindStringSubmatch(strings.TrimSpace(line)))
+	f, ok := playwrightTest(playwrightRE.FindStringSubmatch(strings.TrimSpace(line)))
+	if ok {
+		f.Took = parenTook(line)
+	}
+	return f, ok
 }
 
 // playwrightTest is the test a match of playwrightHead names.

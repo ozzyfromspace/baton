@@ -150,12 +150,13 @@ type Input struct {
 	// response on. Claude Code leaves a window out once its reset has passed.
 	RateLimits struct {
 		FiveHour *Window `json:"five_hour"`
+		SevenDay *Window `json:"seven_day"`
 	} `json:"rate_limits"`
 }
 
 // Window is one of the account's usage limits.
 type Window struct {
-	UsedPercentage *float64 `json:"used_percentage"` // 0 to 100
+	UsedPercentage *float64 `json:"used_percentage"` // 0 to 100, with one decimal
 	ResetsAt       *float64 `json:"resets_at"`       // Unix seconds
 }
 
@@ -163,7 +164,24 @@ type Window struct {
 // (zero if not said). ok is false with no reading, and for one whose reset has passed: that use was of a
 // window gone by.
 func (in Input) FiveHour(now time.Time) (used float64, resets time.Time, ok bool) {
-	w := in.RateLimits.FiveHour
+	return in.RateLimits.FiveHour.reading(now)
+}
+
+// Weekly is the account's weekly limit (seven_day, Claude Code 2.1.309; docs/research/usage.md), read as
+// FiveHour reads the five-hour one.
+func (in Input) Weekly(now time.Time) (used float64, resets time.Time, ok bool) {
+	return in.RateLimits.SevenDay.reading(now)
+}
+
+// Usage is what the input says of both windows (FiveHour and Weekly).
+func (in Input) Usage(now time.Time) state.UsageReading {
+	var r state.UsageReading
+	r.FiveHourPct, r.FiveHourResets, r.HasFiveHour = in.FiveHour(now)
+	r.WeeklyPct, r.WeeklyResets, r.HasWeekly = in.Weekly(now)
+	return r
+}
+
+func (w *Window) reading(now time.Time) (used float64, resets time.Time, ok bool) {
 	if w == nil || w.UsedPercentage == nil {
 		return 0, time.Time{}, false
 	}

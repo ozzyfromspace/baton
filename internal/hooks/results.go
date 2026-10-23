@@ -144,6 +144,7 @@ func JobLog(s *state.Store, j state.Job) decide.Log {
 	e, _ := lane.ReadExcerpt(path, resultLines, resultBytes, resultFailures, resultClip)
 	log := decide.Log{Path: path, Tail: e.Tail, Failures: e.Failures, More: e.More, Rerun: s.Reran(j), Env: jobEnv(s, j, path)}
 	log.Failed, log.FailedMore = failedOf(j, path)
+	log.TimedOut = timedOutOf(j, log.Failed)
 	log.Cost = costOf(s, j)
 	return log
 }

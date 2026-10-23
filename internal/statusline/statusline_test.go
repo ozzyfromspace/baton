@@ -284,6 +284,34 @@ func TestFiveHour(t *testing.T) {
 	}
 }
 
+// The weekly limit, as Claude Code 2.1.309 gives it (spike 42): seven_day, in the five-hour window's shape.
+func TestWeekly(t *testing.T) {
+	now := time.Unix(1_792_739_400, 0)
+	week, five := now.Add(6*24*time.Hour), now.Add(50*time.Minute)
+	for _, c := range []struct {
+		name, raw string
+		used      float64
+		resets    time.Time
+		ok        bool
+	}{
+		{"present, as captured", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":19,"resets_at":%d},"seven_day":{"used_percentage":38,"resets_at":%d}}}`,
+			five.Unix(), week.Unix()), 38, week, true},
+		{"with a decimal", fmt.Sprintf(`{"rate_limits":{"seven_day":{"used_percentage":98.4,"resets_at":%d}}}`, week.Unix()), 98.4, week, true},
+		{"absent: the five-hour window only", fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":19,"resets_at":%d}}}`, five.Unix()), 0, time.Time{}, false},
+		{"before the first response", `{"rate_limits":null}`, 0, time.Time{}, false},
+		{"past its reset", fmt.Sprintf(`{"rate_limits":{"seven_day":{"used_percentage":100,"resets_at":%d}}}`, now.Add(-time.Second).Unix()), 0, time.Time{}, false},
+	} {
+		used, at, ok := Parse([]byte(c.raw)).Weekly(now)
+		if used != c.used || !at.Equal(c.resets) || ok != c.ok {
+			t.Errorf("%s: %v %v %v, want %v %v %v", c.name, used, at, ok, c.used, c.resets, c.ok)
+		}
+	}
+	r := Parse([]byte(fmt.Sprintf(`{"rate_limits":{"seven_day":{"used_percentage":38,"resets_at":%d}}}`, week.Unix()))).Usage(now)
+	if r.HasFiveHour || !r.HasWeekly || r.WeeklyPct != 38 || !r.WeeklyResets.Equal(week) {
+		t.Errorf("Usage: %+v", r)
+	}
+}
+
 // Captured from Claude Code 2.1.289 (claude-opus-5-5[1m], --autocompact 810k): the window is the model's,
 // not the cap, and the percentage is rounded to a whole point (10k tokens on this model).
 func TestTokens(t *testing.T) {

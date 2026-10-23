@@ -307,7 +307,6 @@ func (c *Coordinator) step(now time.Time, s *state.Store, sweep bool) {
 	if st, err = s.Load(); err != nil {
 		return
 	}
-	c.usage(now, s, st)
 	c.look(now)
 	c.toAgents(now, s, b) // the human's words go before anything else baton has for an agent
 	for _, w := range c.launched() {

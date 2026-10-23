@@ -505,6 +505,10 @@ type StopError struct {
 	// Category is a refusal's, as the API named it ("cyber", …; "" for none).
 	Category string    `json:"category,omitempty"`
 	At       time.Time `json:"at"`
+	// Window and Resets are a usage limit's window (WindowOf) and when it resets, as the stopped loop's
+	// transcript said (transcript.Limited); empty when it did not.
+	Window string    `json:"window,omitempty"`
+	Resets time.Time `json:"resets_at,omitzero"`
 }
 
 // ErrRefusal is the error of a turn the model's safeguards declined, which Claude Code would not go on
