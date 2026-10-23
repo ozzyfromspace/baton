@@ -767,6 +767,9 @@ func TestAPhaseAgentsCompactionIsNotTheLeads(t *testing.T) {
 	// stay in the foreground.
 	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_CHECKPOINT_PCT=0", "BATON_NOTICE_PCT=0", "BATON_FOREGROUND_MAX=10m"}, "--autocompact", "100k", "--permission-mode", "acceptEdits",
 		"--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Bash(sh wait.sh asked)", "Bash(sh wait.sh read)", "Read")
+	// Briefed again after its compactions, Haiku may look its worktree over (git -C <worktree> log, status)
+	// before it commits; a human approves those commands.
+	s.ApprovePermissions()
 
 	waitStarted(t, s, dir, "asked", 6*time.Minute)
 	if i := first(s.Events(), is("phase_done", "phase", "P0")); i < 0 || s.Events()[i]["next"] != "P2" {
