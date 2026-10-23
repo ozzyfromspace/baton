@@ -184,6 +184,17 @@ func TestNoWorkerSegments(t *testing.T) {
 			st.Usage = &state.Usage{UsedPct: 100, Limited: now.Add(40 * time.Minute), Hit: now}
 			return st
 		}, "◆ baton · P0 1/4 The overlay · usage limit until " + now.Add(40*time.Minute).Format("15:04") + " · ctx 41%"},
+		{"a usage limit the resume timer ends", func() state.State {
+			st := with()
+			st.Usage = &state.Usage{Limited: now.Add(40 * time.Minute), Hit: now, ResumeAt: now.Add(40 * time.Minute)}
+			return st
+		}, "◆ baton · P0 1/4 The overlay · usage limit · resumes at " + now.Add(40*time.Minute).Format("15:04") + " · ctx 41%"},
+		{"paused, its resume timer cancelled", func() state.State {
+			st := with()
+			st.Mode = state.ModePaused
+			st.Usage = &state.Usage{Limited: now.Add(40 * time.Minute), Hit: now, Cancelled: state.CancelPrompt}
+			return st
+		}, "◆ baton · paused · usage limit until " + now.Add(40*time.Minute).Format("15:04") + " · auto-resume cancelled"},
 		{"a limit that is over", func() state.State {
 			st := with()
 			st.Usage = &state.Usage{UsedPct: 12, Limited: now, Hit: now.Add(-time.Hour)}

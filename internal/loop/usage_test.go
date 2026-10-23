@@ -10,9 +10,10 @@ import (
 )
 
 // A turn of any session of the run that ends on the account's usage limit holds the whole run: no worker
-// starts until the limit resets, a minute after the reset of the window the stop names (its transcript,
+// starts until the limit resets, limitGrace after the reset of the window the stop names (its transcript,
 // StopError.Window), else of a window the status line has at 99% or more, the weekly one first, or after
-// RateLimitRetry when when it resets is unknown. One limit hit is logged and announced once.
+// RateLimitRetry when when it resets is unknown. One limit hit is logged and announced once: with its
+// reset known, as the resume timer's (resume.go).
 func TestAUsageLimitHitInAnySessionHoldsTheRun(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -78,7 +79,11 @@ func TestAUsageLimitHitInAnySessionHoldsTheRun(t *testing.T) {
 				who = "the worker on " + c.by
 			}
 			ann := strings.Join(x.state().Run.Announce, "\n")
-			if !strings.Contains(ann, who+" hit the account's ") || !strings.Contains(ann, "until "+decide.Clock(until, hit)) ||
+			want := "until " + decide.Clock(until, hit)
+			if c.known != state.WindowUnknown {
+				want = "baton resumes the run at " + decide.Clock(until, hit.Add(c.resets))
+			}
+			if !strings.Contains(ann, who+" hit the account's ") || !strings.Contains(ann, want) ||
 				strings.Contains(ann, "resets is unknown") != (c.known == state.WindowUnknown) {
 				t.Errorf("announced %q", ann)
 			}
@@ -132,8 +137,8 @@ func TestLimitHit(t *testing.T) {
 }
 
 // While the run waits on the account's usage limit, every session's watchdog stays quiet: no retry, no
-// reminder, no compaction typed, and nothing escalated as stalled. Claude Code resumes each session
-// itself as the limit resets; whatever baton still owes a session goes out once the hold is over.
+// reminder, no compaction typed, and nothing escalated as stalled. Nothing resumes a session by itself
+// (docs/research/usage.md): once the hold is over, its own retry goes, and whatever else baton owes it.
 func TestTheWatchdogStaysQuietWhileTheRunIsLimited(t *testing.T) {
 	const limit = 50 * time.Minute
 	for _, c := range []struct {

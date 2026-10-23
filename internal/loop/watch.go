@@ -348,11 +348,12 @@ var errorKinds = map[string]bool{"api_error": true, "refused": true}
 // MaxErrorRetries is how many transient-error retries happen before the human is told (retries go on).
 const MaxErrorRetries = 6
 
-// watchError resumes a turn that an API error ended. A usage limit is announced once per episode and
-// retried every 15-30 minutes, so the run resumes soon after the limit resets. Overloads and server
-// errors are retried with backoff, and reported if they persist. Errors that will not pass on their
-// own are reported at once and not retried. A turn that starts on its own (Claude Code may resume by
-// itself) supersedes all of this.
+// watchError resumes a turn that an API error ended. Nothing resumes a session stopped on the account's
+// usage limit by itself (docs/research/usage.md): with its reset known, the run's resume timer holds the
+// retry until the reset and lets it type once then (resumeRetry); with it unknown, it is announced once
+// per episode and retried 15, then 30 minutes on. Overloads and server errors are retried with backoff,
+// and reported if they persist. Errors that will not pass on their own are reported at once and not
+// retried. A turn that starts meanwhile (the human's, say) supersedes all of this.
 //
 // A refusal (a turn the model's safeguards declined, which Claude Code would not go on with) is never
 // retried, and nothing is typed into its conversation: the same model given the same conversation
@@ -384,7 +385,10 @@ func (l *Loop) watchError(v host.View, st state.State, in host.Injector, e state
 	}
 	var wait time.Duration
 	if e.Error == "rate_limit" {
-		if !l.rateNotified {
+		if l.resumeRetry(v, st, in, e) {
+			return // the run's resume timer has it (resume.go)
+		}
+		if !l.rateNotified && !knownWindow(e.Window) { // a known window's limit is told as the timer's (usage_wait)
 			l.rateNotified = true
 			l.update(func(st *state.State) {
 				st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "rate_limit", Text: e.Details, At: v.Now})

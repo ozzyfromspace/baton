@@ -42,6 +42,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 	switch {
 	case st.Mode == state.ModeComplete:
 		return mark + " · ✓ plan complete"
+	case st.Mode == state.ModePaused && st.Usage != nil && now.Before(st.Usage.Limited):
+		u := st.Usage
+		return mark + " · paused · " + decide.BandLimit(u.Limited, u.ResumeAt, u.Cancelled != "", now)
 	case st.Mode == state.ModePaused:
 		return mark + " · paused"
 	case st.ReviewDue != "":
@@ -70,7 +73,7 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 		s += fmt.Sprintf(" · %s %d/%d %s", st.Current, i+1, len(pl.Phases), clip(pl.Phases[i].Title, 28))
 	}
 	if u := st.Usage; u != nil && now.Before(u.Limited) {
-		s += " · usage limit until " + u.Limited.Local().Format("15:04")
+		s += " · " + decide.BandLimit(u.Limited, u.ResumeAt, u.Cancelled != "", now)
 	}
 	if j := jobs(st, now); j != "" {
 		s += " · " + j

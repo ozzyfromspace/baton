@@ -118,7 +118,9 @@ func cmdExit(args []string, io IO) int {
 	paused := false
 	var jobs []state.Job
 	var workers []string
+	var left *state.Usage
 	s.Update(func(st *state.State) error {
+		left = leaveResume(st, state.CancelExit, io.Now())
 		paused, jobs = state.Pause(st) == nil, st.Unfinished()
 		for _, w := range st.LiveWorkers() {
 			workers = append(workers, w.Phase)
@@ -126,6 +128,7 @@ func cmdExit(args []string, io IO) int {
 		st.Run.ExitAt, st.Run.SessionID = io.Now(), sid // the session leaving, whose record the host completes
 		return nil
 	})
+	resumeLeft(s, left)
 	s.Event("exit_requested", map[string]any{"paused": paused})
 	msg := "baton: leaving baton. When this turn ends, baton stops claude, and this terminal resumes this same conversation as plain Claude Code. End your turn now."
 	if paused {

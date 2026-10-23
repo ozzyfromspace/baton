@@ -1070,12 +1070,15 @@ func TurnSource(prompt, source string) string {
 func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	by := TurnSource(str(c.Input, "prompt"), str(c.Input, "source"))
 	var lead *toLead
+	var cancelSay, cancelTell string
 	if by == "human" {
+		// The human takes over from the usage limit's resume timer (resumecancel.go).
+		cancelSay, cancelTell = h.cancelResume(c)
 		// The human's words for a phase's agent (@P23 <words>): sent to its agent, with no turn of the
 		// lead's, or the lead's own prompt, told where the phase stands.
 		res, routed, l := h.addressed(c)
 		if routed {
-			return res, nil
+			return withCancelled(res, cancelSay), nil
 		}
 		lead = l
 	}
@@ -1158,6 +1161,10 @@ func (h *handlers) userPromptSubmit(c Context) (Result, error) {
 	if lead != nil {
 		tell = strings.TrimSpace(tell + "\n\n" + lead.context) // last, beside the prompt it is about
 		says = append(says, lead.say)
+	}
+	if cancelSay != "" {
+		tell = strings.TrimSpace(tell + "\n\n" + cancelTell)
+		says = append(says, cancelSay)
 	}
 	if tell == "" {
 		if len(says) > 0 {

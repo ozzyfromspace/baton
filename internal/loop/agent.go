@@ -46,7 +46,7 @@ type Agent struct {
 func (c *Coordinator) newAgent(phase string, sub *state.Store) *Agent {
 	lead := c.Lead
 	return &Agent{Phase: phase, Store: sub, lead: lead.Store, advise: c.advise, loop: &Loop{Store: sub, Notify: lead.Notify, Project: lead.Project + " · " + phase,
-		Timing: lead.Timing, Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunLimited: c.runLimited,
+		Timing: lead.Timing, Snapshot: lead.Snapshot, Version: lead.Version, Runners: lead.Runners, RunUsage: c.runUsage, RunPaused: c.paused.Load,
 		Logf: func(format string, a ...any) { lead.logf(phase+": "+format, a...) }, owner: true}}
 }
 

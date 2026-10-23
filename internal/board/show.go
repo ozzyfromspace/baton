@@ -49,7 +49,7 @@ func (b Board) Band(width int) string {
 		parts = append(parts, part{text: decide.BandStep(b.Step, len(b.Steps)), rank: rankHead})
 	}
 	if b.Limit != nil {
-		parts = append(parts, part{text: decide.BandLimit(b.Limit.Until), rank: rankRun})
+		parts = append(parts, part{text: decide.BandLimit(b.Limit.Until, b.Limit.Resumes, b.Limit.Cancelled, b.At), rank: rankRun})
 	}
 	if b.Serial != "" {
 		parts = append(parts, part{text: decide.BandSerial, rank: rankReady})
@@ -181,7 +181,7 @@ func (b Board) Lines(width int) []string {
 		out = append(out, clip(decide.BoardSerial(b.Serial), width))
 	}
 	if l := b.Limit; l != nil {
-		out = append(out, clip(decide.BoardLimit(l.By, l.Until), width))
+		out = append(out, clip(decide.BoardLimit(l.By, l.Until, l.Resumes, l.Cancelled, b.At), width))
 	}
 	if r := b.Risk; r != nil {
 		out = append(out, clip(decide.RiskLine(r.Total, r.Held), width))
