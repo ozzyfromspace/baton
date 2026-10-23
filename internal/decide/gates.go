@@ -15,8 +15,9 @@ import (
 // phase whose second and third passes reran what had passed. A human who feels the time would not.
 
 // GateRules are baton's rules for a plan's gates: when a phase checks its work, how, and where the full
-// checks run, opened by what the human's time is (TimeFelt). The skill's planning guidance
-// (internal/skill/skill.md) says the same in short.
+// checks run, opened by what the human's time is (TimeFelt), and what a phase adds to the permanent suite:
+// a phase's evidence is its notes and commit, not a test every later run pays for (rule 11). The skill's
+// planning guidance (internal/skill/skill.md) says the same in short.
 const GateRules = TimeFelt + "\n\n" +
 	"Test the way a human who feels time does: scoped checks while you work, and the big one once, at the end.\n" +
 	"1. QA phases sit at real seams, never per phase: at the end, and, in a long plan, at the end of a group of related phases that later work builds on. " +
@@ -31,7 +32,10 @@ const GateRules = TimeFelt + "\n\n" +
 	"7. No file many phases edit: records per phase, or the plan's `Record:` file.\n" +
 	"8. Long checks go through `baton verify` or `baton await`, never a background shell.\n" +
 	"9. Push to CI early in the QA phase, batching fixes per round trip.\n" +
-	"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`."
+	"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`.\n" +
+	"11. A phase's evidence goes in its notes and commit, not the permanent suite. " +
+	"A browser test is for a user journey; a design rule is a lint or a component test. " +
+	"A test fails fast: short timeouts, no retries in a gate, no fixed sleeps."
 
 // GateCheck is the part of baton's one turn-back at a plan's first ExitPlanMode for every plan, beside
 // CompetingDirectives and, for a plan that is mostly a chain, ShapeCheck: the gate rules, the plan's QA
@@ -130,17 +134,20 @@ func phaseCount(n int) string {
 // where the plan has a QA phase: a gate stops at its first failure and only what failed runs again, by
 // `baton verify --failed`, staged or given the narrower command; the whole gate again takes a reason the
 // human is told (`--why`); a long gate is a committed script of baton stages, run through baton verify;
-// and a gate's environment is recorded where every phase sees it. Without git (git false) there is no
-// lane, so no verify and no stages: long checks go through baton await.
+// a gate's environment is recorded where every phase sees it; and a phase's evidence goes in its notes
+// (and commits), not the permanent suite, whose tests fail fast (GateRules' rule 11). Without git (git
+// false) there is no lane, so no verify and no stages: long checks go through baton await. Each form stays
+// under 600 characters.
 func GateHabits(git bool) string {
-	env := "When a gate fails on its environment rather than the change (a port in use, a daemon down), " +
-		"record what it needs with `baton env \"<what it needs>\"`, so every phase sees it."
+	env := "When a gate fails on its environment, `baton env \"<what it needs>\"` tells every phase."
 	if !git {
 		return "Gates: a check stops at its first failure; then rerun only what failed, never the whole suite again. " +
-			"Long checks go through `baton await`, never a background shell. " + env
+			"Long checks go through `baton await`, never a background shell. " + env +
+			" Evidence goes in notes, not the permanent suite; tests fail fast."
 	}
 	return "Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, " +
 		"then rerun only what failed (`baton verify --failed [-- <narrower command>]`), " +
 		"never the whole gate again without `--why \"…\"`, which baton tells the human. " +
-		"A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell. " + env
+		"A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell. " + env +
+		" Evidence goes in notes and commits, not the permanent suite; tests fail fast."
 }
