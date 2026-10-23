@@ -178,6 +178,12 @@ func TestBand(t *testing.T) {
 			r.st.Hold = &state.Hold{Phase: "P4", Kind: state.HoldBusy, Why: "memory pressure is critical", Since: now}
 			return r
 		}, "", step2 + "P2 ▶ 5m · P3 ⚙ 1m · P4 held · P5 waits on P3 · lead: working on P2"},
+		{"every agent slot at work: the band keeps it short", func() *run {
+			r := newRun()
+			r.agent("P3", "a1", time.Minute)
+			r.st.Hold = &state.Hold{Phase: "P4", Kind: state.HoldCap, Why: decide.SlotsAtWork(1), Since: now, Cap: 1}
+			return r
+		}, "", step2 + "P2 ▶ 5m · P3 ⚙ 1m · P4 ready · P5 waits on P3 · lead: working on P2"},
 		{"a usage limit", func() *run {
 			r := newRun()
 			r.st.Usage = &state.Usage{UsedPct: 100, Limited: now.Add(40 * time.Minute), Hit: now, By: "lead"}
@@ -283,6 +289,37 @@ func TestLines(t *testing.T) {
 			"step 3  · P5  baton's view — waits on P3",
 			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
 			"lead: working on P2, its turn 2m",
+		}},
+		{"every agent slot at work: every ready phase says so", func() *run {
+			r := newRun()
+			r.st.Hold = &state.Hold{Phase: "P3", Kind: state.HoldCap, Why: decide.SlotsAtWork(6), Since: now, Cap: 6}
+			return r
+		}, "", 0, []string{
+			`◆ baton · "Workers you can see" · step 2 of 4`,
+			"step 1  ✓ P1  The mod — done",
+			"step 2  ▶ P2  Every hook knows its loop — the lead works on it 5m",
+			"        · P3  Phase agents — ready: all 6 agent slots at work",
+			"        · P4  Gates and questions — ready: all 6 agent slots at work",
+			"step 3  · P5  baton's view — waits on P3",
+			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
+			"lead: working on P2, its turn 2m",
+		}},
+		{"the one agent slot at work", func() *run {
+			r := newRun()
+			r.agent("P3", "a1b2c3d4e5f6", 12*time.Minute)
+			r.st.Hold = &state.Hold{Phase: "P4", Kind: state.HoldCap, Why: decide.SlotsAtWork(1), Since: now, Cap: 1}
+			return r
+		}, "", 0, []string{
+			`◆ baton · "Workers you can see" · step 2 of 4`,
+			"step 1  ✓ P1  The mod — done",
+			"step 2  ▶ P2  Every hook knows its loop — the lead works on it 5m",
+			"        ⚙ P3  Phase agents — agent at work 12m · @P3 <your words> · agent a1b2c3d4",
+			"        · P4  Gates and questions — ready: the one agent slot at work",
+			"step 3  · P5  baton's view — waits on P3",
+			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
+			"lead: working on P2, its turn 2m",
+			decide.BoardWrite[0],
+			decide.BoardWrite[1],
 		}},
 		{"serial, waiting on a gate", func() *run {
 			r := newRun()

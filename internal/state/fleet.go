@@ -172,13 +172,15 @@ type Usage struct {
 // Hold is what holds back a phase that waits for a worker, since Since: no room for another session on
 // the machine (HoldBusy), gates waiting for the project's lanes (HoldLanes), the workers' landings
 // conflicting with the run's branch (HoldConflicts), no room in the account's five-hour allowance
-// (HoldUsage), or an agent that started a moment ago (HoldRamp). Why says so in words. The workers at
-// work go on.
+// (HoldUsage), an agent that started a moment ago (HoldRamp), or every one of the Cap agent slots at
+// work (HoldCap), which holds back every phase that could go ahead, not Phase alone. Why says so in
+// words. The workers at work go on.
 type Hold struct {
 	Phase string    `json:"phase"`
 	Kind  string    `json:"kind"`
 	Why   string    `json:"why"`
 	Since time.Time `json:"since"`
+	Cap   int       `json:"cap,omitempty"`
 }
 
 // What holds a phase back from a worker (Hold.Kind).
@@ -188,6 +190,7 @@ const (
 	HoldConflicts = "conflicts"
 	HoldUsage     = "usage"
 	HoldRamp      = "ramp"
+	HoldCap       = "cap"
 )
 
 // LimitHit is when the session's last turn ended on the account's usage limit: zero if it did not, or
