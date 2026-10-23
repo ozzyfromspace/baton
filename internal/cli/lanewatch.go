@@ -72,6 +72,7 @@ func (jw *jobWatch) ended(st lane.Stage, k int) {
 	rec, recorded := jw.record(st.Name, k)
 	if !recorded {
 		rec = st
+		rec.KeepGoing = jw.job.QAPhase // a QA phase's gate runs every stage, as `baton stage` records it there
 	}
 	if !jw.update(func(j *state.Job) bool { j.Stages = append(j.Stages, rec); return true }) {
 		return

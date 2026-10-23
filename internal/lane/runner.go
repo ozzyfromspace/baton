@@ -48,6 +48,8 @@ type Job struct {
 	// gates in lanes and in worktrees together run no more at once than the project's slots, and what a
 	// lane keeps apart (a test database, a Compose project) stays apart.
 	Here bool
+	// QAPhase: the job is a QA phase's gate, given EnvQAPhase, so that every stage of it runs.
+	QAPhase bool
 }
 
 // Result is how a job ended.
@@ -184,6 +186,9 @@ func (j Job) env(env []string) []string {
 	}
 	if j.Rerun != "" {
 		env = append(env, EnvRerun+"="+j.Rerun)
+	}
+	if j.QAPhase {
+		env = append(env, EnvQAPhase+"=1")
 	}
 	return env
 }

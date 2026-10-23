@@ -263,6 +263,10 @@ func TestAGateBeforeTheQAPhaseIsAskedAbout(t *testing.T) {
 			if j == nil || j.Kind != c.args[0] || j.QA != c.flagged {
 				t.Fatalf("job %+v, want a %s queued, flagged %q", j, c.args[0], c.flagged)
 			}
+			// A QA phase's job runs every stage of its gate (lane.EnvQAPhase); no other job is one.
+			if inQA := c.qa == first; j.QAPhase != inQA || s.logged("job_queued", map[string]any{"job": "j1", "qa_phase": true}) != inQA {
+				t.Errorf("job %+v is a QA phase's: %v, want %v; events:\n%s", j, j.QAPhase, inQA, s.events())
+			}
 			if c.flagged != "" {
 				if !s.logged("qa_early", map[string]any{"job": "j1", "phase": "P0", "why": c.flagged}) || !strings.Contains(strings.Join(s.state().Run.Announce, "\n"), "runs a full check ahead of its QA phase (job j1)") {
 					t.Errorf("not flagged: %s", s.events())

@@ -22,7 +22,8 @@ func planSection(t *testing.T) string {
 }
 
 // /baton plan teaches a graph, not a list: the six shape rules, the old same-files chaining only as the last
-// resort of splitting by files, the shape baton shows at approval, and the rest of the section as it was.
+// resort of splitting by files, the shape baton shows at approval, a phase's evidence kept out of the
+// permanent suite (decide.GateRules' rule 11), and the rest of the section as it was.
 func TestPlanTeachesTheShapeRules(t *testing.T) {
 	plan := planSection(t)
 	for _, c := range []struct {
@@ -48,6 +49,9 @@ func TestPlanTeachesTheShapeRules(t *testing.T) {
 		{"QA phases at real seams", "Place QA phases at real seams, never per phase, to protect the human's time: at the end, " +
 			"and in a long plan at the end of a group of related phases that later work builds on, each `After:` everything it checks."},
 		{"scoped checks between them", "The phases between QA phases run scoped checks only (the tests of what they change, by name)"},
+		{"evidence, not permanent proofs", "A phase's evidence goes in its notes and commit, not the permanent suite: " +
+			"a browser test is for a user journey, a design rule is a lint or a component test, " +
+			"and a test fails fast (short timeouts, no retries in a gate, no fixed sleeps)."},
 		{"the gate rules asked at approval", "baton asks for this, with its gate rules, once at your first `ExitPlanMode`"},
 		{"sizing", "Size each phase to finish comfortably in one context window."},
 		{"standing rules", "`## Standing rules`"},

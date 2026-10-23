@@ -154,7 +154,7 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 	}
 	u := st.Usage
 	switch {
-	case st.RiskHeld():
+	case st.RiskHeld() && !qaPhase(pl, phase): // a QA phase is the full check the hold waits for
 		return phase, decide.RiskHoldsAgents, state.HoldRisk // until the lead queues the full check (risk.go)
 	case r.busy != "":
 		return phase, r.busy, state.HoldBusy
