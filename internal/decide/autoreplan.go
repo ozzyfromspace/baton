@@ -10,8 +10,9 @@ import (
 
 // What baton says about the replans it opens by itself (package replan's Auto), at the lead's phase
 // boundary: after an upgrade whose planning rules changed (state.ReplanUpgrade), at the start of a QA
-// phase over a remainder that is mostly one chain (state.ReplanQA), and once a phase marked `Replan: after`
-// is done (state.ReplanMarked). The model replans before it begins the phase whose brief follows.
+// phase over a remainder that is mostly one chain (state.ReplanQA), once a phase marked `Replan: after`
+// is done (state.ReplanMarked), and once a file in a second landing conflict is named by phases not
+// started (state.ReplanConflict). The model replans before it begins the phase whose brief follows.
 
 // structural reports a kind of replan that may change only the structure of the phases not started, and
 // is kept only if their shape improves: baton's own at an upgrade or a QA phase.
@@ -36,7 +37,9 @@ func (b ReplanBrief) cause() string {
 		}
 		return fmt.Sprintf("Why now: %s %s done, and the plan marks %s `Replan: after`: what %s found should reshape the phases not started. "+
 			"What %s found is %s.", phaseNames(b.Cue), plural(len(b.Cue), "is", "are"), plural(len(b.Cue), "it", "them"),
-			plural(len(b.Cue), "it", "they"), plural(len(b.Cue), "it", "they"), notes)
+			plural(len(b.Cue), "it", "they"), plural(len(b.Cue), "it", "they"), notes) + conflictAlso(b.Files)
+	case state.ReplanConflict:
+		return "Why now: " + conflictCause(b.Files)
 	}
 	return "Why now: " + replanBy(b.By) + "."
 }
@@ -72,6 +75,8 @@ func AutoReplanOpened(by string, cue []string, max time.Duration) string {
 		why = andList(cue) + ", a QA phase, starts over a chain of phases not started"
 	case by == state.ReplanMarked && len(cue) > 0:
 		why = andList(cue) + " " + plural(len(cue), "is", "are") + " done, marked Replan: after"
+	case by == state.ReplanConflict && len(cue) > 0:
+		why = "a file that conflicted in a second landing is named by " + andList(cue) + ", not started"
 	}
 	return fmt.Sprintf("baton: replanning the phases not started (%s) → Claude does it before the next phase; no new phase agent starts until it is done, %s at most", why, Spell(max))
 }

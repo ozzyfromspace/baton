@@ -192,10 +192,14 @@ func TestAStopLeavesOutAnotherLoopsBackgroundWork(t *testing.T) {
 	}
 }
 
-// The record of background work told at its start keeps the command and the description the call gave,
-// each on one line and clipped to 200 characters, and leaves out what the call did not give.
+// The record of background work told at its start keeps the command the call gave whole, on its lines, up
+// to 4,000 characters, and the description on one line, clipped to 200, and leaves out what the call did
+// not give.
 func TestBackgroundToldRecordsTheCommandAndDescription(t *testing.T) {
 	long := "go test ./... -run '" + strings.Repeat("A", 300) + "'"
+	whole := "cd web && npx vitest run " + strings.Repeat("src/a.test.ts ", 213) // 3,000 characters and more
+	past := "go test -run '" + strings.Repeat("TestA|", 700) + "' ./..."         // past 4,000
+	doc := "python3 - <<'EOF'\nimport pathlib\n# the lead's fix\nEOF\ncd backend && pytest tests/"
 	for _, c := range []struct {
 		name                 string
 		in                   map[string]any
@@ -203,10 +207,19 @@ func TestBackgroundToldRecordsTheCommandAndDescription(t *testing.T) {
 	}{
 		{name: "a command run in the background", in: bgBash("npm test", "b1", false), command: "npm test", description: "run npm test"},
 		{name: "a long command", in: bgBash(long, "b1", false),
-			command: string([]rune(long)[:199]) + "…", description: string([]rune("run " + long)[:199]) + "…"},
-		{name: "a command on several lines", in: map[string]any{"tool_name": "Bash",
-			"tool_input":    map[string]any{"command": "cd web &&\n  pnpm test", "run_in_background": true},
-			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: "cd web && pnpm test"},
+			command: long, description: string([]rune("run " + long)[:199]) + "…"},
+		{name: "a command of 3,000 characters, kept whole", in: map[string]any{"tool_name": "Bash",
+			"tool_input":    map[string]any{"command": whole, "description": "run the tests", "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: strings.TrimSpace(whole), description: "run the tests"},
+		{name: "a command past 4,000 characters, cut there", in: map[string]any{"tool_name": "Bash",
+			"tool_input":    map[string]any{"command": past, "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: past[:3999] + "…"},
+		{name: "a command on several lines, kept on them", in: map[string]any{"tool_name": "Bash",
+			"tool_input":    map[string]any{"command": "cd web &&\n  pnpm test\n", "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: "cd web &&\n  pnpm test"},
+		{name: "a here-document, its body kept", in: map[string]any{"tool_name": "Bash",
+			"tool_input":    map[string]any{"command": doc, "run_in_background": true},
+			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: doc},
 		{name: "a PowerShell command", in: map[string]any{"tool_name": "PowerShell",
 			"tool_input":    map[string]any{"command": "Invoke-Pester", "description": "run the tests", "run_in_background": true},
 			"tool_response": map[string]any{"backgroundTaskId": "b1"}}, command: "Invoke-Pester", description: "run the tests"},

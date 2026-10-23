@@ -211,6 +211,8 @@ func TestBatonCommands(t *testing.T) {
 		{`cd /work && BATON_X=1 baton verify "make test; make vet" --notes "a | b"`, []Command{{"verify", []string{"make test; make vet", "--notes", "a | b"}}}},
 		{"git commit -m x\nbaton done P1 --notes 'it'\\''s done'", []Command{{"done", []string{"P1", "--notes", "it's done"}}}},
 		{`(baton await "gh run watch") & baton status`, []Command{{"await", []string{"gh run watch"}}, {"status", []string{}}}},
+		{"git commit -F - <<'EOF'\nfix: P1's parser\n\nbaton done P1 comes next\nEOF\nbaton done P1 --notes 'it'\\''s in'",
+			[]Command{{"done", []string{"P1", "--notes", "it's in"}}}}, // a here-document's body holds no command
 		{`baton`, nil},
 		{`batonx note`, nil},
 	} {

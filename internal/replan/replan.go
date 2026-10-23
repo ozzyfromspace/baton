@@ -45,14 +45,15 @@ func MaxFrom(env func(string) string) time.Duration {
 // drop or merge phases, or change the plan's goal sections, only when they gave words to consider: the
 // model goes as far as those ask, and names in its notes each phase it drops. One a phase marked Replan:
 // after cued may rework the steps of the phases not started with what it found, and split them, but never
-// drop or merge work. baton's others, at an upgrade or a QA phase, change the structure alone (Structural):
+// drop or merge work; so may one a file in a second landing conflict cued, to give the phases that name it
+// files of their own. baton's others, at an upgrade or a QA phase, change the structure alone (Structural):
 // every phase's text but its After: line stays as it is, so what the human approved of each phase stays,
 // however many such replans run.
 func LimitsOf(r state.Replan) plan.Limits {
 	switch r.By {
 	case state.ReplanHuman:
 		return plan.Limits{Add: true, Edit: true, Drop: r.Words != "", Goal: r.Words != ""}
-	case state.ReplanMarked:
+	case state.ReplanMarked, state.ReplanConflict:
 		return plan.Limits{Add: true, Edit: true}
 	}
 	return plan.Limits{}
@@ -144,6 +145,9 @@ func open(s *state.Store, st state.State, pl plan.Plan, r state.Replan, max time
 	if len(r.Cue) > 0 {
 		fields["cue"] = r.Cue
 	}
+	if len(r.Files) > 0 {
+		fields["files"] = r.Files
+	}
 	if r.Then != "" {
 		fields["then"] = r.Then
 	}
@@ -201,8 +205,9 @@ func follow(st state.State, pl plan.Plan, doc []byte) (plan.Plan, error) {
 // brief is the brief of replan r of plan pl, run st on s, whose text is doc (nil when it is not at hand).
 // One baton opened by itself names the phases that cued it, and the phase the model begins once it is
 // finished, whose brief follows it; where they have notes, it says where (a marked phase's findings are in
-// its notes). Every one lists the phases not started that may run at once and whose sections in doc name
-// the same files.
+// its notes), and the files in a second landing conflict it settles, each with the phases not started whose
+// sections in doc name it. Every one lists the phases not started that may run at once and whose sections
+// in doc name the same files.
 func brief(s *state.Store, st state.State, pl plan.Plan, doc []byte, r state.Replan, max time.Duration) decide.ReplanBrief {
 	frozen := state.Frozen(st, pl)
 	b := decide.ReplanBrief{Title: pl.Title, By: r.By, Words: r.Words, Draft: s.DraftPath(), Limits: LimitsOf(r), Max: max, Then: r.Then}
@@ -232,6 +237,10 @@ func brief(s *state.Store, st state.State, pl plan.Plan, doc []byte, r state.Rep
 	}
 	b.Shape = pl.Part(pending).Shape()
 	b.Shared = pl.Overlaps(doc, pending)
+	named := Naming(pl, doc, pending, r.Files)
+	for _, f := range r.Files {
+		b.Files = append(b.Files, decide.ReplanFile{Path: f, Phases: named[f]})
+	}
 	return b
 }
 

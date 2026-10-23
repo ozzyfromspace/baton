@@ -2,6 +2,7 @@ package decide
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -125,21 +126,44 @@ func LandingsWaitSaid(j state.Job, held []HeldLanding, others int) string {
 }
 
 // FileConflicts is the look-in that tells the lead that paths each conflicted in a second landing of the
-// run; phases are, by path, the phases whose landings conflicted in it, in order.
-func FileConflicts(paths []string, phases map[string][]string) string {
+// run; phases are, by path, the phases whose landings conflicted in it, in order, and naming the phases
+// not started whose sections name it (conflict.go). replans says baton replans those at the lead's next
+// phase boundary (auto_replan); otherwise the plan stays as it is. Either way the lead has nothing to do,
+// and nothing to carry to an agent: each agent was told of its own conflict.
+func FileConflicts(paths []string, phases, naming map[string][]string, replans bool) string {
 	var each []string
 	for _, p := range paths {
-		each = append(each, fmt.Sprintf("%s (%s)", p, strings.Join(phases[p], ", then ")))
+		each = append(each, fmt.Sprintf("%s (%s; named by %s, not started)", p, strings.Join(phases[p], ", then "), andList(naming[p])))
 	}
-	return fmt.Sprintf("[baton] %s conflicted in a second landing of this run: %s. One file every phase edits serializes the phases, "+
-		"since each landing must merge the last one's changes to it, and conflicts there. For the phases not started, give each phase "+
-		"a file of its own and have a QA phase merge them; or ask the human to run `/baton replan`, which can restructure them.",
-		plural(len(paths), "A file", "Files"), andList(each))
+	next := "auto_replan is off, so baton leaves the plan as it is."
+	if replans {
+		next = "baton opens a replan of the phases not started at your next phase boundary, to give each of them a file of its own: nothing to do about it before then."
+	}
+	return fmt.Sprintf("[baton] %s conflicted in a second landing of this run: %s. One file that phases running at once each change serializes them, "+
+		"since each landing must merge the last one's changes to it, and conflicts there. %s "+
+		"Each landing that conflicted went back to its phase agent with what conflicted and whose changes those were, and the agent merges and resolves it itself: "+
+		"nobody needs to carry anything to it.",
+		plural(len(paths), "A file", "Files"), andList(each), next)
 }
 
-// FileConflictsSaid is the line that tells the human about paths, each in a second landing conflict.
-func FileConflictsSaid(paths []string) string {
-	return fmt.Sprintf("baton: %s conflicted in a second landing of this run", andList(paths))
+// FileConflictsSaid is the line that tells the human about paths, each in a second landing conflict and
+// named by the phases not started naming has for it; replans says baton replans those at the lead's next
+// phase boundary.
+func FileConflictsSaid(paths []string, naming map[string][]string, replans bool) string {
+	var ids []string
+	for _, p := range paths {
+		for _, id := range naming[p] {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	s := fmt.Sprintf("baton: %s conflicted in a second landing of this run, and %s, not started, %s %s", andList(paths), andList(ids),
+		plural(len(ids), "names", "name"), plural(len(paths), "it", "them"))
+	if replans {
+		s += " → a replan of the phases not started opens at the lead's next phase boundary"
+	}
+	return s
 }
 
 // LookInTyped is the line that wakes an idle lead for look-ins of kinds (state.LookIn's), which its

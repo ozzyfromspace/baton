@@ -122,8 +122,30 @@ func TestWhenAWorkerStarts(t *testing.T) {
 		{"nor the phase the idle lead takes up next", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			st.Phases["P0"].Status, st.Current = state.PhaseDone, ""
 		}, "P2", "", ""},
-		{"every slot taken", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "", "1 of 1 workers run already", ""},
-		{"a suspended worker keeps its slot", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerSuspended) }, "", "1 of 1 workers run already", ""},
+		{"every slot taken: a hold on every phase that can go ahead", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) },
+			"P2", decide.SlotsAtWork(1), state.HoldCap},
+		{"every slot taken, with a number", Fleet{Max: 2}, room{}, wide, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			on(st, "P2", state.WorkerStarting)
+		}, "P3", "all 2 agent slots at work", state.HoldCap},
+		{"every slot taken, and no phase waits", Fleet{Max: 2}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			on(st, "P2", state.WorkerWorking)
+		}, "", "2 of 2 workers run already", ""},
+		{"a suspended worker keeps its slot", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerSuspended) }, "P2", decide.SlotsAtWork(1), state.HoldCap},
+		{"a worker waiting to land takes no slot: its agent is idle", Fleet{Max: 1}, room{}, pl, func(st *state.State) { on(st, "P1", state.WorkerLanding) }, "P2", "", ""},
+		{"nor do two", Fleet{Max: 1}, room{}, wide, func(st *state.State) {
+			on(st, "P1", state.WorkerLanding)
+			on(st, "P2", state.WorkerLanding)
+		}, "P3", "", ""},
+		{"a landing handed back takes its slot again", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking) // merge.go's returned
+			st.Conflicts = 1
+		}, "P2", decide.SlotsAtWork(1), state.HoldCap},
+		{"one at work and one waiting to land take one slot", Fleet{Max: 2}, room{}, wide, func(st *state.State) {
+			on(st, "P1", state.WorkerWorking)
+			on(st, "P2", state.WorkerLanding)
+		}, "P3", "", ""},
 		{"a worker of a replaced plan keeps none", Fleet{Max: 1}, room{}, pl, func(st *state.State) {
 			on(st, "P1", state.WorkerWorking)
 			st.Generation++
@@ -160,7 +182,8 @@ func TestWhenAWorkerStarts(t *testing.T) {
 			st.Usage = &state.Usage{UsedPct: 85}
 		}, "P1", busyWhy, state.HoldBusy},
 		{"no room, and no phase waits", Fleet{Max: 1}, room{busy: busyWhy}, chain, nil, "", "no other phase can start", ""},
-		{"no room, and every slot taken", Fleet{Max: 1}, room{busy: busyWhy}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) }, "", "1 of 1 workers run already", ""},
+		{"no room, and every slot taken: the slots first", Fleet{Max: 1}, room{busy: busyWhy}, pl, func(st *state.State) { on(st, "P1", state.WorkerWorking) },
+			"P2", decide.SlotsAtWork(1), state.HoldCap},
 
 		// The lanes, and the landings.
 		{"a gate waits for a lane", Fleet{Max: 6}, room{lanes: laneWhy}, pl, nil, "P1", laneWhy, state.HoldLanes},
@@ -184,6 +207,10 @@ func TestWhenAWorkerStarts(t *testing.T) {
 			st.Workers = append(st.Workers, state.Worker{Phase: "P1", Ref: "r/P1", Status: state.WorkerFailed})
 			st.Conflicts = 2
 		}, "P1", "", ""},
+		{"conflicts, and a worker waiting to land may end them", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
+			on(st, "P1", state.WorkerLanding)
+			st.Conflicts = 2
+		}, "P2", "2 landings in a row conflicted", state.HoldConflicts},
 		{"conflicts, and only a replaced plan's worker left", Fleet{Max: 6}, room{}, pl, func(st *state.State) {
 			on(st, "P1", state.WorkerWorking)
 			st.Generation++
