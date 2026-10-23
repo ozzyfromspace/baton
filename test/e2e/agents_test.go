@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -427,16 +428,17 @@ After: none
 If baton then says your work conflicts with the run's branch, do as it says. In list.txt, keep both versions of the third line: the one from the run's branch first, then yours on the line after it, and leave the other lines as they are.
 `
 
-// The run's branch changes the line the phase agent changes, after the agent started: merging it into the
-// agent's branch conflicts, so baton hands the phase back to the agent with a message, and the agent merges
-// and resolves it itself and reports it done again. Then it lands, with both changes and every commit as it
-// was. The agent may run only git add and git commit unasked: its merge goes to Claude Code's permission
-// check, as in a real session.
+// The run's branch changes the line the phase agent changes, after the agent started: baton's merge of it
+// into the agent's branch, in the agent's worktree, stops at the conflict, and baton leaves it there and
+// hands the phase back to the agent with a message. The agent resolves the file, adds and commits it, and
+// reports the phase done again, never running git merge itself. Then it lands, with both changes and every
+// commit as it was. Nobody approves a prompt here, and the agent may run only git add and git commit
+// unasked: a permission prompt for anything else fails the scenario at once (in a real run the classifier
+// refused the agent's own git merge for hours).
 func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 	dir := listPlanProject(t)
 	Attach(t, dir, conflictPlan)
 	s := StartAgents(t, dir, nil, "--allowedTools", "Bash(git add:*)", "Bash(git commit:*)", "Bash(echo:*)", "Edit", "Write")
-	s.AutoApprove()
 
 	if spawned := s.WaitEvent("worker_spawned", 2*time.Minute); spawned == nil || spawned["phase"] != "P1" {
 		t.Fatalf("no phase agent on P1: %v", spawned)
@@ -445,11 +447,31 @@ func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 	writeFile(t, dir, "list.txt", "alpha\nbeta\ngamma (lead)\ndelta\nepsilon\n")
 	Git(t, dir, "commit", "-q", "-m", "feat: the lead gamma", "list.txt")
 
-	s.Until("the plan to complete", 10*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 })
+	prompt := func(e map[string]any) bool {
+		return e["kind"] == "dialog_open" && e["dialog"] == "" && e["tool"] != "AskUserQuestion"
+	}
+	s.Until("the plan to complete", 10*time.Minute, func() bool {
+		return first(s.Events(), is("plan_complete")) >= 0 || first(s.Events(), prompt) >= 0
+	})
 	ev := s.Events()
+	if i := first(ev, prompt); i >= 0 {
+		t.Fatalf("a permission prompt nobody here answers: %v", ev[i])
+	}
 	returned := first(ev, is("land_returned", "phase", "P1"))
 	if returned < 0 || fmt.Sprint(ev[returned]["paths"]) != "[list.txt]" {
 		t.Fatal("the conflict did not go back to the phase agent")
+	}
+	if ev[returned]["kept"] != true {
+		t.Errorf("baton's merge was not left in the agent's worktree: %v", ev[returned])
+	}
+	commands := agentCommands(t, s)
+	if len(commands) == 0 {
+		t.Fatal("no Bash command in the phase agents' transcripts")
+	}
+	for _, c := range commands {
+		if gitMerge.MatchString(c) {
+			t.Errorf("the phase agent ran a merge of its own: %q", c)
+		}
 	}
 	if !before(ev, is("land_returned", "phase", "P1"), is("landed", "phase", "P1")) {
 		t.Fatal("P1 never landed after its conflict")
@@ -460,8 +482,10 @@ func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 	if w := s.WorkerEvents("P1"); len(filter(w, is("phase_done", "phase", "P1"))) < 2 {
 		t.Error("the phase agent did not report P1 done again")
 	}
+	// The merge commit's message is whatever the agent gave it: baton's merge prepares git's own, and
+	// git commit --no-edit keeps it, but a -m of the agent's is no failure.
 	log := Git(t, dir, "log", "--format=%s")
-	if !strings.Contains(log, "feat: the lead gamma") || !strings.Contains(log, "feat: the agent gamma") || !strings.Contains(log, "Merge branch 'main' into baton/") {
+	if !strings.Contains(log, "feat: the lead gamma") || !strings.Contains(log, "feat: the agent gamma") || strings.TrimSpace(Git(t, dir, "log", "--merges", "--format=%H")) == "" {
 		t.Errorf("the run's branch, newest first, with no merge: %s", log)
 	}
 	got := readFile(dir, "list.txt")
@@ -470,6 +494,74 @@ func TestAConflictGoesBackToThePhaseAgent(t *testing.T) {
 		t.Errorf("list.txt: %q", got)
 	}
 	none(t, s, "controller_panic", "worker_waiting", "worker_resumed")
+}
+
+// gitMerge matches a command line that runs git merge (git merge-base aside), at its start or after a
+// shell's separator.
+var gitMerge = regexp.MustCompile(`(^|[;&|(]|\$\()\s*git(\s+-[Cc]\s+\S+)*\s+merge(\s|$)`)
+
+// agentCommands is every Bash command the phase agents of s's run tried, from their transcripts (Claude
+// Code keeps each agent's under the lead session's subagents/ folder, which each sub-run records): one the
+// classifier or a hook refused counts too.
+func agentCommands(t *testing.T, s *Session) []string {
+	t.Helper()
+	folders := map[string]bool{}
+	paths, _ := filepath.Glob(filepath.Join(s.Dir, ".baton", "runs", "*", "workers", "*", "state.json"))
+	for _, p := range paths {
+		var st struct {
+			Run struct {
+				Transcript string `json:"transcript"`
+			} `json:"run"`
+		}
+		if b, err := os.ReadFile(p); err == nil && json.Unmarshal(b, &st) == nil && st.Run.Transcript != "" {
+			folders[filepath.Dir(st.Run.Transcript)] = true
+		}
+	}
+	var out []string
+	for folder := range folders {
+		transcripts, _ := filepath.Glob(filepath.Join(folder, "agent-*.jsonl"))
+		for _, path := range transcripts {
+			out = append(out, bashCommands(t, path)...)
+		}
+	}
+	return out
+}
+
+// bashCommands is every Bash tool call's command in the transcript at path.
+func bashCommands(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading a phase agent's transcript: %v", err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		var e struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "assistant" {
+			continue
+		}
+		var blocks []struct {
+			Type  string `json:"type"`
+			Name  string `json:"name"`
+			Input struct {
+				Command string `json:"command"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(e.Message.Content, &blocks) != nil {
+			continue
+		}
+		for _, c := range blocks {
+			if c.Type == "tool_use" && c.Name == "Bash" {
+				out = append(out, c.Input.Command)
+			}
+		}
+	}
+	return out
 }
 
 // filter is the events cond matches.
