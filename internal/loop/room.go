@@ -171,8 +171,9 @@ type room struct {
 // with what next found: phase waits ("" for none), why no worker starts ("" if one does), and held, the
 // hold on it ("" for none). A hold is told once, as it starts or changes kind (worker_deferred, and a line
 // in the session), and its record goes once a worker starts or no phase waits for one. Every agent slot
-// at work (state.HoldCap, with Fleet.Max) is the run going as it should: it is recorded and logged, for
-// the board and baton watch to say why ready phases wait, and told in no line of the session.
+// at work (state.HoldCap, with Fleet.Max) is the run going as it should, and the weekly wind-down
+// (state.HoldWeekly) is told as the run winds down (winddown.go): each is recorded and logged, for the
+// board and baton watch to say why ready phases wait, and told in no line of the session.
 func (c *Coordinator) hold(now time.Time, s *state.Store, st state.State, phase, why, held string) {
 	cur, slots := st.Hold, 0
 	if held == state.HoldCap {
@@ -189,7 +190,7 @@ func (c *Coordinator) hold(now time.Time, s *state.Store, st state.State, phase,
 			fields["cap"] = slots
 		}
 		s.Event("worker_deferred", fields)
-		if held == state.HoldCap {
+		if held == state.HoldCap || held == state.HoldWeekly {
 			return
 		}
 		c.Lead.logf("loop: %s: no worker for now: %s", phase, why)

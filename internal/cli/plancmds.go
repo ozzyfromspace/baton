@@ -1040,6 +1040,10 @@ func cmdDone(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "%s %s\n", finished, decide.HereHeld(*st.HereGate()))
 		return 0
 	}
+	if next == "" && st.WoundDown() {
+		fmt.Fprintf(io.Out, "%s %s\n", finished, decide.WindDownDone(st.Usage.GoesOnAt(), io.Now()))
+		return 0
+	}
 	if next == "" {
 		fmt.Fprintf(io.Out, "%s No other phase can start until a job finishes: every phase left waits for one. End your turn now; baton wakes you when there is something to do.\n", finished)
 		return 0
@@ -1633,7 +1637,7 @@ func cmdDrop(args []string, io IO) int {
 	var logs int
 	var workers []string
 	var rec *state.Record
-	var left *state.Usage
+	var left *resumeCancel
 	if _, err := s.Update(func(st *state.State) error {
 		stopped, logs = st.Unfinished(), len(st.Jobs)
 		for _, w := range st.LiveWorkers() {

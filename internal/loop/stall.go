@@ -29,9 +29,10 @@ import (
 //     that ends by itself, bounded by verify_timeout), a gate waiting for a lane, and a gate whose log grew
 //     within StallAfter or whose process tree used CPU since the alarm's last look. A gate quiet in both
 //     (or in its log, where its processes cannot be read) is a hung gate, and named so.
-//   - Never: a run not running, or with nothing left to do; the account's usage limit; a dialog open (the
-//     human is told of it already). The quiet is counted from the machine's last wake (Loop.wokeAt), and
-//     from the moment a usage limit lifts.
+//   - Never: a run not running, or with nothing left to do; the account's usage limit; the weekly
+//     wind-down once nothing is under way (winddown.go: what is under way should finish, and is watched);
+//     a dialog open (the human is told of it already). The quiet is counted from the machine's last wake
+//     (Loop.wokeAt), from the moment a usage limit lifts, and from the wind-down's end.
 
 // stallEvery is how often the coordinator looks at whether the run has stopped moving.
 const stallEvery = time.Minute
@@ -64,7 +65,7 @@ func (c *Coordinator) stalls(v host.View, s *state.Store, st state.State) {
 		loops = append(loops, r.State)
 	}
 	quiet := c.readJobs(v.Now, loops)
-	since := latest(movedAt(st), c.Lead.wokeAt, c.Lead.limited(st))
+	since := latest(movedAt(st), c.Lead.wokeAt, c.Lead.limited(st), woundUpAt(st))
 	for _, r := range subs {
 		since = latest(since, movedAt(r.State))
 	}
@@ -198,7 +199,8 @@ func (c *Coordinator) cpuOf(pgid int) procs.Usage {
 }
 
 // stillWhy says why the run st cannot be stalled now ("" when it can): it is not running, has nothing
-// left to do, waits on the account's usage limit or on a dialog (a phase agent's too, named by its phase:
+// left to do, waits on the account's usage limit, on the weekly reset with nothing under way (the
+// wind-down), or on a dialog (a phase agent's too, named by its phase:
 // the human is told of it already), or something in one of its loops is busy (quiet: the running gates
 // that look hung, readJobs).
 func (c *Coordinator) stillWhy(now time.Time, st state.State, pl plan.Plan, loops []state.State, quiet map[string]time.Duration) string {
@@ -209,6 +211,8 @@ func (c *Coordinator) stillWhy(now time.Time, st state.State, pl plan.Plan, loop
 		return "no phase is left"
 	case now.Before(c.Lead.limited(st)):
 		return gateUsage
+	case st.WoundDown() && len(state.UnderWay(st, pl)) == 0:
+		return windWait
 	case st.Run.Dialogs.LeadOpen():
 		return gateDialog
 	case st.Run.Dialogs.AnyOpen():

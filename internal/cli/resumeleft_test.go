@@ -39,3 +39,33 @@ func TestTheResumeTimerInStatusAndDrop(t *testing.T) {
 		t.Errorf("usage after drop: %+v", st.Usage)
 	}
 }
+
+// baton status says the run winds down and when it goes on; baton done with nothing left to start says the
+// lead waits for the reset; a drop cancels the going on, logged.
+func TestTheWindDownInStatusDoneAndDrop(t *testing.T) {
+	s, planFile := newSession(t)
+	s.attach(planFile)
+	resets := s.now.Add(5 * time.Hour)
+	goesOn := resets.Add(state.ResumeGrace)
+	s.set(func(st *state.State) {
+		st.Usage = &state.Usage{WeeklyPct: 98.5, WeeklyResets: resets}
+		state.WindDown(st, 2, s.now)
+	})
+	if out := s.must("", "status"); !strings.Contains(out, "weekly wind-down: 1.5% of weekly usage left → nothing new starts; what is under way finishes · baton goes on at "+goesOn.Local().Format("15:04")) {
+		t.Errorf("status:\n%s", out)
+	}
+	if out := s.must("", "done", "P0", "--notes", "P0's notes"); !strings.Contains(out, "no new phase starts until the weekly reset, and baton goes on at "+goesOn.Local().Format("15:04")) {
+		t.Errorf("done:\n%s", out)
+	}
+	if st := s.state(); st.Current != "" {
+		t.Errorf("the lead took %s", st.Current)
+	}
+	s.must("", "drop")
+	logged := false
+	for _, line := range strings.Split(s.events(), "\n") {
+		logged = logged || strings.Contains(line, `"kind":"usage_wait_cancelled"`) && strings.Contains(line, `"by":"drop"`) && strings.Contains(line, `"wind_down":true`)
+	}
+	if !logged {
+		t.Errorf("events:\n%s", s.events())
+	}
+}

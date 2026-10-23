@@ -41,13 +41,13 @@ func TestPriorityFollowsWhatTheHumanMustDo(t *testing.T) {
 	defer srv.Close()
 	off := false
 	n := New(config.Config{NtfyTopic: "t", NtfyServer: srv.URL, Desktop: &off})
-	for _, kind := range []string{"note", "proposal", "proceeded", "not_now", "decision", "hold_lapsed", "review", "blocked", "block_lapsed", "answered", "review_ready", "usage_wait", "usage_resumed"} {
+	for _, kind := range []string{"note", "proposal", "proceeded", "not_now", "decision", "hold_lapsed", "review", "blocked", "block_lapsed", "answered", "review_ready", "usage_wait", "usage_resumed", "weekly_wind_down", "weekly_wound_up"} {
 		if headline[kind] == "" {
 			t.Errorf("%s has no headline", kind)
 		}
 		n.Notify("p", kind, "")
 	}
-	if want := []string{"2", "4", "", "", "4", "", "4", "", "", "2", "", "2", "2"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if want := []string{"2", "4", "", "", "4", "", "4", "", "", "2", "", "2", "2", "", "2"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("priorities %q, want %q", got, want)
 	}
 }

@@ -326,6 +326,21 @@ func TestLines(t *testing.T) {
 			decide.BoardWrite[0],
 			decide.BoardWrite[1],
 		}},
+		{"the weekly wind-down, every agent slot at work too: every ready phase names the wind-down", func() *run {
+			r := newRun()
+			r.st.Hold = &state.Hold{Phase: "P3", Kind: state.HoldWeekly, Why: "held", Since: now}
+			r.st.Usage = &state.Usage{WeeklyPct: 98.4, WeeklyResets: now.Add(30 * time.Hour), WoundDown: now, WindFor: now.Add(30 * time.Hour)}
+			return r
+		}, "", 0, []string{
+			`◆ baton · "Workers you can see" · step 2 of 4`,
+			"step 1  ✓ P1  The mod — done",
+			"step 2  ▶ P2  Every hook knows its loop — the lead works on it 5m",
+			"        · P3  Phase agents — ready: " + decide.WindDownHolds(now.Add(30*time.Hour+state.ResumeGrace), now),
+			"        · P4  Gates and questions — ready: " + decide.WindDownHolds(now.Add(30*time.Hour+state.ResumeGrace), now),
+			"step 3  · P5  baton's view — waits on P3",
+			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
+			"lead: working on P2, its turn 2m",
+		}},
 		{"serial, waiting on a gate", func() *run {
 			r := newRun()
 			r.st.Jobs = []state.Job{{ID: "j2", Phase: "P2", Kind: state.JobAwait, Status: state.JobRunning, Queued: now.Add(-90 * time.Second)}}

@@ -75,6 +75,7 @@ func (c *Coordinator) usage(now time.Time, s *state.Store, st state.State) {
 			break
 		}
 	}
+	st = c.windDown(now, s, st)
 	st = c.timer(now, s, st, runs)
 	var u *state.Usage
 	if st.Usage != nil {

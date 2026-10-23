@@ -125,10 +125,10 @@ func launchable(st state.State, now time.Time) string {
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
 // one does): the run must be running, with no replan open (nor one of baton's own due at the lead's phase
 // boundary under way), under Max workers of its plan, with a phase that can go ahead.
-// held names what holds a phase that waits back: every agent slot at work (Max workers of the plan), no
-// room on the machine (r.busy), gates waiting for lanes (r.lanes), landings that keep conflicting, no
-// room under worker_usage_max, or an agent that started less than Ramp ago (state.HoldCap, HoldBusy,
-// HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
+// held names what holds a phase that waits back: the weekly wind-down, every agent slot at work (Max
+// workers of the plan), no room on the machine (r.busy), gates waiting for lanes (r.lanes), landings that
+// keep conflicting, no room under worker_usage_max, or an agent that started less than Ramp ago
+// (state.HoldWeekly, HoldCap, HoldBusy, HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
 func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
 		return "", why, ""
@@ -143,6 +143,9 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 		return "", "the plan was attached with no branch checked out", ""
 	}
 	phase = state.NextWorker(st, pl)
+	if phase != "" && st.WoundDown() { // before the slots, so that the board names the wind-down
+		return phase, decide.WindDownHolds(st.Usage.GoesOnAt(), now), state.HoldWeekly // every phase that can go ahead waits
+	}
 	if n := planWorkers(st); n >= f.Max {
 		if phase == "" {
 			return "", fmt.Sprintf("%d of %d workers run already", n, f.Max), ""

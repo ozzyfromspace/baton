@@ -148,6 +148,9 @@ func printUsage(io IO, st state.State) {
 		fmt.Fprintf(io.Out, "usage limit: %s hit it at %s → no worker starts, and baton types nothing into the run's sessions, until %s%s\n",
 			who, decide.Clock(u.Hit, now), decide.Clock(u.Limited, now), decide.StatusResume(u.ResumeAt, u.Cancelled, now))
 	}
+	if st.WoundDown() {
+		fmt.Fprintln(io.Out, decide.StatusWindDown(u.WeeklyPct, u.GoesOnAt(), st.Mode == state.ModePaused, now))
+	}
 	cfg := config.Load(batonRoot(io), io.Env)
 	if n, _, err := cfg.WorkerCap(io.reading); err != nil || n == 0 || !u.Resets.IsZero() && !now.Before(u.Resets) {
 		return

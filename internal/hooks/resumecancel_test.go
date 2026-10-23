@@ -87,3 +87,33 @@ func fmtOut(out map[string]any) string {
 	}
 	return b.String()
 }
+
+// In the weekly wind-down, the human's prompt stops the run going on by itself after the reset as it
+// cancels the resume timer: the run pauses, told beside it, once.
+func TestAPromptPausesTheWindDown(t *testing.T) {
+	f := newFixture(t, true)
+	resets := f.now.Add(30 * time.Hour)
+	f.store.Update(func(st *state.State) error {
+		if err := state.Claim(st, f.inst, 1, f.now); err != nil {
+			return err
+		}
+		st.Usage = &state.Usage{WeeklyPct: 98.5, WeeklyResets: resets}
+		state.WindDown(st, 2, f.now)
+		return nil
+	})
+	out := f.fire("UserPromptSubmit", map[string]any{"prompt": "what is left?"})
+	st := f.state()
+	if st.Mode != state.ModePaused || !st.WoundDown() || st.Usage.WindPaused.IsZero() || st.Usage.Cancelled != "" {
+		t.Fatalf("mode %s, usage %+v", st.Mode, st.Usage)
+	}
+	if say, _ := out["systemMessage"].(string); !strings.Contains(say, "going on after the weekly reset cancelled") {
+		t.Errorf("the human was told %q", say)
+	}
+	if !strings.Contains(fmtOut(out), "will not go on by itself after the weekly reset") {
+		t.Errorf("the model was told %v", out)
+	}
+	f.fire("UserPromptSubmit", map[string]any{"prompt": "and then?"})
+	if n := strings.Count(f.eventLog(), `"wind_down":true`); n != 1 {
+		t.Errorf("told %d times:\n%s", n, f.eventLog())
+	}
+}

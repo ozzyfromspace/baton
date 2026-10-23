@@ -11,11 +11,11 @@ import (
 var resumeCancelling = func() {}
 
 // cancelResume cancels the run's resume timer when the human writes at the lead while it is armed
-// (state/resume.go): the human takes over, so the run pauses, and /baton run gives it back. Words for a
-// phase's agent (@P3 …) cancel it too, before they are routed. A /baton command that only looks (status,
-// board) or gives the run back (run) cancels nothing. It returns what the human and the lead's model are
-// told ("" for nothing), once, as the timer is armed no more. Whatever goes wrong, even a panic, leaves the
-// prompt as it was.
+// (state/resume.go), and so the weekly wind-down's going on after the reset (state/winddown.go): the human
+// takes over, so the run pauses, and /baton run gives it back. Words for a phase's agent (@P3 …) cancel
+// it too, before they are routed. A /baton command that only looks (status, board) or gives the run back
+// (run) cancels nothing. It returns what the human and the lead's model are told ("" for nothing), once,
+// as the timer is armed no more. Whatever goes wrong, even a panic, leaves the prompt as it was.
 func (h *handlers) cancelResume(c Context) (say, tell string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -29,23 +29,38 @@ func (h *handlers) cancelResume(c Context) (say, tell string) {
 	if err != nil || s == nil || s.Worker() != "" {
 		return "", ""
 	}
-	if peek, err := s.Peek(); err != nil || peek.Usage == nil || peek.Usage.ResumeAt.IsZero() {
+	if peek, err := s.Peek(); err != nil || peek.Usage == nil || peek.Usage.ResumeAt.IsZero() && !peek.WindArmed() {
 		return "", ""
 	}
 	resumeCancelling()
 	var u state.Usage
-	cancelled := false
+	limit, wind := false, false
 	if _, err := s.Update(func(st *state.State) error {
-		if !st.IsOwner(s.Instance, c.Now) || !state.CancelResume(st, state.CancelPrompt, c.Now) {
+		if !st.IsOwner(s.Instance, c.Now) {
 			return nil
 		}
-		cancelled, u = true, *st.Usage
+		wind = st.WindArmed()
+		if limit = state.CancelResume(st, state.CancelPrompt, c.Now); !limit && !wind {
+			return nil
+		}
 		state.Pause(st)
+		if wind {
+			state.WindPause(st, c.Now) // told here
+		}
+		u = *st.Usage
 		return nil
-	}); err != nil || !cancelled {
+	}); err != nil || !limit && !wind {
 		return "", ""
 	}
-	s.Event("usage_wait_cancelled", map[string]any{"by": state.CancelPrompt, "window": u.Window, "paused": true})
+	if !limit {
+		s.Event("usage_wait_cancelled", map[string]any{"by": state.CancelPrompt, "window": state.WindowWeekly, "paused": true, "wind_down": true})
+		return decide.WindCancelled(state.CancelPrompt), decide.WindCancelledTell
+	}
+	fields := map[string]any{"by": state.CancelPrompt, "window": u.Window, "paused": true}
+	if wind {
+		fields["wind_down"] = true
+	}
+	s.Event("usage_wait_cancelled", fields)
 	return decide.ResumeCancelled(state.CancelPrompt, false), decide.ResumeCancelledTell
 }
 

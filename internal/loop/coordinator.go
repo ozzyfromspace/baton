@@ -43,6 +43,9 @@ type Coordinator struct {
 	leftAt    time.Time
 	// Advisor is the advisor's settings (advisor.go): a small model's note on each look-in at a gate.
 	Advisor Advisor
+	// WeeklyReserve is weekly_reserve_pct: the percent of the account's weekly allowance the run leaves,
+	// at which it winds down until the weekly reset (winddown.go; 0: no wind-down).
+	WeeklyReserve float64
 
 	mu      sync.Mutex
 	workers map[string]*worker // by phase: the phase agents this host started

@@ -118,7 +118,7 @@ func cmdExit(args []string, io IO) int {
 	paused := false
 	var jobs []state.Job
 	var workers []string
-	var left *state.Usage
+	var left *resumeCancel
 	s.Update(func(st *state.State) error {
 		left = leaveResume(st, state.CancelExit, io.Now())
 		paused, jobs = state.Pause(st) == nil, st.Unfinished()

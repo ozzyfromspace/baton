@@ -163,7 +163,9 @@ const LandedByLead = "lead"
 // into the run's sessions, until then. Window is the window that limit was, and WindowResets when it resets
 // (zero when unknown; LimitWindow). ResumeAt is when the run's resume timer fires (zero: none armed), Fired
 // when it last did, and Tries the tries since that hit the limit again; Cancelled says who cancelled it,
-// and CancelSaid when that was told (resume.go).
+// and CancelSaid when that was told (resume.go). WoundDown is when the run wound down near the end of the
+// weekly allowance, until the weekly reset WindFor (zero: it is not), WindPaused when the human was told
+// that a pause stops it going on by itself, and WoundUp when it last went on (winddown.go).
 type Usage struct {
 	UsedPct      float64   `json:"used_pct"`
 	Resets       time.Time `json:"resets_at,omitzero"`
@@ -181,14 +183,18 @@ type Usage struct {
 	Tries        int       `json:"resume_tries,omitempty"`
 	Cancelled    string    `json:"resume_cancelled,omitempty"`
 	CancelSaid   time.Time `json:"resume_cancel_said,omitzero"`
+	WoundDown    time.Time `json:"wound_down,omitzero"`
+	WindFor      time.Time `json:"wind_for,omitzero"`
+	WindPaused   time.Time `json:"wind_paused,omitzero"`
+	WoundUp      time.Time `json:"wound_up,omitzero"`
 }
 
 // Hold is what holds back a phase that waits for a worker, since Since: no room for another session on
 // the machine (HoldBusy), gates waiting for the project's lanes (HoldLanes), the workers' landings
 // conflicting with the run's branch (HoldConflicts), no room in the account's five-hour allowance
-// (HoldUsage), an agent that started a moment ago (HoldRamp), or every one of the Cap agent slots at
-// work (HoldCap), which holds back every phase that could go ahead, not Phase alone. Why says so in
-// words. The workers at work go on.
+// (HoldUsage), an agent that started a moment ago (HoldRamp), every one of the Cap agent slots at work
+// (HoldCap), or the weekly wind-down (HoldWeekly, winddown.go); the last two hold back every phase that
+// could go ahead, not Phase alone. Why says so in words. The workers at work go on.
 type Hold struct {
 	Phase string    `json:"phase"`
 	Kind  string    `json:"kind"`
@@ -205,6 +211,7 @@ const (
 	HoldUsage     = "usage"
 	HoldRamp      = "ramp"
 	HoldCap       = "cap"
+	HoldWeekly    = "weekly"
 )
 
 // LimitHit is when the session's last turn ended on the account's usage limit: zero if it did not, or

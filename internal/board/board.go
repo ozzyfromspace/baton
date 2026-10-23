@@ -178,7 +178,7 @@ func phase(st state.State, pl plan.Plan, subs map[string]state.State, id string,
 	case p.Status == state.PhaseParked:
 		p.Stand = parked(st, id)
 	default:
-		p.Stand = pending(st, pl, id)
+		p.Stand = pending(st, pl, id, now)
 	}
 	return p
 }
@@ -218,8 +218,9 @@ func parked(st state.State, id string) decide.Stand {
 }
 
 // pending is how a phase stands that nobody has taken up: it waits on phases not done, a phase agent for
-// it is held back, or it is ready, and with every agent slot at work (state.HoldCap), says so.
-func pending(st state.State, pl plan.Plan, id string) decide.Stand {
+// it is held back, or it is ready, and in the weekly wind-down (state.WoundDown), or with every agent slot
+// at work (state.HoldCap), says so.
+func pending(st state.State, pl plan.Plan, id string, now time.Time) decide.Stand {
 	var waits []string
 	for _, d := range pl.Deps(id) {
 		if ps := st.Phases[d]; ps == nil || ps.Status != state.PhaseDone {
@@ -229,6 +230,8 @@ func pending(st state.State, pl plan.Plan, id string) decide.Stand {
 	switch h := st.Hold; {
 	case len(waits) > 0:
 		return decide.Stand{Kind: decide.StandWaits, Waits: waits}
+	case st.WoundDown():
+		return decide.Stand{Kind: decide.StandReady, Why: decide.WindDownHolds(st.Usage.GoesOnAt(), now)}
 	case h != nil && h.Kind == state.HoldCap:
 		return decide.Stand{Kind: decide.StandReady, Why: decide.SlotsAtWork(h.Cap)}
 	case h != nil && h.Phase == id:

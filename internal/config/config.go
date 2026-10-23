@@ -92,11 +92,16 @@ type Config struct {
 	// WorkerUsageMax is how much of the account's five-hour usage allowance, in percent, may be used before
 	// baton starts no new worker: up to 100, or 0, the default, for no check (BATON_WORKER_USAGE_MAX).
 	WorkerUsageMax *float64 `json:"worker_usage_max,omitempty"`
+	// WeeklyReservePct is how much of the account's weekly usage allowance, in percent, the run leaves:
+	// once the rest is used, the run finishes what it started and starts nothing new until the weekly
+	// reset (WeeklyReserve): 2 by default, up to 50, or 0 for no wind-down (BATON_WEEKLY_RESERVE_PCT).
+	WeeklyReservePct *float64 `json:"weekly_reserve_pct,omitempty"`
 
 	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after,
-	// foreground_max, workers and worker_usage_max, which are checked against bounds of their own.
+	// foreground_max, workers, worker_usage_max and weekly_reserve_pct, which are checked against bounds of
+	// their own.
 	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter, envForegroundMax string
-	envWorkers, envUsageMax                                                    string
+	envWorkers, envUsageMax, envWeeklyReserve                                  string
 }
 
 // Defaults.
@@ -185,6 +190,7 @@ func Load(root string, env func(string) string) Config {
 	c.envVerifyTimeout, c.envSwitchAfter = env("BATON_VERIFY_TIMEOUT"), env("BATON_SWITCH_AFTER")
 	c.envForegroundMax = env("BATON_FOREGROUND_MAX")
 	c.envWorkers, c.envUsageMax = env("BATON_WORKERS"), env("BATON_WORKER_USAGE_MAX")
+	c.envWeeklyReserve = env("BATON_WEEKLY_RESERVE_PCT")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}

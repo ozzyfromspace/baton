@@ -149,6 +149,10 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	reserve, err := cfg.WeeklyReserve()
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
@@ -204,6 +208,8 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
 		Leftovers: io.Leftovers,
 		Advisor:   loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)}} // a small model's note on each look-in (advisor, advisor_model)
+	// The run winds down near the end of the account's weekly allowance (weekly_reserve_pct).
+	coordinator.WeeklyReserve = reserve
 	if coordinator.Risk, err = riskLines(io); err != nil { // the risk ledger's lines (risk, risk_review, risk_full)
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
