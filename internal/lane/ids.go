@@ -5,6 +5,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 )
 
 // FailedTest is one test a gate's output says failed.
@@ -19,21 +20,25 @@ type FailedTest struct {
 	// Whole: ID is a file or package that failed with no test of it named (it did not build or load, or a
 	// test timed out), so only a run of all of it reruns what failed.
 	Whole bool `json:"whole,omitempty"`
+	// Took is how long the test ran, as its runner's failure line says it (go, Playwright, vitest), the
+	// longest of its lines a Reading read; 0 where the runner says none.
+	Took time.Duration `json:"took,omitempty"`
 }
 
 // A Reading collects the tests a gate's output says failed, a line at a time: its ::baton fail lines, and
 // the failure lines of the runners it reads. Each test is kept once, in the order it was first named, up to
-// its max; the rest are counted.
+// its max, with the longest time a line of it gave; the rest are counted.
 type Reading struct {
 	max     int
 	readers []reader
-	at      map[FailedTest]int // each test, and when it was first named
+	at      map[FailedTest]int           // each test (its Took left out), and when it was first named
+	took    map[FailedTest]time.Duration // the longest time a line gave each test
 	seq     int
 }
 
 // NewReading reads ::baton fail lines and the output of the runners presets, keeping at most max tests.
 func NewReading(max int, presets ...Preset) *Reading {
-	r := &Reading{max: max, at: map[FailedTest]int{}}
+	r := &Reading{max: max, at: map[FailedTest]int{}, took: map[FailedTest]time.Duration{}}
 	for _, p := range presets {
 		r.readers = append(r.readers, p.read(r))
 	}
@@ -67,6 +72,9 @@ func (r *Reading) Failed() ([]FailedTest, int) {
 		all = append(all, f)
 	}
 	slices.SortFunc(all, func(a, b FailedTest) int { return r.at[a] - r.at[b] })
+	for i, f := range all {
+		all[i].Took = r.took[f]
+	}
 	if len(all) > r.max {
 		return all[:r.max], len(all) - r.max
 	}
@@ -83,9 +91,12 @@ func (r *Reading) next() int {
 func (r *Reading) add(f FailedTest) { r.addAt(r.next(), f) }
 
 func (r *Reading) addAt(seq int, f FailedTest) {
+	took := f.Took
+	f.Took = 0
 	if _, ok := r.at[f]; !ok {
 		r.at[f] = seq
 	}
+	r.took[f] = max(r.took[f], took)
 }
 
 // FailureIDs reads the log at path for the tests it says failed (a Reading of every Preset): at most max of

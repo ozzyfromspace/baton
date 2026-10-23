@@ -3,6 +3,7 @@ package lane
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 // Each runner's lines that name a failed test, and those that do not.
@@ -101,7 +102,7 @@ func TestPlaywrightSummary(t *testing.T) {
 			[]FailedTest{a("a.spec.ts:3", ""), a("b.spec.ts:4", "")}},
 		{"pytest's count is not Playwright's", []string{"1 failed, 2 passed in 0.12s", "    a.spec.ts:3:5 › fails ───"}, nil},
 		{"the list and the summary name a test once", []string{"  ✘  2 [chromium] › a.spec.ts:3:5 › fails (1.0s)", "  1 failed",
-			"    [chromium] › a.spec.ts:3:5 › fails ───"}, []FailedTest{a("a.spec.ts:3", "chromium")}},
+			"    [chromium] › a.spec.ts:3:5 › fails ───"}, []FailedTest{{Runner: RunPlaywright, ID: "a.spec.ts:3", Scope: "chromium", Took: time.Second}}},
 		{"not a test file", []string{"  1 failed", "    [chromium] › a.spec.md:3:5 › fails ───"}, nil},
 	}
 	for _, c := range cases {

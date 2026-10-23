@@ -58,7 +58,7 @@ func failuresIn(s *state.Store, jobs []state.Job) ([]lane.FailedTest, int) {
 		}
 		more += n
 		for _, f := range fs {
-			if !slices.Contains(out, f) {
+			if !slices.ContainsFunc(out, f.Same) {
 				out = append(out, f)
 			}
 		}

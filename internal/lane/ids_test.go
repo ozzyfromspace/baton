@@ -7,12 +7,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The tests a red log says failed are read whatever runner printed it, colour and Windows line ends
-// included, each once, in the order first named, with the command that reruns only them.
+// included, each once, in the order first named, with the time its runner says it took and the command
+// that reruns only them.
 func TestFailureIDs(t *testing.T) {
 	type ft = FailedTest
+	ms := time.Millisecond
 	cases := []struct {
 		log    string
 		crlf   bool
@@ -20,7 +23,7 @@ func TestFailureIDs(t *testing.T) {
 		reruns []string
 	}{
 		{"go.log", false, []ft{
-			{Runner: RunGo, ID: "TestRanking", Scope: "example.com/m/internal/rank"},
+			{Runner: RunGo, ID: "TestRanking", Scope: "example.com/m/internal/rank", Took: 20 * ms},
 			{Runner: RunGo, ID: "TestParse", Scope: "example.com/m/internal/rank"},
 			{Runner: RunGo, ID: "example.com/m/internal/broken", Scope: "example.com/m/internal/broken", Whole: true},
 			{Runner: RunGo, ID: "example.com/m/internal/slow", Scope: "example.com/m/internal/slow", Whole: true},
@@ -37,9 +40,9 @@ func TestFailureIDs(t *testing.T) {
 			{Runner: RunPytest, ID: "tests/test_calc.py::test_add[a b-c]"},
 		}, []string{"pytest tests/test_api.py::test_logout 'tests/test_calc.py::test_add[a b-c]'"}},
 		{"vitest.log", false, []ft{
-			{Runner: RunVitest, ID: "src/board.test.ts > Board > moves > rejects a move off the grid"},
-			{Runner: RunVitest, ID: "src/board.test.ts > Board > keeps score"},
-			{Runner: RunVitest, ID: "src/view.test.tsx > View > draws the band"},
+			{Runner: RunVitest, ID: "src/board.test.ts > Board > moves > rejects a move off the grid", Took: 5 * ms},
+			{Runner: RunVitest, ID: "src/board.test.ts > Board > keeps score", Took: ms},
+			{Runner: RunVitest, ID: "src/view.test.tsx > View > draws the band", Took: 30 * ms},
 			{Runner: RunVitest, ID: "src/broken.test.ts", Whole: true},
 		}, []string{"vitest run src/board.test.ts src/view.test.tsx -t 'rejects a move off the grid|keeps score|draws the band'" +
 			" && vitest run src/broken.test.ts"}},
@@ -49,8 +52,8 @@ func TestFailureIDs(t *testing.T) {
 			{Runner: RunJest, ID: "src/legacy.test.js", Whole: true},
 		}, []string{"jest src/cart.test.js -t 'applies the discount|empties' && jest src/legacy.test.js"}},
 		{"playwright.log", false, []ft{
-			{Runner: RunPlaywright, ID: "tests/home.spec.ts:12", Scope: "chromium"},
-			{Runner: RunPlaywright, ID: "tests/cart.spec.ts:8", Scope: "firefox"},
+			{Runner: RunPlaywright, ID: "tests/home.spec.ts:12", Scope: "chromium", Took: 5200 * ms},
+			{Runner: RunPlaywright, ID: "tests/cart.spec.ts:8", Scope: "firefox", Took: 30 * time.Second}, // its retry too
 		}, []string{"playwright test tests/home.spec.ts:12 tests/cart.spec.ts:8 --project=chromium --project=firefox"}},
 		{"playwright-summary.log", true, []ft{ // its summary alone: no ✘ line, no failure's details
 			{Runner: RunPlaywright, ID: "tests/search.spec.ts:21", Scope: "chromium"},
@@ -60,7 +63,7 @@ func TestFailureIDs(t *testing.T) {
 		{"mixed.log", true, []ft{
 			{Runner: RunPytest, ID: "tests/test_api.py::test_logout"},
 			{ID: "lint:unused-import"},
-			{Runner: RunPlaywright, ID: "e2e/login.spec.ts:4"},
+			{Runner: RunPlaywright, ID: "e2e/login.spec.ts:4", Took: 3 * time.Second},
 		}, []string{"pytest tests/test_api.py::test_logout", "playwright test e2e/login.spec.ts:4"}},
 	}
 	for _, c := range cases {
