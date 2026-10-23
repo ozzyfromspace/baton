@@ -294,7 +294,7 @@ func TestTheModIsToldToAskTheFrontQuestion(t *testing.T) {
 	st := x.state()
 	r := st.RelayIssued()
 	deadline := decide.Deadline(r.Issued, DefaultTiming.EscalationTimeout)
-	want := decide.RelayQuestion(*r, deadline)
+	want := decide.RelayQuestion(*r, deadline, decide.RunWait{})
 	if c := x.asks[0]; c.Question != want.Text || strings.Join(c.Options, "|") != "Wait for me|Pause baton|Go ahead" || c.Header != "baton" || c.Phase != "P1" {
 		t.Errorf("asked %+v, want %q", c, want.Text)
 	}

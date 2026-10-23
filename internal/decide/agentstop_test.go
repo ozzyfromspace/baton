@@ -82,7 +82,7 @@ func TestAgentQuestions(t *testing.T) {
 			[]string{StopIt, "Pause baton", KeepItGoing}, KeepItGoing},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			q := RelayQuestion(c.r, due)
+			q := RelayQuestion(c.r, due, RunWait{})
 			for _, w := range c.want {
 				if !strings.Contains(q.Text, w) {
 					t.Errorf("the question lacks %q:\n%s", w, q.Text)

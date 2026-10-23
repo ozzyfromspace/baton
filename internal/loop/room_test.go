@@ -9,7 +9,6 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
-	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
 	"github.com/ozzyfromspace/baton/internal/machine"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
@@ -357,6 +356,11 @@ func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 	x.atWork("P1")
 	x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
 	for i, content := range []string{"the worker's\n", "the worker's, again\n"} {
+		if i > 0 {
+			// The worker commits the merge baton left in progress with its own side, and the lead changes
+			// the file again meanwhile.
+			x.leadCommits(map[string]string{"a.txt": "the lead's, again\n"})
+		}
 		x.finish("P1", map[string]string{"a.txt": content}, false)
 		x.tick(time.Second)
 		if n := x.state().Conflicts; n != i+1 || x.worker("P1").Status != state.WorkerWorking {
@@ -380,19 +384,9 @@ func TestLandingsThatKeepConflictingHoldWorkersBack(t *testing.T) {
 		t.Errorf("its stop gave it %q", got)
 	}
 
-	// The worker resolves it, and lands: the hold is over.
-	w := x.worker("P1")
-	gittest.Git(t, w.Worktree, "reset", "-q", "--soft", "main")
-	gittest.Write(t, w.Worktree, "a.txt", "both\n")
-	gittest.Commit(t, w.Worktree, "P1: both")
-	sub := x.sub("P1")
-	pl, _ := sub.LoadPlan()
-	sub.Update(func(st *state.State) error {
-		state.TakeMail(st)
-		_, err := state.Done(st, pl, "P1", x.now, state.DoneOpts{})
-		st.Run.TurnOpen = false
-		return err
-	})
+	// The worker resolves it, commits the merge, and lands: the hold is over.
+	x.resolve("P1", map[string]string{"a.txt": "both\n"})
+	x.doneAgain("P1")
 	x.tick(workerQuiet) // the message handing the conflict back started the agent again: it is quiet once more
 	x.tick(time.Second)
 	if st := x.state(); x.worker("P1").Status != state.WorkerLanded || st.Conflicts != 0 || st.Hold != nil || !slices.Contains(x.spawned(), "P2") {

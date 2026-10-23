@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -78,6 +77,35 @@ func (x *crew) leadCommits(files map[string]string) string {
 	})
 	gittest.Commit(x.t, x.repo, "the lead's", paths...)
 	return gitx.Head(x.repo)
+}
+
+// resolve resolves the merge baton left in progress in phase's worktree, as its worker is told: it writes
+// files, adds them, and commits the merge with git's own message. It returns the commit.
+func (x *crew) resolve(phase string, files map[string]string) string {
+	t := x.t
+	t.Helper()
+	w := x.worker(phase)
+	for name, content := range files {
+		gittest.Write(t, w.Worktree, name, content)
+		gittest.Git(t, w.Worktree, "add", name)
+	}
+	gittest.Git(t, w.Worktree, "commit", "-q", "--no-edit")
+	return gitx.Head(w.Worktree)
+}
+
+// doneAgain has the worker on phase, its phase handed back, take baton's message and report the phase
+// done again, ending its turn.
+func (x *crew) doneAgain(phase string) {
+	sub := x.sub(phase)
+	pl, _ := sub.LoadPlan()
+	if _, err := sub.Update(func(st *state.State) error {
+		state.TakeMail(st)
+		_, err := state.Done(st, pl, phase, x.now, state.DoneOpts{})
+		st.Run.TurnOpen = false
+		return err
+	}); err != nil {
+		x.t.Fatal(err)
+	}
 }
 
 func (x *crew) announced() string { return strings.Join(x.state().Run.Announce, "\n") }
@@ -248,8 +276,9 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 	}
 }
 
-// A merge that conflicts is aborted, and the phase goes back to its worker, told what conflicted; once it
-// resolves the conflict and reports the phase done again, it lands.
+// A merge that conflicts is left in progress in the worker's worktree, and the phase goes back to its
+// worker, told what conflicted; once it resolves the files, adds them, commits the merge (never running
+// git merge itself) and reports the phase done again, it lands.
 func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	x := landingCrew(t)
 	leads := x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
@@ -257,8 +286,15 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	x.tick(time.Second)
 
 	w := x.worker("P1")
-	if gitx.Head(w.Worktree) != old || gittest.Git(t, w.Worktree, "status", "--porcelain") != "" {
-		t.Fatal("the conflicted merge was not aborted")
+	ctx := context.Background()
+	if gitx.Head(w.Worktree) != old || !gitx.Merging(ctx, w.Worktree) || gitx.RevParse(w.Worktree, "MERGE_HEAD") != leads {
+		t.Fatalf("the conflicted merge is not in progress on the worker's commit\n%s", x.events())
+	}
+	if got := read(t, w.Worktree, "a.txt"); !strings.Contains(got, "<<<<<<< HEAD\nthe worker's\n=======\nthe lead's\n>>>>>>> ") {
+		t.Errorf("a.txt holds no conflict markers:\n%s", got)
+	}
+	if paths, _ := gitx.Unmerged(ctx, w.Worktree); !slices.Equal(paths, []string{"a.txt"}) {
+		t.Errorf("unmerged %v", paths)
 	}
 	sst, _ := x.sub("P1").Load()
 	if w.Status != state.WorkerWorking || w.Merge != nil || sst.Mode != state.ModeRunning || sst.Current != "P1" || sst.Phases["P1"].Status != state.PhaseActive {
@@ -268,29 +304,22 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 		map[string][]decide.ConflictCommit{"a.txt": {{Hash: leads[:7], Subject: "the lead's"}}}) {
 		t.Errorf("the worker's inbox: %+v", sst.Inbox)
 	}
-	if !x.has("land_returned", `"paths":["a.txt"]`) || !strings.Contains(x.announced(), "P1's work did not land: its branch conflicts with the run's in a.txt") {
+	if !x.has("land_returned", `"kept":true`, `"paths":["a.txt"]`) || !strings.Contains(x.announced(), "P1's work did not land: its branch conflicts with the run's in a.txt") {
 		t.Errorf("events:\n%s\nannounced %q", x.events(), x.announced())
 	}
 	if n := x.state().Conflicts; n != 1 {
 		t.Errorf("%d landings in a row conflicted, want 1", n)
 	}
 
-	// The worker resolves it by merging, as it is told, and reports the phase done again. The run's branch
-	// moves on once more meanwhile: baton merges that in too, and the resolution stays.
-	exec.Command("git", "-C", w.Worktree, "merge", "main").Run()
-	gittest.Write(t, w.Worktree, "a.txt", "both\n")
-	gittest.Git(t, w.Worktree, "add", "a.txt")
-	gittest.Git(t, w.Worktree, "commit", "-q", "--no-edit")
-	resolved := gitx.Head(w.Worktree)
+	// The worker resolves it as it is told (resolve, add, commit; the merge is under way), and reports
+	// the phase done again. The run's branch moves on once more meanwhile: baton merges that in too, and the
+	// resolution stays.
+	resolved := x.resolve("P1", map[string]string{"a.txt": "both\n"})
+	if parents := gittest.Git(t, w.Worktree, "rev-list", "--parents", "-n", "1", "HEAD"); parents != resolved+" "+old+" "+leads {
+		t.Errorf("the worker's commit is %q, want the merge of main into its branch", parents)
+	}
 	x.leadCommits(map[string]string{"b.txt": "the lead's again\n"})
-	sub := x.sub("P1")
-	pl, _ := sub.LoadPlan()
-	sub.Update(func(st *state.State) error {
-		state.TakeMail(st)
-		_, err := state.Done(st, pl, "P1", x.now, state.DoneOpts{})
-		st.Run.TurnOpen = false
-		return err
-	})
+	x.doneAgain("P1")
 	x.tick(time.Second)
 	if !x.has("merged_in", `"from":"`+resolved+`"`) {
 		t.Fatalf("the run's branch was not merged into the resolved branch\n%s", x.events())
