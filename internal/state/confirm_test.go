@@ -50,9 +50,9 @@ func TestNeedsConfirm(t *testing.T) {
 // and the full run its reruns go back to; none for a gate that ran whole, is red, or checked nothing. A full
 // run gone from the record leaves the gate's command, when a staged rerun ran it.
 func TestConfirmFrom(t *testing.T) {
-	whole := Job{ID: "j1", Phase: "P0", Command: "bin/qa-set", Commit: "c1", Status: JobFailed, Exit: 1}
+	whole := Job{ID: "j1", Phase: "P0", Command: "./qa.sh", Commit: "c1", Status: JobFailed, Exit: 1}
 	rerun := func(id, of, status string) Job {
-		return Job{ID: id, Phase: "P0", Command: "bin/qa-set", Commit: "c2", Reruns: of, Status: status}
+		return Job{ID: id, Phase: "P0", Command: "./qa.sh", Commit: "c2", Reruns: of, Status: status}
 	}
 	narrowed := Job{ID: "j2", Phase: "P0", Command: "go test -run '^TestA$' ./x", Reruns: "j1", Narrows: []string{"TestA"}, Status: JobPassed}
 	for _, c := range []struct {
@@ -62,13 +62,13 @@ func TestConfirmFrom(t *testing.T) {
 		gate, of string
 		command  string // the full run's
 	}{
-		{"reruns passed", []Job{whole, rerun("j2", "j1", JobFailed), rerun("j3", "j2", JobPassed)}, true, "j3", "j1", "bin/qa-set"},
-		{"a narrowed rerun passed", []Job{whole, narrowed}, true, "j2", "j1", "bin/qa-set"},
-		{"a rerun runs", []Job{whole, rerun("j2", "j1", JobRunning)}, true, "j2", "j1", "bin/qa-set"},
-		{"the full run passed", []Job{whole, {ID: "j2", Phase: "P0", Command: "bin/qa-set", Status: JobPassed}}, false, "", "", ""},
+		{"reruns passed", []Job{whole, rerun("j2", "j1", JobFailed), rerun("j3", "j2", JobPassed)}, true, "j3", "j1", "./qa.sh"},
+		{"a narrowed rerun passed", []Job{whole, narrowed}, true, "j2", "j1", "./qa.sh"},
+		{"a rerun runs", []Job{whole, rerun("j2", "j1", JobRunning)}, true, "j2", "j1", "./qa.sh"},
+		{"the full run passed", []Job{whole, {ID: "j2", Phase: "P0", Command: "./qa.sh", Status: JobPassed}}, false, "", "", ""},
 		{"a rerun failed", []Job{whole, rerun("j2", "j1", JobFailed)}, false, "", "", ""},
 		{"a rerun was stopped", []Job{whole, rerun("j2", "j1", JobInterrupted)}, false, "", "", ""},
-		{"the full run is gone", []Job{rerun("j2", "j1", JobFailed), rerun("j3", "j2", JobPassed)}, true, "j3", "", "bin/qa-set"},
+		{"the full run is gone", []Job{rerun("j2", "j1", JobFailed), rerun("j3", "j2", JobPassed)}, true, "j3", "", "./qa.sh"},
 		{"the full run is gone, narrowed", []Job{narrowed}, true, "j2", "", ""},
 	} {
 		st := State{Jobs: c.jobs}
@@ -86,12 +86,12 @@ func TestConfirmFrom(t *testing.T) {
 func TestConfirmAtDoneAndSettle(t *testing.T) {
 	p := graph("P0:", "P1:")
 	t1, t2 := t0.Add(time.Hour), t0.Add(2*time.Hour)
-	c := Confirm{Of: "j1", Command: "bin/qa-set", Commit: "c3", Files: []string{"src/a.go"}, Notes: "confirm"}
+	c := Confirm{Of: "j1", Command: "./qa.sh", Commit: "c3", Files: []string{"src/a.go"}, Notes: "confirm"}
 	setup := func(status string) State {
 		st := Attach(p, t0, Origin{})
 		st.Jobs = []Job{
-			{ID: "j1", Phase: "P0", Kind: JobVerify, Command: "bin/qa-set", Commit: "c1", Status: JobFailed, Exit: 1, QAPhase: true},
-			{ID: "j2", Phase: "P0", Kind: JobVerify, Command: "bin/qa-set", Commit: "c2", Reruns: "j1", Status: status, QAPhase: true},
+			{ID: "j1", Phase: "P0", Kind: JobVerify, Command: "./qa.sh", Commit: "c1", Status: JobFailed, Exit: 1, QAPhase: true},
+			{ID: "j2", Phase: "P0", Kind: JobVerify, Command: "./qa.sh", Commit: "c2", Reruns: "j1", Status: status, QAPhase: true},
 		}
 		st.JobSeq = 2
 		return st
@@ -122,7 +122,7 @@ func TestConfirmAtDoneAndSettle(t *testing.T) {
 		}
 		ps := st.Phases["P0"]
 		if c2.then == "" {
-			if q.ID != "j3" || !q.Requeue || !q.QAPhase || q.Command != "bin/qa-set" || q.Commit != "c3" || q.Notes != "confirm" ||
+			if q.ID != "j3" || !q.Requeue || !q.QAPhase || q.Command != "./qa.sh" || q.Commit != "c3" || q.Notes != "confirm" ||
 				ps.Confirm == nil || ps.Confirm.Job != "j3" || ps.Confirm.After != "" || !slices.Equal(ps.On, []string{"j3"}) || ps.Status != PhaseVerifying {
 				t.Fatalf("%s: queued %+v, P0 %+v, confirm %+v", c2.name, q, ps, ps.Confirm)
 			}

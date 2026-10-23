@@ -24,7 +24,7 @@ func TestWholeStagesSayWhyAndTook(t *testing.T) {
 	recs := map[string][]lane.Stage{
 		"j1": {
 			ran("unit", lane.StagePassed, 0, 2*m),
-			unnarrowed(ran("drives", lane.StageFailed, 2*m, 78*m), lane.UnnarrowedNoIDs),
+			unnarrowed(ran("browser", lane.StageFailed, 2*m, 78*m), lane.UnnarrowedNoIDs),
 			unnarrowed(ran("api", lane.StageFailed, 80*m, 5*m), lane.UnnarrowedWhole),
 			unnarrowed(ran("load", lane.StageFailed, 85*m, 4*m), lane.UnnarrowedMany),
 			ran("old", lane.StageFailed, 89*m, 3*m), // recorded before Unnarrowed
@@ -50,7 +50,7 @@ func TestWholeStagesSayWhyAndTook(t *testing.T) {
 		whole []WholeStage
 	}{
 		{"as recorded", nil, []WholeStage{
-			{Name: "drives", Why: lane.UnnarrowedNoIDs, Took: 78 * m},
+			{Name: "browser", Why: lane.UnnarrowedNoIDs, Took: 78 * m},
 			{Name: "api", Why: lane.UnnarrowedWhole, Took: 5 * m},
 			{Name: "load", Why: lane.UnnarrowedMany, Took: 4 * m},
 			{Name: "old", Why: lane.UnnarrowedNoIDs, Took: 3 * m},
@@ -59,7 +59,7 @@ func TestWholeStagesSayWhyAndTook(t *testing.T) {
 		}},
 		{"brought back", []string{"unit", "lint"}, []WholeStage{
 			{Name: "unit", Why: WholeBroughtBack, Took: 2 * m},
-			{Name: "drives", Why: lane.UnnarrowedNoIDs, Took: 78 * m},
+			{Name: "browser", Why: lane.UnnarrowedNoIDs, Took: 78 * m},
 			{Name: "api", Why: lane.UnnarrowedWhole, Took: 5 * m},
 			{Name: "load", Why: lane.UnnarrowedMany, Took: 4 * m},
 			{Name: "old", Why: lane.UnnarrowedNoIDs, Took: 3 * m},

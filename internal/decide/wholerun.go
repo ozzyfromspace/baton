@@ -20,7 +20,7 @@ import (
 // whole a red stage that took GateLong or more last time.
 const GateWholeRerun = "whole_rerun"
 
-// wholeStages names stages a rerun runs whole, each with its last time, where known, and why: "`drives`
+// wholeStages names stages a rerun runs whole, each with its last time, where known, and why: "`browser`
 // (1h18m last time; baton read no failure ids from it)".
 func wholeStages(stages []state.WholeStage) string {
 	out := make([]string, len(stages))
@@ -97,14 +97,14 @@ func WholeRerunQuestioned(phase string, of state.Job, long []state.WholeStage, l
 }
 
 // WholeRerunSaid tells the human that phase reruns red stages of its gate whole over baton's question
-// (long, as WholeRerunQuestioned), with the model's reason: "P11 reruns `drives` of `bin/qa-set` whole
+// (long, as WholeRerunQuestioned), with the model's reason: "P11 reruns `browser` of `./qa.sh` whole
 // (1h18m last time, run 4): <why>". c is phase's gates read for the gate's command before this run.
 func WholeRerunSaid(phase string, long []state.WholeStage, c state.Cost, why string) string {
 	return fmt.Sprintf("%s reruns %s of `%s` whole (%s): %s", phase, wholeNames(long), c.Of, lastRun(wholeTook(long), c, false), why)
 }
 
 // WholeRerunUnexplained tells the human that phase reran red stages of its gate whole over baton's question
-// without saying why: "P11 reran `drives` of `bin/qa-set` whole (1h18m last time, run 4, 2h40m so far)
+// without saying why: "P11 reran `browser` of `./qa.sh` whole (1h18m last time, run 4, 2h40m so far)
 // without saying why". long and c are as for WholeRerunSaid.
 func WholeRerunUnexplained(phase string, long []state.WholeStage, c state.Cost) string {
 	return fmt.Sprintf("%s reran %s of `%s` whole (%s) without saying why", phase, wholeNames(long), c.Of, lastRun(wholeTook(long), c, true))

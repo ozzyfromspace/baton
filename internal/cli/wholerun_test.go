@@ -34,7 +34,7 @@ func (s *session) wholeIn(kind string) []string {
 // with --why is queued at once, its reason told to the human. A short whole stage, a long one narrowed, and
 // a long one that passed and is brought back are not questioned; a long red one brought back is.
 func TestALongWholeRerunIsQuestionedOnce(t *testing.T) {
-	const notes = "--notes=the drives are fixed"
+	const notes = "--notes=the pages are fixed"
 	m := time.Minute
 	stage := func(name, status string, took time.Duration, s lane.Stage) lane.Stage {
 		s.Name, s.Status, s.Started = name, status, time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
@@ -100,18 +100,18 @@ func TestALongWholeRerunIsQuestionedOnce(t *testing.T) {
 				}
 			}},
 		{name: "--why queues it, told to the human", stages: []lane.Stage{stage("two", lane.StageFailed, 78*m, noIDs)},
-			args: []string{"--why", "the drives' fix touches every drive"},
+			args: []string{"--why", "the fix touches every page"},
 			check: func(t *testing.T, s *session, root, log string) {
-				const line = "P0 reruns `two` of `make e2e` whole (1h18m last time, run 2): the drives' fix touches every drive"
+				const line = "P0 reruns `two` of `make e2e` whole (1h18m last time, run 2): the fix touches every page"
 				st := s.state()
 				j := st.Job("j2")
-				if j == nil || j.Reruns != "j1" || j.Why != "the drives' fix touches every drive" || j.Unexplained != "" {
+				if j == nil || j.Reruns != "j1" || j.Why != "the fix touches every page" || j.Unexplained != "" {
 					t.Fatalf("j2: %+v", j)
 				}
 				if !slices.Contains(st.Run.Announce, "baton: "+line) {
 					t.Errorf("announced %q", st.Run.Announce)
 				}
-				if !s.logged("gate_repeated", map[string]any{"job": "j2", "last": "j1", "why": "the drives' fix touches every drive", "took_seconds": 4680.0}) ||
+				if !s.logged("gate_repeated", map[string]any{"job": "j2", "last": "j1", "why": "the fix touches every page", "took_seconds": 4680.0}) ||
 					!slices.Equal(s.wholeIn("gate_repeated"), []string{"two"}) || s.logged("gate_unexplained", nil) {
 					t.Errorf("events:\n%s", s.events())
 				}
@@ -125,8 +125,8 @@ func TestALongWholeRerunIsQuestionedOnce(t *testing.T) {
 		{name: "a new commit asks again", stages: []lane.Stage{stage("two", lane.StageFailed, 78*m, noIDs)},
 			check: func(t *testing.T, s *session, root, log string) {
 				s.fails("verify", "--failed", notes)
-				gittest.Write(t, root, "src/drive.go", "package src // again\n")
-				gittest.Commit(t, root, "again", "src/drive.go")
+				gittest.Write(t, root, "src/page.go", "package src // again\n")
+				gittest.Commit(t, root, "again", "src/page.go")
 				if errs := s.fails("verify", "--failed", notes); !strings.Contains(errs, "not queued, this once.") {
 					t.Errorf("refused with:\n%s", errs)
 				}
@@ -151,16 +151,16 @@ func TestALongWholeRerunIsQuestionedOnce(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, root := gitSession(t)
-			gittest.Write(t, root, "src/drive.go", "package src\n")
-			gittest.Commit(t, root, "drive", "src/drive.go")
-			s.must("", "verify", "make", "e2e", "--notes", "the drives are done")
+			gittest.Write(t, root, "src/page.go", "package src\n")
+			gittest.Commit(t, root, "page", "src/page.go")
+			s.must("", "verify", "make", "e2e", "--notes", "the pages are done")
 			s.staged("j1", state.JobFailed, 1, c.stages...)
 			s.set(func(x *state.State) {
 				j := x.Job("j1")
 				j.Started, j.Ran, j.Ended = s.now.Add(-90*m), s.now.Add(-90*m), s.now.Add(-10*m)
 			})
-			gittest.Write(t, root, "src/drive.go", "package src // fixed\n")
-			gittest.Commit(t, root, "fix", "src/drive.go")
+			gittest.Write(t, root, "src/page.go", "package src // fixed\n")
+			gittest.Commit(t, root, "fix", "src/page.go")
 			if c.check != nil {
 				if len(c.args) > 0 && c.args[0] == "--why" {
 					s.must("", append(append([]string{"verify", "--failed"}, c.args...), notes)...)
