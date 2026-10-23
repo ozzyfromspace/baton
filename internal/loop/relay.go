@@ -164,7 +164,8 @@ func lapseRelayHold(st *state.State, r state.Relay, after time.Duration, maxAuto
 // proposal gets its default at the time its question names (Go ahead, or Not now for an outward one), a
 // block is lifted then for the agent to look again (Timing.BlockLook after it was queued), and anything
 // else gets its default (it waits for the human) after the escalation timeout; asked again, it keeps its
-// deadline.
+// deadline. A block's question says whether anything else in the run can move meanwhile (runWait), worked
+// out once, so that the question the mod asks is the one recorded, by which its answer is matched.
 func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	st, err := s.Load()
 	if err != nil {
@@ -190,7 +191,8 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 			deadline = due // the time its question names, from when it was made
 		}
 	}
-	q := decide.RelayQuestion(*r, deadline)
+	w, moves := runWait(s, st, *r, now) // once: the question the mod asks is the one recorded
+	q := decide.RelayQuestion(*r, deadline, w)
 	cmd, err := b.Issue(bridge.Command{Kind: bridge.Ask, Instance: s.Instance, Phase: r.Phase, Question: q.Text, Options: labels(q.Options), Header: "baton"})
 	if err != nil {
 		c.Lead.logf("loop: asking the question of %s: %v", r.Phase, err)
@@ -198,8 +200,9 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	}
 	issued := false
 	s.Update(func(st *state.State) error {
-		if q := st.RelayOf(*r); q != nil && q.Answered == nil {
-			state.IssueRelay(q, decide.RelayQuestion(*q, deadline).Text, cmd.ID, s.Instance, deadline, now)
+		if x := st.RelayOf(*r); x != nil && x.Answered == nil {
+			state.IssueRelay(x, q.Text, cmd.ID, s.Instance, deadline, now)
+			x.RunWaits = w.Stuck
 			issued = true
 		}
 		return nil
@@ -214,6 +217,12 @@ func (c *Coordinator) ask(now time.Time, s *state.Store, b *bridge.Bridge) {
 	}
 	if again {
 		fields["again"] = true
+	}
+	if r.Kind == state.RelayBlocked {
+		fields["run_waits"] = w.Stuck
+		if moves != "" {
+			fields["moves"] = moves
+		}
 	}
 	s.Event("relay_issued", relayFields(*r, fields))
 }

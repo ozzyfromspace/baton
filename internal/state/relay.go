@@ -38,7 +38,10 @@ type Relay struct {
 	// or baton's default (0 in a question queued before v0.8.3: the escalation timeout).
 	Wait time.Duration `json:"wait,omitempty"`
 	// Question is the question exactly as the human is asked it, written when it is issued.
-	Question string    `json:"question,omitempty"`
+	Question string `json:"question,omitempty"`
+	// RunWaits, on a block, is whether its Question says that nothing else in the run can move until it
+	// is cleared (State.Moves, as the host saw it when it issued the question).
+	RunWaits bool      `json:"run_waits,omitempty"`
 	Queued   time.Time `json:"queued"`
 	// Issued is when the host had the mod ask it (command Ask, of host instance Instance), and Deadline
 	// when baton answers it if nobody has: a proposal gets its default then (the time its question names:

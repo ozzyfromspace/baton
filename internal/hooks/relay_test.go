@@ -32,7 +32,7 @@ func issue(lead *fixture, r state.Relay) {
 	lead.set(func(st *state.State) {
 		q := st.FrontRelay()
 		deadline := lead.now.Add(5 * time.Minute)
-		state.IssueRelay(q, decide.RelayQuestion(*q, deadline).Text, 4, lead.inst, deadline, lead.now)
+		state.IssueRelay(q, decide.RelayQuestion(*q, deadline, decide.RunWait{}).Text, 4, lead.inst, deadline, lead.now)
 	})
 }
 

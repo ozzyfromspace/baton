@@ -75,8 +75,9 @@ func RelayDefault(r state.Relay) string {
 
 // RelayQuestion is the question that puts phase agent question r to the human. A proposal goes ahead at
 // deadline, or is answered Not now then if it is outward, and a block is lifted then for the agent to
-// look again.
-func RelayQuestion(r state.Relay, deadline time.Time) Question {
+// look again; a block's question says what the rest of the run does meanwhile (w), and any other
+// question leaves w out.
+func RelayQuestion(r state.Relay, deadline time.Time, w RunWait) Question {
 	if r.AboutAgent() {
 		return Question{Text: Sanitize(agentQuestion(r, deadline)), Options: RelayOptions(r)}
 	}
@@ -91,8 +92,8 @@ func RelayQuestion(r state.Relay, deadline time.Time) Question {
 		text = fmt.Sprintf("%s has made %d decisions without you, as many as it may before you review them; /baton status lists each with its undo. Let %s go on?",
 			who, r.Count, r.Phase)
 	default:
-		text = fmt.Sprintf("%s is blocked: %s. Only %s waits for you; the rest of the run goes on. Unless you answer by %s, it looks again for a safe way around it.",
-			who, clause(r.Because), r.Phase, deadline.Local().Format("15:04"))
+		text = fmt.Sprintf("%s is blocked: %s. %s Unless you answer by %s, it looks again for a safe way around it.",
+			who, clause(r.Because), blockRest(r.Phase, w), deadline.Local().Format("15:04"))
 	}
 	return Question{Text: Sanitize(text + RelayHandle(r.Phase)), Options: RelayOptions(r)}
 }
