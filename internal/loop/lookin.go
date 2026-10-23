@@ -184,30 +184,40 @@ func (c *Coordinator) heldLookIn(now time.Time, s *state.Store, st state.State) 
 func heldByGate(id string) string { return fmt.Sprintf("a gate runs in the checkout (job %s)", id) }
 
 // conflicted counts a landing of phase that conflicted with the run's branch in paths, in the run s
-// (state.CountConflict), and leaves the lead a look-in for the paths in their second conflict, each once:
-// one file every phase edits serializes the phases.
+// (state.CountConflict), and leaves the lead a look-in for the paths in their second conflict, each once,
+// while phases not started name them (conflict.go): one file every phase edits serializes the phases, and
+// a replan can still give those files of their own. Each such path cues that replan at the lead's next
+// phase boundary (state.CueConflict).
 func (c *Coordinator) conflicted(now time.Time, s *state.Store, phase string, paths []string) {
 	if len(paths) == 0 {
 		return
 	}
-	var second []string
-	var by map[string][]string
+	pl, named := conflictNames(s, paths)
+	replans := c.Fleet != nil && c.Fleet.AutoReplan
+	var second, told []string
+	var by, naming map[string][]string
 	s.Update(func(st *state.State) error {
-		if second = state.CountConflict(st, phase, paths); len(second) > 0 {
+		second = state.CountConflict(st, phase, paths)
+		if told, naming = unstartedNaming(*st, pl, named, second); len(told) > 0 {
 			by = maps.Clone(st.Conflicted)
-			state.AddLookIn(st, state.LookIn{Kind: state.LookConflict, At: now, Text: decide.FileConflicts(second, by), Say: decide.FileConflictsSaid(second)})
+			state.CueConflict(st, told, naming)
+			state.AddLookIn(st, state.LookIn{Kind: state.LookConflict, At: now, Text: decide.FileConflicts(told, by, naming, replans), Say: decide.FileConflictsSaid(told, naming, replans)})
 		}
 		return nil
 	})
 	if len(second) == 0 {
 		return
 	}
+	if len(told) == 0 {
+		c.Lead.logf("loop: %v conflicted in a second landing: no phase not started names it, so the lead is not told", second)
+		return
+	}
 	phases := map[string][]string{}
-	for _, p := range second {
+	for _, p := range told {
 		phases[p] = by[p]
 	}
-	c.Lead.logf("loop: %v conflicted in a second landing: told the lead", second)
-	s.Event("look_in", map[string]any{"type": state.LookConflict, "paths": second, "phases": phases})
+	c.Lead.logf("loop: %v conflicted in a second landing: told the lead", told)
+	s.Event("look_in", map[string]any{"type": state.LookConflict, "paths": told, "phases": phases, "named": naming, "replan": replans})
 }
 
 // leaveLookIn leaves li in the run of loop x (state.AddLookIn), unless it was left before, and logs it there

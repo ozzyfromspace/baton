@@ -1,14 +1,39 @@
 package loop
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/gitx/gittest"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
+
+// conflictDoc is newStill's plan as a document: P0 (in hand) and P1 (its agent's) name docs/notes.md and
+// go.sum, and P2, not started, names docs/notes.md by its end.
+const conflictDoc = "# Demo\n\n## P0 — zero\n\nAfter: none\n\nEdit `docs/notes.md`.\n\n## P1 — one\n\nAfter: none\n\n" +
+	"Edit `docs/notes.md` and `go.sum`.\n\n## P2 — two\n\nAfter: P1\n\nAdd to `notes.md`.\n"
+
+// planOf gives the run s the plan doc, written to a file of its own, as the human approved it.
+func planOf(t *testing.T, s *state.Store, doc string) plan.Plan {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "demo.md")
+	if err := os.WriteFile(file, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pl, err := plan.Build(file, []byte(doc), plan.Suggest([]byte(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SavePlan(pl); err != nil {
+		t.Fatal(err)
+	}
+	return pl
+}
 
 // A landing that conflicts goes back to its agent with the run's branch's commits that changed each
 // conflicting file since its branch last met it, newest first: one that a phase's landing brought names

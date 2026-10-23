@@ -64,11 +64,14 @@ type ReplanBrief struct {
 	Limits  plan.Limits    // what it may change beyond their order and After: lines
 	Max     time.Duration  // how long it may stay open (Timing.ReplanMax)
 	// A replan baton opened by itself, at the lead's phase boundary (autoreplan.go): the phases that cued
-	// it (the QA phase that starts, or the phases marked Replan: after that are done), the phase whose
-	// brief follows this one, which the model begins once it is finished, and where the phases' notes are.
+	// it (the QA phase that starts, the phases marked Replan: after that are done, or the phases not
+	// started that name a file that conflicted twice), the phase whose brief follows this one, which the
+	// model begins once it is finished, where the phases' notes are, and the files in a second landing
+	// conflict it settles (conflict.go).
 	Cue   []ReplanPhase
 	Then  string
 	Notes string
+	Files []ReplanFile
 }
 
 // Brief is the model's brief for a replan: what it replans, what it may change, and how to finish.
@@ -76,8 +79,11 @@ func (b ReplanBrief) Brief() string {
 	var s strings.Builder
 	if b.Then != "" {
 		purpose := "so more of them can run at once"
-		if b.By == state.ReplanMarked {
+		switch b.By {
+		case state.ReplanMarked:
 			purpose = "with what " + phaseIDs(b.Cue) + " found"
+		case state.ReplanConflict:
+			purpose = conflictPurpose
 		}
 		fmt.Fprintf(&s, "[baton] Before you begin %s: replan the phases of %q that have not started, %s. Do it first, in this turn; %s's brief follows this one.\n\n",
 			b.Then, b.Title, purpose, b.Then)
@@ -153,6 +159,8 @@ func (b ReplanBrief) allowed() string {
 	switch {
 	case b.Limits.Edit && b.By == state.ReplanMarked:
 		lines = append(lines, "- rework the steps of a phase not started with what "+phaseIDs(b.Cue)+" found, and its done-when where that needs it")
+	case b.Limits.Edit && b.By == state.ReplanConflict:
+		lines = append(lines, conflictEdit)
 	case b.Limits.Edit:
 		lines = append(lines, "- reword a phase not started, as a split or the human's words need")
 	default:
@@ -198,6 +206,8 @@ func replanBy(by string) string {
 		return "a QA phase starts over a chain"
 	case state.ReplanMarked:
 		return "a phase marked Replan: after is done"
+	case state.ReplanConflict:
+		return "a file conflicted in a second landing"
 	}
 	return by
 }

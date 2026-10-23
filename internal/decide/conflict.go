@@ -53,3 +53,47 @@ func broughtBy(phase string) string {
 	}
 	return phase + "'s work"
 }
+
+// A file that conflicts in a second landing of the run serializes the phases that change it: each landing
+// must merge the last one's changes to it. The lead hears of it (FileConflicts) only while phases not
+// started name it, which a replan can still give files of their own, and baton opens that replan itself
+// at the lead's next phase boundary (state.ReplanConflict; package replan's Due): nobody asks the human for
+// one.
+
+// ReplanFile is a file in a second landing conflict, as a replan's brief names it: with the phases not
+// started whose sections name it.
+type ReplanFile struct {
+	Path   string
+	Phases []string
+}
+
+// conflictPurpose is what a replan a conflict cued is for, as its brief opens.
+const conflictPurpose = "so the phases that name the files that conflicted stop colliding when they land"
+
+// conflictEdit is what a replan a conflict cued may change in a phase not started, beyond a split.
+const conflictEdit = "- reword a phase not started so it works on a file of its own (its steps name the file it changes), and its done-when where that needs it"
+
+// conflictCause says why a conflict cued a replan: files, each with the phases not started that name it.
+func conflictCause(files []ReplanFile) string {
+	var each []string
+	for _, f := range files {
+		if len(f.Phases) == 0 {
+			each = append(each, f.Path)
+			continue
+		}
+		each = append(each, fmt.Sprintf("%s (named by %s)", f.Path, andList(f.Phases)))
+	}
+	return fmt.Sprintf("%s %s in a second landing of this run, and phases not started name %s. "+
+		"One file that phases running at once each change serializes them: each landing must merge the last one's changes to it, and conflicts there. "+
+		"Give each phase not started that names %s a file of its own, and have a QA phase merge them; "+
+		"where one truly builds on another's change to it, have it wait for that one instead (shape rule 4).",
+		andList(each), plural(len(files), "conflicted", "each conflicted"), plural(len(files), "it", "them"), plural(len(files), "it", "one"))
+}
+
+// conflictAlso is the conflict a replan of another kind settles as well, after its own cause: "" for none.
+func conflictAlso(files []ReplanFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+	return " Also: " + conflictCause(files)
+}

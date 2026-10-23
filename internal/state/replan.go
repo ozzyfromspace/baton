@@ -26,32 +26,37 @@ import (
 // replaced plan's record (Archive's folder).
 
 // Who opens a replan (Replan.By): the human's /baton replan, or baton itself after an upgrade whose
-// planning rules changed, at the start of a QA phase over a remainder that is mostly a chain, and once a
-// phase the plan marks `Replan: after` is done.
+// planning rules changed, at the start of a QA phase over a remainder that is mostly a chain, once a
+// phase the plan marks `Replan: after` is done, and once a file in a second landing conflict is named by
+// phases not started (ConflictCue).
 const (
-	ReplanHuman   = "human"
-	ReplanUpgrade = "upgrade"
-	ReplanQA      = "qa"
-	ReplanMarked  = "marked"
+	ReplanHuman    = "human"
+	ReplanUpgrade  = "upgrade"
+	ReplanQA       = "qa"
+	ReplanMarked   = "marked"
+	ReplanConflict = "conflict"
 )
 
 // Replan is a replan of the run's plan that is open: the model edits the draft, until baton follows it
 // (`baton replanned --notes`), the model finds nothing to change (`--none`), or it lapses. No new phase
 // agent starts while it is open.
 type Replan struct {
-	By    string    `json:"by"`              // ReplanHuman, ReplanUpgrade, ReplanQA or ReplanMarked
+	By    string    `json:"by"`              // ReplanHuman, ReplanUpgrade, ReplanQA, ReplanMarked or ReplanConflict
 	Words string    `json:"words,omitempty"` // what the human asked it to consider
 	Since time.Time `json:"since"`
 	N     int       `json:"n"` // replan/<n>.md holds the plan's text as it found it
-	// Cue is the phases that cued a replan baton opened by itself: the QA phase that started, or the
-	// phases marked Replan: after that are done. Then is the phase whose brief came after its own, which
-	// the lead begins once it is finished.
-	Cue  []string `json:"cue,omitempty"`
-	Then string   `json:"then,omitempty"`
+	// Cue is the phases that cued a replan baton opened by itself: the QA phase that started, the phases
+	// marked Replan: after that are done, or the phases not started that name a file that conflicted
+	// twice. Then is the phase whose brief came after its own, which the lead begins once it is finished.
+	// Files are the files in a second landing conflict it settles (ConflictCue).
+	Cue   []string `json:"cue,omitempty"`
+	Then  string   `json:"then,omitempty"`
+	Files []string `json:"files,omitempty"`
 }
 
 // Cued reports that baton has looked at the cue of an automatic replan of kind by (ReplanQA,
-// ReplanMarked) that phase gives, which it does once (State.ReplanCued).
+// ReplanMarked, ReplanConflict) that phase (for ReplanConflict, a file) gives, which it does once
+// (State.ReplanCued).
 func (st State) Cued(by, phase string) bool { return slices.Contains(st.ReplanCued, by+":"+phase) }
 
 // Cue records that baton looked at the cue of an automatic replan of kind by that phase gives.
