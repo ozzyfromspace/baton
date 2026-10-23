@@ -80,7 +80,7 @@ func (r Runtime) RepliedSince(t time.Time) bool {
 
 // LiftLimit ends, at at, the hold of the limit recorded in st: a session of the run got a reply since it
 // was hit (RepliedSince), so the account's limit no longer holds, whenever its reset was to be (the human
-// switched accounts, say). It reports whether a hold was lifted.
+// switched accounts, say), and an armed resume timer fires now. It reports whether a hold was lifted.
 func LiftLimit(st *State, at time.Time) bool {
 	u := st.Usage
 	if u == nil || !at.Before(u.Limited) {
@@ -88,6 +88,9 @@ func LiftLimit(st *State, at time.Time) bool {
 	}
 	next := *u
 	next.Limited, next.Lifted = at, at
+	if !next.ResumeAt.IsZero() {
+		next.ResumeAt = at
+	}
 	st.Usage = &next
 	return true
 }

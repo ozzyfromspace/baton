@@ -1633,6 +1633,7 @@ func cmdDrop(args []string, io IO) int {
 	var logs int
 	var workers []string
 	var rec *state.Record
+	var left *state.Usage
 	if _, err := s.Update(func(st *state.State) error {
 		stopped, logs = st.Unfinished(), len(st.Jobs)
 		for _, w := range st.LiveWorkers() {
@@ -1645,10 +1646,12 @@ func cmdDrop(args []string, io IO) int {
 		if rec, err = s.Record(*st); err != nil { // written once the lock is let go
 			return fmt.Errorf("could not keep the record of the plan: %w", err)
 		}
+		left = leaveResume(st, state.CancelDrop, io.Now())
 		return state.Detach(st)
 	}); err != nil {
 		return refused(io, s, "drop", err)
 	}
+	resumeLeft(s, left)
 	kept := keepRecord(io, s, rec)
 	s.KeepReplans(kept) // the dropped plan's replans go with its record
 	// Taken off the record, the jobs stop at their runners' next beat; told to, they stop now.

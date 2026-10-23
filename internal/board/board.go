@@ -59,10 +59,13 @@ type Phase struct {
 	Worker string `json:"worker,omitempty"`
 }
 
-// Limit is the account's usage limit the run waits on: who hit it (state.Usage.By), and until when.
+// Limit is the account's usage limit the run waits on: who hit it (state.Usage.By), until when, and when
+// its resume timer resumes the run (zero: none armed), or that it was cancelled (state/resume.go).
 type Limit struct {
-	By    string    `json:"by,omitempty"`
-	Until time.Time `json:"until"`
+	By        string    `json:"by,omitempty"`
+	Until     time.Time `json:"until"`
+	Resumes   time.Time `json:"resumes,omitzero"`
+	Cancelled bool      `json:"cancelled,omitempty"`
 }
 
 // Input is what a board is built from.
@@ -88,7 +91,7 @@ func Build(in Input) Board {
 	}
 	b.Title, b.Serial = pl.Title, in.Serial
 	if u := st.Usage; u != nil && now.Before(u.Limited) {
-		b.Limit = &Limit{By: u.By, Until: u.Limited}
+		b.Limit = &Limit{By: u.By, Until: u.Limited, Resumes: u.ResumeAt, Cancelled: u.Cancelled != ""}
 	}
 	subs := map[string]state.State{}
 	for _, r := range in.Subs {

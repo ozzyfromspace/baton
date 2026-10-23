@@ -113,8 +113,11 @@ type Coordinator struct {
 	rec recorder // the record step's (record.go)
 	adv advising // the advisor's calls, in memory (advisor.go)
 
-	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
-	usageAt time.Time    // when the lead's tick last looked at the account's usage limit (usage.go)
+	// run is the account's usage, its limit and its resume timer, and paused whether the run is paused, as the
+	// last step of usage found them, for the agents' Loops (usage.go); usageAt is when that step was.
+	run     atomic.Pointer[state.Usage]
+	paused  atomic.Bool
+	usageAt time.Time
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
 	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
 	// host ends, and so do the phase agents in it, which Ended suspends.

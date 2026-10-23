@@ -56,12 +56,16 @@ var headline = map[string]string{
 	"recovery_backoff":  "claude keeps exiting: baton brings it back after a wait",
 	"afresh_later":      "a session keeps failing: baton starts a fresh one after a wait",
 	"review_ready":      "ready for your review: every phase but QA has landed",
+	"usage_wait":        "a usage limit holds the run: baton resumes it as the limit resets",
+	"usage_resumed":     "the usage limit reset: baton resumed the run",
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a
 // note, and a question baton answered for them, need nothing from the human; a proposal has a deadline;
-// and a hold, a review, a phase held for them and a run that stopped moving each wait on them.
-var priority = map[string]string{"note": "2", "answered": "2", "proposal": "4", "decision": "4", "review": "4", "worker_held": "4", "run_stalled": "4"}
+// and a hold, a review, a phase held for them and a run that stopped moving each wait on them. A usage
+// limit's resume timer, armed or fired, needs nothing of them either.
+var priority = map[string]string{"note": "2", "answered": "2", "proposal": "4", "decision": "4", "review": "4", "worker_held": "4", "run_stalled": "4",
+	"usage_wait": "2", "usage_resumed": "2"}
 
 func (m *multi) Notify(project, kind, detail string) error {
 	title := "baton — " + project

@@ -36,8 +36,9 @@ func TestAUsageLimitHoldsARunWithNoWorkers(t *testing.T) {
 	if ev := x.events(); strings.Contains(ev, `"kind":"error_retry"`) {
 		t.Fatalf("the lead was retried during the limit:\n%s", ev)
 	}
-	x.tick(until.Sub(x.now) + time.Second)
-	if ev := x.events(); strings.Count(ev, `"kind":"error_retry"`) != 1 {
+	x.tick(until.Sub(x.now) + time.Second) // the resume timer fires after the lead's tick
+	x.tick(time.Second)
+	if ev := x.events(); strings.Count(ev, `"kind":"error_retry"`) != 1 || !strings.Contains(ev, `"by":"resume_timer"`) {
 		t.Errorf("the lead was not retried once the limit reset:\n%s", ev)
 	}
 }

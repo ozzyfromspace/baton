@@ -318,8 +318,19 @@ func ParkedWhy(reason string) string {
 // BandStep is the step the run is at, of how many: "step 2/4".
 func BandStep(n, of int) string { return fmt.Sprintf("step %d/%d", n, of) }
 
-// BandLimit: the run waits on the account's usage limit until until.
-func BandLimit(until time.Time) string { return "usage limit until " + until.Local().Format("15:04") }
+// BandLimit: the run waits on the account's usage limit until until, as of now, and what its resume timer
+// says (state/resume.go): it resumes the run at resumes ("usage limit · resumes at 17:02"), or was
+// cancelled ("usage limit until 17:02 · auto-resume cancelled"). The status line and baton status say it
+// too.
+func BandLimit(until, resumes time.Time, cancelled bool, now time.Time) string {
+	switch {
+	case !resumes.IsZero():
+		return "usage limit · resumes at " + Clock(resumes, now)
+	case cancelled:
+		return "usage limit until " + Clock(until, now) + " · auto-resume cancelled"
+	}
+	return "usage limit until " + Clock(until, now)
+}
 
 // BandMore counts the phases the band had no room for.
 func BandMore(n int) string { return fmt.Sprintf("+%d", n) }
@@ -350,14 +361,22 @@ func BoardStep(n int) string { return fmt.Sprintf("step %d", n) }
 // BoardSerial says why the run's phases go one at a time in the lead.
 func BoardSerial(why string) string { return "phases run one at a time here: " + why }
 
-// BoardLimit says the run waits on the account's usage limit, which by hit, until until: nothing starts,
-// and baton types nothing into the lead, until then.
-func BoardLimit(by string, until time.Time) string {
+// BoardLimit says the run waits on the account's usage limit, which by hit, until until, as of now:
+// nothing starts, and nothing is typed into the lead. Its resume timer resumes the run at resumes, or was
+// cancelled.
+func BoardLimit(by string, until, resumes time.Time, cancelled bool, now time.Time) string {
 	who := "the lead"
 	if by != "" && by != "lead" {
 		who = "the agent on " + by
 	}
-	return fmt.Sprintf("usage limit: %s hit it; nothing starts, and baton types nothing into the lead, until %s", who, until.Local().Format("15:04"))
+	s := fmt.Sprintf("usage limit: %s hit it; nothing starts, and baton types nothing into the lead, until %s", who, Clock(until, now))
+	switch {
+	case !resumes.IsZero():
+		s += "; baton resumes the run at " + Clock(resumes, now) + " unless you pause or write"
+	case cancelled:
+		s += "; auto-resume cancelled: /baton run resumes"
+	}
+	return s
 }
 
 // BoardNoPlan is the board of a run with no plan.

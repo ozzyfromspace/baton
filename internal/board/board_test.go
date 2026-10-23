@@ -189,6 +189,11 @@ func TestBand(t *testing.T) {
 			r.st.Usage = &state.Usage{UsedPct: 100, Limited: now.Add(40 * time.Minute), Hit: now, By: "lead"}
 			return r
 		}, "", step2 + "usage limit until " + now.Add(40*time.Minute).Format("15:04") + " · P2 ▶ 5m · P3 ready · P4 ready · P5 waits on P3 · lead: working on P2"},
+		{"a usage limit the resume timer ends", func() *run {
+			r := newRun()
+			r.st.Usage = &state.Usage{Limited: now.Add(40 * time.Minute), Hit: now, By: "lead", ResumeAt: now.Add(40 * time.Minute)}
+			return r
+		}, "", step2 + "usage limit · resumes at " + now.Add(40*time.Minute).Format("15:04") + " · P2 ▶ 5m · P3 ready · P4 ready · P5 waits on P3 · lead: working on P2"},
 		{"compacting at a boundary", func() *run {
 			r := newRun()
 			r.st.Phases["P2"].Status = state.PhaseDone
@@ -372,7 +377,7 @@ func TestLines(t *testing.T) {
 		{"paused, with a usage limit", func() *run {
 			r := newRun()
 			r.st.Mode = state.ModePaused
-			r.st.Usage = &state.Usage{Limited: now.Add(time.Hour), Hit: now, By: "P3"}
+			r.st.Usage = &state.Usage{Limited: now.Add(time.Hour), Hit: now, By: "P3", Cancelled: state.CancelPause}
 			return r
 		}, "", 0, []string{
 			`◆ baton · "Workers you can see" · paused · step 2 of 4`,
@@ -383,7 +388,8 @@ func TestLines(t *testing.T) {
 			"step 3  · P5  baton's view — waits on P3",
 			"step 4  · P6  Release — waits on P2, P3, P4 and P5",
 			"lead: paused, the human has the wheel (/baton run resumes the plan)",
-			"usage limit: the agent on P3 hit it; nothing starts, and baton types nothing into the lead, until " + now.Add(time.Hour).Format("15:04"),
+			"usage limit: the agent on P3 hit it; nothing starts, and baton types nothing into the lead, until " + now.Add(time.Hour).Format("15:04") +
+				"; auto-resume cancelled: /baton run resumes",
 		}},
 	} {
 		got := c.run().board(c.serial).Lines(c.width)

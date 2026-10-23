@@ -161,7 +161,9 @@ const LandedByLead = "lead"
 // WeeklyResets) is used, as the lead's status line last reported it (At). Limited is set when the lead or a
 // phase agent hit a limit (By: "lead", or a worker's phase), at Hit: no worker starts, and nothing is typed
 // into the run's sessions, until then. Window is the window that limit was, and WindowResets when it resets
-// (zero when unknown; LimitWindow).
+// (zero when unknown; LimitWindow). ResumeAt is when the run's resume timer fires (zero: none armed), Fired
+// when it last did, and Tries the tries since that hit the limit again; Cancelled says who cancelled it,
+// and CancelSaid when that was told (resume.go).
 type Usage struct {
 	UsedPct      float64   `json:"used_pct"`
 	Resets       time.Time `json:"resets_at,omitzero"`
@@ -174,6 +176,11 @@ type Usage struct {
 	Window       string    `json:"window,omitempty"`
 	WindowResets time.Time `json:"window_resets_at,omitzero"`
 	Lifted       time.Time `json:"lifted,omitzero"`
+	ResumeAt     time.Time `json:"resume_at,omitzero"`
+	Fired        time.Time `json:"resume_fired,omitzero"`
+	Tries        int       `json:"resume_tries,omitempty"`
+	Cancelled    string    `json:"resume_cancelled,omitempty"`
+	CancelSaid   time.Time `json:"resume_cancel_said,omitzero"`
 }
 
 // Hold is what holds back a phase that waits for a worker, since Since: no room for another session on

@@ -145,8 +145,8 @@ func printUsage(io IO, st state.State) {
 		if u.By != "lead" && u.By != "" {
 			who = "the worker on " + u.By
 		}
-		fmt.Fprintf(io.Out, "usage limit: %s hit it at %s → no worker starts, and baton types nothing into the run's sessions, until %s\n",
-			who, u.Hit.Local().Format("15:04"), u.Limited.Local().Format("15:04"))
+		fmt.Fprintf(io.Out, "usage limit: %s hit it at %s → no worker starts, and baton types nothing into the run's sessions, until %s%s\n",
+			who, decide.Clock(u.Hit, now), decide.Clock(u.Limited, now), decide.StatusResume(u.ResumeAt, u.Cancelled, now))
 	}
 	cfg := config.Load(batonRoot(io), io.Env)
 	if n, _, err := cfg.WorkerCap(io.reading); err != nil || n == 0 || !u.Resets.IsZero() && !now.Before(u.Resets) {

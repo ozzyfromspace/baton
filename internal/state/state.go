@@ -570,11 +570,13 @@ func (st *State) OweCheckpoint(now time.Time) {
 const ResumeGrowth = 20_000
 
 // Pause hands the session to the human: baton keeps observing but takes no action. It notes how large
-// the context is, so that Resume can tell how much the paused conversation added.
+// the context is, so that Resume can tell how much the paused conversation added. It cancels the usage
+// limit's resume timer, which the coordinator tells (CancelResume).
 func Pause(st *State) error {
 	if st.Mode != ModeRunning {
 		return fmt.Errorf("nothing to pause (mode: %s)", st.Mode)
 	}
+	CancelResume(st, CancelPause, time.Time{})
 	st.Mode, st.PauseContext, st.PauseCompacted, st.Covered = ModePaused, 0, time.Time{}, time.Time{}
 	if cu := st.Run.Context; cu != nil {
 		st.PauseContext = cu.Used()

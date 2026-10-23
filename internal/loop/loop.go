@@ -136,9 +136,11 @@ type Loop struct {
 	Newer   func() string
 	// Runners runs the session's jobs (nil: jobs stay queued).
 	Runners Runners
-	// RunLimited is until when the run waits on the account's usage limit, for a phase agent's Loop, whose
-	// sub-run does not record it as the lead's run does (the coordinator's; nil for the lead).
-	RunLimited func() time.Time
+	// RunUsage is the run's account usage, its limit and its resume timer, for a phase agent's Loop, whose
+	// sub-run does not record them as the lead's run does, and RunPaused whether the lead's run is paused
+	// (the coordinator's; nil for the lead).
+	RunUsage  func() *state.Usage
+	RunPaused func() bool
 	// Workers says the run has workers beside the lead (the coordinator's Fleet): while the lead is
 	// stopped, the phases that do not need its phase go on.
 	Workers bool
@@ -488,7 +490,7 @@ func (l *Loop) gate(v host.View, st state.State) string {
 	case l.dialogHolds(st):
 		why = gateDialog
 	case v.Now.Before(l.limited(st)):
-		why = gateUsage // anything typed would fail on it: Claude Code resumes the session itself as it resets
+		why = gateUsage // anything typed would fail on it; once it ends, each stopped session's own retry goes (watchError)
 	case l.mode == modWaiting:
 		why = gateMod
 	case busyAgents(st) && !l.agentsStale(v, st):
@@ -540,8 +542,10 @@ func (l *Loop) limited(st state.State) time.Time {
 	if st.Usage != nil {
 		until = st.Usage.Limited
 	}
-	if l.RunLimited != nil {
-		until = latest(until, l.RunLimited())
+	if l.RunUsage != nil {
+		if u := l.RunUsage(); u != nil {
+			until = latest(until, u.Limited)
+		}
 	}
 	return until
 }
