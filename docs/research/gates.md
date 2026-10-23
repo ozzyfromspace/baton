@@ -11,6 +11,10 @@ and landings were verified again on a single lane, 17 of 18 green. A human who f
 while working and the big check once, at the end. v0.8.7 steers plans, phases and gates toward that. A real run
 since showed that asking alone changed nothing: models resubmitted every gate baton questioned, unchanged, within
 seconds, and never used `--failed`. v0.8.11 makes the cheap path the easy one ([below](#since-v087-asking-was-not-enough)).
+A real run on v0.8.14 then spent its hours in a QA set's long stages: whole reruns of a browser stage baton could
+not narrow, nine runs of a final QA phase that each found one red, and failing tests that waited out their
+timeouts. v0.8.15 runs every stage in a QA phase and reruns only what failed until all of it passes
+([below](#since-v0811-a-qa-sets-hours)).
 
 Studied 2026-10-17 from the runs' records (`state.json`, `events.jsonl`, job logs, read-only), for the two runs
 below. The second is a private project: only its numbers are given here.
@@ -174,3 +178,33 @@ every minute: they wait on the run, their usage drains, and the work they care a
 
 To measure in the next real run, against these numbers: `gate_repeated` and `gate_unexplained` counts, narrowed
 reruns (`job_queued` with `reruns` and `narrows`), and gate time per phase.
+
+## Since v0.8.11: a QA set's hours
+
+Read 2026-10-23 from a real 58-phase run on v0.8.14 (its record, job logs and the project's test output,
+read-only). It is a private project: only its numbers are given here.
+
+- **Three whole reruns of one stage.** A staged QA gate's browser stage, 390 tests in 64 files, took 1h18m to 1h50m
+  a run. It went red three times, and each `baton verify --failed` reran all 64 files. The queue message said only
+  "run whole". The human stepped in: "at some point I'm just clearly waiting too long."
+- **The side log.** The project's gate script wrote each stage's output to a log of its own, so the job's log held
+  a 40-line tail of it and no test name. Playwright's end-of-run list of failures (`N failed`, then each test) was
+  in lines baton's reader skipped.
+- **Nine runs of the final QA phase, one red stage each.** A gate stopped at its first failed stage (`lane.Halted`),
+  so each run found one red. The phase was the lead's, in the human's checkout, for 3h20m. The human had review
+  findings of their own ready and could not start: "the fact that it's running is an active blocker for me."
+- **Failing tests that waited out their timeouts.** In the browser stage, 125 failing cases that ran 40 seconds or
+  more took 3.75 of the stage's 8 case-hours. In a smaller stage, 12 failing cases took 0.68 of its one. Per-test
+  timeouts ran from 30 seconds to 3 minutes, and specs raised them as far as 15 minutes.
+
+| Finding | v0.8.15 |
+|---|---|
+| The failures in a side log | `baton stage --log <file>` reads a red stage's failures from the file its command writes to (`lane.ReadInto`). Playwright's end-of-run list is read too. |
+| "run whole", with no reason | Each stage a rerun runs whole is named with why and its last time (`state.WholeStage`, from `lane.Stage.Unnarrowed`), and a red one of 10 minutes or more is questioned once (`whole_rerun`), offering a rerun by name. |
+| One red a run | In a QA phase a gate's stages keep going past a red one (`BATON_QA_PHASE`, `Job.QAPhase`); `--halts` marks a stage the rest need. |
+| Full reruns once every red was known | **Slim runs:** in a QA phase, the red gate's own command reruns what failed until all of it passes (`decide.SlimRun`); `--whole --why` runs it whole, told to the human (`gate_whole`). At `baton done`, one full run confirms the reruns only when files beyond Markdown and the failing tests changed since the full run (`state.NeedsConfirm`, `qa_confirm_queued`). |
+| The QA phase in the human's checkout | A QA phase goes to a phase agent where the run has them (`State.HasAgents`), and the human is told once when every other phase is done, so a review of theirs reaches the QA phase in time (`review_ready`). |
+| Failures that waited out a timeout | A red result says so when 3 or more failures clustered at one long duration took a quarter or more of the run (`lane.TimedOut`), and asks for lower timeouts by runner. The gate rules add rule 11: evidence in notes and commits rather than the permanent suite, browser tests for user journeys, and tests that fail fast. |
+
+To measure in the next real run: whole reruns of a stage (`job_queued` with `reruns`, `gate_questioned` with
+`whole`), runs per QA phase, `qa_confirm_queued` against `qa_confirm_skipped`, and `timeout_failures`.

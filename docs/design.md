@@ -138,7 +138,9 @@ how; the host decides when, and whether the result stands.**
   - the human's `/baton replan "<what to consider>"`, done at once in that turn;
   - a run carried across an upgrade whose planning rules changed (`plan.RulesVersion`), once;
   - a QA phase under way while the phases not started are mostly one chain, once per QA phase;
-  - a phase marked `Replan: after` (a spike, an exploration), once it is done.
+  - a phase marked `Replan: after` (a spike, an exploration), once it is done;
+  - a file that conflicted in a second landing of the run while phases not started name it (v0.8.15), once per
+    file ([Look-ins](#look-ins)).
 
   baton's own replans open at the lead's phase boundary, in its fresh context: the replan's brief comes before the
   next phase's, and the lead replans, runs `baton replanned`, then begins the phase. `auto_replan: false` turns them
@@ -156,7 +158,8 @@ how; the host decides when, and whether the result stands.**
     the phases not started got a shorter longest chain or more of them can run at once; otherwise the plan stays as
     it was, and the model is told why.
   - After a marked phase, the steps of the phases not started may also take in what it found, and a phase may be
-    split, but no work is dropped or merged.
+    split, but no work is dropped or merged. A conflict's replan may change as much, to give each phase that names
+    the file a file of its own.
   - The human's may also add, split and reword phases, and, as far as their words ask, drop or merge phases or
     change the plan's goal sections (its title and opening, the standing rules, the end section).
 - **Recorded, and undone in one step.** A draft that stands is written over the plan file and followed: the phase
@@ -236,7 +239,8 @@ for a lane while its runner beats, and a gate whose log grows or, with its log s
 the alarm's last look, as the check that stops a hung gate reads it: in a real run, a QA gate whose tests printed
 nothing for an hour while they worked raised a false alarm. Where the CPU can't be read, the log decides. The alarm
 holds nothing, and the run moving arms it again. A usage limit, an open dialog and a machine just woken are never a
-stall.
+stall, nor is the weekly wind-down's wait once nothing is under way; while work is under way, it is watched as
+ever, so a stuck agent is named whatever the wind-down.
 
 ## Gates
 
@@ -286,24 +290,38 @@ result carries what the phase's gates cost, and wherever a gate is decided baton
 is (`decide.TimeFelt`, and `decide.TimeShort` beside a long gate: "This gate spends 12m of the human's time; to you
 it is one tool call.").
 
+**A QA set's hours** (v0.8.15). A real run on v0.8.14 spent its waiting in a QA gate's long stages. A browser stage
+of 64 files, 1h18m to 1h50m a run, went red three times, and each `--failed` rerun ran it whole: its script wrote
+the stage's output to a side log, so baton had no failure ids, and the queue message said only "run whole". The
+final QA phase ran 9 times in 3h20m in the human's checkout, one red stage a run, since a gate stopped at its first
+failed stage, while the human waited to review. And failing tests waited out their timeouts: 3.75 of the browser
+stage's 8 case-hours. So in a QA phase every stage runs, and then only what failed reruns until all of it passes; a
+stage reads failures from its side log; a whole rerun says why and what it costs; a QA phase runs beside the lead;
+and a red result says when its failures waited out a timeout.
+
 **The gate rules** go to the model where plans are made and where phases start ([Plans](#plans)), after
 `TimeFelt`: QA phases at real
 seams (the end, and in a long plan the end of a group of related phases later work builds on), never per phase;
 every other phase runs scoped checks that finish in seconds or minutes, by name; gate scripts are committed, built
 from `baton stage`, and tear down what they start; a gate stops at its first failure, and then only what failed runs
 again; a setup phase proves the lane recipe first; timings on a shared machine are warnings; no file many phases
-edit; long checks go through `verify` or `await`, never a background shell; CI early in the QA phase; and a phase
-stops what it started before `baton done`.
+edit; long checks go through `verify` or `await`, never a background shell; CI early in the QA phase; a phase
+stops what it started before `baton done`; and (v0.8.15) a phase's evidence goes in its notes and commit, not the
+permanent suite: a browser test is for a user journey, a design rule is a lint or a component test, and a test
+fails fast, with short timeouts, no retries in a gate and no fixed sleeps.
 
 ### The gate protocol
 
 A gate reports as it runs (package `lane`'s protocol). Each step of a gate script is a stage:
-`baton stage <name> [--keep-going] [--runner go|pytest|vitest|jest|playwright] -- <command>` prints `▶ <name> HH:MM:SS` and a start marker
+`baton stage <name> [--keep-going | --halts] [--log <file>] [--runner go|pytest|vitest|jest|playwright] -- <command>` prints `▶ <name> HH:MM:SS` and a start marker
 (`::baton stage <name> start`), passes its command's output through line by line, prints how it ended and an end
 marker (`::baton stage <name> passed|failed|skipped|carried exit=<n> seconds=<n>`), appends the stage to the job's
 stages file (`jobs/<id>.stages`, beside its log) and exits with the command's code. What failed is named by
 `::baton fail <id>` lines, which any command may print, and by a runner preset: Go's top-level `--- FAIL: TestX`
-names, pytest's `FAILED path::name`, vitest's and jest's `file > suite > test`, Playwright's `file:line`. A package
+names, pytest's `FAILED path::name`, vitest's and jest's `file > suite > test`, Playwright's `file:line` (from its
+`✘` lines and, since v0.8.15, its end-of-run list). A stage whose command writes its output to a file of its own
+names it with `--log <file>`, and a red stage reads its failures from that file too (`lane.ReadInto`); a file that
+is not there is said, and changes nothing else. A package
 or file that failed with no test named (a build failure, a timeout, a file that did not load) is named whole, and a
 stage with one records no ids, so its rerun runs whole. A stage given no `--runner` reads every preset, a
 command's fail lines first, and records the runner whose lines named all its ids (`Stage.Runner`, v0.8.13), and
@@ -317,6 +335,11 @@ failures. A custom command reads `BATON_FAILED` and `BATON_FAILED_RE`.
 - **A gate stops at its first failure.** A stage reads the stages file, and when an earlier stage failed without
   `--keep-going`, it prints why and is skipped (exit 1), however the script goes on. A stage that collects every
   failure on purpose says `--keep-going`.
+- **Except in a QA phase** (v0.8.15), whose job is to find every red at once. A gate queued in a `Type: qa` phase
+  (`Job.QAPhase`) runs with `BATON_QA_PHASE=1`, and there each stage keeps going by default; `--halts` marks a stage
+  the later ones need (a setup, a build), which stops them when it fails (`decide.StageHaltedQA`).
+- **Why a red stage runs whole** is recorded with it (`lane.Stage.Unnarrowed`): no failure ids, more than 100
+  failures, a file or package that failed with no test named, or failures from more than one runner.
 - **It acts on no run.** `baton stage` needs no host: outside a job it prints and runs its command and records
   nothing, so a script run by hand still shows its stages.
 - **The runner reads the log as it is written.** A gate's command gets `BATON_JOB`, `BATON_STAGES` (its stages
@@ -344,7 +367,22 @@ failures. A custom command reads `BATON_FAILED` and `BATON_FAILED_RE`.
   `--stages a,b` brings carried stages back. What it reruns comes from baton's record (the red gate, with what a
   stopped run learned since, written beside the rerun's log as it is queued), never from a model's reading of a
   tail. Its result names each carried stage's job and commit and the files changed since, and each narrowed
-  stage's ids. It is refused, saying why, with nothing to rerun.
+  stage's ids. It is refused, saying why, with nothing to rerun. As it queues, each stage it runs whole is named
+  with why and how long it took last time (`state.WholeStage`: "run whole: `browser` (1h18m last time; baton read
+  no failure ids from it)"), and one that was red and took 10 minutes or more is questioned once (`whole_rerun`,
+  v0.8.15): its own log may name the failures, to rerun by name with `--replace`, or `--why` runs it whole, told
+  to the human; queued again without one, it runs, and the human is told (`gate_unexplained`).
+- **Slim runs in a QA phase** (v0.8.15, the human's rule): once the full run has found every red, reruns are
+  narrowed until all of it passes. In a `Type: qa` phase, `baton verify` of the red gate's own command, for a gate
+  built from stages, is queued as its `--failed` rerun, saying so (`decide.SlimRun`). `--whole --why "…"` runs it
+  whole, and the human is told the reason (`gate_whole`); `--whole` without `--why` is refused. A gate built from
+  no stages keeps the repeat question, which offers its narrowed rerun.
+- **One full run confirms them, only when needed.** At `baton done` of a QA phase whose red gate reruns cleared,
+  baton takes the files changed since that whole run (`state.NeedsConfirm`): Markdown and the failing tests' own
+  files need no confirmation, and any other file does. Then one full run of the gate's command is queued at
+  `HEAD`, as a landing's re-verification is (no questions, every stage run), and the phase is verifying until it
+  passes (`decide.Confirming`, `qa_confirm_queued`); a red one is the phase's red gate, and slim runs begin again.
+  With none needed, `done` goes on, and says why (`qa_confirm_skipped`).
 - **`baton verify --failed -- <command>`** reruns only what failed in a red gate that recorded no stages (a make
   target, a test command, a script): baton reads the failure ids of every run the rerun draws on from their logs,
   for Go, pytest, vitest, jest and Playwright and `::baton fail` lines (`lane.FailureIDs`), and runs the model's
@@ -375,6 +413,11 @@ failures. A custom command reads `BATON_FAILED` and `BATON_FAILED_RE`.
   to run as `baton verify --failed -- <that command>`. Every gate's result ends with what its phase's gates have
   cost so far (`state.GateCost`: the phase's gate runs and their clock time, overlaps counted once; from the second
   run on), and a gate that ran 10 minutes or more with `TimeShort`.
+- **A red gate says when its failures waited out a timeout** (v0.8.15). When 3 or more failures ran about as long
+  as each other (within 10% of their median), 30 seconds or more each, and together a quarter or more of the
+  gate's run (`lane.TimedOut`, from each runner's own times), the result says what they cost and asks for tests
+  that fail in seconds, naming the timeouts of the runners present; `job_finished` logs `timeout_failures` and
+  `timeout_seconds`.
 - **A red gate its environment failed says so.** A log with no test failure and a known environment line (a port
   in use, the Docker daemon out of reach, an unhealthy container, a full disk, a registry's rate limit, a host name
   that does not resolve) reads as the environment's failure, not the change's. The result quotes the line, lists
@@ -395,8 +438,12 @@ minute, and each goes once per job and kind:
 - a gate past 1.5 times the slowest earlier passing run of its command, and 15 minutes more, or at 80% of
   `verify_timeout`: to its owner, with its elapsed time, the earlier runs and how long its log has been still;
 - landings that have waited 20 minutes behind a gate in the lead's checkout: to the lead, which and since when;
-- a file in a second landing conflict of the run: to the lead, saying that one file every phase edits serializes
-  them, so give each phase its own file merged by a QA phase, or have the human replan;
+- a file in a second landing conflict of the run, while phases not started name it (`replan.Naming`): to the
+  lead, naming them, and saying that one file every phase edits serializes them. Since v0.8.15 baton opens a
+  replan of those phases itself at the lead's next boundary, once per file ([Replans](#replans)), and the look-in
+  no longer asks for the human: a real run's lead, told to "ask the human to run `/baton replan`" with one phase
+  left, asked the human to carry a merge note to an agent that had already merged. With no such phase, the lead can do
+  nothing about it, and is told nothing;
 - what finished phases left running, while the machine has no room and a gate runs past its history: to the gate's
   owner (below).
 
@@ -575,10 +622,28 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   turn having changed nothing, and nothing waits on it.
 - **Room.** `workers: auto` sizes the fleet to the machine. New agents start at least 2 minutes apart, since the
   machine's readings lag the load an agent brings. A new agent also waits while the machine is busy, the lanes fall
-  behind, landings keep conflicting, a usage limit holds, a replan is open or owed ([Replans](#replans)), or a risk
-  assessment said "full now" ([The risk ledger](#the-risk-ledger)). Every hold is host code.
+  behind, landings keep conflicting, a usage limit holds or the run winds down near the end of the weekly allowance
+  ([Usage limits](#usage-limits)), a replan is open or owed ([Replans](#replans)), or a risk assessment said "full
+  now" ([The risk ledger](#the-risk-ledger)). Every hold is host code. An agent whose work waits to land takes no
+  slot, since the merge queue and the lead hold it, not the agent; one handed back counts again. With every slot
+  at work, a ready phase is held at the cap (`state.HoldCap`), which the board and `baton watch` show ("ready: all
+  6 agent slots at work") and nothing announces: the run is going as it should.
+- **QA phases run beside the lead** (v0.8.15). Where the run has phase agents (`State.HasAgents`: the host runs a
+  fleet, `Runtime.Fleet`, the run is not serial, and it has a branch), a ready QA phase goes to an agent, even as
+  the plan's last phase, and the lead, with no phase in hand, idles as it does while agents hold every phase. In a
+  real run, the final QA phase held the human's checkout for 3h20m while they waited to review. Its agent's
+  narrowed plan keeps the phases it checks (`Plan.QASince`). It is the lead's again once an agent of this plan
+  failed on it, or when it is parked.
+- **Ready for review.** Once every phase but the QA phases is done and the QA phase's session can take the human's
+  words (the lead holds it, or its agent is at work), the human is told once a plan, announced and pushed, that a
+  review of theirs now reaches the QA phase in time, through `@<its id>` or phases they add, and that nothing waits
+  on them (`state.ReviewReady`, `decide.ReviewReady`, `review_ready`, `Runtime.Review`).
 - **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, it is merged into the phase's
-  branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Nothing baton
+  branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Under each
+  conflicting path, the agent is told the commits that changed it on the run's branch since the merge base, with
+  the phase that landed each (at most 5 a path; `gitx.LogPaths`, read before the lock), so it knows whose changes
+  it merges. The lead's standing words say never to ask the human to carry words between sessions
+  (`decide.NoCourier`): an agent gets baton's messages and does its own merges. Nothing baton
   runs, or asks an agent to run, rewrites a commit: a rebase can drop a resolved conflict without a word, and Claude
   Code's auto mode may refuse one as destructive. A merge starts only on a worktree with nothing uncommitted, and one
   that stops is aborted, leaving everything as it was. The phase is verified again if the run's branch moved (at most
@@ -635,7 +700,9 @@ interface had made *notify* and *halt* the same operation.
 - **Nothing waits on the human for what baton can decide** (v0.8.3, v0.8.4, v0.8.6). With no deadline, baton waits
   on them only where they chose it (Pause baton, `/baton pause`, a `max_auto_decisions` they set, a phase agent they
   stopped twice whose work is not done, while the rest of the run can go on) or where nothing in baton can answer
-  (a permission prompt, the usage limit, a login or billing error, a refusal, which is never retried). Every other
+  (a permission prompt, the usage limit until its reset, a login or billing error, a refusal, which is never
+  retried). A run that was working on its own goes on at the usage limit's reset, and the weekly wind-down ends at
+  the weekly reset; the human cancels either by pausing or writing ([Usage limits](#usage-limits)). Every other
   wait has a deadline, and the deadline picks the model's side: the human said they would rather correct an
   assumption later than find a run idle for hours, and that nothing should wait more than a few minutes, 20 at most.
   Only a block waits longer, 30 minutes, as below. baton's own holds have one too: a risk assessment's hold on new
@@ -729,6 +796,38 @@ interface had made *notify* and *halt* the same operation.
   the replan's draft, made from the older text, is refused.
 - **`/baton replan "<what to consider>"`** has the lead's model restructure the phases not started at once, as far
   as the human's words ask ([Replans](#replans)).
+
+## Usage limits
+
+Every session of a run spends from one account, which has two windows: five hours and a week. In real runs, two
+five-hour stops cost 3h20m, and both weekly limits were taken for unknown resets: baton retried into one at 15 and
+30 minutes with its reset 4 days away. Nothing resumes a stopped session by itself: every resumption was baton's
+retry or the human's prompt ([`research/usage.md`](research/usage.md)). The human chose time to completion over
+pacing: no budget, a run as far as the account goes, and baton's waits no longer than the limit's own.
+
+- **Which window, and when it resets.** The stopped loop's own transcript says both before the stop is reported
+  (`quotaLimits.rateLimitType`, `resetsAt`); the stop's hook reads them before the lock. Failing that, a window the
+  lead's status line reads at 99% or more names the limit, the weekly window first. Otherwise the window is unknown:
+  a 429 not known to be a usage limit, retried at 15, then 30 minutes. The status line's weekly reading
+  (`rate_limits.seven_day`) is stored beside the five-hour one.
+- **The hold runs in every run,** with phase agents or none: until the reset plus 2 minutes (`state.ResumeGrace`,
+  for the account's clock and baton's), no new agent starts and no session is typed into. A reply to any of the
+  run's sessions after the hit lifts it (the human switched accounts, say).
+- **The resume timer.** A limit hit while the run worked on its own (running, not paused, and the stopped turn not
+  the human's) arms a timer at the stored reset plus 2 minutes, never a fresh reading, since the status line drops
+  a window once its reset passes. It lives in the run's state, so a restart keeps it and a machine asleep through
+  the reset resumes on waking. Firing is each stopped session's held retry, typed once, with no second wake path; a
+  session limited again within 10 minutes tries again 2, 5, 10, then every 15 minutes. The band, the board, the
+  status line and `baton status` say when the run resumes.
+- **The human's act cancels it:** a pause, any prompt of theirs at the lead while it waits (an `@<phase>` too),
+  which also pauses the run, and leaving baton. A limit hit by the human's own turn cancels it at once. Then the run
+  waits for `/baton run`, which arms it again. A `/baton` command that only looks (status, board) cancels nothing.
+- **The weekly wind-down.** At `weekly_reserve_pct` (2 by default) of the weekly allowance left, nothing new
+  starts: the lead takes no new phase, no new agent starts, and the phases under way, their gates and landings
+  finish. The run goes on 2 minutes after the weekly reset it read, or at once on a reading below the line. The
+  line reads the lead's status line, the only reading there is, which moves only with the lead's own turns, so it
+  can come late; a weekly limit hit first is the timer's. Its cancel is the pause itself, as the timer's is, and
+  `/baton run` arms it again.
 
 ## Recovery
 

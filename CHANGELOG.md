@@ -4,6 +4,122 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.15] - 2026-10-23
+
+A real 58-phase run on v0.8.14 left its human waiting on baton in four ways. A QA gate's 64-file browser stage,
+1h18m to 1h50m a run, went red three times, and each `--failed` rerun ran all of it again: the project's gate
+script wrote the stage's output to a side log, and the queue message said only "run whole". The final QA phase
+held the human's checkout for 3h20m and 9 runs, one red stage each, since a gate stopped at its first failed
+stage; the human had review findings ready and could not start. A landing's conflict made the human a courier: the
+lead copied a merge note for them to send to a phase agent that had already merged. And two five-hour usage stops
+cost 3h20m, with the weekly window never read. So in a QA phase every stage runs and only what failed reruns until
+all of it passes, a whole rerun says why and what it costs, a QA phase runs beside the lead, a conflict reaches its
+agent with its history, and a usage limit costs only its wait: baton reads both windows, resumes a run that was
+working on its own at the reset, and winds down near the end of the weekly allowance. The evidence is in
+[`docs/research/gates.md`](docs/research/gates.md) and [`docs/research/usage.md`](docs/research/usage.md).
+
+A session on v0.8.x moves to v0.8.15 by itself at its next restart point. The gate rules gained a rule, but
+`plan.RulesVersion` stays 1, as in v0.8.7: a structural replan could not apply it, so it reaches a running plan
+through each phase's brief.
+
+### Added
+
+- **A usage limit resumes the run at its reset.** baton reads which window stopped a session and when it resets
+  from that session's own transcript, where Claude Code writes it before reporting the stop, else from a status
+  line reading at 99% or more, the weekly window first. When the run was working on its own (running, not paused,
+  and the turn that hit the limit not yours), a timer is armed for the reset plus 2 minutes, and baton says so:
+  "baton: the worker on P3 hit the account's weekly usage limit, until Mon 10:00. baton resumes the run at 10:02
+  unless you pause or write." While it waits, nothing is typed into any session, however far off the reset. At
+  it, each session stopped on the limit is told once that the limit has reset and goes on with its phase
+  (`usage_resumed`, pushed). A session limited again within 10 minutes tries again 2, 5 and 10 minutes later, then
+  every 15, and never gives up. The timer is kept in the run's state, so a host restart keeps it and a laptop
+  asleep through the reset resumes on waking. The band, the board, the status line and `baton status` say when the
+  run resumes. A limit whose window is unknown (a 429 not known to be a usage limit) keeps the retry at 15, then
+  30 minutes.
+- **Your pause or prompt cancels it.** `/baton pause`, any prompt you type at the lead while the run waits (`@P3
+  …` included), `/baton drop` and `/baton exit` cancel the timer. A prompt also pauses the run, and you're told
+  that baton will not resume by itself; a limit hit by a turn you started pauses it the same way. `/baton run`
+  arms the timer again, firing at once when the reset has passed. `/baton status`, `board`, `version`, `drafts`,
+  `help` and `/baton-board` cancel nothing.
+- **The weekly wind-down.** At `weekly_reserve_pct` of the account's weekly usage left (2 by default,
+  `BATON_WEEKLY_RESERVE_PCT`; at most 50, and `0` turns it off), nothing new starts: the lead takes up no new phase
+  and no new phase agent starts, while the phases under way, their gates and their landings finish. It is
+  announced, pushed and logged once a weekly window: "baton: 2% of weekly usage left: nothing new starts. P3 and
+  P5 finish. baton goes on at Mon 10:02, after the weekly reset, unless you pause or write." The run goes on 2
+  minutes after the weekly reset it read, needing no fresh reading, or at once on a reading below the line (after
+  you switch accounts, say), and the lead takes up its next phase after a compaction (`weekly_wound_up`, pushed). A
+  pause or a prompt of yours stops it going on by itself, as with the timer, and `/baton run` arms it again. The
+  reading is the lead's status line's, which moves only with the lead's own turns, so the wind-down can come late;
+  a weekly limit hit before it shows is the timer's case. The board names the wind-down as why a ready phase waits,
+  `baton status` and `baton done` say when the run goes on, and the stall alarm counts the wait as expected once
+  nothing is under way.
+- **Every stage runs in a QA phase.** A gate queued in a `Type: qa` phase gets `BATON_QA_PHASE=1`, and its `baton
+  stage` steps keep going past a red stage, so one run collects every red. `--halts` marks a stage the later ones
+  need (a setup, a build), which stops them when it fails. Outside a QA phase, a gate still stops at its first
+  failure.
+- **Slim runs in a QA phase.** There, `baton verify` of the red gate's own command, for a gate built from stages,
+  is queued as its `--failed` rerun, and says so: once the full run has found every red, only what failed reruns,
+  until all of it passes. `--whole --why "…"` runs it whole, and you're told the reason (`gate_whole`); `--whole`
+  without `--why` is refused.
+- **One full run confirms a QA phase's reruns, only when needed.** At `baton done` of a QA phase whose red gate
+  reruns cleared, baton looks at what changed since the full run. Markdown and the failing tests' own files need
+  no confirmation. Any other file does: baton queues one full run of the gate at `HEAD`, and the phase is
+  verifying until it passes (`qa_confirm_queued`; `qa_confirm_skipped` when none is needed). A red confirmation
+  starts slim runs again.
+- **`baton stage --log <file>`** reads a red stage's failures from the file its command writes its output to, for
+  a gate script that sends a stage's output to a side log. A missing file is said, and changes nothing else.
+- **A red gate says when its failures waited out a timeout.** When 3 or more failures ran about as long as each
+  other, 30 seconds or more each, and together a quarter or more of the gate's run, the result says so ("12 of 14
+  failures ran about 3m each, 36 of this gate's 40 minutes") and asks for tests that fail in seconds, naming the
+  timeouts of the runners present (Playwright's `timeout` and `expect.timeout`, a go test's deadline, vitest's
+  `testTimeout`). `job_finished` logs `timeout_failures` and `timeout_seconds`.
+- **A QA phase runs beside the lead.** Where the run has phase agents, a QA phase goes to one, even as the plan's
+  last phase, so it never holds your checkout, and its agent's brief names the phases it checks. With `workers: 0`
+  or in serial mode, nothing changes.
+- **You hear when to review.** Once every phase but the QA phases is done, and the QA phase's session can take
+  your words, baton tells you once a plan, announced and pushed: "Every phase but the QA phase has landed. If you
+  review now, what you find reaches the QA phase in time: write it to `@P12`, or add phases. Nothing waits on
+  you." (`review_ready`).
+- **A planning rule against permanent proofs.** The gate rules and every brief's gate habits add: a phase's
+  evidence goes in its notes and commit, not the permanent suite; a browser test is for a user journey and a
+  design rule is a lint or a component test; a test fails fast, with short timeouts, no retries in a gate and no
+  fixed sleeps.
+
+### Changed
+
+- **A whole rerun says why, and a long one is questioned once.** `baton verify --failed` names each stage it runs
+  whole, with why and how long it took last time: "run whole: `browser` (1h18m last time; baton read no failure
+  ids from it)". The reasons: no failure ids, more than 100 failures, a file or package that failed with no test
+  named, failures from more than one runner, a stage not on record, skipped in an earlier job, or brought back
+  by `--stages`. A red stage that would run whole and took 10 minutes or more is questioned once (`whole_rerun`),
+  with its last time, the phase's gate cost, and the rerun by name to run instead; `--why` runs it, and you're
+  told. Queued again without one, it runs, and you're told it ran without a reason (`gate_unexplained`).
+- **A landing's conflict reaches its agent with its history.** Under each conflicting path, the agent is told the
+  commits that changed it on the run's branch since the merge base, with the phase that landed each, at most 5 a
+  path.
+- **The look-in about a file that keeps conflicting** goes to the lead only while phases not started name that
+  file, and names them. It no longer asks the lead to have you run `/baton replan`: baton opens a replan of those
+  phases itself, once per file, at the lead's next phase boundary (a `conflict` replan, which may reorder, reword
+  and split them, never drop or merge them). `auto_replan: false` leaves the plan as it is.
+- **Nobody is a courier.** The lead's model is told never to ask you to carry words between sessions: a phase
+  agent gets baton's messages and does its own merges, and `@<phase>` is your own way to write to one.
+- **A usage limit holds every run until its own reset,** `workers: 0` included, and lifts once a session gets a
+  reply after it (`usage_lifted`). Its line names the window and its reset, days away included ("until Mon
+  10:00"), and no longer says that Claude Code resumes a session by itself: nothing does.
+
+### Fixed
+
+- **Playwright's failures are read from its end-of-run list** too (`N failed`, then each test), which baton
+  skipped: a log that held only that list gave no failure ids, so its stage reran whole.
+- **A phase agent waiting to land takes no agent slot.** A landing waits on the merge queue and the lead, so it
+  held a slot a new phase could use; a landing handed back to its agent counts again.
+- **Ready phases at the agent cap say so.** With every agent slot at work, the board and `baton watch` show each
+  ready phase as "ready: all 6 agent slots at work", where they showed it ready with nothing to say why it waited.
+- **A here-document's body is no command.** baton's check for a long gate started as a background shell task
+  read the body of a heredoc as commands, and an apostrophe in it hid the test command that followed.
+- **A background task's command is recorded whole,** up to 4,000 characters, on its lines (`background_told`,
+  `background_questioned`), where it was cut at 200.
+
 ## [0.8.14] - 2026-10-19
 
 ### Fixed
@@ -1577,7 +1693,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.15...HEAD
+[0.8.15]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...v0.8.15
 [0.8.14]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...v0.8.14
 [0.8.13]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...v0.8.13
 [0.8.12]: https://github.com/ozzyfromspace/baton/compare/v0.8.11...v0.8.12

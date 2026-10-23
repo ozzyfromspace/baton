@@ -154,8 +154,11 @@ From the docs and the 2.1.296 bundle:
 
 - **The status line receives `rate_limits.five_hour.used_percentage` and `resets_at`** on Pro and Max plans. That
   lets baton see how much of the account's five-hour allowance is used before it starts another session.
-- **Interactive sessions wait out a usage limit by themselves** and resume when it resets. StopFailure reports
-  `rate_limit` but no reset time.
+- **A session stopped on a usage limit does not resume by itself** (corrected in v0.8.15; this note first said it
+  did). StopFailure reports `rate_limit` with no reset time, and a stopped turn ends: only a typed line, a message
+  or a prompt starts the next one. In two real runs, every resumption was baton's own retry or the human's prompt.
+  The stopped session's transcript names the window and its reset, and the status line carries the weekly window
+  too: [`usage.md`](usage.md).
 - **Agent teams** are experimental and run in-process, inside one session's terminal.
 - **Remote Control** and a host posting to a session's messaging socket (`CLAUDE_CODE_MESSAGING_SOCKET`) exist.
   Neither is needed for v0.5.
@@ -198,7 +201,8 @@ From the docs and the 2.1.296 bundle:
   files before editing them, and never to amend, reset, rebase or revert commits it did not make. A guard refuses
   those rewrites over landed commits.
 - **Usage:** the status line's five-hour reading gates new workers, and a session waiting on a usage limit holds
-  every nudge until the reset.
+  every nudge until the reset. Since v0.8.15 baton resumes it at the reset, as nothing else does, and winds the
+  run down near the end of the weekly allowance ([`usage.md`](usage.md)).
 
 ## Machine readings and leftovers (spikes 27 and 28)
 
