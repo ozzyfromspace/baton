@@ -261,7 +261,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	if st.Mode != state.ModeRunning {
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
-			l.restartOn(v, st, in)
+			l.restartOn(v, st, in, "")
 		}
 		return
 	}
@@ -271,14 +271,18 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.remind(v, st)
 	st = l.switching(v, st)
 	l.clearDraft(v, st, in)
+	if l.idleRestart(v, st, in) {
+		return // the lead holds no phase, so no compaction comes to restart at (upgradeidle.go)
+	}
 
 	comp := st.Run.Compaction
 	switch comp.Status {
 	case state.CompactQueued:
-		// The one point a running plan restarts on a newer baton: a compaction is due, and the
-		// restarted session types it instead. Nothing else in a running plan waits for a restart.
+		// The point a running plan restarts on a newer baton while its lead has a phase: a compaction is
+		// due, and the restarted session types it instead. Nothing else in a running plan waits for a
+		// restart.
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.why) {
-			l.restartOn(v, st, in)
+			l.restartOn(v, st, in, "")
 			return
 		}
 		l.moveAside(st) // before the compaction would add the plan-mode file to the context once more
@@ -380,9 +384,11 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // only inside this claude process may be running, because it would end with it: background work of any
 // kind (baton's phase agents too), monitors, session-scoped wakeups. baton's own jobs do not count: their runners outlive the
 // restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
-// about to type, decided by the caller; otherwise the session must have been idle for RestartIdle, so a
-// human reading its last answer is not interrupted. While a newer baton waits, no phase agent starts
-// (Coordinator.pending); one that is idle when the restart comes is taken up again after it.
+// about to type, or a lead idle with no phase and no phase agent live (idleRestart), decided by the caller;
+// otherwise the session must have been idle for RestartIdle, so a human reading its last answer is not
+// interrupted. While a newer baton waits and the lead can reach its safe point by itself, no phase agent
+// starts (Coordinator.pending, upgradeHolds); one that is idle when the restart comes is taken up again
+// after it.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
@@ -400,13 +406,18 @@ func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 }
 
 // restartOn ends claude so the host can restart the session on the newer baton: the host's command
-// resumes the same conversation on it, and the restarted session says so (Runtime.Restart).
-func (l *Loop) restartOn(v host.View, st state.State, in host.Injector) {
+// resumes the same conversation on it, and the restarted session says so (Runtime.Restart). why, when
+// set, says why it restarts where it does, for the log.
+func (l *Loop) restartOn(v host.View, st state.State, in host.Injector, why string) {
 	to := l.Newer()
 	l.quit = true
 	l.restart = &restart{to: to, session: st.Run.SessionID}
 	l.update(func(st *state.State) { st.Run.Restart = &state.Restart{From: l.Version, To: to, At: v.Now} })
-	l.Store.Event("restarting", map[string]any{"from": l.Version, "to": to, "session": st.Run.SessionID, "mode": st.Mode})
+	fields := map[string]any{"from": l.Version, "to": to, "session": st.Run.SessionID, "mode": st.Mode}
+	if why != "" {
+		fields["why"] = why
+	}
+	l.Store.Event("restarting", fields)
 	l.logf("loop: restarting the session on baton %s", to)
 	if err := in.Quit(); err != nil {
 		l.logf("loop: quitting: %v", err)

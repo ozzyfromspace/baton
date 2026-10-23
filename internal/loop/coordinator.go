@@ -152,7 +152,7 @@ func (c *Coordinator) duties(v host.View) {
 	if err != nil || st.Owner != nil && !st.IsOwner(s.Instance, v.Now) {
 		return
 	}
-	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
+	c.pending.Store(c.Fleet != nil && c.Lead.upgradeHolds(v, st))
 	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleetOn(s, st) // the run's QA phases go to its agents (review.go)
