@@ -3,7 +3,6 @@ package lane
 import (
 	"bufio"
 	"io"
-	"os"
 	"slices"
 	"strings"
 )
@@ -92,16 +91,13 @@ func (r *Reading) addAt(seq int, f FailedTest) {
 // FailureIDs reads the log at path for the tests it says failed (a Reading of every Preset): at most max of
 // them (MaxFailures when max is 0 or more than that), and how many more there are.
 func FailureIDs(path string, max int) ([]FailedTest, int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
 	if max <= 0 || max > MaxFailures {
 		max = MaxFailures
 	}
 	r := NewReading(max, Presets...)
-	eachLine(f, r.Line)
+	if err := ReadInto(r, path); err != nil {
+		return nil, 0, err
+	}
 	fs, more := r.Failed()
 	return fs, more, nil
 }

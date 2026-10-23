@@ -289,8 +289,8 @@ func TestLaneRunCountsTheTimeoutFromTheLane(t *testing.T) {
 	}
 }
 
-// A gate's command gets its job's variables of the gate protocol, its stages file and, for a rerun, the
-// red gate's, and finds the baton running it first on its PATH.
+// A gate's command gets its job's variables of the gate protocol, its stages file, for a rerun the red
+// gate's and in a QA phase BATON_QA_PHASE, and finds the baton running it first on its PATH.
 func TestLaneRunGivesTheGateItsEnvironment(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -299,11 +299,12 @@ func TestLaneRunGivesTheGateItsEnvironment(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		reruns string
-	}{{"a gate", ""}, {"a rerun", "j0"}} {
+		qa     bool
+	}{{"a gate", "", false}, {"a rerun", "j0", false}, {"a QA phase's gate", "", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "env.txt")
-			s, env := laneProject(t, `printf '%s\n' "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${PATH%%:*}" > `+out)
-			s.Update(func(st *state.State) error { st.Jobs[0].Reruns = c.reruns; return nil })
+			s, env := laneProject(t, `printf '%s\n' "$BATON_JOB" "$BATON_STAGES" "${BATON_RERUN-none}" "${BATON_QA_PHASE-none}" "${PATH%%:*}" > `+out)
+			s.Update(func(st *state.State) error { st.Jobs[0].Reruns, st.Jobs[0].QAPhase = c.reruns, c.qa; return nil })
 			if code, errs := laneRun(env, "sess-1", "j1"); code != 0 {
 				t.Fatalf("lane-run: exit %d: %s", code, errs)
 			}
@@ -311,8 +312,12 @@ func TestLaneRunGivesTheGateItsEnvironment(t *testing.T) {
 			if c.reruns != "" {
 				rerun = s.JobRerun("j1") // the record it runs from, written as verify --failed queued it
 			}
+			qa := "none"
+			if c.qa {
+				qa = "1"
+			}
 			b, _ := os.ReadFile(out)
-			if got, want := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"), []string{"j1", s.JobStages("j1"), rerun, filepath.Dir(exe)}; !slices.Equal(got, want) {
+			if got, want := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"), []string{"j1", s.JobStages("j1"), rerun, qa, filepath.Dir(exe)}; !slices.Equal(got, want) {
 				t.Errorf("the gate saw %q, want %q", got, want)
 			}
 		})

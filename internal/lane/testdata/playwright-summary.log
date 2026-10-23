@@ -1,0 +1,10 @@
+[e2e] 64 files, 390 tests; the list reporter writes to test-results/e2e.log
+
+  3 failed
+    [chromium] › tests/search.spec.ts:21:5 › search › finds a product ──────────────────────────────
+    [firefox] › tests/account.spec.ts:9:3 › signs out ──────────────────────────────────────────────
+    [chromium] › tests/checkout/pay.spec.ts:44:7 › checkout › pays by card ─────────────────────────
+  1 flaky
+    [chromium] › tests/cart.spec.ts:8:5 › checkout ─────────────────────────────────────────────────
+  2 skipped
+  384 passed (1.3h)

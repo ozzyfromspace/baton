@@ -31,7 +31,8 @@ func gatePlan(t *testing.T, heads ...string) plan.Plan {
 }
 
 // The gate rules open with what the human's time is (TimeFelt), then the frame, a human who feels time,
-// and hold the ten rules in order; a red gate's rerun names the narrower command too.
+// and hold the eleven rules in order, the last on what a phase adds to the permanent suite; a red gate's
+// rerun names the narrower command too.
 func TestGateRulesWords(t *testing.T) {
 	if !strings.HasPrefix(GateRules, TimeFelt+"\n\n") {
 		t.Errorf("the rules open with %q", GateRules[:80])
@@ -51,7 +52,10 @@ func TestGateRulesWords(t *testing.T) {
 		"7. No file many phases edit: records per phase, or the plan's `Record:` file.",
 		"8. Long checks go through `baton verify` or `baton await`, never a background shell.",
 		"9. Push to CI early in the QA phase, batching fixes per round trip.",
-		"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`.",
+		"10. A gate script tears down what it starts (`trap … EXIT`), and a phase stops what it started (servers, containers, test stacks) before `baton done`.\n",
+		"11. A phase's evidence goes in its notes and commit, not the permanent suite. " +
+			"A browser test is for a user journey; a design rule is a lint or a component test. " +
+			"A test fails fast: short timeouts, no retries in a gate, no fixed sleeps.",
 	} {
 		i := strings.Index(GateRules[at:], want)
 		if i < 0 {
@@ -143,7 +147,8 @@ func TestGateCheckWords(t *testing.T) {
 // phase, which the model does not feel and the human does; a QA phase runs its set once; stop at the
 // first failure and rerun only what failed, staged or by the narrower command, and the whole gate again
 // only with a reason the human is told; long gates staged and through baton verify, and the environment
-// recorded for every phase; without git, no lane, so no verify or stages.
+// recorded for every phase; a phase's evidence in its notes, not the permanent suite, whose tests fail
+// fast; without git, no lane, so no verify, stages or commits. Every form stays under 600 characters.
 func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 	focus := QAFocus("P9 (QA)")
 	for _, want := range []string{
@@ -176,23 +181,25 @@ func TestTheBriefsShortFormOfTheGateRules(t *testing.T) {
 		"rerun only what failed (`baton verify --failed [-- <narrower command>]`),",
 		"never the whole gate again without `--why \"…\"`, which baton tells the human.",
 		"A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell.",
-		"record what it needs with `baton env \"<what it needs>\"`, so every phase sees it.",
+		"When a gate fails on its environment, `baton env \"<what it needs>\"` tells every phase.",
+		"Evidence goes in notes and commits, not the permanent suite; tests fail fast.",
 	} {
 		if !strings.Contains(habits, want) {
 			t.Errorf("GateHabits(git) lacks %q:\n%s", want, habits)
 		}
 	}
 	bare := GateHabits(false)
-	if !strings.Contains(bare, "Long checks go through `baton await`, never a background shell.") || !strings.Contains(bare, "`baton env") {
+	if !strings.Contains(bare, "Long checks go through `baton await`, never a background shell.") || !strings.Contains(bare, "`baton env") ||
+		!strings.Contains(bare, "Evidence goes in notes, not the permanent suite; tests fail fast.") {
 		t.Errorf("GateHabits(no git):\n%s", bare)
 	}
-	for _, not := range []string{"baton verify", "baton stage"} {
+	for _, not := range []string{"baton verify", "baton stage", "commits"} {
 		if strings.Contains(bare, not) {
 			t.Errorf("GateHabits(no git) has %q:\n%s", not, bare)
 		}
 	}
 	// Short: the old focus paragraph alone ran to about 700 characters.
-	for name, s := range map[string]string{"QAFocus": focus, "QAPhase": qa, "GateHabits": habits} {
+	for name, s := range map[string]string{"QAFocus": focus, "QAPhase": qa, "GateHabits": habits, "GateHabits without git": bare} {
 		if len(s) > 600 {
 			t.Errorf("%s runs to %d characters:\n%s", name, len(s), s)
 		}

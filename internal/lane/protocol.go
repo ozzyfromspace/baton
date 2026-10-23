@@ -31,21 +31,29 @@ import (
 // A stage is a named step of the gate (lint, unit, e2e); its name has no spaces (ValidStageName). A fail
 // line names one thing that failed, a test's id as its runner names it, so that a rerun can run exactly
 // that (ValidFailID). `baton stage <name> -- <command>` prints a stage's markers around its command and
-// records it; a script may print them itself. ParseMarker reads a line.
+// records it; a script may print them itself. ParseMarker reads a line. A stage whose command writes its
+// output to a file of its own rather than to the stage's output (a side log) names it, `baton stage
+// <name> --log <file> -- <command>`, and when the stage fails its failures are read from that file too
+// (ReadInto), as from its output.
 //
 // The stages file. Each ended stage is a JSON line (Stage) in jobs/<id>.stages, beside the job's log,
 // appended as it ends (AppendStage) by `baton stage` or the runner, and read back by ReadStages. A gate
-// stops at its first failed stage, across the separate commands of a script, by reading it (Halted).
+// stops at its first failed stage, across the separate commands of a script, by reading it (Halted),
+// unless that stage kept going (Stage.KeepGoing: `baton stage --keep-going`). In a QA phase's gate
+// (EnvQAPhase) every stage keeps going unless it says `--halts`, as a stage the later ones need does (a
+// setup, a build): a QA phase runs every stage, to collect every red at once. A failed stage whose rerun
+// cannot run only what failed in it says why (Stage.Unnarrowed).
 //
 // The environment. A gate's command gets, besides the lane's (Pool.env, which strips every BATON_ variable
-// it inherits), EnvJob (the job's id), EnvStages (this job's stages file) and, on a rerun of a red gate,
-// EnvRerun (the record of the red gate it reruns: a stages file, in which a stage names the job its record
-// comes from, Stage.From, when that is not the file's own). A stage narrowed to what failed in the red
-// gate also gets EnvFailed (a file of the ids, one a line) and EnvFailedRE (FailedRE of them); when its
-// record says which runner named them (Stage.Runner), that runner's own narrowing too (Preset.Narrow: go's
-// GOFLAGS, pytest's PYTEST_ADDOPTS) and EnvFailedArgs, the runner's own arguments for only those tests
-// (Preset.Args), which a command that runs the runner passes on: vitest, jest and Playwright read no variable
-// that selects tests, so `playwright test $BATON_FAILED_ARGS` is how a stage of theirs runs fewer.
+// it inherits), EnvJob (the job's id), EnvStages (this job's stages file), EnvQAPhase in a QA phase's gate
+// (Job.QAPhase) and, on a rerun of a red gate, EnvRerun (the record of the red gate it reruns: a stages
+// file, in which a stage names the job its record comes from, Stage.From, when that is not the file's
+// own). A stage narrowed to what failed in the red gate also gets EnvFailed (a file of the ids, one a line)
+// and EnvFailedRE (FailedRE of them); when its record says which runner named them (Stage.Runner), that
+// runner's own narrowing too (Preset.Narrow: go's GOFLAGS, pytest's PYTEST_ADDOPTS) and EnvFailedArgs, the
+// runner's own arguments for only those tests (Preset.Args), which a command that runs the runner passes
+// on: vitest, jest and Playwright read no variable that selects tests, so `playwright test
+// $BATON_FAILED_ARGS` is how a stage of theirs runs fewer.
 
 // Environment variables of the gate protocol.
 const (
@@ -56,6 +64,9 @@ const (
 	EnvFailedRE = "BATON_FAILED_RE"
 	// EnvFailedArgs is the runner's own arguments for only the tests a narrowed stage failed in (Preset.Args).
 	EnvFailedArgs = "BATON_FAILED_ARGS"
+	// EnvQAPhase is "1" in the gate of a QA phase (Job.QAPhase), where every stage keeps going unless it
+	// says --halts.
+	EnvQAPhase = "BATON_QA_PHASE"
 )
 
 // How a stage ended. A carried stage is one a rerun did not run again, as it passed in the red gate the
@@ -173,8 +184,13 @@ type Stage struct {
 	// Failures are the ids of what failed in the stage (its fail lines, or its runner's own lines), at most
 	// MaxFailures: what a rerun of it narrows to.
 	Failures []string `json:"failures,omitempty"`
-	// KeepGoing: the stage was run with --keep-going, so its failure does not stop the stages after it.
+	// KeepGoing: the stage was run with --keep-going, or in a QA phase's gate without --halts, so its
+	// failure does not stop the stages after it.
 	KeepGoing bool `json:"keep_going,omitempty"`
+	// Unnarrowed is why a rerun of the failed stage runs it whole, Failures being none
+	// (UnnarrowedNoIDs, UnnarrowedMany, UnnarrowedWhole, UnnarrowedRunners); "" for a stage that passed, or
+	// whose failures a rerun narrows to.
+	Unnarrowed string `json:"unnarrowed,omitempty"`
 	// From is a carried stage's: the red gate's job it passed in.
 	From string `json:"from,omitempty"`
 	// Runner is the runner whose own lines named every one of Failures (Preset.Name), "" for the ids of fail

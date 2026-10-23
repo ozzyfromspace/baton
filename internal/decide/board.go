@@ -40,7 +40,7 @@ type Stand struct {
 	Job   string    `json:"job,omitempty"`  // the job it waits on
 	Also  string    `json:"also,omitempty"` // the job of the other kind it waits on beside Job
 	// Waits are the phases it waits on; Why is what it needs of the human, or why it is held back, set
-	// aside, suspended or waits to land.
+	// aside, suspended or waits to land, or, ready, why no agent takes it up yet.
 	Waits []string `json:"waits,omitempty"`
 	Why   string   `json:"why,omitempty"`
 	// Idle: its agent's turn is over, and nothing runs for it.
@@ -153,6 +153,9 @@ func (s Stand) Board(now time.Time) string {
 	case StandHeld:
 		return words("held:", s.Why)
 	case StandReady:
+		if s.Why != "" {
+			return "ready: " + s.Why
+		}
 		return "ready"
 	case StandWaits:
 		return "waits on " + andList(s.Waits)
@@ -160,6 +163,15 @@ func (s Stand) Board(now time.Time) string {
 		return words("needs you:", s.Why)
 	}
 	return s.Kind
+}
+
+// SlotsAtWork is why a phase that could go ahead waits, every one of the n agent slots (workers, or what
+// workers: auto allows on this machine) having a phase agent at work: "all 6 agent slots at work".
+func SlotsAtWork(n int) string {
+	if n == 1 {
+		return "the one agent slot at work"
+	}
+	return fmt.Sprintf("all %d agent slots at work", n)
 }
 
 // How the lead session stands (LeadStand.Kind).

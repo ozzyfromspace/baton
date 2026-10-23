@@ -45,7 +45,7 @@ import (
 // with BATON_LANE (the lane's number), BATON_LANE_DIR, BATON_ROOT (the project's working tree) and
 // BATON_COMMIT set, the directory of the baton running the job first on the PATH, and every other GIT_*,
 // BATON_* and CLAUDE_* variable removed. A run also gets the job's variables of the gate protocol
-// (BATON_JOB, BATON_STAGES, BATON_RERUN), to pass on to the command.
+// (BATON_JOB, BATON_STAGES, BATON_RERUN, BATON_QA_PHASE), to pass on to the command.
 const Script = ".baton-lane"
 
 // MaxSlots is the most lanes a project may run at once.

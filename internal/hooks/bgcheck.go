@@ -49,7 +49,7 @@ func (h *handlers) backgroundCheck(c Context) (Result, bool) {
 		return Result{}, false
 	}
 	w := words(c, s)
-	s.Event("background_questioned", map[string]any{"phase": phase, "tool": tool, "command": clip(cmd, recordClip)})
+	s.Event("background_questioned", map[string]any{"phase": phase, "tool": tool, "command": recorded(raw)})
 	res := permission("deny", w.BackgroundCheck(clipWhat(cmd)))
 	res.Output["systemMessage"] = w.BackgroundCheckSaid(clipWhat(cmd))
 	return res, true
