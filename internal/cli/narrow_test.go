@@ -112,7 +112,7 @@ func TestANarrowedRerunIsRefused(t *testing.T) {
 		why               string
 	}{
 		{"a test left out", state.JobFailed, goRed, []string{"--", "go", "test", "-run", "^TestParse$", "./src"},
-			[]string{"not queued — `go test -run '^TestParse$' ./src` does not name TestLex, which failed in job j1, so it cannot stand in for j1: " +
+			[]string{"not queued — `" + lane.Join([]string{"go", "test", "-run", "^TestParse$", "./src"}) + "` does not name TestLex, which failed in job j1, so it cannot stand in for j1: " +
 				"a narrowed rerun names every test that failed, by its id, its test name or its file:line. This one does: " + offer + "."}, "a failure unnamed"},
 		{"a longer name", state.JobFailed, goRed, []string{"--", "go", "test", "-run", "TestParseAll|TestLex", "./src"},
 			[]string{"does not name TestParse, which failed in job j1"}, "a failure unnamed"},
