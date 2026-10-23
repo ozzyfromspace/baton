@@ -15,7 +15,7 @@ import (
 // lead's.
 
 // WorkerIntro opens the brief a worker starts from: what a worker is, and where it works (tree, on
-// branch, if any).
+// branch, if any). It never runs a git operation on branches: baton merges for it (sync.go).
 func WorkerIntro(title, file, phase, tree, branch string) string {
 	on := ""
 	if branch != "" {
@@ -23,8 +23,8 @@ func WorkerIntro(title, file, phase, tree, branch string) string {
 	}
 	return fmt.Sprintf("You are a worker for the plan %q (%s). baton works on the phases of the plan that can go ahead at the same time, each by an agent of its own: "+
 		"you work on %s alone, in a git worktree of your own (%s%s), while the lead session and any other workers work on other phases elsewhere. "+
-		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, never rebase, reset or push it, and merge into it only when baton asks you to: "+
-		"once you report %s done, baton lands it on the run's branch.", title, file, phase, tree, on, phase)
+		"Leave every other phase to them, and work only in this worktree. Commit your work on its branch, and never run git merge, rebase, reset or push on it: "+
+		"to bring work landed on the run's branch into yours, run baton sync; baton merges again as it lands your work on the run's branch, once you report %s done.", title, file, phase, tree, on, phase)
 }
 
 // WorkerTakesUp tells the agent briefed for phase that an agent before it worked on it, and ended before

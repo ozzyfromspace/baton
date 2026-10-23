@@ -55,6 +55,16 @@ type Input struct {
 	// Facts is the run's environment facts (Store.Facts: a worker's sub-run keeps none of its own); nil:
 	// the state's own.
 	Facts []state.Fact
+	// Merge is the merge in progress in a worker's worktree, which its brief opens with; nil for none.
+	Merge *MergeLeft
+}
+
+// MergeLeft is a merge in progress in a worker's worktree (gitx.Merging): baton merged the run's branch
+// into the phase's branch, as it landed it or for baton sync, and left it at its conflicts for the phase's
+// agent to finish. The agent it told may be one that has ended since.
+type MergeLeft struct {
+	Branch   string   // the run's branch it merges; "" when unknown
+	Unmerged []string // the paths still in conflict
 }
 
 // Write returns the brief.
@@ -96,6 +106,9 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "[baton] %s\n\n", decide.FreshStart(running))
 	default:
 		fmt.Fprintf(&b, "[baton] Claude Code compacted the context automatically, mid-phase. %s\n\n", running)
+	}
+	if m := in.Merge; m != nil && in.Kind == Worker {
+		fmt.Fprintf(&b, "%s\n\n", decide.MergeInProgressBrief(st.Current, m.Branch, m.Unmerged))
 	}
 
 	b.WriteString("Progress:\n")

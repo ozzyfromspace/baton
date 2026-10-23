@@ -875,6 +875,9 @@ func cmdDone(args []string, io IO) int {
 	if ps := cur.Phases[id]; s.Worker() == "" && ps != nil && ps.Status == state.PhaseWorking {
 		return doneLanded(io, s, pl, cur, id, p.vals["notes"], followed)
 	}
+	if code, on := concludeMerge(io, s, "done", id); !on { // a phase agent's merge in progress (mergedone.go)
+		return code
+	}
 	work := checkWork(s, id)
 	keep := strings.TrimSpace(p.vals["keep-dirty"])
 	if len(work.fresh) > 0 && keep == "" {
