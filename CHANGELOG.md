@@ -4,6 +4,66 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.16] - 2026-10-23
+
+A real run on v0.8.14, started before its human went to sleep, lost 4h50m on one phase agent's merge, and every
+phase left waited behind it. The agent's landing conflicted in two files: baton aborted its own merge and told the
+agent to merge the run's branch itself, and Claude Code's auto mode refused that `git merge` twice. The agent
+blocked, and every 30 minutes its question told the human that the rest of the run went on, while nothing else
+could move. Once the human answered, the run stalled again: a newer baton installed meanwhile held every new phase
+agent until the lead restarted, and the lead, waiting on that phase, never reached a point where it would. So baton
+now runs every merge itself, leaving one that conflicts in the agent's worktree for it to resolve and commit; a
+block question says when the whole run waits; and a newer baton never holds a run. The evidence is in
+[`docs/research/visible-workers.md`](docs/research/visible-workers.md) ("Why baton runs the merge").
+
+A session on v0.8.x moves to v0.8.16 by itself at its next restart point. A plan already running when you update
+still restarts by its own release's rules, so one whose lead holds no phase while a new phase agent is due can wait
+for you: update between runs, or restart that session yourself (`/exit`, then `baton --resume <session id>`).
+
+### Added
+
+- **`baton sync`.** A phase agent that needs work already landed on the run's branch runs `baton sync`: baton
+  merges the run's branch into the agent's branch, in its worktree, and says what came in (the commits, the phases
+  whose landings brought them, the files) or that the branch has it all already. A conflict is left in progress
+  for the agent, as at a landing. It is refused over uncommitted changes to tracked files (commit them first, by
+  path), while a `--here` gate runs in the worktree, and to the lead, whose checkout is the run's branch. Each sync
+  is logged (`synced`) and told in your session.
+- **`baton done` commits a resolved merge.** A phase agent's `baton done` over a merge in progress in its worktree
+  commits it once every file is resolved and added and no conflict marker is staged (`merge_concluded`, told in
+  your session), and is refused otherwise, naming the files still in conflict and the three steps to finish,
+  whatever `--keep-dirty` says.
+- **A fresh agent hears of the merge in its worktree first.** An agent started on a phase whose worktree holds a
+  merge in progress (its agent before it checkpointed, say) opens its brief with that merge and how to finish it,
+  since the message about it may have gone to the agent it replaced.
+
+### Changed
+
+- **baton runs every merge itself.** A landing whose merge of the run's branch into a phase's branch stops on
+  conflicts now leaves that merge in progress in the agent's worktree, with git's markers in the files, instead of
+  aborting it and asking the agent to merge. The agent is told the files, with the commits that changed each and
+  the phases that landed them, to resolve each, `git add` it and `git commit --no-edit`, and never to run `git
+  merge`, `rebase`, `reset` or `merge --abort` (`land_returned` gains `kept`). No model is asked to start a merge
+  any more: the worker's brief says never to run git merge, rebase, reset or push on its branch, and to run `baton
+  sync` for work already landed; a landing baton could not merge for another reason asks the agent to commit what
+  is uncommitted, by path, and run `baton done` again. Nothing can be lost: baton merges only on a worktree with no
+  uncommitted change to a tracked file, so an abort would give back everything exactly; a merge that stops for
+  another reason (a merge commit that cannot be signed) is still aborted; and baton never aborts one once a model
+  may have resolved files.
+- **A phase done before its merge is committed goes back to its agent,** told which files still conflict, or that
+  only the commit is left (`land_returned` with why `its merge is not finished`). It counts as no new conflict, and
+  nothing the agent resolved is undone.
+- **A block question says when the whole run waits.** A phase agent's block question said "the rest of the run goes
+  on" whatever the run did. When nothing else can move, it now says so and names the phases behind it: "Nothing else
+  in the run can move until it is cleared: P7 and P8 wait on P6." `relay_asked` and `relay_issued` log `run_waits`.
+
+### Fixed
+
+- **A newer baton never holds a run.** After an update, a running plan's lead restarted only at a compaction baton
+  was about to type, and new phase agents were held until then, so a lead holding no phase, waiting on a phase
+  whose fresh agent was held, never got there. Now a lead with no phase in hand restarts as soon as it is idle with
+  no phase agent at work (`restarting` with `why: idle, waiting on agents`), the restarted host starts the agents
+  that were due, and new agents wait for a restart only while the lead holds a phase or owes a compaction.
+
 ## [0.8.15] - 2026-10-23
 
 A real 58-phase run on v0.8.14 left its human waiting on baton in four ways. A QA gate's 64-file browser stage,
@@ -1693,7 +1753,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.15...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.16...HEAD
+[0.8.16]: https://github.com/ozzyfromspace/baton/compare/v0.8.15...v0.8.16
 [0.8.15]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...v0.8.15
 [0.8.14]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...v0.8.14
 [0.8.13]: https://github.com/ozzyfromspace/baton/compare/v0.8.12...v0.8.13

@@ -50,7 +50,13 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
   swept as the host starts. A run follows its conversation through `--resume` and `/clear`.
 - **Handing a session over.** `/baton start` records the session. Once its turn ends, the plugin's Stop hook ends
   claude, and the `baton init` shell hook relaunches the same conversation under baton. A host that finds a newer
-  compatible baton installed restarts its session on it in place, resuming the same conversation.
+  compatible baton installed restarts its session on it in place, resuming the same conversation. While a plan runs
+  it restarts only with no phase agent at work, since a restart ends every agent in its claude: at a compaction
+  baton is about to type, or, when the lead holds no phase and so has none coming, as soon as the lead is idle
+  (v0.8.16). New agents wait for the restart only while the lead can reach one by itself (it holds a phase, or a
+  compaction is owed); otherwise they start, and the restart waits for them. In a real run on v0.8.14 the newer
+  baton held every new agent while the idle lead waited on a phase whose fresh agent was held, and nothing moved
+  until the human came back.
 - **The skill** is a stub that loads its instructions from the binary (`baton skill`), so they always match the baton
   that carries them out.
 - **`baton watch`** is a live view for a second terminal: every live run of the project, its phases as the board
@@ -638,15 +644,24 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   words (the lead holds it, or its agent is at work), the human is told once a plan, announced and pushed, that a
   review of theirs now reaches the QA phase in time, through `@<its id>` or phases they add, and that nothing waits
   on them (`state.ReviewReady`, `decide.ReviewReady`, `review_ready`, `Runtime.Review`).
-- **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, it is merged into the phase's
-  branch in its worktree, and a conflict goes back to its agent, which merges and resolves it itself. Under each
-  conflicting path, the agent is told the commits that changed it on the run's branch since the merge base, with
-  the phase that landed each (at most 5 a path; `gitx.LogPaths`, read before the lock), so it knows whose changes
-  it merges. The lead's standing words say never to ask the human to carry words between sessions
-  (`decide.NoCourier`): an agent gets baton's messages and does its own merges. Nothing baton
-  runs, or asks an agent to run, rewrites a commit: a rebase can drop a resolved conflict without a word, and Claude
-  Code's auto mode may refuse one as destructive. A merge starts only on a worktree with nothing uncommitted, and one
-  that stops is aborted, leaving everything as it was. The phase is verified again if the run's branch moved (at most
+- **Landing.** A finished phase joins the merge queue. If the run's branch has moved on, baton merges it into the
+  phase's branch in its worktree. baton runs every merge itself, and a model only resolves files, adds them and
+  commits (v0.8.16): in a real run, Claude Code's auto mode refused an agent's own `git merge` of the run's branch
+  twice, and every phase left waited 4h50m. A merge that stops on conflicts is left in progress in the worktree,
+  with git's markers in the files, and the phase goes back to its agent, told to resolve each file, add it and
+  commit the merge, and never to run `git merge`, `rebase`, `reset` or `merge --abort`. Under each conflicting
+  path, the agent is told the commits that changed it on the run's branch since the merge base, with the phase that
+  landed each (at most 5 a path; `gitx.LogPaths`, read before the lock), so it knows whose changes it meets. The
+  agent's `baton done` commits a merge it finished resolving, and is refused while a path is unmerged or a conflict
+  marker is staged; a phase that reaches its landing with the merge still in progress goes back to its agent, and
+  counts as no new conflict. An agent that needs work landed on the run's branch before its own lands runs `baton
+  sync`, the same merge on its say-so, and a fresh agent in a worktree with a merge in progress is told of it
+  first. The lead's standing words say never to ask the human to carry words between sessions
+  (`decide.NoCourier`): an agent gets baton's messages itself. Nothing baton runs, or asks an agent to run,
+  rewrites a commit: a rebase can drop a resolved conflict without a word. A merge starts only on a worktree with
+  no uncommitted change to a tracked file, so `git merge --abort` would give back everything exactly; one that
+  stops for a reason other than conflicts (a merge commit that cannot be signed) is aborted, and baton never aborts
+  one a model may have resolved files of. The phase is verified again if the run's branch moved (at most
   once for the checkout's own commits), unless nothing that came since shares a file with it and a QA phase ahead
   will check them together ([Gates](#landings-verified-again-sized-to-the-change)). Then the run's branch is fast-forwarded to it with `git merge --ff-only`
   between the lead's tool calls, never over a file the lead has uncommitted. The lead is told what moved, and never
@@ -757,7 +772,10 @@ interface had made *notify* and *halt* the same operation.
   hook reports a dismissal; only while baton's question, in exactly the shape baton issued, is the only dialog open.
 - **A phase agent's question** is asked by the mod in the lead's terminal, without stopping the lead's turn, and the
   answer goes to the agent as a message. A phase agent's block stops only its phase, and looks again after 30
-  minutes as the lead's does (its question's default is Look again).
+  minutes as the lead's does (its question's default is Look again). Its question says what the rest of the run
+  does meanwhile: that it goes on, or, when nothing else can move, that the whole run waits until it is cleared,
+  naming the phases behind it (v0.8.16). In a real run a block's questions told a sleeping human for nearly five
+  hours that the rest of the run went on, while every phase left waited on it.
 - **Durability.** `blocked` and `done` refuse fresh uncommitted work unless the model says why. Whenever the run
   halts, the host also snapshots that work into `refs/baton/snapshots/`: staged, unstaged and new files, leaving the
   working tree, the index, `HEAD` and gpg untouched.

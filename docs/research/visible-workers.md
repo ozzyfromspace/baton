@@ -11,7 +11,9 @@ stays in the box; in auto mode agents' reports come back as peer prompts, which 
 taught that nothing may wait on a phase agent's compaction: a sub-run never owes one, so an agent's red gate goes
 back to it; agents start 2 minutes apart, their `--here` gates take lane slots, and a run that stops moving tells the
 human (v0.8.2). A compaction Claude Code refuses while the lead's turn ends is run from the mod's `turn.complete`
-hook (v0.8.5). Workflows were ruled out: a workflow agent cannot wait.
+hook (v0.8.5). Workflows were ruled out: a workflow agent cannot wait. Since v0.8.16 baton runs every merge itself:
+a landing's merge that conflicts is left in progress in the agent's worktree for it to resolve and commit, since auto
+mode refused a real run's agent its own `git merge` twice, and every phase left waited 4h50m.
 
 Measured 2026-10-12 against **Claude Code 2.1.296** (macOS, arm64) with Haiku, from Claude Code's documentation and
 two spikes: [`spikes/31-mod-agents`](../../spikes/31-mod-agents) (can a mod drive phase agents at all; eight
@@ -199,6 +201,48 @@ and `git merge --abort` gives back the branch, index and files exactly; an untra
 refuse before it changes anything; `merge --abort` cannot always give back an uncommitted change to a tracked file,
 so baton merges only on a worktree with none. So baton merges the run's branch into a phase's branch, never rebases
 it, and a conflict goes back to the agent as a merge.
+
+## Why baton runs the merge (v0.8.16)
+
+A real run on v0.8.14 (2026-10-23, phase agents in auto mode, the human asleep) lost 4h50m to one agent's merge, and
+every phase left waited behind it:
+
+- **05:23:** the agent proposed merging the run's branch into its own, to pick up work another phase had landed.
+  `decide.Outward` counts "merge" as outward, so the proposal's deadline answered Not now, and its brief said to
+  merge only when baton asked.
+- **05:35:** its landing conflicted in two files. baton's merge was aborted, as v0.8.1 had it, and the agent was told
+  to run `git merge <run branch>` itself.
+- **Claude Code's auto-mode classifier refused that twice:** as "[Modify Shared Resources]", then the retry as
+  "[Auto-Mode Bypass]". It misread the direction: the merge changes only the agent's own branch.
+- **05:36 to 10:27:** the agent blocked. The block lapsed every 30 minutes and came back each time, and every
+  question told the human that only that phase waited, while nothing else in the run could move.
+- **10:27:** the human, just awake, answered Continue with no context, and with that answer in the agent's context
+  the classifier let the same command through.
+
+It is the second refusal of its kind, after v0.6's `git rebase` (above). The classifier judges a command by its
+context, reviews every command a model runs, and changes between releases; baton cannot know in advance what it
+will refuse, and must not work around it. What baton can do is not ask. A merge of the run's branch into a phase's
+branch is baton's own landing step, which its host already ran for every clean landing. So since v0.8.16 baton runs
+every merge, and a model only resolves files, `git add`s them and commits:
+
+- A landing's merge that stops on conflicts is left in progress in the agent's worktree (`MERGE_HEAD`, and git's
+  markers in the files) instead of aborted. The agent resolves each file, adds it and runs `git commit --no-edit`,
+  or `baton done`, which commits the merge once nothing is unmerged and no conflict marker is staged.
+- An agent that needs another phase's landed work first runs `baton sync`, the same merge on its say-so.
+- Every word to an agent says never to run `git merge`, `rebase`, `reset` or `merge --abort`, and none asks it to.
+
+Nothing can be lost by leaving the merge to the agent:
+
+- baton starts a merge only on a worktree with no uncommitted change to a tracked file, and git refuses before
+  changing anything when an untracked file is in the way. So a merge in progress holds nothing but the merge, and
+  `git merge --abort` would give back the branch, index and files exactly.
+- baton never runs that abort once a model may have resolved files, which would throw the resolution away. A merge
+  that stops for another reason (a merge commit that cannot be signed) stops before any model sees it, and is
+  aborted as before.
+- A phase reported done with its merge unfinished goes back to its agent, never landed half done. A fresh agent is
+  told of the merge in its worktree first, since the message about it may have gone to the agent it replaced.
+- The merge commit keeps both parents: the agent's commits stay as they were, and the run's branch only
+  fast-forwards to it.
 
 ## What spike 35 found (v0.8.2)
 
