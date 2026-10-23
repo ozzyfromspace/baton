@@ -101,6 +101,12 @@ type Runtime struct {
 	// Serial is why the host that decided it runs the plan's phases one at a time in the lead: baton's mod
 	// did not say hello in its claude, or is another baton's (loop/mod.go). Another host decides afresh.
 	Serial *Serial `json:"serial,omitempty"`
+	// Fleet is the host instance that runs phase agents beside the lead (loop's Coordinator.Fleet), "" when
+	// its host runs none: the run's QA phases go to its agents (HasAgents). Each host records its own.
+	Fleet string `json:"fleet,omitempty"`
+	// Review is when the human was told that every phase but the QA phases was done (ReviewReady), once
+	// a plan.
+	Review *ReviewTold `json:"review,omitempty"`
 	// Proven is where the lead's transcript stood when baton last knew of every compaction in it: a compact
 	// boundary past it is a compaction baton has not counted yet (Boundary). nil until a hook of the lead's
 	// own marks it (Remark).

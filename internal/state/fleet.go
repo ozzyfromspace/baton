@@ -231,7 +231,7 @@ func AttachWorker(prev State, phase string) State {
 // dependencies are all done, other than the lead's. The lead's is the phase in hand or, when it holds
 // none, the one it takes up next (Next). A parked phase is never a worker's: it was started in the
 // lead's checkout. Nor is one whose id a worker of a replaced plan still holds (retired). "" when there
-// is none.
+// is none. A QA phase the lead passes over (forAgent) is a worker's, even as the plan's last phase.
 func NextWorker(st State, p plan.Plan) string {
 	lead := st.Current
 	if lead == "" {
@@ -596,7 +596,8 @@ func (st State) landed(phase string) bool {
 
 // takeUp gives the lead the next phase when the plan runs and the lead holds none. The phase starts after
 // a boundary compaction this queues, since the lead may be idle and no stop of its own would queue it.
-// With nothing left to do, the run is complete. It returns the phase taken up ("" for none).
+// With nothing left to do, the run is complete. It returns the phase taken up ("" for none): never a QA
+// phase a phase agent is to take (Next), which leaves the lead idle.
 func takeUp(st *State, p plan.Plan, now time.Time) string {
 	if st.Mode != ModeRunning || st.Current != "" {
 		return ""

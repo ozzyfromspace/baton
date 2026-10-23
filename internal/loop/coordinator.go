@@ -24,9 +24,10 @@ type Lanes interface {
 // lead's tick (Tick), and what belongs to the run as a whole. After the lead's Loop, the coordinator does
 // the run's own duties: the lanes every session shares are swept once, and brought down once the run's plan
 // is complete (a worker's sub-run completing is only its phase done), the run's phase agents are started,
-// watched and ended (fleet.go), each with a loop of its own (Agent), and a run that stops moving is told to
-// the human (stall.go). A panic in one part of the tick leaves the others going. With no workers it is the
-// lead's Loop alone, and the stall alarm.
+// watched and ended (fleet.go), each with a loop of its own (Agent), a run that stops moving is told to
+// the human (stall.go), and so is a plan ready for their review before its QA phases end (review.go). A
+// panic in one part of the tick leaves the others going. With no workers it is the lead's Loop alone, the
+// stall alarm and the review notice.
 type Coordinator struct {
 	Lead  *Loop
 	Lanes Lanes  // the project's lanes (nil: none)
@@ -105,6 +106,9 @@ type Coordinator struct {
 	logs    map[string]logSeen
 	// lookAt is when the lead's tick last looked for look-ins at the run's gates and landings (lookin.go).
 	lookAt time.Time
+	// reviewAt is when the lead's tick last looked at whether the plan is ready for the human's review
+	// (review.go).
+	reviewAt time.Time
 
 	rec recorder // the record step's (record.go)
 	adv advising // the advisor's calls, in memory (advisor.go)
@@ -144,8 +148,10 @@ func (c *Coordinator) duties(v host.View) {
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeDue(v, st))
 	c.records(v, s, st)
 	c.lanes(s, st)
+	c.fleetOn(s, st) // the run's QA phases go to its agents (review.go)
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
+	c.reviewReady(v.Now, s, st)
 	c.lookIns(v, s, st)
 	c.riskLedger(v, s, st)
 }
