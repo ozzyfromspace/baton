@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -19,9 +20,13 @@ import (
 // landed. Then, one step at a time and once its session is idle:
 //
 //  1. if the run's branch moved on, it is merged into the worker's branch, in its worktree (gitx.Merge).
-//     A merge that stops is aborted, and the phase goes back to the worker, which merges it in itself
-//     (state.Reopen). Nothing baton runs, or asks a worker to run, rewrites a commit: a rebase drops a
-//     merge commit, and with it a conflict the worker resolved;
+//     A merge that stops on conflicts is left in progress there, and the phase goes back to the worker
+//     (state.Reopen), which resolves the files and commits the merge: no model runs git merge itself,
+//     which auto mode may refuse. A phase done again with that merge still in progress goes back to it
+//     again (unfinished.go). A merge that stops for another reason is aborted, and the phase goes back
+//     the same way. Nothing baton runs, or asks a worker to run, rewrites a commit or undoes a merge a
+//     worker may have resolved files of: a rebase drops a merge commit, and with it a conflict the worker
+//     resolved;
 //  2. if the run's branch has commits the one its verification passed on lacks, the phase is verified
 //     again on the merged commit (state.Reverify): red takes it up again in the worker. Each landing is
 //     verified against the others: a commit a worker landed (of this run or another in the checkout)
@@ -63,6 +68,8 @@ type landGit interface {
 	MergeBase(ctx context.Context, root, a, b string) (string, error)
 	ChangedBetween(ctx context.Context, root, base, to string) ([]string, error)
 	LogPaths(ctx context.Context, root, from, to string, paths []string) (map[string][]gitx.Commit, error)
+	Merging(ctx context.Context, dir string) bool
+	Unmerged(ctx context.Context, dir string) ([]string, error)
 }
 
 type realGit struct{}
@@ -215,6 +222,9 @@ func (c *Coordinator) land(now time.Time, s *state.Store, st state.State, w *wor
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
+	if g.Merging(ctx, e.Worktree) {
+		return c.unfinished(ctx, now, s, w, e)
+	}
 	onto := g.RevParse(s.Checkout, "refs/heads/"+st.RunBranch)
 	tip := g.RevParse(s.Checkout, "refs/heads/"+e.Branch)
 	if onto == "" || tip == "" {
@@ -290,7 +300,8 @@ type unverified struct {
 }
 
 // mergeIn merges the run's branch, at onto, into worker e's branch, at tip. A merge that does not go
-// through hands the phase back to the worker.
+// through hands the phase back to the worker; one that stopped on conflicts is left in progress for it
+// (kept).
 func (c *Coordinator) mergeIn(now time.Time, s *state.Store, st state.State, w *worker, e state.Worker, onto, tip string) bool {
 	g := c.Fleet.gitx()
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
@@ -311,7 +322,11 @@ func (c *Coordinator) mergeIn(now time.Time, s *state.Store, st state.State, w *
 			c.deferLanding(now, s, e, "baton could not hand its phase back: "+err.Error(), nil, failedRetry)
 			return false
 		}
-		c.returned(now, s, e, why, re.Paths)
+		var more map[string]any
+		if re.Kept {
+			more = map[string]any{"kept": true}
+		}
+		c.handedBack(now, s, e, why, re.Paths, more)
 		return true
 	}
 	merged := g.RevParse(s.Checkout, "refs/heads/"+e.Branch)
@@ -604,6 +619,11 @@ func filesLine(files []string) string {
 // longer queued, and joins the queue again once its `baton done` completes it again. A conflict counts
 // toward the landings in a row that conflicted (State.Conflicts), which hold new workers back.
 func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, why string, paths []string) {
+	c.handedBack(now, s, e, why, paths, nil)
+}
+
+// handedBack is returned, with more fields for its event.
+func (c *Coordinator) handedBack(now time.Time, s *state.Store, e state.Worker, why string, paths []string, more map[string]any) {
 	s.Update(func(st *state.State) error {
 		if x := st.Entry(e); x != nil {
 			x.Status, x.Since, x.Merge = state.WorkerWorking, now, nil
@@ -618,6 +638,7 @@ func (c *Coordinator) returned(now time.Time, s *state.Store, e state.Worker, wh
 	if len(paths) > 0 {
 		fields["paths"] = paths
 	}
+	maps.Copy(fields, more)
 	s.Event("land_returned", fields)
 	c.conflicted(now, s, e.Phase, paths)
 	c.announce(s, fmt.Sprintf("baton: %s's work did not land: %s → its worker takes it up again", e.Phase, why))
