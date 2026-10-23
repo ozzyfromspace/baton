@@ -124,6 +124,13 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 		qaAsked, said = asked.qaAsked, asked.said(phase, command, why)
 	}
+	if kind == state.JobVerify && re != nil {
+		asked = re.questionWhole(io, s, st, phase, commit)
+		if len(asked.questions) > 0 && why == "" {
+			return asked.refuseWhole(io, s, phase, command, commit)
+		}
+		said = asked.said(phase, command, why)
+	}
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var queued state.Job
 	var replaced, clash, beside, red *state.Job

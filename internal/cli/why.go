@@ -39,9 +39,12 @@ type gateSaid struct {
 
 // said is what the human is told of gate command, queued for phase with why (--why, "" for none) once
 // baton's questions about it are asked: the reason, with --why, for every kind of question; for a long
-// repeat queued again without one, that it ran unexplained, which its result opens with too.
+// repeat, or a rerun of a long red stage whole (wholeSaid), queued again without one, that it ran
+// unexplained, which its result opens with too.
 func (a gateAsk) said(phase, command, why string) gateSaid {
 	switch {
+	case len(a.whole) > 0:
+		return a.wholeSaid(phase, why)
 	case why != "" && a.repeat:
 		return gateSaid{decide.RepeatSaid(phase, a.took, a.cost, why), "gate_repeated"}
 	case why != "" && len(a.applies) > 0:
@@ -63,6 +66,7 @@ func (g gateSaid) logged(s *state.Store, a gateAsk, job state.Job) {
 	if job.Why != "" {
 		ev["why"] = job.Why
 	}
+	a.wholeEvent(ev)
 	s.Event(g.event, ev)
 }
 
