@@ -15,6 +15,11 @@ import (
 // right after who it is: the message that told of it may have gone to the agent before it.
 func TestAFreshAgentIsBriefedOnTheMergeLeftInItsWorktree(t *testing.T) {
 	w, lead, tree := newWorker(t)
+	// git merge wants an identity before it starts, which the throwaway configuration does not have: macOS
+	// makes one up from the machine, Linux and Windows refuse.
+	for k, v := range map[string]string{"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid", "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid"} {
+		t.Setenv(k, v)
+	}
 	gittest.Write(t, tree, "a.txt", "a\n")
 	gittest.Commit(t, tree, "base")
 	gittest.Git(t, tree, "checkout", "-q", "-b", "main")
