@@ -573,10 +573,15 @@ type Settled struct {
 	Verdicts []Verdict
 	Taken    string // the phase the run took up, now that one can start ("" for none)
 	Complete bool   // the run is complete now
+	// Confirms are the confirmation runs queued for QA phases whose reruns passed (confirmDue): each phase
+	// verifies on its own, with no verdict yet.
+	Confirms []Job
 }
 
 // Changed reports whether Settle changed anything.
-func (s Settled) Changed() bool { return len(s.Verdicts) > 0 || s.Taken != "" || s.Complete }
+func (s Settled) Changed() bool {
+	return len(s.Verdicts) > 0 || s.Taken != "" || s.Complete || len(s.Confirms) > 0
+}
 
 // Unsettled reports a run that Settle would move: a phase verifying on jobs it waits on no more (HeldOn),
 // or, with no phase in hand, a parked phase that can be taken up again or no job left to wait for.
@@ -601,7 +606,9 @@ func Unsettled(st State) bool {
 // jobs all passed is done; on the first that failed or ran out of time it reopens, parked as red, and on
 // one that ended without a verdict (it could not run, or was interrupted) it reopens as unverified, even
 // while its other job runs on. Either comes back before any phase not started yet (Next). With no phase in
-// hand, the run then takes up the next one that can start, after a compaction, or is complete.
+// hand, the run then takes up the next one that can start, after a compaction, or is complete. A QA phase
+// whose done owed a full run once the rerun it verified on passed verifies on that run instead (confirmDue,
+// Confirms).
 //
 // The result of a verification that passed needs no telling, unless it completed the run: then it is how
 // the model hears that the plan is complete (Due).
@@ -619,6 +626,10 @@ func Settle(st *State, p plan.Plan, now time.Time) Settled {
 		}
 		switch {
 		case j != nil && j.Status == JobPassed:
+			if q, ok := confirmDue(st, ph.ID, v.Jobs, now); ok {
+				out.Confirms = append(out.Confirms, q)
+				continue
+			}
 			ps.Status, ps.DoneAt, ps.On = PhaseDone, now, nil
 		default:
 			v.Park = ParkUnverified

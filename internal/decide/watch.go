@@ -247,6 +247,8 @@ func WatchEvent(kind string, f map[string]any) string {
 		return ph + " queued to land"
 	case "reverify_queued":
 		return ph + " verifying again before it lands (job " + job + ")"
+	case "qa_confirm_queued":
+		return ph + " verifying with one full run (job " + job + ")"
 	case "reverify_skipped":
 		return ph + " lands without verifying again: " + field(f, "qa") + " checks it"
 	case "merged_in":

@@ -237,6 +237,7 @@ func (l *Loop) settle(v host.View, st state.State) state.State {
 				says = append(says, verdictLine(vd))
 			}
 		}
+		says = append(says, confirmLines(*st, out)...)
 		if out.Taken != "" && !agent {
 			st.Run.Compaction.Queue("boundary", v.Now)
 			epoch = st.Run.Compaction.Epoch
@@ -260,6 +261,7 @@ func (l *Loop) settle(v host.View, st state.State) state.State {
 		}
 		l.Store.Event("phase_parked", map[string]any{"phase": vd.Phase, "reason": vd.Park, "job": vd.Job.ID, "status": vd.Job.Status})
 	}
+	l.confirmed(nst, out)
 	switch {
 	case retook != nil:
 		l.retook(*retook, "settle")

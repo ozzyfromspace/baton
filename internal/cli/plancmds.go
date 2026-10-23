@@ -884,6 +884,7 @@ func cmdDone(args []string, io IO) int {
 	if code, asked := askLeftovers(io, s, cur, id); asked {
 		return code
 	}
+	ca := askConfirm(s, cur, pl, id) // a QA phase's full run after its reruns (confirm.go): it reads git and logs
 	despite := decide.Sanitize(p.vals["despite-red"])
 	landCheck := landCheckOf(s, p.vals["land-check"])
 	deviation := decide.Sanitize(p.vals["deviation"])
@@ -930,6 +931,7 @@ func cmdDone(args []string, io IO) int {
 			note = &d
 			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "note", Text: d.What, At: io.Now()})
 		}
+		ca.queue(st, id, io.Now())
 		var err error
 		if next, err = state.Done(st, pl, id, io.Now(), state.DoneOpts{Force: p.bools["force"], DespiteRed: red}); err != nil {
 			return err
@@ -1011,6 +1013,7 @@ func cmdDone(args []string, io IO) int {
 		fmt.Fprintf(io.Out, "baton: %s made %d %s without the human (baton status lists them for the human, each with its undo):\n%s",
 			id, len(mine), plural(len(mine), "decision", "decisions"), decide.Listed(mine, 0))
 	}
+	ca.report(io, s, id)
 	finished := fmt.Sprintf("baton: %s done.", id)
 	if verifying {
 		finished = decide.FinishedVerifying(id, on)
