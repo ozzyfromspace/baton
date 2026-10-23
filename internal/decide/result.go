@@ -85,6 +85,9 @@ type Log struct {
 	// and FailedMore how many more; nil for any other job.
 	Failed     []lane.FailedTest
 	FailedMore int
+	// TimedOut are those of Failed whose times cluster at one long duration (lane.TimedOut): they waited
+	// out a timeout. nil for any other job.
+	TimedOut []lane.FailedTest
 	// Cost is what the job's phase has spent in gates so far (state.GateCost), for a gate.
 	Cost state.Cost
 }
@@ -104,6 +107,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	b.WriteString(rerunRan(j, log.Rerun))
 	b.WriteString(narrowedRan(j, qa))
 	b.WriteString(failedTests(j, log))
+	b.WriteString(timedOut(j, log))
 	if len(log.Failures) > 0 && j.Status != state.JobPassed {
 		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))
 		if log.More > 0 {
