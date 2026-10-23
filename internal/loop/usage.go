@@ -1,42 +1,71 @@
 package loop
 
 import (
-	"fmt"
 	"time"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
-// limitGrace is how long after the account's usage limit resets the run stays held: Claude Code resumes
-// each session by itself as the limit resets, and baton types nothing over that.
+// limitGrace is how long after the account's usage limit resets the run stays held. Nothing resumes a
+// stopped session by itself (docs/research/usage.md): once the hold ends, each loop's own retry
+// (watchError) does.
 const limitGrace = time.Minute
 
-// usage notices a session of the run whose last turn ended on the account's usage limit. Every session
-// of the run shares the account, so until the limit resets no worker starts, and nothing is typed into
-// any of them (gateUsage): each session's Claude Code waits for the reset by itself. The reset is the
-// five-hour window's when the status line has it used up; otherwise baton cannot tell when it is, and
-// looks again after Timing.RateLimitRetry, as for one session (watchError). A limit hit is recorded once
-// (state.Limit), and the workers' Loops read it from here.
+// usage notices a session of the run whose last turn ended on one of the account's usage limits. Every
+// session of the run shares the account, so until the limit resets no worker starts, and nothing is typed
+// into any of them (gateUsage). Which window it was, and when that resets, is the stop's own word from its
+// transcript, else a status line reading at the limit's line (state.LimitWindow); when neither says,
+// baton looks again after Timing.RateLimitRetry, as for one session (watchError). A limit hit is recorded
+// once (state.RecordLimit), and the workers' Loops read it from here. A session that got a reply since the
+// hit lifts the hold (state.LiftLimit). The coordinator's duties call it, so a run with no workers holds
+// too.
 func (c *Coordinator) usage(now time.Time, s *state.Store, st state.State) {
-	by, at := "lead", st.Run.LimitHit()
+	by, at, stop := "lead", st.Run.LimitHit(), st.Run.LastError
+	type session struct {
+		who string
+		run state.Runtime
+	}
+	runs := []session{{"lead", st.Run}}
 	for _, w := range c.launched() {
 		if sub, err := w.store.Load(); err == nil {
+			runs = append(runs, session{w.phase, sub.Run})
 			if hit := sub.Run.LimitHit(); hit.After(at) {
-				by, at = w.phase, hit
+				by, at, stop = w.phase, hit, sub.Run.LastError
 			}
 		}
 	}
-	if !at.IsZero() {
-		until, known := at.Add(c.Lead.Timing.RateLimitRetry), false
-		if u := st.Usage; u != nil && u.UsedPct >= 100 && u.Resets.After(at) {
-			until, known = u.Resets.Add(limitGrace), true
+	if !at.IsZero() && (st.Usage == nil || at.After(st.Usage.Hit)) {
+		window, resets := state.LimitWindow(stop, st.Usage, at)
+		until := at.Add(c.Lead.Timing.RateLimitRetry)
+		if !resets.IsZero() {
+			until = resets.Add(limitGrace)
 		}
 		hit := false
-		if next, err := s.Update(func(st *state.State) error { hit = state.Limit(st, by, at, until); return nil }); err == nil {
+		if next, err := s.Update(func(st *state.State) error {
+			hit = state.RecordLimit(st, by, at, until, window, resets)
+			return nil
+		}); err == nil {
 			st = next
 		}
 		if hit {
-			c.limitHit(s, st, by, until, known)
+			c.limitHit(now, s, st, by)
+		}
+	}
+	if u := st.Usage; u != nil && now.Before(u.Limited) {
+		for _, r := range runs {
+			if !r.run.RepliedSince(u.Hit) {
+				continue
+			}
+			lifted := false
+			if next, err := s.Update(func(st *state.State) error { lifted = state.LiftLimit(st, now); return nil }); err == nil {
+				st = next
+			}
+			if lifted {
+				s.Event("usage_lifted", map[string]any{"by": r.who, "hit": u.Hit.UTC().Format(time.RFC3339), "window": u.Window})
+				c.announce(s, decide.UsageLifted(whoHit(r.who)))
+			}
+			break
 		}
 	}
 	var until int64
@@ -46,23 +75,29 @@ func (c *Coordinator) usage(now time.Time, s *state.Store, st state.State) {
 	c.limited.Store(until)
 }
 
-// limitHit logs and announces the account's usage limit, hit by the session by, which holds the run until
-// until (known: the reset is the five-hour window's).
-func (c *Coordinator) limitHit(s *state.Store, st state.State, by string, until time.Time, known bool) {
-	fields := map[string]any{"by": by, "until": until.UTC().Format(time.RFC3339), "reset_known": known}
-	if u := st.Usage; u != nil && !u.At.IsZero() {
+// limitHit logs and announces the account's usage limit, recorded in st's Usage, hit by the session by.
+func (c *Coordinator) limitHit(now time.Time, s *state.Store, st state.State, by string) {
+	u := st.Usage
+	fields := map[string]any{"by": by, "until": u.Limited.UTC().Format(time.RFC3339), "reset_known": !u.WindowResets.IsZero(), "window": u.Window}
+	if !u.WindowResets.IsZero() {
+		fields["resets"] = u.WindowResets.UTC().Format(time.RFC3339)
+	}
+	if !u.At.IsZero() {
 		fields["used_pct"] = u.UsedPct
+		if !u.WeeklyResets.IsZero() {
+			fields["weekly_pct"] = u.WeeklyPct
+		}
 	}
 	s.Event("usage_limited", fields)
-	who := "the worker on " + by
+	c.announce(s, decide.UsageLimited(whoHit(by), u.Window, u.WindowResets, u.Limited, now))
+}
+
+// whoHit is the session by ("lead", or a worker's phase), as the human reads it.
+func whoHit(by string) string {
 	if by == "lead" {
-		who = "this session"
+		return "this session"
 	}
-	when := fmt.Sprintf("until %s, a minute after it resets: Claude Code resumes each session itself", until.Local().Format("15:04"))
-	if !known {
-		when = fmt.Sprintf("until %s: when it resets is unknown, so baton looks again then", until.Local().Format("15:04"))
-	}
-	c.announce(s, fmt.Sprintf("baton: %s hit the account's usage limit. No worker starts, and baton types nothing into the run's sessions, %s", who, when))
+	return "the worker on " + by
 }
 
 // runLimited is until when the run waits on the account's usage limit, as the coordinator's last step

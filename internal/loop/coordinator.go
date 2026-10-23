@@ -114,6 +114,7 @@ type Coordinator struct {
 	adv advising // the advisor's calls, in memory (advisor.go)
 
 	limited atomic.Int64 // until when the run waits on the account's usage limit, as the last step found it (Unix ns)
+	usageAt time.Time    // when the lead's tick last looked at the account's usage limit (usage.go)
 	// pending says a newer baton waits for the lead's restart, which ends the phase agents: no new one
 	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
 	// host ends, and so do the phase agents in it, which Ended suspends.
@@ -149,6 +150,11 @@ func (c *Coordinator) duties(v host.View) {
 	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleetOn(s, st) // the run's QA phases go to its agents (review.go)
+	// With workers or none, a run holds on the account's usage limit (usage.go).
+	if st.Mode != state.ModeIdle && v.Now.Sub(c.usageAt) >= fleetEvery {
+		c.usageAt = v.Now
+		c.usage(v.Now, s, st)
+	}
 	c.fleet(v, s, st)
 	c.stalls(v, s, st)
 	c.reviewReady(v.Now, s, st)

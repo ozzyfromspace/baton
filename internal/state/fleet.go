@@ -157,16 +157,23 @@ type Landing struct {
 // LandedByLead is Landing.By for work the lead recorded as landed.
 const LandedByLead = "lead"
 
-// Usage is how much of the account's five-hour allowance is used, as a session's status line last
-// reported it (At). Limited is set when the lead or a phase agent hit the limit (By: "lead", or a worker's
-// phase), at Hit: no worker starts, and nothing is typed into the lead, until then.
+// Usage is how much of the account's five-hour allowance (UsedPct, Resets) and weekly one (WeeklyPct,
+// WeeklyResets) is used, as the lead's status line last reported it (At). Limited is set when the lead or a
+// phase agent hit a limit (By: "lead", or a worker's phase), at Hit: no worker starts, and nothing is typed
+// into the run's sessions, until then. Window is the window that limit was, and WindowResets when it resets
+// (zero when unknown; LimitWindow).
 type Usage struct {
-	UsedPct float64   `json:"used_pct"`
-	Resets  time.Time `json:"resets_at,omitzero"`
-	At      time.Time `json:"at"`
-	Limited time.Time `json:"limited_until,omitzero"`
-	Hit     time.Time `json:"hit,omitzero"`
-	By      string    `json:"by,omitempty"`
+	UsedPct      float64   `json:"used_pct"`
+	Resets       time.Time `json:"resets_at,omitzero"`
+	WeeklyPct    float64   `json:"weekly_pct,omitempty"`
+	WeeklyResets time.Time `json:"weekly_resets_at,omitzero"`
+	At           time.Time `json:"at"`
+	Limited      time.Time `json:"limited_until,omitzero"`
+	Hit          time.Time `json:"hit,omitzero"`
+	By           string    `json:"by,omitempty"`
+	Window       string    `json:"window,omitempty"`
+	WindowResets time.Time `json:"window_resets_at,omitzero"`
+	Lifted       time.Time `json:"lifted,omitzero"`
 }
 
 // Hold is what holds back a phase that waits for a worker, since Since: no room for another session on

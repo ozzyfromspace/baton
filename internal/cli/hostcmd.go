@@ -517,13 +517,14 @@ func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, err
 // again only once it is that old.
 const usageFresh = 5 * time.Minute
 
-// recordUsage stores the account's five-hour usage Claude Code reports in the run's state (a worker's, in
-// the run it works for), where the run's host reads it: no new worker starts above worker_usage_max. A
-// reading is written when it changed, or once it is usageFresh old. It reports whether it wrote one.
+// recordUsage stores the account's five-hour and weekly usage Claude Code reports in the run's state (a
+// worker's, in the run it works for), where the run's host reads it: no new worker starts above
+// worker_usage_max, and a limit hit at a window's line is that window's (state.LimitWindow). A reading is
+// written when it changed, or once it is usageFresh old. It reports whether it wrote one.
 func recordUsage(s *state.Store, in statusline.Input, io IO) bool {
 	now := io.Now()
-	used, resets, ok := in.FiveHour(now)
-	if !ok {
+	r := in.Usage(now)
+	if r.Empty() {
 		return false
 	}
 	if s.Parent != "" {
@@ -534,18 +535,10 @@ func recordUsage(s *state.Store, in statusline.Input, io IO) bool {
 		s = up
 	}
 	st, err := s.Load()
-	if u := st.Usage; err != nil || u != nil && u.UsedPct == used && u.Resets.Equal(resets) && now.Sub(u.At) < usageFresh {
+	if u := st.Usage; err != nil || u != nil && r.Same(u) && now.Sub(u.At) < usageFresh {
 		return false
 	}
-	_, err = s.Update(func(st *state.State) error {
-		var u state.Usage
-		if st.Usage != nil {
-			u = *st.Usage
-		}
-		u.UsedPct, u.Resets, u.At = used, resets, now
-		st.Usage = &u
-		return nil
-	})
+	_, err = s.Update(func(st *state.State) error { state.SawUsage(st, r, now); return nil })
 	return err == nil
 }
 

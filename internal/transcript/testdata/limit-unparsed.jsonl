@@ -1,0 +1,2 @@
+{"parentUuid":"a0","isSidechain":false,"promptSource":"typed","type":"user","message":{"role":"user","content":"Go on with P3."},"uuid":"u1","timestamp":"2026-10-11T12:00:00.000Z"}
+{"parentUuid":"u1","isSidechain":false,"type":"assistant","uuid":"a1","timestamp":"2026-10-11T12:00:05.000Z","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Rate limit reached"}]}}

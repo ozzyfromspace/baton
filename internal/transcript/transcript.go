@@ -43,6 +43,9 @@ type Entry struct {
 	// Slug is the session's plan slug the entry was written under (Slug): its plan-mode file is
 	// <plansDirectory>/<slug>.md. "" on entries that carry none.
 	Slug string
+	// Limit is set on the entry Claude Code writes when a turn ends on one of the account's usage limits
+	// (LastLimit).
+	Limit *Limit
 }
 
 // Tool is a tool call the model made.
@@ -215,6 +218,8 @@ type line struct {
 	CompactMetadata   compactMetadata `json:"compactMetadata"`
 	Attachment        json.RawMessage `json:"attachment"`
 	Message           json.RawMessage `json:"message"`
+	Error             json.RawMessage `json:"error"`
+	QuotaLimits       json.RawMessage `json:"quotaLimits"`
 }
 
 // compactMetadata is the part of a compact boundary's compactMetadata baton reads.
@@ -274,6 +279,9 @@ func parse(raw []byte) (Entry, bool) {
 		if json.Unmarshal(l.Attachment, &a) == nil {
 			e.Attachment, e.HookEvent = a.Type, a.HookEvent
 		}
+	}
+	if l.Type == "assistant" {
+		e.Limit = limitOf(l)
 	}
 	if l.Type != "assistant" {
 		switch {
