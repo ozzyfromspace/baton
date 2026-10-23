@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/ozzyfromspace/baton/internal/lane"
 )
 
 // A rewind (Esc Esc, or /rewind) fires no hook, and leaves the session id and the transcript file as they
@@ -227,11 +229,12 @@ type Command struct {
 
 // batonCommands finds the baton commands in a Bash command line: each simple command whose program's base
 // name is baton (baton, ~/.baton/bin/v0.6.0/baton, baton.exe), after any VAR=value words. The line is read
-// as a shell would, just far enough for that: quotes and backslashes protect what they cover, and ;, &, |,
-// parentheses and newlines outside them separate commands.
+// as a shell would, just far enough for that (lane.Commands): quotes and backslashes protect what they
+// cover, ;, &, |, parentheses and newlines outside them separate commands, and a here-document's body (a
+// commit message, say) holds none.
 func batonCommands(line string) []Command {
 	var out []Command
-	for _, words := range simpleCommands(line) {
+	for _, words := range lane.Commands(line) {
 		for len(words) > 0 && assignment(words[0]) {
 			words = words[1:]
 		}
@@ -244,63 +247,6 @@ func batonCommands(line string) []Command {
 		}
 	}
 	return out
-}
-
-// simpleCommands splits a command line into its simple commands, each as its words with the quoting
-// taken off.
-func simpleCommands(line string) [][]string {
-	var cmds [][]string
-	var words []string
-	var word strings.Builder
-	inWord, single, double := false, false, false
-	endWord := func() {
-		if inWord {
-			words = append(words, word.String())
-		}
-		word.Reset()
-		inWord = false
-	}
-	endCommand := func() {
-		endWord()
-		if len(words) > 0 {
-			cmds = append(cmds, words)
-		}
-		words = nil
-	}
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case single:
-			if c == '\'' {
-				single = false
-			} else {
-				word.WriteByte(c)
-			}
-		case c == '\\' && i+1 < len(line) && (!double || strings.IndexByte("\"\\$`", line[i+1]) >= 0):
-			i++
-			word.WriteByte(line[i])
-			inWord = true
-		case double:
-			if c == '"' {
-				double = false
-			} else {
-				word.WriteByte(c)
-			}
-		case c == '\'':
-			single, inWord = true, true
-		case c == '"':
-			double, inWord = true, true
-		case c == ' ' || c == '\t':
-			endWord()
-		case strings.IndexByte(";&|()\n", c) >= 0:
-			endCommand()
-		default:
-			word.WriteByte(c)
-			inWord = true
-		}
-	}
-	endCommand()
-	return cmds
 }
 
 // assignment reports a VAR=value word, which sets the command's environment rather than naming it.
