@@ -34,6 +34,10 @@ type gateAsk struct {
 	repeat                 bool          // the gate repeats a long run of its command (GateRepeat), asked now or before
 	cost                   state.Cost    // the phase's gates so far, and its runs of the command
 	qaAsked                bool          // the QA question was put to this command on this commit, or is put now
+
+	// whole are a --failed rerun's long red stages that it runs whole (questionWhole), which took took
+	// together; job is the gate it reruns.
+	whole []state.WholeStage
 }
 
 // questionGate is what baton asks of gate command, about to be queued on commit for phase (qa: the --qa
@@ -84,6 +88,12 @@ func questionGate(io IO, s *state.Store, st state.State, pl plan.Plan, phase, co
 
 // refuse records the questions as asked and puts them to the model: the gate is not queued this time.
 func (a gateAsk) refuse(io IO, s *state.Store, phase, command, commit string) int {
+	a.markAsked(s, phase, command, commit)
+	return fail(io, "%s", decide.GateQuestioned(command, decide.GateLead(phase, a.took, a.cost), a.questions))
+}
+
+// markAsked records the questions as asked (Run.GatesQuestioned) and logs each (gate_questioned).
+func (a gateAsk) markAsked(s *state.Store, phase, command, commit string) {
 	s.Update(func(st *state.State) error {
 		for _, k := range a.keys {
 			if !slices.Contains(st.Run.GatesQuestioned, k) {
@@ -97,9 +107,9 @@ func (a gateAsk) refuse(io IO, s *state.Store, phase, command, commit string) in
 		if a.job != "" {
 			ev["job"] = a.job
 		}
+		a.wholeEvent(ev)
 		s.Event("gate_questioned", ev)
 	}
-	return fail(io, "%s", decide.GateQuestioned(command, decide.GateLead(phase, a.took, a.cost), a.questions))
 }
 
 // gateKey is a question's record in Run.GatesQuestioned: its kind, the command and the commit.

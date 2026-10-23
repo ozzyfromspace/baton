@@ -125,9 +125,10 @@ func launchable(st state.State, now time.Time) string {
 // next is the phase a new worker would take up ("" if none waits for one), and why none starts now ("" if
 // one does): the run must be running, with no replan open (nor one of baton's own due at the lead's phase
 // boundary under way), under Max workers of its plan, with a phase that can go ahead.
-// held names what holds a phase that waits back: no room on the machine (r.busy), gates waiting for lanes
-// (r.lanes), landings that keep conflicting, no room under worker_usage_max, or an agent that started
-// less than Ramp ago (state.HoldBusy, HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
+// held names what holds a phase that waits back: every agent slot at work (Max workers of the plan), no
+// room on the machine (r.busy), gates waiting for lanes (r.lanes), landings that keep conflicting, no
+// room under worker_usage_max, or an agent that started less than Ramp ago (state.HoldCap, HoldBusy,
+// HoldLanes, HoldConflicts, HoldUsage, HoldRamp); "" for none.
 func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase, why, held string) {
 	if why := launchable(st, now); why != "" {
 		return "", why, ""
@@ -141,15 +142,19 @@ func (f *Fleet) next(st state.State, pl plan.Plan, now time.Time, r room) (phase
 	if st.RunBranch == "" {
 		return "", "the plan was attached with no branch checked out", ""
 	}
+	phase = state.NextWorker(st, pl)
 	if n := planWorkers(st); n >= f.Max {
-		return "", fmt.Sprintf("%d of %d workers run already", n, f.Max), ""
+		if phase == "" {
+			return "", fmt.Sprintf("%d of %d workers run already", n, f.Max), ""
+		}
+		return phase, decide.SlotsAtWork(f.Max), state.HoldCap // every phase that can go ahead waits (board.pending)
 	}
-	if phase = state.NextWorker(st, pl); phase == "" {
+	if phase == "" {
 		return "", "no other phase can start", ""
 	}
 	u := st.Usage
 	switch {
-	case st.RiskHeld():
+	case st.RiskHeld() && !qaPhase(pl, phase): // a QA phase is the full check the hold waits for
 		return phase, decide.RiskHoldsAgents, state.HoldRisk // until the lead queues the full check (risk.go)
 	case r.busy != "":
 		return phase, r.busy, state.HoldBusy
@@ -178,13 +183,15 @@ func newestAgent(st state.State) (phase string, at time.Time) {
 	return phase, at
 }
 
-// planWorkers counts the live workers of the plan attached now: a worker of a replaced plan is on its
-// way out, and one whose agent the human stopped, with no question left about it, waits for them for as
-// long as they take, with no agent: only its phase, and those that need it, wait (stopped.go).
+// planWorkers counts the live workers of the plan attached now that take an agent slot: a worker of a
+// replaced plan is on its way out, and one whose agent the human stopped, with no question left about it,
+// waits for them for as long as they take, with no agent: only its phase, and those that need it, wait
+// (stopped.go). Nor does a worker whose work waits to land take one: its agent is idle, and a landing
+// handed back to it (merge.go's returned) sets it working again, and counts it again.
 func planWorkers(st state.State) int {
 	n := 0
 	for _, w := range st.LiveWorkers() {
-		if w.Status == state.WorkerHeld && !st.StopAsked(w.Phase) {
+		if w.Status == state.WorkerLanding || w.Status == state.WorkerHeld && !st.StopAsked(w.Phase) {
 			continue
 		}
 		if w.Generation == st.Generation {

@@ -292,25 +292,59 @@ func TestLandingsHeldBehindAGateHereAreALookIn(t *testing.T) {
 	}
 }
 
-// A file in a second landing conflict of the run is a look-in for the lead, once a file.
+// A file in a second landing conflict of the run is a look-in for the lead, once a file, only while a
+// phase not started names it (conflictDoc: P2 names docs/notes.md, and only P0 and P1, which started,
+// name go.sum); it names those phases, says whether baton replans them, and cues that replan. Once every
+// phase that names it has started, it is no look-in and cues nothing.
 func TestAFileInASecondLandingConflictIsALookIn(t *testing.T) {
-	x := newStill(t)
-	e := x.leadState().Workers[0]
-	x.c.returned(x.t0, x.lead, e, "its branch conflicts with the run's in notes.md", []string{"notes.md", "go.sum"})
-	if got := leftIn(t, x.lead); len(got) != 0 {
-		t.Fatalf("after one conflict: %+v", got)
-	}
-	x.c.returned(x.t0.Add(time.Hour), x.lead, e, "its branch conflicts with the run's in notes.md", []string{"notes.md"})
-	got := leftIn(t, x.lead)
-	if len(got) != 1 || got[0].Kind != state.LookConflict || !strings.Contains(got[0].Text, "notes.md (P1, then P1)") || strings.Contains(got[0].Text, "go.sum") {
-		t.Fatalf("left %+v", got)
-	}
-	if !lookLogged(x.lead, "look_in", map[string]any{"type": state.LookConflict}) {
-		t.Errorf("not logged:\n%s", lookEvents(x.lead))
-	}
-	x.c.returned(x.t0.Add(2*time.Hour), x.lead, e, "again", []string{"notes.md"})
-	if got := leftIn(t, x.lead); len(got) != 1 {
-		t.Errorf("told again: %+v", got)
+	for _, c := range []struct {
+		name    string
+		replans bool
+		started bool
+		want    string
+	}{
+		{"baton replans", true, false, "baton opens a replan of the phases not started at your next phase boundary"},
+		{"auto_replan off", false, false, "auto_replan is off, so baton leaves the plan as it is."},
+		{"every phase naming it started", true, true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			x := newStill(t)
+			planOf(t, x.lead, conflictDoc)
+			if c.replans {
+				x.c.Fleet = &Fleet{AutoReplan: true}
+			}
+			if c.started {
+				x.setLead(func(st *state.State) { st.Phases["P2"].Status = state.PhaseDone })
+			}
+			e := x.leadState().Workers[0]
+			x.c.returned(x.t0, x.lead, e, "its branch conflicts with the run's in docs/notes.md", []string{"docs/notes.md", "go.sum"})
+			if got := leftIn(t, x.lead); len(got) != 0 {
+				t.Fatalf("after one conflict: %+v", got)
+			}
+			x.c.returned(x.t0.Add(time.Hour), x.lead, e, "its branch conflicts with the run's in docs/notes.md", []string{"go.sum", "docs/notes.md"})
+			got := leftIn(t, x.lead)
+			if c.want == "" {
+				if len(got) != 0 || x.leadState().ConflictCue != nil || lookLogged(x.lead, "look_in", map[string]any{"type": state.LookConflict}) {
+					t.Fatalf("left %+v, cue %v", got, x.leadState().ConflictCue)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Kind != state.LookConflict || !strings.Contains(got[0].Text, "docs/notes.md (P1, then P1; named by P2, not started)") ||
+				!strings.Contains(got[0].Text, c.want) || strings.Contains(got[0].Text, "go.sum") || strings.Contains(got[0].Text, "/baton replan") {
+				t.Fatalf("left %+v", got)
+			}
+			if cue := x.leadState().ConflictCue; len(cue) != 1 || !slices.Equal(cue["docs/notes.md"], []string{"P2"}) {
+				t.Errorf("cue %v", cue)
+			}
+			if !lookLogged(x.lead, "look_in", map[string]any{"type": state.LookConflict, "paths": []string{"docs/notes.md"},
+				"named": map[string][]string{"docs/notes.md": {"P2"}}, "replan": c.replans}) {
+				t.Errorf("not logged:\n%s", lookEvents(x.lead))
+			}
+			x.c.returned(x.t0.Add(2*time.Hour), x.lead, e, "again", []string{"docs/notes.md"})
+			if got := leftIn(t, x.lead); len(got) != 1 {
+				t.Errorf("told again: %+v", got)
+			}
+		})
 	}
 }
 

@@ -32,6 +32,9 @@ func TestABackgroundCheckIsQuestioned(t *testing.T) {
 		{name: "a package script", in: shellCall("Bash", "pnpm --filter web test:e2e", true), asked: true},
 		{name: "a check after cd, piped", in: shellCall("Bash", "cd web && npx vitest run 2>&1 | tail -50", true), asked: true},
 		{name: "a check on a later line", in: shellCall("Bash", "cd web\npnpm lint", true), asked: true},
+		{name: "a check after a here-document", in: shellCall("Bash", "python3 - <<'EOF'\nimport pathlib\n# the lead's fix\nEOF\ncd backend && pytest tests/", true), asked: true},
+		{name: "a long check", in: shellCall("Bash", "go test -run '"+strings.Repeat("TestA|", 500)+"TestB' ./...", true), asked: true},
+		{name: "a check's words in a here-document only", in: shellCall("Bash", "cat > notes.md <<'EOF'\ngo test ./... runs first\nEOF", true)},
 		{name: "a PowerShell check", in: shellCall("PowerShell", "go test ./...", true), asked: true},
 		{name: "a dev server", in: shellCall("Bash", "pnpm dev", true)},
 		{name: "a build", in: shellCall("Bash", "go build ./...", true)},
@@ -59,7 +62,7 @@ func TestABackgroundCheckIsQuestioned(t *testing.T) {
 				return
 			}
 			ti := c.in["tool_input"].(map[string]any)
-			cmd := strings.Join(strings.Fields(ti["command"].(string)), " ")
+			cmd := clipWhat(ti["command"].(string)) // what the model and the human read, on one line
 			for _, w := range []string{"[baton] Not run yet: this starts a check (" + cmd + ") as a background task of your own",
 				"A long check belongs in baton: ", "make the same call again: it goes through."} {
 				if !strings.Contains(why, w) {
@@ -69,7 +72,7 @@ func TestABackgroundCheckIsQuestioned(t *testing.T) {
 			if s := say(out); !strings.HasPrefix(s, "baton: pointed a check started in the background ("+cmd+") to baton ") {
 				t.Errorf("announced %q", s)
 			}
-			if !f.logged("background_questioned", map[string]any{"phase": "P0", "tool": c.in["tool_name"], "command": cmd}) {
+			if !f.logged("background_questioned", map[string]any{"phase": "P0", "tool": c.in["tool_name"], "command": ti["command"]}) { // whole, on its lines
 				t.Errorf("events: %s", f.eventLog())
 			}
 		})

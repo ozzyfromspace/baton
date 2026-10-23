@@ -262,7 +262,7 @@ func TestARedRerunKeepsTheGateRed(t *testing.T) {
 func TestFailedBringsStagesBack(t *testing.T) {
 	s, _, _ := redStagedGate(t)
 	out := s.must("", "verify", "--failed", "--stages", "one", "--notes", "TestA fixed; one touches the parser too")
-	if !strings.Contains(out, "- narrowed to what failed there: `two` (TestA)\n- run whole: `one`\n") || strings.Contains(out, "carried, not run again") {
+	if !strings.Contains(out, "- narrowed to what failed there: `two` (TestA)\n- run whole: `one` (brought back by --stages)\n") || strings.Contains(out, "carried, not run again") {
 		t.Errorf("verify --failed --stages says:\n%s", out)
 	}
 	if record, _ := lane.ReadStages(s.store().JobRerun("j2")); len(record) != 1 || record[0].Name != "two" {
@@ -418,7 +418,8 @@ func TestStopAtTheFirstFailureThenRerunWhatFailed(t *testing.T) {
 	gittest.Write(t, root, "src/parse.go", "package src // fixed\n")
 	gittest.Commit(t, root, "fix", "src/parse.go")
 	out = s.must("", "verify", "--failed", "--notes", "TestA fixed")
-	if !strings.Contains(out, "it reruns what failed in job j1:\n- carried, not run again: `one`, passed in j1 on "+first[:12]+" (changed since: src/parse.go)\nA stage j1's record does not name runs whole too.") {
+	if !strings.Contains(out, "it reruns what failed in job j1:\n- carried, not run again: `one`, passed in j1 on "+first[:12]+" (changed since: src/parse.go)\n"+
+		"- run whole: `two` (a run of it showed a failure and never ended, so baton has no record of it)\nA stage j1's record does not name runs whole too.") {
 		t.Errorf("verify --failed says:\n%s", out)
 	}
 	if j := s.state().Job("j2"); j == nil || j.Reruns != "j1" {

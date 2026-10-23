@@ -81,11 +81,12 @@ func (w Words) Reporting() string {
 	unattended := "The plan runs unattended, so do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which gives them a deadline to veto your choice. " +
 		"A question baton gives you to put to the human is the exception: ask it as given. "
 	pause := "(If the human wants to talk instead of running the plan, they can run /baton pause.)"
+	courier := NoCourier + " "
 	if w.Worker {
 		done = "when your phase is " + w.complete() + ", run `" + DoneCall + "` and end your turn — " + landing + " " + LandCheckHow + " "
 		blocked = ", and end your turn: it stops only your phase, and baton asks the human; " + lookAgainAfter + ". "
 		unattended = "Do not ask the human questions (AskUserQuestion) of your own: decide and carry on, or use `baton propose`, which baton puts to them with a deadline to veto your choice. "
-		pause = ""
+		pause, courier = "", ""
 	}
 	return strings.TrimSpace("Report progress only with these commands (Bash tool): " + done +
 		"A run must not stop for something it can work around. When something goes wrong, keep the plan moving on a reversible path, and tell the human in the lightest way that fits: " +
@@ -98,7 +99,7 @@ func (w Words) Reporting() string {
 		"Hand a gate that takes more than about 2 minutes, or needs state of its own (a database, a server), to baton: " + w.verifyHow() + " " +
 		"A command that runs long moves to the background by itself and wakes you when it ends: keep working on what does not depend on it, and with nothing left to do, end your turn. " +
 		"Keep backticks and $ out of double-quoted notes (the shell would run them), or use single quotes. " +
-		unattended +
+		unattended + courier +
 		"In a long phase, at a safe point (" + safePoint + "), `baton checkpoint --notes \"<where you are>\"` " + w.checkpoints() + ". " +
 		"Never type /compact yourself, and don't stop between phases without one of these commands: baton will ask you why. " +
 		pause)
@@ -257,7 +258,7 @@ func (w Words) Closing(id string) string {
 		"Gates that take more than about 2 minutes, or need state of their own, go to baton: %s "+
 		"If something goes wrong, keep moving on a reversible path and tell the human: `baton note` (you took it), "+
 		"`baton propose` (a reversible way around a problem; the human may veto it by a deadline), "+
-		"`baton blocked --tried` (only if every way forward is irreversible). Never type /compact yourself.", id, w.complete(), id, w.verifyHow())
+		"`baton blocked --tried` (only if every way forward is irreversible). %s Never type /compact yourself.", id, w.complete(), id, w.verifyHow(), NoCourier)
 }
 
 // QAFocus tells a phase that is not a QA phase how to check its work while the plan aggregates its heavy

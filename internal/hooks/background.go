@@ -17,8 +17,13 @@ type bgStart struct {
 	monitor              bool // a Monitor, which wakes the model with what it reports
 }
 
-// recordClip is how much of a background task's command and description its record keeps.
-const recordClip = 200
+// recordClip is how much of a command its record keeps (background_told, background_questioned): the
+// command whole, its lines and a here-document's body too, up to this many characters, so that the record
+// shows what it ran. In a real run, 200 characters on one line could not show it.
+const recordClip = 4000
+
+// describeClip is how much of a background task's description its record keeps, on one line.
+const describeClip = 200
 
 // backgroundStarted is the background work a tool call's result says it started
 // (docs/research/parallel.md): a Monitor's task (tool_response.taskId), a command run in the background or
@@ -42,7 +47,7 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 		return bgStart{}, false
 	}
 	ti, _ := in["tool_input"].(map[string]any)
-	b.command, b.description = clip(str(ti, "command"), recordClip), clip(str(ti, "description"), recordClip)
+	b.command, b.description = recorded(str(ti, "command")), clip(str(ti, "description"), describeClip)
 	for _, k := range []string{"description", "command"} {
 		if b.what = clipWhat(str(ti, k)); b.what != "" {
 			break
@@ -55,7 +60,7 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 }
 
 // told is the record of background work told at its start (background_told): in phase, its task, the tool
-// that started it, and the command and description the call gave, each clipped to recordClip characters.
+// that started it, and the command (whole, up to recordClip characters) and description the call gave.
 func (b bgStart) told(phase string) map[string]any {
 	f := map[string]any{"phase": phase, "task": b.id, "tool": b.tool, "via": "start"}
 	if b.command != "" {
@@ -97,6 +102,16 @@ func backgroundEnded(phase string, ended []state.TaskEnded, now time.Time) []eve
 
 // clipWhat is s on one line, at most 80 characters: a command can be long.
 func clipWhat(s string) string { return clip(s, 80) }
+
+// recorded is command as its record keeps it: as given, on as many lines, with the blanks around it
+// trimmed, and at most recordClip characters.
+func recorded(command string) string {
+	command = strings.TrimSpace(command)
+	if r := []rune(command); len(r) > recordClip {
+		command = string(r[:recordClip-1]) + "…"
+	}
+	return command
+}
 
 // clip is s on one line, at most n characters.
 func clip(s string, n int) string {

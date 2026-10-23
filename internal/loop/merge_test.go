@@ -252,7 +252,7 @@ func TestALandingIsVerifiedAgain(t *testing.T) {
 // resolves the conflict and reports the phase done again, it lands.
 func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	x := landingCrew(t)
-	x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
+	leads := x.leadCommits(map[string]string{"a.txt": "the lead's\n"})
 	old := x.finish("P1", map[string]string{"a.txt": "the worker's\n"}, false)
 	x.tick(time.Second)
 
@@ -264,7 +264,8 @@ func TestAConflictGoesBackToTheWorker(t *testing.T) {
 	if w.Status != state.WorkerWorking || w.Merge != nil || sst.Mode != state.ModeRunning || sst.Current != "P1" || sst.Phases["P1"].Status != state.PhaseActive {
 		t.Fatalf("worker %+v; sub-run %s on %q", w, sst.Mode, sst.Current)
 	}
-	if len(sst.Inbox) != 1 || sst.Inbox[0].Text != decide.LandConflict("P1", "main", []string{"a.txt"}) {
+	if len(sst.Inbox) != 1 || sst.Inbox[0].Text != decide.LandConflict("P1", "main", []string{"a.txt"},
+		map[string][]decide.ConflictCommit{"a.txt": {{Hash: leads[:7], Subject: "the lead's"}}}) {
 		t.Errorf("the worker's inbox: %+v", sst.Inbox)
 	}
 	if !x.has("land_returned", `"paths":["a.txt"]`) || !strings.Contains(x.announced(), "P1's work did not land: its branch conflicts with the run's in a.txt") {

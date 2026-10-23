@@ -192,13 +192,16 @@ func assignment(word string) bool {
 
 // simpleCommands splits a shell command line into its simple commands, each as words: quotes are taken off
 // and a backslash escapes the next character, and the line is cut at &&, ||, ;, |, &, a newline and
-// parentheses. It reads no expansion, which is enough to tell what each command runs.
+// parentheses. A here-document's body, the lines after the one that opened it up to its closing line, is
+// no command (openHereDoc, pastHereDocs). It reads no expansion, which is enough to tell what each command
+// runs.
 func simpleCommands(line string) [][]string {
 	var (
 		cmds  [][]string
 		words []string
 		word  strings.Builder
 		inW   bool
+		docs  []hereDoc // opened on this line, their bodies starting after it
 	)
 	endWord := func() {
 		if inW {
@@ -241,6 +244,18 @@ func simpleCommands(line string) [][]string {
 			inW = true
 		case c == ' ' || c == '\t':
 			endWord()
+		case c == '<' && strings.HasPrefix(line[i:], "<<<"): // a here-string
+			word.WriteString("<<<")
+			inW, i = true, i+2
+		case c == '<' && strings.HasPrefix(line[i:], "<<"):
+			d, kept, end, ok := openHereDoc(line, i)
+			if !ok {
+				word.WriteString("<<")
+				inW, i = true, i+1
+				continue
+			}
+			endWord()
+			words, docs, i = append(words, kept), append(docs, d), end-1
 		case c == ';' || c == '&' || c == '|' || c == '\n' || c == '(' || c == ')':
 			if c == '&' && i > 0 && line[i-1] == '>' {
 				word.WriteByte(c) // 2>&1
@@ -248,6 +263,9 @@ func simpleCommands(line string) [][]string {
 				continue
 			}
 			endCmd()
+			if c == '\n' && len(docs) > 0 { // the here-documents' bodies are no commands
+				i, docs = pastHereDocs(line, i+1, docs)-1, nil
+			}
 		default:
 			word.WriteByte(c)
 			inW = true

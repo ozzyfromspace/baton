@@ -78,8 +78,11 @@ func (p Plan) QAAhead(id string) string {
 }
 
 // SinceQA lists the phases a QA phase id checks: those between the QA phase before it (or the plan's
-// start) and it.
+// start) and it. A narrowed plan (Only) of a QA phase, a phase agent's, keeps them (QASince).
 func (p Plan) SinceQA(id string) []string {
+	if len(p.QASince) > 0 && len(p.Phases) == 1 && p.Phases[0].ID == id {
+		return slices.Clone(p.QASince)
+	}
 	var out []string
 	for i := p.Index(id) - 1; i >= 0 && !p.Phases[i].QA(); i-- {
 		out = append([]string{p.Phases[i].ID}, out...)
@@ -102,6 +105,8 @@ type Plan struct {
 	// leaves it out (NextQA).
 	QAFor      string `json:"qa_for,omitempty"`
 	QAForTitle string `json:"qa_for_title,omitempty"`
+	// QASince are the phases the QA phase of a narrowed plan (Only) checks, which it leaves out (SinceQA).
+	QASince []string `json:"qa_since,omitempty"`
 	// Bounds are the anchors of the phases a narrowed plan leaves out (Only): sections still end at them.
 	Bounds []string `json:"bounds,omitempty"`
 	// Origin is the file the plan was approved or attached in, when baton moved it out of Claude Code's
@@ -301,9 +306,12 @@ func (p Plan) Only(id string) (Plan, error) {
 	ph.After = []string{}
 	q := p
 	q.Phases, q.Bounds = []Phase{ph}, slices.Clone(p.Bounds)
-	q.QAFor, q.QAForTitle = "", ""
+	q.QAFor, q.QAForTitle, q.QASince = "", "", nil
 	if qa := p.NextQA(id); qa != nil {
 		q.QAFor, q.QAForTitle = qa.ID, qa.Title
+	}
+	if ph.QA() {
+		q.QASince = p.SinceQA(id) // its agent's brief names the phases it checks
 	}
 	for _, o := range p.Phases {
 		if o.ID != id {

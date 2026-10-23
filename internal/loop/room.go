@@ -85,13 +85,26 @@ func lanes(now time.Time, s *state.Store, st state.State) string {
 }
 
 // conflicted says why the workers' landings leave no room for another worker ("" if they do): the last
-// maxConflicts or more of them conflicted with the run's branch, and a worker of the plan still at work
-// may land to end it. With none left to, a worker starts: the lead has no landing of its own to end it.
+// maxConflicts or more of them conflicted with the run's branch, and a worker of the plan still at work,
+// or waiting to land, may land to end it. With none left to, a worker starts: the lead has no landing of
+// its own to end it.
 func conflicted(st state.State) string {
-	if st.Conflicts < maxConflicts || planWorkers(st) == 0 {
+	if st.Conflicts < maxConflicts || planWorkers(st)+landings(st) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%d landings in a row conflicted", st.Conflicts)
+}
+
+// landings counts the workers of the plan attached now whose work waits to land, which take no agent slot
+// (planWorkers).
+func landings(st state.State) int {
+	n := 0
+	for _, w := range st.Workers {
+		if w.Status == state.WorkerLanding && w.Generation == st.Generation {
+			n++
+		}
+	}
+	return n
 }
 
 // bytesShown is a size in GiB to a tenth, or under a GiB in MiB.
@@ -157,17 +170,29 @@ type room struct {
 // hold keeps the run's record of what holds back a phase that waits for a worker (state.Hold) in step
 // with what next found: phase waits ("" for none), why no worker starts ("" if one does), and held, the
 // hold on it ("" for none). A hold is told once, as it starts or changes kind (worker_deferred, and a line
-// in the session), and its record goes once a worker starts or no phase waits for one.
+// in the session), and its record goes once a worker starts or no phase waits for one. Every agent slot
+// at work (state.HoldCap, with Fleet.Max) is the run going as it should: it is recorded and logged, for
+// the board and baton watch to say why ready phases wait, and told in no line of the session.
 func (c *Coordinator) hold(now time.Time, s *state.Store, st state.State, phase, why, held string) {
-	cur := st.Hold
+	cur, slots := st.Hold, 0
+	if held == state.HoldCap {
+		slots = c.Fleet.Max
+	}
 	switch {
-	case held != "" && (cur == nil || cur.Kind != held):
+	case held != "" && (cur == nil || cur.Kind != held || cur.Cap != slots):
 		s.Update(func(st *state.State) error {
-			st.Hold = &state.Hold{Phase: phase, Kind: held, Why: why, Since: now}
+			st.Hold = &state.Hold{Phase: phase, Kind: held, Why: why, Since: now, Cap: slots}
 			return nil
 		})
+		fields := map[string]any{"phase": phase, "why": why, "held": held}
+		if slots > 0 {
+			fields["cap"] = slots
+		}
+		s.Event("worker_deferred", fields)
+		if held == state.HoldCap {
+			return
+		}
 		c.Lead.logf("loop: %s: no worker for now: %s", phase, why)
-		s.Event("worker_deferred", map[string]any{"phase": phase, "why": why, "held": held})
 		c.announce(s, decide.WorkerHeld(phase, why))
 	case held != "" && cur.Phase != phase:
 		s.Update(func(st *state.State) error {

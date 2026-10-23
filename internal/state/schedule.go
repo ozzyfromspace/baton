@@ -490,7 +490,8 @@ func (st State) Job(id string) *Job {
 // order, whose dependencies are all done, else "": every phase left is verifying, parked while its jobs
 // run, a worker's, or waits for one that is. In a run that never parked a phase this is the first phase
 // not done, as phases have always run. While a gate runs in the session's working tree (HereGate), it is
-// "" too: the next phase would change the files the gate reads.
+// "" too: the next phase would change the files the gate reads. In a run with phase agents, a QA phase is
+// an agent's, and passed over (forAgent).
 func Next(st State, p plan.Plan) string {
 	if st.HereGate() != nil {
 		return ""
@@ -499,7 +500,7 @@ func Next(st State, p plan.Plan) string {
 		return next
 	}
 	for _, ph := range p.Phases {
-		if ps := st.Phases[ph.ID]; (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) {
+		if ps := st.Phases[ph.ID]; (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.forAgent(ph) {
 			return ph.ID
 		}
 	}

@@ -210,6 +210,9 @@ type State struct {
 	// phases whose landings conflicted with the run's branch in it, one entry a landing (lookin.go).
 	LookIns    []LookIn            `json:"look_ins,omitempty"`
 	Conflicted map[string][]string `json:"conflicted,omitempty"`
+	// ConflictCue lists, by file in a second landing conflict, the phases not started whose sections named
+	// it then: each file cues a replan once, at the lead's next phase boundary (conflictcue.go).
+	ConflictCue map[string][]string `json:"conflict_cue,omitempty"`
 	// Advice is the advisor's part in the look-ins the host asked it about: each held from the session
 	// until the host releases it, then the advisor's words, until the look-in is told (advice.go).
 	Advice []Advice `json:"advice,omitempty"`
