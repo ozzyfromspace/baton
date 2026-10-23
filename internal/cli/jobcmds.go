@@ -29,7 +29,8 @@ func init() {
 		"baton questions a gate out of proportion once; --why answers it, and baton tells the human your reason. "+
 		"A red gate stands until the same command passes, or --replace makes another command the phase's gate (the human is told). "+
 		"verify --failed [--stages <name>,<name>] --notes \"…\" reruns what failed in a red gate built from stages: the stages that passed are carried, and a pass clears it; "+
-		"of a red gate built from none, verify --failed --notes \"…\" -- <a command that names each test that failed> reruns only them, and a pass clears it", cmdVerify)
+		"of a red gate built from none, verify --failed --notes \"…\" -- <a command that names each test that failed> reruns only them, and a pass clears it. "+
+		"In a QA phase, the red gate's own command again reruns what failed in it, as --failed does, until all of it passes; --whole --why \"…\" runs it whole, and baton tells the human", cmdVerify)
 	register("await", "wait on something outside the project (a CI run, a deploy) while you work on: await \"<command>\" [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"] --notes \"<where the phase stands>\", or the command's words after --. "+
 		"One await at a time, beside one gate: the same command again replaces the await that runs, and another command only with --replace", cmdAwait)
 }
@@ -45,7 +46,7 @@ func queueJob(args []string, io IO, kind string) int {
 	usage := " [--qa \"<why a full check now>\"] [--replace] [--why \"<what this run can show that the last could not>\"]"
 	vals := []string{"notes", "qa", "why"}
 	if kind == state.JobVerify {
-		bools, vals, usage = append(bools, "here", "failed"), append(vals, "stages"), " [--here]"+usage
+		bools, vals, usage = append(bools, "here", "failed", "whole"), append(vals, "stages"), " [--here]"+usage
 	}
 	p, err := parseArgs(args, vals, bools)
 	command := strings.TrimSpace(strings.Join(p.pos, " "))
@@ -55,7 +56,7 @@ func queueJob(args []string, io IO, kind string) int {
 		command = strings.TrimSpace(strings.Join(p.pos[:p.dash], " ") + " " + lane.Join(p.pos[p.dash:]))
 	}
 	failed, bring := p.bools["failed"], stageList(p.vals["stages"])
-	if err != nil || command == "" && !failed || len(bring) > 0 && !failed {
+	if err != nil || command == "" && !failed || len(bring) > 0 && !failed || failed && p.bools["whole"] {
 		rerun := ""
 		if kind == state.JobVerify {
 			rerun = ", or baton verify --failed [--stages <name>,<name>] --notes \"<where the phase stands>\" [-- <a command that names each test that failed>] to rerun what failed in the red gate"
@@ -88,6 +89,15 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 		command, here, re = a.command(), here || a.r.Of.Here, &a
 	}
+	var slim *slimRun // a QA phase's red gate's command again: its rerun, or whole (slim.go)
+	if kind == state.JobVerify && !failed {
+		if slim, err = askSlim(s, st, pl, phase, command, p.bools["whole"], why); err != nil {
+			return refused(io, s, kind, err)
+		}
+		if slim != nil && slim.rerun != nil {
+			here, re = here || slim.rerun.r.Of.Here, slim.rerun
+		}
+	}
 	var commit string
 	var work workLeft
 	if kind == state.JobVerify {
@@ -114,6 +124,7 @@ func queueJob(args []string, io IO, kind string) int {
 				plural(len(work.fresh), "it", "them"), fileList(work.fresh))
 		}
 	}
+	slim.say(io, phase)
 	qaAsked := false // the QA question went with baton's questions about this gate, so it is not put again
 	var asked gateAsk
 	var said gateSaid // what the human is told of a gate queued over baton's questions
@@ -131,6 +142,7 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 		said = asked.said(phase, command, why)
 	}
+	said = slim.said(phase, said)
 	most := config.EscalationFromEnv(io.Env).MaxAuto
 	var queued state.Job
 	var replaced, clash, beside, red *state.Job
@@ -239,6 +251,7 @@ func queueJob(args []string, io IO, kind string) int {
 	if queued.QAPhase {
 		queuedEvent["qa_phase"] = true // every stage of its gate runs
 	}
+	slim.event(queuedEvent)
 	if re != nil {
 		queuedEvent["reruns"] = re.r.Of.ID
 		if ids := re.names(); len(ids) > 0 {
@@ -270,6 +283,7 @@ func queueJob(args []string, io IO, kind string) int {
 	}
 	s.Event("job_queued", queuedEvent)
 	said.logged(s, asked, queued)
+	slim.logged(s, queued)
 	if said.line != "" {
 		tellLead(s, said.line)
 	}
