@@ -65,7 +65,7 @@ func (h *handlers) cancelResume(c Context) (say, tell string) {
 }
 
 // keepsResume reports a prompt that leaves the resume timer armed: a /baton command that only looks at the
-// run, or gives it back.
+// run, gives it back, or wraps it up (which lets it finish).
 func keepsResume(prompt string) bool {
 	f := strings.Fields(prompt)
 	if len(f) == 0 {
@@ -81,7 +81,7 @@ func keepsResume(prompt string) bool {
 		return true // help
 	}
 	switch f[1] {
-	case "status", "board", "version", "drafts", "help", "run":
+	case "status", "board", "version", "drafts", "help", "run", "wrap":
 		return true
 	}
 	return false

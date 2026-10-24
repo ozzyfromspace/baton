@@ -61,10 +61,10 @@ func TestTheResumeCancelFailsOpen(t *testing.T) {
 	}
 }
 
-// A /baton command that only looks at the run, or gives it back, leaves the timer armed.
+// A /baton command that only looks at the run, gives it back, or wraps it up leaves the timer armed.
 func TestKeepsResume(t *testing.T) {
 	for prompt, want := range map[string]bool{
-		"/baton status": true, "/baton board": true, "/baton-board": true, "/baton": true, "/baton run": true,
+		"/baton status": true, "/baton board": true, "/baton-board": true, "/baton": true, "/baton run": true, "/baton wrap": true, "/baton wrap --off": true,
 		"/baton replan 'later'": false, "/baton pause": false, "how is it going?": false, "": false, "@P3 hi": false,
 	} {
 		if got := keepsResume(prompt); got != want {
