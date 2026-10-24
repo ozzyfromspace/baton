@@ -76,6 +76,11 @@ type Job struct {
 	// QAPhase: the job is a QA phase's (plan.TypeQA), whose gate runs every stage (lane.EnvQAPhase), to
 	// collect every red at once.
 	QAPhase bool `json:"qa_phase,omitempty"`
+
+	// EnvRead is when the host read which stages of this whole run, ended red or stopped, its environment
+	// took, and EnvLost what it found (envrepeat.go).
+	EnvRead time.Time `json:"env_read,omitzero"`
+	EnvLost []EnvLoss `json:"env_lost,omitempty"`
 }
 
 // Failing is the first failure a job's output showed while it ran: a failure line (lane.Failure), a fail

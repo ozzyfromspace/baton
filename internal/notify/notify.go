@@ -60,6 +60,7 @@ var headline = map[string]string{
 	"usage_resumed":     "the usage limit reset: baton resumed the run",
 	"weekly_wind_down":  "little weekly usage is left: the run finishes what it started, and starts nothing new",
 	"weekly_wound_up":   "the weekly usage reset: the run goes on",
+	"env_repeated":      "a gate lost a stage to the machine or its environment twice: the run works around it",
 }
 
 // priority is the ntfy priority (1 lowest, 5 highest) of the notices that differ from the default, 3: a

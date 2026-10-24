@@ -67,6 +67,9 @@ type PhaseState struct {
 	Deviation string `json:"deviation,omitempty"`
 	// Confirm is the one full run a QA phase owed at its done, after reruns cleared its gate (confirm.go).
 	Confirm *Confirm `json:"confirm,omitempty"`
+	// EnvPushed are the kinds of environment failure the human was pushed about, as two whole runs of the
+	// phase's gate lost a stage to each (envrepeat.go): once per phase and kind.
+	EnvPushed []string `json:"env_pushed,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.

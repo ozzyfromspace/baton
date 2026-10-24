@@ -206,6 +206,7 @@ func (l *Loop) lost(v host.View, j state.Job, reason string) {
 // once (state.Retake), and the result is due to it. What it did is logged, and left for the human to read
 // in the session (Runtime.Announce; a phase agent's, in the lead's). It returns the state as it left it.
 func (l *Loop) settle(v host.View, st state.State) state.State {
+	l.envRepeat(v, st) // what the environment took of each whole run that ended red (envrepeat.go)
 	if !state.Unsettled(st) || v.Now.Sub(l.settled) < settleEvery {
 		return st
 	}
