@@ -81,6 +81,9 @@ type Log struct {
 	// Env is what the log of a red gate says of its environment, when it shows an environment failure and
 	// no test failure (lane.Environment); nil otherwise.
 	Env *Env
+	// StageEnv are the stages of a red staged gate its environment took, each by the line of its own part
+	// of the log that says so (lane.StageEnvironment), in the order they ran; nil for none (envstage.go).
+	StageEnv []state.EnvLoss
 	// Failed are the tests the log of a red gate says failed (lane.FailureIDs), at most lane.MaxFailures,
 	// and FailedMore how many more; nil for any other job.
 	Failed     []lane.FailedTest
@@ -108,6 +111,7 @@ func JobResult(j state.Job, log Log, others []state.Job, qa string) string {
 	b.WriteString(narrowedRan(j, qa))
 	b.WriteString(failedTests(j, log))
 	b.WriteString(timedOut(j, log))
+	b.WriteString(envStages(j, log))
 	if len(log.Failures) > 0 && j.Status != state.JobPassed {
 		fmt.Fprintf(&b, "Lines that report a failure earlier in its log, before its end below:\n\n%s\n", strings.Join(log.Failures, "\n"))
 		if log.More > 0 {
