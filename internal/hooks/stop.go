@@ -202,6 +202,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.say("baton: plan complete — " + done)
 			d.emit("plan_complete", saving.Log(map[string]any{"decisions": n, "left": left}))
 		}
+		if !w.Worker {
+			mailAtEnd(st, &d)
+		}
 		return d
 	}
 	if st.CheckpointAsked && !st.BoundaryOwed {
