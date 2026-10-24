@@ -33,13 +33,13 @@ func TestTheLeadsStopNamesTheAgentsItWaitsOn(t *testing.T) {
 	}{
 		{"the last phase with an agent", nil, func(st *state.State) { agent(st, "P5") },
 			"baton: P5, the last phase, is with its phase agent — baton says here when it lands and the plan is complete. Nothing waits on you.",
-			map[string]any{"agents": []string{"P5"}, "waiting": []string(nil), "last": true}},
+			map[string]any{"agents": []string{"P5"}, "behind": []string(nil), "last": true}},
 		{"two last phases", nil, func(st *state.State) { agent(st, "P4"); agent(st, "P5") },
 			"baton: P4 and P5, the last phases, are with phase agents — baton says here when they land and the plan is complete. Nothing waits on you.",
-			map[string]any{"agents": []string{"P4", "P5"}, "waiting": []string(nil), "last": true}},
+			map[string]any{"agents": []string{"P4", "P5"}, "behind": []string(nil), "last": true}},
 		{"a phase waiting on an agent's", []string{"P5"}, func(st *state.State) { agent(st, "P3") },
 			"baton: no phase can start until P3's agent lands its work (P5 waits on it) — baton takes the next one up then. Nothing waits on you.",
-			map[string]any{"agents": []string{"P3"}, "waiting": []string{"P5"}, "last": false}},
+			map[string]any{"agents": []string{"P3"}, "behind": []string{"P5"}, "last": false}},
 		{"jobs only", []string{"P5"}, func(st *state.State) {
 			st.Phases["P3"].Status, st.Jobs = state.PhaseVerifying, []state.Job{job}
 		}, decide.NoPhaseYet("job j1 (`make test`, P3)", nil), nil},

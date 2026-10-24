@@ -31,8 +31,8 @@ type Behind struct {
 // on agents' work alone.
 func (h AgentsHold) Holds() bool { return h.Last || len(h.Behind) > 0 }
 
-// Waiting lists the phases of h.Behind.
-func (h AgentsHold) Waiting() []string {
+// Held lists the phases of h.Behind.
+func (h AgentsHold) Held() []string {
 	var out []string
 	for _, b := range h.Behind {
 		out = append(out, b.Phase)
