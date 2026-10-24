@@ -89,6 +89,9 @@ func queueJob(args []string, io IO, kind string) int {
 		}
 		command, here, re = a.command(), here || a.r.Of.Here, &a
 	}
+	if err := askWrap(s, st, pl, phase, command, kind, failed, p.bools["whole"]); err != nil {
+		return refused(io, s, kind, err) // the human is wrapping the run up: no gate runs whole a second time (wrap.go)
+	}
 	var slim *slimRun // a QA phase's red gate's command again: its rerun, or whole (slim.go)
 	if kind == state.JobVerify && !failed {
 		if slim, err = askSlim(s, st, pl, phase, command, p.bools["whole"], why); err != nil {

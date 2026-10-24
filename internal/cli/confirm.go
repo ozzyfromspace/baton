@@ -28,6 +28,8 @@ type confirmAsk struct {
 	changed int            // how many files changed since the full run, when it owes none
 	queued  *state.Job     // the confirmation, queued at the done (queue)
 	stands  bool           // c was recorded under the lock (queue)
+	// wrapping: the human is wrapping the run up (wrap.go), so it owes none
+	wrapping bool
 }
 
 // confirmWait is how long askConfirm waits for git to list the files changed since the full run.
@@ -46,6 +48,9 @@ func askConfirm(s *state.Store, st state.State, pl plan.Plan, phase string) conf
 		return ca // no rerun cleared it, or nothing baton could run whole
 	}
 	ca.asked, ca.gate, ca.of = true, g, whole.ID
+	if ca.wrapping = s.LeadWrap() != nil; ca.wrapping {
+		return ca
+	}
 	var changed []string
 	if c.Unknown = whole.ID == "" || whole.Commit == ""; !c.Unknown {
 		ctx, cancel := context.WithTimeout(context.Background(), confirmWait)
@@ -124,6 +129,8 @@ func (ca *confirmAsk) queue(st *state.State, phase string, now time.Time) {
 func (ca confirmAsk) report(io IO, s *state.Store, phase string) {
 	switch {
 	case !ca.asked:
+	case ca.c == nil && ca.wrapping:
+		ca.wrapSkipped(io, s, phase)
 	case ca.c == nil:
 		s.Event("qa_confirm_skipped", map[string]any{"phase": phase, "of": ca.of, "gate": ca.gate.ID, "changed": ca.changed})
 		fmt.Fprintln(io.Out, "baton: "+decide.ConfirmSkipped(phase, ca.of, ca.changed))

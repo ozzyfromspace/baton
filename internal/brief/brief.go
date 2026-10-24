@@ -57,6 +57,9 @@ type Input struct {
 	Facts []state.Fact
 	// Merge is the merge in progress in a worker's worktree, which its brief opens with; nil for none.
 	Merge *MergeLeft
+	// Wrap is the human wrapping the run up (the lead's run's state.Wrap): the brief says the phase finishes on
+	// the evidence it has (decide.WrapBrief). nil while the run is not wrapping up.
+	Wrap *state.Wrap
 }
 
 // MergeLeft is a merge in progress in a worker's worktree (gitx.Merging): baton merged the run's branch
@@ -190,6 +193,9 @@ func Write(in Input) string {
 	}
 	if q := qaGuide(pl, st.Current, in.Words); q != "" {
 		b.WriteString(q + "\n\n")
+	}
+	if in.Wrap != nil {
+		b.WriteString(decide.WrapBrief(st.Current) + "\n\n")
 	}
 	if park != nil && strings.TrimSpace(park.Notes) != "" {
 		fmt.Fprintf(&b, "This phase's park notes (where %s stood when it was set aside):\n\n%s\n\n", st.Current, clip(strings.TrimSpace(park.Notes), maxNotes))

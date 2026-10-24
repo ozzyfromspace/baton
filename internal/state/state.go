@@ -234,6 +234,9 @@ type State struct {
 	Recorded []string `json:"recorded,omitempty"`
 	// Risk is the exposure the run has built up on work no full check has passed since (risk.go).
 	Risk *Risk `json:"risk,omitempty"`
+	// Wrap is the human wrapping the run up (/baton wrap, wrap.go), in the lead's run alone: no gate runs whole
+	// a second time. A new plan starts without it.
+	Wrap *Wrap `json:"wrap,omitempty"`
 	// Run is what the hooks observe about the live session.
 	Run Runtime `json:"run"`
 }
