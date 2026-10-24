@@ -33,8 +33,8 @@ func TestANewPlanStartsFresh(t *testing.T) {
 	// jobs and ids go on from, its generations, and of its runtime what runKept says.
 	stKept := []string{"Owner", "Mode", "PauseContext", "PauseCompacted", "Workers", "JobSeq", "IDPrefix", "Generation", "Run"}
 	// The replaced plan's: its phases and jobs, what it owed, its decisions and questions, replans, branch,
-	// landings, usage and holds, mail and look-ins, records, facts and risk. (The callers set the new plan's
-	// branch after attaching it.)
+	// landings, usage and holds, mail and look-ins, records, facts and risk, and the human's wrap of it. (The
+	// callers set the new plan's branch after attaching it.)
 	stFresh := []string{
 		"Version", "Current", "Phases", "Blocked", "Jobs", "KeptLogs",
 		"BoundaryOwed", "CheckpointOwed", "CheckpointAsked", "CheckpointDue", "OwedAt", "Covered",
@@ -42,6 +42,7 @@ func TestANewPlanStartsFresh(t *testing.T) {
 		"Replan", "Replans", "RulesVersion", "ReplanCued",
 		"RunBranch", "Relay", "Landed", "Usage", "Hold", "Conflicts", "BranchNote", "BranchTold", "BranchFrom",
 		"Inbox", "LookIns", "Conflicted", "ConflictCue", "Advice", "Records", "ToAgents", "PlanText", "Facts", "Recorded", "Risk",
+		"Wrap",
 	}
 	sorted(t, reflect.TypeFor[Runtime](), runKept, runFresh)
 	sorted(t, reflect.TypeFor[State](), stKept, stFresh)
