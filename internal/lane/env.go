@@ -10,10 +10,11 @@ import (
 
 // A gate can fail for its environment rather than for the change it checks: the port its stack wants is
 // taken (by the dev stack, or another lane's), the Docker daemon is not running, a container never got
-// healthy, the disk is full, a registry rate-limits its pulls, a host name does not resolve. A model that
-// reads such a failure as its own code's goes looking for a bug that is not there, and every phase finds
-// the same fix again. Environment reads a red gate's log for the lines that say so, so that its result can
-// say it (decide.EnvFailed).
+// healthy, the disk is full, a registry rate-limits its pulls, a host name does not resolve, a process was
+// killed for memory (killed.go). A model that reads such a failure as its own code's goes looking for a bug
+// that is not there, and every phase finds the same fix again. Environment reads a red gate's log for the
+// lines that say so, so that its result can say it (decide.EnvFailed); StageEnvironment reads each failed
+// stage's part of it (stageenv.go).
 
 // EnvMatch is what a log says of a gate's environment: Kind names what failed it ("a port already in
 // use"), and Line is the log's line that says so, trimmed and clipped. The zero EnvMatch is none.
@@ -51,6 +52,7 @@ var envSigns = []envSign{
 		return containsAny(l, "could not resolve host", "temporary failure in name resolution") ||
 			strings.Contains(l, ": no such host") && noHostRE.MatchString(l)
 	}},
+	{EnvKilled, killedForMemory},
 }
 
 func containsAny(s string, subs ...string) bool {
