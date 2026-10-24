@@ -68,6 +68,8 @@ func GateAnswered(phase, command string, kinds []string, why string) string {
 			about = append(about, "it runs a script in no commit")
 		case GateUnstaged:
 			about = append(about, "it is not built from stages")
+		case GateEnvAgain:
+			about = append(about, envAgainAbout)
 		case GateBeforeQA, GateQAAsk:
 			if !slices.Contains(about, "a full check before QA") {
 				about = append(about, "a full check before QA")

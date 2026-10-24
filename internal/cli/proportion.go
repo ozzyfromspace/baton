@@ -59,6 +59,7 @@ func questionGate(io IO, s *state.Store, st state.State, pl plan.Plan, phase, co
 		a.job, a.took, a.repeat = last.ID, ranFor(*last), true
 		add(decide.GateRepeat, repeatOf(s, st, phase, *last, command, commit).Question(phase))
 	}
+	a.askEnvAgain(s, st, command, add) // its last whole run lost a stage to its environment (envagain.go)
 	if paths := outsideScripts(command, s, io.Env); len(paths) > 0 {
 		add(decide.GateOutside, decide.OutsideScript(paths))
 	}
