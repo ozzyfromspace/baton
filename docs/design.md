@@ -431,6 +431,14 @@ failures. A custom command reads `BATON_FAILED` and `BATON_FAILED_RE`.
   needs>"`, which every later brief of the run, the lead's and the agents', carries, and a phase agent at work is
   told of once (`env_fact`), and to make it permanent in `.baton-lane`. In a real run, at least 8 agents found the
   same fix for a port collision again.
+- **A stage the machine killed is the machine's** (v0.8.17). A process killed for memory (a runtime out of heap,
+  the kernel's out-of-memory killer, exit code 137) is an environment line too, and a staged gate's log is read a
+  stage at a time: a failed stage with no failure ids whose own part of the log shows an environment line is the
+  environment's, whatever failed in other stages, and the result names it and asks to rerun it alone and give it
+  room. The next whole run of that command is questioned once (`env_again`), and a second whole run of a phase's
+  gate that loses a stage to the same kind is pushed to the human, once per phase and kind (`env_repeated`). In a
+  real run the out-of-memory killer took a QA set's build in three of four whole runs, and the agent fixed the
+  cause only after the third.
 
 A gate that hangs in silence is stopped: a `verify` job whose log has not grown and whose processes used no CPU for 20
 minutes ends unverified, with the reason, and the model is told. Log silence alone never stops one, so where the CPU
@@ -688,6 +696,11 @@ Each other phase that can start runs as a **phase agent**: a background agent of
   which waits on the merge queue and the lead) against the wall clock from the first phase's start, as in "phase
   agents saved about 3h20m: 8h29m of phase work in 5h09m". The wall clock runs through every wait, so the figure is
   never more than the work done side by side, and never below zero. `baton status` shows it for a complete plan.
+- **The end is told, however it comes.** A plan whose last phase lands from an agent is announced and pushed by
+  the landing, and the lead, which holds no phase and has no `done` of its own to tell it, gets baton's message
+  to sum the run up for the human: an idle lead is woken for it, and a lead mid-turn is given it at its stop.
+  While only agents' work is left, the lead's stop line names them, and what waits on them, and says nothing
+  waits on the human, where it used to say no phase could start yet.
 - **Serial mode.** With no hello from the mod, there are no phase agents: the lead works the phases in turn, as
   `workers: 0` does.
 
@@ -804,11 +817,28 @@ interface had made *notify* and *halt* the same operation.
   compaction proven while paused, the human's own `/compact` or one baton queued before the pause, covers the one
   the run owed. At `/baton run` the owed phase starts from its brief with no compaction of baton's, unless the
   conversation has grown by more than 20k tokens since, when the model checkpoints first.
+- **`/baton wrap`** wraps a long run up: every phase still runs and lands, but no gate runs whole a second time.
+  A real run's final QA phase ran its 40–49 minute set whole four times, and its human, who wanted the run over,
+  had nothing lighter than dropping it. `baton wrap`, which the lead's model runs only in a turn the human
+  started, records the wrap in the lead's run (`State.Wrap`), then, one run's lock at a time: stops every
+  confirmation run under way, the phase done on the rerun that passed (a decision with its undo), and every whole
+  repeat under way; drops every confirmation owed; leaves a phase's first run of its gate alone, as that phase's
+  only evidence; and tells each agent at work and the lead to finish on the evidence they have. While it lasts, a
+  gate whose command already ran whole in its phase is refused with no `--why`, since the human chose it and it
+  waits on nothing, and a fresh agent's brief says so. `--off` lifts it; a phase agent, or a turn the human did not
+  start, is refused; a new plan starts without it.
 - **A plan attached while paused** stays paused until `/baton run`, unless the human's answer to baton's question
   about it is to start it now.
 - **A plan's record is kept.** Before another plan replaces it, or `baton drop` sets it aside, its state, anchors and
   handoff are copied into `.baton/runs/<run>/gen-<N>/`, and `baton status` lists the run's earlier plans with how
   many phases each finished.
+- **A new plan starts fresh.** Attaching a plan (`/baton run`, an approval, "Start the new plan from P0") keeps
+  only the runtime that is the session's, the host's or the account's and still true under a new plan: the turn
+  under way, background work and open calls, the mod's sequence, the context reading and its valves, a pending
+  restart, the crash count, the compaction epoch, and lines and notices not yet shown. Everything else, every
+  question asked, every refusal counted, the previous plan's end told, starts over. In a real run, a third plan
+  in one session finished with no word, since the flag that the second's end was told came along. A test lists
+  every field of the run's state as kept or fresh, and fails on a new one in neither.
 - **The plan file may change while it runs.** baton follows the new text, and the phase agents at work hear of a
   change to their part of it (above). An edit made while a replan is open is followed once the replan closes, and
   the replan's draft, made from the older text, is refused.

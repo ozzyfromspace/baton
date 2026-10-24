@@ -14,7 +14,9 @@ seconds, and never used `--failed`. v0.8.11 makes the cheap path the easy one ([
 A real run on v0.8.14 then spent its hours in a QA set's long stages: whole reruns of a browser stage baton could
 not narrow, nine runs of a final QA phase that each found one red, and failing tests that waited out their
 timeouts. v0.8.15 runs every stage in a QA phase and reruns only what failed until all of it passes
-([below](#since-v0811-a-qa-sets-hours)).
+([below](#since-v0811-a-qa-sets-hours)). A run on v0.8.16 lost about two hours to four whole runs of one QA set,
+three of them killed by the machine: v0.8.17 says when a stage is the machine's, and gives the human
+`/baton wrap` ([below](#since-v0815-the-machines-failures)).
 
 Studied 2026-10-17 from the runs' records (`state.json`, `events.jsonl`, job logs, read-only), for the two runs
 below. The second is a private project: only its numbers are given here.
@@ -208,3 +210,28 @@ read-only). It is a private project: only its numbers are given here.
 
 To measure in the next real run: whole reruns of a stage (`job_queued` with `reruns`, `gate_questioned` with
 `whole`), runs per QA phase, `qa_confirm_queued` against `qa_confirm_skipped`, and `timeout_failures`.
+
+## Since v0.8.15: the machine's failures
+
+Read 2026-10-24 from a real run on v0.8.16 (its record and job logs, read-only). It is a private project: only its
+numbers are given here.
+
+- **Four whole runs of one QA set.** The run's final QA phase ran its staged set whole four times, 40 to 49 minutes
+  each, about two hours of the wall clock between them.
+- **The machine killed the build three times.** In three of the four runs the out-of-memory killer of the 23.4 GiB
+  Docker VM took the set's build, which ran beside a second copy of the project's stack. The project's own script
+  printed that the VM's kernel had logged out-of-memory lines after the first. baton knew no memory signature, and
+  called a log the environment's only when no test failed anywhere in it, so each run read as one more red stage.
+  The agent found the cause, and fixed it, only after the third.
+- **The human wanted it over.** They had QA of their own to start, and nothing lighter to say so with than
+  `/baton drop`.
+
+| Finding | v0.8.17 |
+|---|---|
+| No memory signature | A process killed for memory (a runtime out of heap, the kernel's out-of-memory killer, exit code 137) is an environment line (`lane.EnvKilled`), never matched in a line that names a test. |
+| A test failure elsewhere hid it | Each failed stage with no failure ids is read in its own part of the log (`lane.StageEnvironment`): the result names a stage the machine killed as the machine's, and asks to rerun it alone and give it room. |
+| The same loss again | The next whole run of that command is questioned once (`env_again`), and a second whole run of a phase's gate that loses a stage to the same kind is pushed to the human, once per phase and kind (`env_repeated`). |
+| No way to say "finish now" | `/baton wrap`: every phase still runs and lands, but no gate runs whole a second time. Confirmation runs are skipped, whole reruns refused, and only what failed reruns; a phase's first run of its gate keeps going. |
+
+To measure in the next real run: `gate_questioned` of type `env_again`, `env_repeated`, and how many whole runs a
+QA phase makes before and after `wrap_started`.

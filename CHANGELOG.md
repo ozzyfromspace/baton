@@ -4,6 +4,60 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-10-24
+
+A real run on v0.8.16 left its human confused twice, and lost about two hours to full runs. A third plan in one
+session finished when its last phase agent's work landed, and nothing said so: no line in the session, no push,
+and from a phone the idle session looked stuck. Before that, with the last phase at work in its agent, the lead's
+last line said no phase could start yet, as if one were still to come. And the final QA phase ran its 40–49 minute
+set whole four times while the machine's out-of-memory killer took its build in three of them, each read as one
+more red stage; the human, who wanted the run over, had nothing lighter to say so with than dropping it. So a new
+plan now starts fresh, a plan's end is always told, the wait line says what the run waits on, a stage the machine
+killed is said to be the machine's, and `/baton wrap` wraps a long run up. The evidence is in
+[`docs/research/gates.md`](docs/research/gates.md) ("Since v0.8.15: the machine's failures").
+
+A session on v0.8.x moves to v0.8.17 by itself at its next restart point. A plan attached before you update keeps
+what it carried from the plan before it, so its end can still go untold: update between runs (`/baton update`).
+
+### Added
+
+- **`/baton wrap`.** Wraps a long run up: every phase still runs and lands, but no gate runs whole a second time.
+  Confirmation runs are skipped, a gate whose command already ran whole in its phase is refused, and only what
+  failed reruns. A confirmation run under way is stopped, its phase done on the rerun that passed (a decision with
+  its undo), and so is a second whole run under way; a phase's first run of its gate keeps going, since it is that
+  phase's only evidence. Each phase agent at work and your session are told to finish on the evidence they have,
+  and a fresh agent's brief says so. Only you start it, in a turn of yours in the lead's session: a phase agent,
+  or a turn baton or a notification started, is refused. `/baton wrap --off` lifts it, and a new plan starts
+  without it. Logged as `wrap_started`, `wrap_ended` and `wrap_refused`.
+- **A stage the machine killed is said to be the machine's.** A process killed for memory (a runtime out of heap,
+  the kernel's out-of-memory killer, exit code 137) is now a known environment failure, and a staged gate's log is
+  read a stage at a time, so a test that failed in another stage no longer hides it. A red result names each stage
+  the machine killed, "not failed by the code", and asks to rerun it alone and give it room. The next whole run of
+  that command is questioned once (`gate_questioned` of type `env_again`; `--why` answers it), and when a second
+  whole run of a phase's gate loses a stage to the same kind, you're pushed once per phase and kind
+  (`env_repeated`), since only you can give the machine more memory.
+
+### Changed
+
+- **A new plan starts fresh.** Attaching a plan (`/baton run`, an approval in plan mode, "Start the new plan from
+  P0") keeps only what is the session's, the host's or the account's and still true under a new plan: the turn
+  under way, background work and open calls, the mod's sequence, the context reading and its valves, a pending
+  restart, the crash count, and lines and notices you haven't seen yet. Every question asked, refusal counted and
+  flag of the plan before starts over. A test lists every field of the run's state as kept or fresh, and fails on
+  a new one in neither.
+- **The wait line says what the run waits on.** When only phase agents' work holds the run, your session's stop
+  line names them and what waits on them, and says nothing waits on you: "baton: P4, the last phase, is with its
+  phase agent — baton says here when it lands and the plan is complete. Nothing waits on you." It used to say no
+  phase could start yet (`idle_on_agents`).
+
+### Fixed
+
+- **A plan's end is always told.** A plan attached after another had finished inherited the flag that the first
+  one's end was told, so when its last phase agent's work landed, baton logged no `plan_complete`, pushed nothing
+  and said nothing. Now every plan's end is announced and pushed, and a landing that completes the plan also
+  leaves your session's model baton's message to sum the run up for you, naming the decisions made without you:
+  an idle session is woken for it, and one mid-turn is given it at its stop.
+
 ## [0.8.16] - 2026-10-23
 
 A real run on v0.8.14, started before its human went to sleep, lost 4h50m on one phase agent's merge, and every
@@ -1753,7 +1807,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.16...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.17...HEAD
+[0.8.17]: https://github.com/ozzyfromspace/baton/compare/v0.8.16...v0.8.17
 [0.8.16]: https://github.com/ozzyfromspace/baton/compare/v0.8.15...v0.8.16
 [0.8.15]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...v0.8.15
 [0.8.14]: https://github.com/ozzyfromspace/baton/compare/v0.8.13...v0.8.14
