@@ -566,6 +566,7 @@ func (c *Coordinator) landed(now time.Time, s *state.Store, e state.Worker, l st
 			done = decide.PlanDone(len(pl.Phases), len(decide.WithoutHuman(st.Decisions))+len(decide.WithoutHuman(workers)),
 				len(decide.LeftForYou(st.Decisions))+len(decide.LeftForYou(workers)), saving)
 			st.Run.Notices = append(st.Run.Notices, state.Notice{Kind: "plan_complete", Text: pl.Title + ": " + done, At: now})
+			tellComplete(st, pl, e.Phase, saving, workers, now)
 		}
 		return nil
 	})

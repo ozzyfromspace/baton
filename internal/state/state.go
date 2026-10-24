@@ -268,10 +268,10 @@ func Attach(p plan.Plan, now time.Time, o Origin) State {
 }
 
 // Reattach is Attach for a project that may already have an owner: ownership survives a new plan, and so
-// do the workers still on the roster, which the host retires as the replaced plan's.
+// do the workers still on the roster, which the host retires as the replaced plan's. Of the runtime, it
+// keeps only what is the session's, the host's or the account's (freshRun).
 func Reattach(prev State, p plan.Plan, now time.Time, o Origin) State {
-	run := prev.Run
-	run.Compaction, run.StopBlocks, run.Escalation = Compaction{Epoch: prev.Run.Compaction.Epoch}, 0, nil
+	run := freshRun(prev.Run)
 	st := attachKeeping(prev, &run, p, now, o)
 	st.JobSeq, st.IDPrefix = prev.JobSeq, prev.IDPrefix
 	return st

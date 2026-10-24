@@ -31,6 +31,7 @@ const (
 	MessageCommit = "commit" // the lead's uncommitted changes have held a phase's landing long: it is to commit them
 	MessageWords  = "words"  // the human's words for a phase's agent reached none, and are the lead's (HumanWords)
 	MessageBranch = "branch" // the lead's checkout is on a branch the run's cannot follow, and a landing waits for it
+	MessageDone   = "done"   // a phase agent's landing completed the plan, and the lead is to sum the run up for the human
 )
 
 // PlanText is what a worker's agent was given of the plan, as hashes (TextSum): the standing rules, and

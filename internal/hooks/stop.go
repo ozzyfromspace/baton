@@ -202,6 +202,9 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 			d.say("baton: plan complete — " + done)
 			d.emit("plan_complete", saving.Log(map[string]any{"decisions": n, "left": left}))
 		}
+		if !w.Worker {
+			mailAtEnd(st, &d)
+		}
 		return d
 	}
 	if st.CheckpointAsked && !st.BoundaryOwed {
@@ -324,16 +327,20 @@ func decideStop(st *state.State, pl plan.Plan, now time.Time, w decide.Words, wo
 		d.say(fmt.Sprintf("baton: %s waits on the human's answer to proposal %s, which baton puts to them", cur, rp.ID))
 		d.emit("idle_on_relay", map[string]any{"phase": st.Current, "id": rp.ID})
 	case st.Current == "":
-		// Every phase left waits for a job, or a gate in the working tree holds the next one, so there is
-		// nothing to work on; baton takes the next phase up as soon as one can start. When a phase waits on
-		// the human's answer about the agent they stopped twice, the line says so, and when baton takes it
-		// back for the lead (stoppedWaits).
+		// Every phase left waits for a job or a phase agent's work, or a gate in the working tree holds the
+		// next one, so there is nothing to work on; baton takes the next phase up as soon as one can start.
+		// When agents' work alone holds the run, the line names it (agentsHold). When a phase waits on the
+		// human's answer about the agent they stopped twice, the line says so, and when baton takes it back
+		// for the lead (stoppedWaits).
 		st.Run.StopBlocks = 0
 		waiting := ""
 		if jobs := st.Unfinished(); len(jobs) > 0 {
 			waiting = waitingOn(jobs)
 		}
-		line := decide.NoPhaseYet(waiting, st.HereGate())
+		line := agentsHold(*st, &d, pl)
+		if line == "" {
+			line = decide.NoPhaseYet(waiting, st.HereGate())
+		}
 		if r := st.StoppedTwice(); r != nil {
 			line = stoppedWaits(st, &d, pl, *r, line, now, w.Timeout)
 		}

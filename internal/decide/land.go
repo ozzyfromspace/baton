@@ -170,6 +170,8 @@ func MailTyped(kinds []string) string {
 			return "[baton] The human wrote something for a phase's agent that did not reach it: baton's message, attached, has their words."
 		case state.MessageBranch:
 			return MailBranch
+		case state.MessageDone:
+			return MailDone
 		}
 	}
 	return "[baton] baton has a message for you, attached."
