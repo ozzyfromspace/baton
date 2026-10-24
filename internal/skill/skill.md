@@ -6,12 +6,13 @@ Act on the first word of the arguments; with none, act as for `help`. If it name
 
 Explain briefly:
 - `/baton plan <goal>`: plan the work in plan mode. Once the user approves the plan, baton runs it.
-- `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. If this conversation had other turns, baton compacts them away before a new plan's first phase.
+- `/baton run [plan file]`: run a plan. This session's own plan goes on where it stopped (after a pause or a block, or with phases the user added to its file); any other plan is attached and started. baton compacts this conversation's earlier turns away before a new plan's first phase.
 - `/baton start`: hand this session to baton, keeping the conversation. `/baton plan` and `/baton run` do it when they need to.
 - `/baton replan [what to consider]`: restructure the running plan's phases not started yet, so more can run at once, weighing what the user gives; baton checks the result, never changes a phase that started, and records the change with its undo.
 - `/baton status`: where the run stands.
-- `/baton board`: the plan step by step: how each phase stands and what the lead is doing (the line above the prompt says it in brief, and `/baton-board` opens or closes the board while Claude works).
+- `/baton board`: the plan step by step: how each phase stands and what the lead is doing (`/baton-board` opens or closes it while Claude works).
 - `/baton pause`: take the wheel; `/baton run` gives it back.
+- `/baton wrap`: wrap the run up: every phase still lands, but no gate runs whole a second time (`--off` lifts it).
 - `/baton drop`: drop the run. Its plan is set aside, and baton does nothing more until the next plan.
 - `/baton clean`: end what no live session uses: phase agents, jobs, lanes, worktrees and leftover files (`--dry-run` only says what it would end).
 - `/baton exit`: leave baton; this conversation goes on as plain Claude Code.
@@ -103,13 +104,17 @@ Where baton runs without its mod (the phases one at a time in this session), it 
 
 Run `baton pause` and report the result in one line. It hands the session to the human: baton stops compacting, nudging and escalating until `/baton run` gives the session back.
 
+## wrap
+
+Run `baton wrap` (passing through `--off`) only when the user typed /baton wrap, and report its result.
+
 ## drop
 
-Run `baton drop` and report the result in one line. The run's plan is set aside (its record is kept, and `baton status` lists it), and baton does nothing more here until the next plan; the session stays hosted.
+Run `baton drop` and report the result in one line. The run's plan is set aside, its record kept, and baton does nothing more here until the next plan; the session stays hosted.
 
 ## clean
 
-Run `baton clean` (passing through `--dry-run`) and show its output verbatim. It ends what no live session in this project uses (the phase agents, jobs, worktrees, lanes and leftover files of runs nobody will come back to), leaves every live run alone, this one included (`/baton drop` first to clean it), and lists what it keeps, with the command to remove each.
+Run `baton clean` (passing through `--dry-run`) and show its output verbatim. It ends what no live session in this project uses, leaves every live run alone, this one included (`/baton drop` first to clean it), and lists what it keeps, with the command to remove each.
 
 ## exit
 
@@ -130,7 +135,7 @@ Run `baton start "<what you should do next once hosted>"`, for example `baton st
 - **If it says this session has no terminal (desktop app or IDE panel):** tell the user that baton needs a terminal session started with `baton`.
 - **If it says this session is not hosted by baton because it inherited baton's settings** (Claude Code moved it to its background, say): relay the way back it gives (`baton --resume <session id>` in a terminal) to the user word for word, then stop.
 
-baton does not stop claude while background tasks or subagents are still running; it tries again at the next stop.
+baton does not stop claude while background tasks or subagents run; it tries again at the next stop.
 
 ## version
 
@@ -162,7 +167,7 @@ Run `baton update` (passing through `--check`) and show its output. It updates t
 
 - A run must not stop for something it can work around. When something goes wrong, keep the plan moving on a reversible path, and tell the human in the lightest way that fits:
   - `baton note "<what you did>" --undo "<how to reverse it>"`: you already took a reversible path, and the human should know. The run continues.
-  - `baton propose "<what you will do>" --because "<what went wrong>" --undo "<how to reverse it>" --wait 5m`: a rule or convention of the plan can't be followed right now, or a human might choose differently. baton prints the exact question to put to the human; ask it exactly as printed. If nobody answers by its deadline (even if the question went away unanswered), baton picks Go ahead, and you do it. If the human answers Wait for me, wait for their word; with none for 20 minutes, baton tells you to go on. An outward or irreversible act (a push, a release, a deploy, a delete, a payment, a message sent, a force-push) is answered Not now at its deadline instead: do it only if it is safely reversible and stays inside the project (pushing your own branch, a draft pull request, deleting files you generated), and `baton note` it; otherwise leave it for the human, and carry on with what does not need it. Give the shortest wait that fits, from 5 to 20 minutes, since a waiting proposal costs the run time: 5m for most, longer only for an action the human would most want to catch. With no `--wait`, or one outside that range, it waits 10 minutes (unless the human set another). A proposal is an action that makes progress: waiting, doing nothing or stopping is not a proposal. One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.
+  - `baton propose "<what you will do>" --because "<what went wrong>" --undo "<how to reverse it>" --wait 5m`: a rule or convention of the plan can't be followed right now, or a human might choose differently. baton prints the exact question to put to the human; ask it exactly as printed. If nobody answers by its deadline, even if the question went away, baton picks Go ahead, and you do it. If the human answers Wait for me, wait for their word; with none for 20 minutes, baton tells you to go on. An outward or irreversible act (a push, a release, a deploy, a delete, a payment, a message sent, a force-push) is answered Not now at its deadline instead: do it only if it is safely reversible and stays inside the project (pushing your own branch, a draft pull request, deleting files you generated), and `baton note` it; otherwise leave it for the human, and carry on with what does not need it. Give the shortest wait that fits, from 5 to 20 minutes, since a waiting proposal costs the run time: 5m for most, longer only for an action the human would most want to catch. With no `--wait` in that range, it waits 10 minutes (unless the human set another). A proposal is an action that makes progress: waiting, doing nothing or stopping is not a proposal. One proposal covers the case in front of you; when the same thing happens again, `baton note` it each time.
   - `baton blocked "<why>" --tried "<what you tried>"`: only if every way forward is irreversible, needs a secret only the human holds, or is one the model's safeguards stopped (below). Your phase stops until they answer; only they can clear it. If nobody answers in 30 minutes, baton lifts it: look again for a safe way to complete the phase without dropping work (the parts that do not need the answer first, or a reversible way around), and propose it, which goes ahead if nobody answers. If you are still blocked for the same reason, block again.
 - If the model's safeguards stop one of your responses (Claude Code notes it, and lets you go on once), never rephrase, split up or disguise the work to get past them. Go on with what stays clear of it. If the phase cannot go on without it, run `baton blocked "<what the safeguards stopped>" --tried "<what you did instead>"` and end your turn: the human decides how the phase goes on. When the safeguards refuse a turn outright, it ends, and baton tells the human; baton never retries it.
 - Don't ask the human questions of your own (AskUserQuestion) while a plan runs: nobody may be there, and the run would wait. Decide and carry on, or use `baton propose`. (baton refuses such questions unless the human started the turn, and even then may answer one for them at its deadline, 10 minutes unless they set another, with the option marked "(Recommended)", or else the first: so put the safe choice there.) The exception is a question baton gives you to put to the human: ask it exactly as given. A phase agent's questions are baton's to ask, not yours.
