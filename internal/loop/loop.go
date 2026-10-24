@@ -251,8 +251,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 	}
 	l.lapseReplan(v, st)
-	if st.Mode == state.ModeComplete && len(st.Due()) > 0 {
-		// A verification completed the plan while the session was idle: it is told, and sums the run up.
+	if st.Mode == state.ModeComplete && (len(st.Due()) > 0 || len(st.Mail()) > 0) {
+		// A verification, or a phase agent's landing (state.MessageDone), completed the plan while the
+		// session was idle: it is told, and sums the run up.
 		l.why, l.wished = l.gate(v, st), false
 		l.clearDraft(v, st, in)
 		l.deliver(v, st, in)

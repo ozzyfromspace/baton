@@ -288,7 +288,7 @@ func (h *handlers) phaseBrief(c Context, s *state.Store, st state.State, b state
 	}
 	doc, _ := os.ReadFile(pl.File)
 	handoff, _ := os.ReadFile(s.HandoffPath())
-	in := brief.Input{Kind: b.Kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s), Decisions: s.Decisions(st)}
+	in := brief.Input{Kind: b.Kind, Plan: pl, Doc: doc, State: st, Handoff: string(handoff), Words: words(c, s), Decisions: s.Decisions(st), Wrap: wrapOf(s, st)}
 	if s.Worker() != "" {
 		in.Tree, in.Needs = s.Root, builtOn(s, st.Current)
 	}
