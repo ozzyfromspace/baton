@@ -40,8 +40,8 @@ func TestTierFor(t *testing.T) {
 			t.Errorf("%s with %v: %s, want %s", c.phase, c.allowed, got, c.want)
 		}
 	}
-	if r := st.Raised("P1"); r == nil || *r != (plan.Tier{Model: "opus", Effort: "max"}) || st.Raised("P2") != nil {
-		t.Errorf("raised: %v %v", r, st.Raised("P2"))
+	if r := st.Raised(p, "P1"); r == nil || *r != (plan.Tier{Model: "opus", Effort: "max"}) || st.Raised(p, "P2") != nil {
+		t.Errorf("raised: %v %v", r, st.Raised(p, "P2"))
 	}
 }
 
@@ -162,5 +162,86 @@ func TestRedRuns(t *testing.T) {
 	}
 	if n, _ := RedRuns(st, "P1", st.LastRaise("P1")); n != 0 {
 		t.Errorf("after the raise: %d", n)
+	}
+}
+
+// The plan sets each phase's tier and baton only raises it: a raise stands while the plan names the tier it
+// was raised from, and once the human writes another tier into the plan, that tier is the phase's, and its
+// steps count again. A raise recorded before v0.8.19 names no plan tier, and stands.
+func TestARaiseStandsUntilThePlanChangesTheTier(t *testing.T) {
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	high, xhigh, max := plan.Tier{Model: "opus", Effort: "high"}, plan.Tier{Model: "opus", Effort: "xhigh"}, plan.Tier{Model: "opus", Effort: "max"}
+	on := func(t plan.Tier) plan.Plan {
+		return plan.Plan{Phases: []plan.Phase{{ID: "P1", Model: t.Model, Effort: t.Effort}}}
+	}
+	st := New()
+	st.Phases["P1"] = &PhaseState{Status: PhaseActive}
+	RaiseTier(&st, "P1", TierRaise{From: high, To: xhigh, Plan: high, Why: "3 red runs", At: at})
+	if got := TierFor(st, on(high), "P1", nil); got != xhigh || len(Raises(st, on(high), "P1")) != 1 {
+		t.Errorf("raised under the same plan tier: %s", got)
+	}
+	if got := TierFor(st, on(max), "P1", nil); got != max || Raises(st, on(max), "P1") != nil || st.Raised(on(max), "P1") != nil {
+		t.Errorf("after the human wrote max into the plan: %s", got)
+	}
+	medium := plan.Tier{Model: "opus", Effort: "medium"}
+	if got := TierFor(st, on(medium), "P1", nil); got != medium {
+		t.Errorf("after the human lowered it in the plan: %s", got)
+	}
+	RaiseTier(&st, "P1", TierRaise{From: medium, To: high, Plan: medium, At: at.Add(time.Minute)})
+	if rs := Raises(st, on(medium), "P1"); len(rs) != 1 || TierFor(st, on(medium), "P1", nil) != high {
+		t.Errorf("a raise under the new plan tier: %+v", rs)
+	}
+	old := New()
+	old.Phases["P1"] = &PhaseState{Status: PhaseActive, Raises: []TierRaise{{From: high, To: xhigh, At: at}}}
+	if got := TierFor(old, on(max), "P1", nil); got != xhigh {
+		t.Errorf("a raise from before v0.8.19: %s", got)
+	}
+}
+
+// A change of the plan's text that changes phases' tiers lists each phase not done whose tier changed,
+// with where it stands: the lead's (and whether the lead moves), a phase agent's (and whether it is
+// replaced: never one spawned on no tier), started and neither, or not started.
+func TestTierChanges(t *testing.T) {
+	high, xhigh := plan.Tier{Model: "opus", Effort: "high"}, plan.Tier{Model: "opus", Effort: "xhigh"}
+	mk := func(t plan.Tier) plan.Plan {
+		var p plan.Plan
+		for _, id := range []string{"P0", "P1", "P2", "P3", "P4", "P5", "P6"} {
+			p.Phases = append(p.Phases, plan.Phase{ID: id, Model: t.Model, Effort: t.Effort, After: []string{}})
+		}
+		return p
+	}
+	was, now := mk(high), mk(xhigh)
+	now.Phases[6].Effort = "high" // unchanged
+	st := New()
+	st.Mode, st.Current = ModeRunning, "P1"
+	st.Run.Launched = high
+	st.Phases["P0"] = &PhaseState{Status: PhaseDone}
+	st.Phases["P1"] = &PhaseState{Status: PhaseActive}
+	st.Phases["P2"] = &PhaseState{Status: PhaseWorking}
+	st.Phases["P3"] = &PhaseState{Status: PhaseWorking}
+	st.Phases["P4"] = &PhaseState{Status: PhaseVerifying}
+	st.Workers = []Worker{{Phase: "P2", Status: WorkerWorking, Tier: high}, {Phase: "P3", Status: WorkerWorking}}
+	got := TierChanges(st, was, now)
+	want := []TierChange{
+		{Phase: "P1", From: high, To: xhigh, Held: HeldByLead, Moves: true},
+		{Phase: "P2", From: high, To: xhigh, Held: HeldByAgent, Moves: true},
+		{Phase: "P3", From: high, To: xhigh, Held: HeldByAgent},
+		{Phase: "P4", From: high, To: xhigh, Held: HeldStarted},
+		{Phase: "P5", From: high, To: xhigh},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("changes %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("change %d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	st.Run.Launched = xhigh
+	if c := TierChanges(st, was, now)[0]; c.Phase != "P1" || c.Moves {
+		t.Errorf("a lead on the new tier already moves: %+v", c)
+	}
+	if c := TierChanges(st, was, was); c != nil {
+		t.Errorf("no change: %+v", c)
 	}
 }

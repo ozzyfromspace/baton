@@ -246,14 +246,18 @@ func (l *Loop) retierOn(v host.View, st state.State, in host.Injector, t plan.Ti
 	if shown.Model == "" {
 		shown.Model = t.Model
 	}
+	var raised *state.TierRaise
+	if pl, ok := l.tierPlan(v.Now); ok && phase != "" {
+		raised = state.LastRaised(st, pl, phase)
+	}
 	l.update(func(st *state.State) {
 		tier := shown
 		st.Run.Restart = &state.Restart{From: l.Version, To: l.Version, At: v.Now, Tier: &tier, Phase: phase}
 		st.Run.Model, st.Run.Effort = "", "" // learned again from the restarted session, so its tier is judged on its own (leadServed)
 		if mid {
 			why := ""
-			if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
-				why = ps.Raises[len(ps.Raises)-1].Why
+			if raised != nil {
+				why = raised.Why
 			}
 			state.Tell(st, state.Message{Kind: state.MessageTier, Phase: phase, Text: decide.TierRestartedMail(phase, shown, why)}, v.Now)
 		}

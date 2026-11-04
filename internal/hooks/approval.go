@@ -385,8 +385,33 @@ func planQuestionOf(r *state.PlanQuestion) decide.Question {
 // that holds no phase takes up one the change lets start (state.Extend), and planDrift returns it as
 // took: it starts after the boundary compaction this stop queues. While a replan is open, the plan file is
 // the replan's to change (package replan), and left alone; a text a replan kept copied back over it undoes
-// that replan and those after it, and is followed as such (replan.Restore).
-func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
+// that replan and those after it, and is followed as such (replan.Restore). A change of a phase's tier is
+// said by name for each phase under way and logged for each phase (tier_changed): the loops that hold them
+// move onto their new tiers (loop/leadtier.go, loop/escalate.go's retier).
+func planDrift(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, evs []event, took string) {
+	say, ev, took := planDrifted(st, s, pl, now)
+	if ev != nil {
+		evs = append(evs, *ev)
+	}
+	if ev == nil || ev.kind != "plan_changed" || ev.fields["adopted"] != true {
+		return say, evs, took
+	}
+	adopted, err := s.LoadPlan()
+	if err != nil {
+		return say, evs, took
+	}
+	changes := state.TierChanges(*st, pl, adopted)
+	for _, c := range changes {
+		evs = append(evs, event{"tier_changed", c.Fields()})
+	}
+	if line := decide.TierChanged(changes); line != "" {
+		say = strings.TrimSpace(say + "\n" + line)
+	}
+	return say, evs, took
+}
+
+// planDrifted is planDrift without its part about the tiers: the following of the plan file itself.
+func planDrifted(st *state.State, s *state.Store, pl plan.Plan, now time.Time) (say string, ev *event, took string) {
 	if pl.File == "" || st.PlanQuestion != nil || st.Replan != nil || (st.Mode != state.ModeRunning && st.Mode != state.ModePaused) {
 		return "", nil, ""
 	}

@@ -866,6 +866,7 @@ func cmdDone(args []string, io IO) int {
 	// The plan file is read again as the phase ends, so a phase the human just added to it comes next. A
 	// worker's plan is the run's narrowed to its phase: the plan file is the lead's to follow.
 	var followed bool
+	was := pl
 	if s.Worker() == "" {
 		adopted, changed, rerr := plan.Recheck(pl, state.Remaining(cur, pl))
 		if followed = changed && rerr == nil && s.WritePlan(adopted) == nil; followed {
@@ -908,6 +909,7 @@ func cmdDone(args []string, io IO) int {
 			if added, _ := state.Extend(st, pl, io.Now()); len(added) > 0 {
 				s.Event("plan_changed", map[string]any{"plan": pl.File, "adopted": true, "added": added})
 			}
+			tierChanged(s, st, was, pl)
 		}
 		standing, reds = st.Standing(id), nil
 		for _, j := range standing {
@@ -1514,6 +1516,7 @@ func runAdded(io IO, s *state.Store, pl plan.Plan) int {
 // phase takes up one that can start (state.Extend): one the plan file adds, or one free to start since the
 // run was paused.
 func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
+	was := pl
 	adopted, changed, err := plan.Recheck(pl, state.Remaining(cur, pl))
 	if err != nil {
 		first := strings.SplitN(err.Error(), "\n", 2)[0]
@@ -1547,6 +1550,7 @@ func resume(io IO, s *state.Store, pl plan.Plan, cur state.State) int {
 		}
 		if changed {
 			st.PlanDrift = ""
+			tierChanged(s, st, was, pl)
 		}
 		grew, covered = st.GrownWhilePaused(), !st.Covered.IsZero()
 		kept, keeps = state.Keep(st, io.Now(), origin)

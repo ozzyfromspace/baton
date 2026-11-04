@@ -37,13 +37,13 @@ func TestTheLeadsRedPhaseIsRaisedAStepAtATime(t *testing.T) {
 		redRuns(st, "P1", 2, r.now)
 	})
 	r.tick(time.Second)
-	if st := r.state(); st.Raised("P1") != nil {
+	if st := r.state(); lastRaise(st, "P1") != nil {
 		t.Fatalf("raised after two red runs: %+v", st.Phases["P1"].Raises)
 	}
 	r.set(func(st *state.State) { redRuns(st, "P1", 1, r.now) })
 	r.tick(time.Second)
 	st := r.state()
-	if raised := st.Raised("P1"); raised == nil || raised.String() != "opus/xhigh" {
+	if raised := lastRaise(st, "P1"); raised == nil || raised.String() != "opus/xhigh" {
 		t.Fatalf("after three: %+v", st.Phases["P1"].Raises)
 	}
 	if raise := st.Phases["P1"].Raises[0]; raise.From.String() != "opus/high" || raise.Reds != 3 || !strings.Contains(raise.Why, "3 red runs of its gate (`go test ./...`)") {
@@ -58,7 +58,7 @@ func TestTheLeadsRedPhaseIsRaisedAStepAtATime(t *testing.T) {
 	}
 	r.set(func(st *state.State) { redRuns(st, "P1", 3, r.now) })
 	r.tick(time.Second)
-	if raised := r.state().Raised("P1"); raised == nil || raised.String() != "opus/max" {
+	if raised := lastRaise(r.state(), "P1"); raised == nil || raised.String() != "opus/max" {
 		t.Fatalf("after three more: %v", raised)
 	}
 	r.set(func(st *state.State) { redRuns(st, "P1", 3, r.now) })
@@ -92,7 +92,7 @@ func TestNoRaiseWithEscalateOff(t *testing.T) {
 		redRuns(st, "P1", 9, r.now)
 	})
 	r.tick(time.Second)
-	if st := r.state(); st.Raised("P1") != nil {
+	if st := r.state(); lastRaise(st, "P1") != nil {
 		t.Fatalf("raised: %+v", st.Phases["P1"].Raises)
 	}
 }
@@ -144,7 +144,7 @@ func TestARedPhaseAgentIsRaisedAndReplacedOnTheNewTier(t *testing.T) {
 		return nil
 	})
 	x.tick(time.Second)
-	if raised := x.state().Raised("P1"); raised == nil || raised.String() != "opus/xhigh" {
+	if raised := lastRaise(x.state(), "P1"); raised == nil || raised.String() != "opus/xhigh" {
 		t.Fatalf("not raised: %+v", x.state().Phases["P1"])
 	}
 	x.tick(time.Second)
@@ -168,6 +168,9 @@ func TestARedPhaseAgentIsRaisedAndReplacedOnTheNewTier(t *testing.T) {
 	if got := x.spawnCmds[len(x.spawnCmds)-1]; got.Phase != "P1" || got.Effort != "xhigh" || got.Model != "opus" {
 		t.Errorf("the fresh agent's spawn: %+v", got)
 	}
+	if !x.subLogged("P1", "agent_retiered", map[string]any{"to": "opus/xhigh", "by": "raise", "idle": true}) {
+		t.Errorf("no agent_retiered by raise")
+	}
 }
 
 // A phase whose plan names no tier, as every plan from before tiers, is never raised, however often its
@@ -182,7 +185,7 @@ func TestAPhaseWithNoTierIsNeverRaised(t *testing.T) {
 		redRuns(st, "P1", 9, r.now)
 	})
 	r.run(time.Minute)
-	if st := r.state(); st.Raised("P1") != nil {
+	if st := r.state(); lastRaise(st, "P1") != nil {
 		t.Fatalf("raised: %+v", st.Phases["P1"].Raises)
 	}
 	if _, ok := r.loop.Retier(); ok || strings.Contains(r.events(), "tier_") {
@@ -195,7 +198,81 @@ func TestAPhaseWithNoTierIsNeverRaised(t *testing.T) {
 	x.sub("P1").Update(func(st *state.State) error { redRuns(st, "P1", 9, x.now); return nil })
 	x.tick(time.Second)
 	x.tick(time.Second)
-	if raised := x.state().Raised("P1"); raised != nil {
+	if raised := lastRaise(x.state(), "P1"); raised != nil {
 		t.Errorf("a phase agent's phase with no tier was raised: %v", raised)
+	}
+}
+
+// lastRaise is the tier phase was last raised to in st, standing or not, or nil.
+func lastRaise(st state.State, phase string) *plan.Tier {
+	if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
+		t := ps.Raises[len(ps.Raises)-1].To
+		return &t
+	}
+	return nil
+}
+
+// The plan sets each phase's tier: when the human changes the tier of a phase whose agent is at work, up
+// or down, a fresh agent takes it up on the new tier once the agent is idle, or Timing.TierWait after baton
+// saw the change, whatever it is doing, with escalate off too; an agent spawned on no tier goes on as it is.
+func TestAPlanChangeOfATierReplacesTheAgentAtWork(t *testing.T) {
+	pl := plan.Plan{Version: 1, Title: "Demo", File: "/plans/demo.md", Phases: []plan.Phase{
+		{ID: "P0", Title: "zero", After: []string{}},
+		{ID: "P1", Title: "one", After: []string{}, Model: "opus", Effort: "max"},
+	}}
+	x := newCrewOn(t, 1, pl)
+	x.c.Lead.Tiers = config.Tiers{Models: stdTiers.Models, Steps: 0, After: 3} // escalate off: the plan's word still goes
+	x.atWork("P1")
+	first := x.agent("P1")
+	x.sub("P1").Update(func(st *state.State) error {
+		st.Run.TurnOpen, st.Run.TurnStarted = true, x.now // at work
+		return nil
+	})
+	revised := pl
+	revised.Phases = []plan.Phase{pl.Phases[0], pl.Phases[1]}
+	revised.Phases[1].Effort = "high" // down: the human's to choose
+	x.lead.WritePlan(revised)
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if x.status("P1") != state.WorkerWorking || x.agent("P1").id != first.id {
+		t.Fatalf("an agent at work was replaced mid-turn: %s", x.status("P1"))
+	}
+	x.advance(x.c.Lead.Timing.TierWait)
+	for range 6 {
+		x.tick(time.Second)
+	}
+	next := x.agent("P1")
+	if next.id == first.id {
+		t.Fatalf("no fresh agent after TierWait: %+v\n%s", x.state().Workers, x.events())
+	}
+	if w := x.worker("P1"); w.Tier != (plan.Tier{Model: "opus", Effort: "high"}) {
+		t.Errorf("the fresh agent's worker: %+v", w)
+	}
+	if got := x.spawnCmds[len(x.spawnCmds)-1]; got.Phase != "P1" || got.Effort != "high" || got.Model != "opus" {
+		t.Errorf("the fresh agent's spawn: %+v", got)
+	}
+	if !x.subLogged("P1", "agent_retiered", map[string]any{"from": "opus/max", "to": "opus/high", "by": "plan", "idle": false}) || strings.Contains(x.events(), `"kind":"tier_raised"`) {
+		t.Errorf("events: %s", x.events())
+	}
+	if b := x.briefs[next.id]; !strings.Contains(b, "You run on opus/high, P1's tier from its plan.") {
+		t.Errorf("the fresh agent's brief does not say its tier:\n%s", b)
+	}
+
+	// An agent spawned on no tier, before tiers, goes on as it is.
+	y := newCrewOn(t, 1, plan.Plan{Version: 1, Title: "Demo", File: "/plans/demo.md", Phases: []plan.Phase{
+		{ID: "P0", Title: "zero", After: []string{}}, {ID: "P1", Title: "one", After: []string{}}}})
+	y.c.Lead.Tiers = stdTiers
+	y.atWork("P1")
+	old := y.agent("P1")
+	tiered := y.pl
+	tiered.Phases = []plan.Phase{y.pl.Phases[0], y.pl.Phases[1]}
+	tiered.Phases[1].Model, tiered.Phases[1].Effort = "opus", "max"
+	y.lead.WritePlan(tiered)
+	y.advance(y.c.Lead.Timing.TierWait)
+	for range 4 {
+		y.tick(time.Second)
+	}
+	if y.agent("P1").id != old.id || y.status("P1") != state.WorkerWorking {
+		t.Errorf("an agent spawned on no tier was replaced: %+v", y.state().Workers)
 	}
 }

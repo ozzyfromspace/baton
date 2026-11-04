@@ -72,12 +72,7 @@ func (in Input) tier() (plan.Tier, *state.TierRaise) {
 		return *in.Tier, in.Raise
 	}
 	st := in.State
-	t := state.TierFor(st, in.Plan, st.Current, st.Run.Models)
-	if ps := st.Phases[st.Current]; ps != nil && len(ps.Raises) > 0 {
-		r := ps.Raises[len(ps.Raises)-1]
-		return t, &r
-	}
-	return t, nil
+	return state.TierFor(st, in.Plan, st.Current, st.Run.Models), state.LastRaised(st, in.Plan, st.Current)
 }
 
 // MergeLeft is a merge in progress in a worker's worktree (gitx.Merging): baton merged the run's branch

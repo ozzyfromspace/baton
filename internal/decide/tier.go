@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // The words about a phase's tier, the model and effort it runs on (plan/tier.go, state/tier.go).
@@ -54,7 +55,7 @@ func TierRestartedMail(phase string, t plan.Tier, why string) string {
 		return fmt.Sprintf("baton raised %s to %s after %s, and restarted this session on it (the same conversation; nothing of your work is lost). "+
 			"Take %s up again where you left it: look again at why its gate keeps failing before you change more.", phase, t, why, phase)
 	}
-	return fmt.Sprintf("baton restarted this session on %s, %s's tier (the same conversation; nothing of your work is lost). "+
+	return fmt.Sprintf("baton restarted this session on %s, the tier the plan names for %s (the same conversation; nothing of your work is lost). "+
 		"Take %s up again where you left it.", t, phase, phase)
 }
 
@@ -104,6 +105,12 @@ func TierRaised(phase string, from, to plan.Tier, why string, lead bool) string 
 // AgentTierRaised is why a phase agent's worker is suspended for a fresh agent on tier t.
 func AgentTierRaised(t plan.Tier) string {
 	return "baton raised its phase to " + t.String() + ", and a fresh agent takes it up on that tier"
+}
+
+// AgentTierChanged is why a phase agent's worker is suspended for a fresh agent on tier t, the tier the
+// plan file names for its phase now.
+func AgentTierChanged(t plan.Tier) string {
+	return "the plan file puts its phase on " + t.String() + " now, and a fresh agent takes it up on that tier"
 }
 
 // TierRules are the rules a plan's tiers are set by, as the planning model reads them at its first
@@ -195,4 +202,42 @@ func PlanTiers(pl plan.Plan) string {
 func TierGivenUp(phase string, want, runs plan.Tier, wait time.Duration) string {
 	return fmt.Sprintf("baton: %s goes on on %s, not its tier %s: for %s the lead could not restart on it, since a phase agent was at work "+
 		"(one may be waiting on you). baton restarts the lead on %s as soon as nothing is at work.", phase, runs, want, Spell(wait), want)
+}
+
+// TierChanged tells the human the tiers a change of the plan file changed (state.TierChanges), so that
+// they never have to wonder whether an edit took: each phase under way by name, with what follows for it,
+// and how many not started, which start on theirs. "" for none.
+func TierChanged(changes []state.TierChange) string {
+	var under []string
+	later := 0
+	for _, c := range changes {
+		then := ""
+		switch {
+		case c.Held == state.HeldByLead && c.Moves:
+			then = "your session restarts on it once it is idle, in the same conversation"
+		case c.Held == state.HeldByLead:
+			then = "your session runs on it already"
+		case c.Held == state.HeldByAgent && c.Moves:
+			then = "a fresh phase agent takes it up on it in its worktree, at its agent's next idle moment"
+		case c.Held == state.HeldByAgent:
+			then = "its agent goes on as it is"
+		case c.Held == state.HeldStarted:
+			then = "it goes on on it once it is taken up again"
+		default:
+			later++
+			continue
+		}
+		under = append(under, fmt.Sprintf("%s from %s to %s (%s)", c.Phase, c.From, c.To, then))
+	}
+	notStarted := fmt.Sprintf("%d %s not started, which %s on %s new %s", later, plural(later, "phase", "phases"),
+		plural(later, "starts", "start"), plural(later, "its", "their"), plural(later, "tier", "tiers"))
+	switch {
+	case len(under) == 0 && later == 0:
+		return ""
+	case len(under) == 0:
+		return "baton: the plan file changed the " + plural(later, "tier", "tiers") + " of " + notStarted
+	case later == 0:
+		return "baton: the plan file changed the tier of " + strings.Join(under, "; ")
+	}
+	return "baton: the plan file changed the tier of " + strings.Join(under, "; ") + "; and of " + notStarted
 }

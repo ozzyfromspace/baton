@@ -9,6 +9,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/machine"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
 
@@ -434,6 +435,28 @@ func TestThePlanFileIsWatched(t *testing.T) {
 	f.fire("Stop", map[string]any{})
 	if n := strings.Count(f.eventLog(), `"kind":"plan_changed"`); n != 2 {
 		t.Errorf("%d plan_changed events; each change is reported once", n)
+	}
+}
+
+// An edit to the plan file that changes the tier of the phase the lead holds, and of one not started, is
+// followed at the next stop, said by name, and logged for each phase: the human never has to wonder
+// whether it took.
+func TestATierEditOfThePhaseInHandIsFollowedAndSaid(t *testing.T) {
+	f := newFixture(t, false)
+	file := f.startRun()
+	doc, _ := os.ReadFile(file)
+	edited := strings.Replace(string(doc), "## P1 — Second\n", "## P1 — Second\nModel: opus\nEffort: xhigh\n", 1)
+	edited = strings.Replace(edited, "## P2 — Third\n", "## P2 — Third\nModel: opus\nEffort: max\n", 1)
+	os.WriteFile(file, []byte(edited), 0o644)
+	msg := say(f.fire("Stop", map[string]any{}))
+	if !strings.Contains(msg, "the plan file changed the tier of P1 from the session's to opus/xhigh") || !strings.Contains(msg, "and of 1 phase not started, which starts on its new tier") {
+		t.Fatalf("not said: %q", msg)
+	}
+	if pl, _ := f.store.LoadPlan(); pl.TierOf("P1") != (plan.Tier{Model: "opus", Effort: "xhigh"}) || pl.TierOf("P2") != (plan.Tier{Model: "opus", Effort: "max"}) {
+		t.Fatalf("not followed: %+v", pl.Phases)
+	}
+	if !f.logged("tier_changed", map[string]any{"phase": "P1", "to": "opus/xhigh", "by": "plan", "held": "lead"}) || !f.logged("tier_changed", map[string]any{"phase": "P2", "to": "opus/max"}) {
+		t.Errorf("events: %s", f.eventLog())
 	}
 }
 

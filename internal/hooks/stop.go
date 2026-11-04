@@ -58,12 +58,12 @@ func (h *handlers) stop(c Context) (Result, error) {
 		// follow, and so is restarting on a newer baton.
 		worker := s.Worker() != ""
 		var drift, took string
-		var ev *event
+		var evs []event
 		if !worker {
-			drift, ev, took = planDrift(st, s, pl, c.Now)
+			drift, evs, took = planDrift(st, s, pl, c.Now)
 		}
-		if ev != nil {
-			dropped = append(dropped, *ev)
+		if len(evs) > 0 {
+			dropped = append(dropped, evs...)
 			pl, _ = s.LoadPlan()
 		}
 		d = decideStop(st, pl, c.Now, words(c, s), s.WorkerDecisions(*st))

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/leftover"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/risk"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -201,6 +202,10 @@ type worker struct {
 	// erred is when the API error a fresh agent avoids, last found to end its agent's turn, ended it
 	// (afresh.go).
 	erred time.Time
+	// retierTo is the tier its phase runs on now, other than its agent's, since retierAt, when baton first
+	// saw it: the agent is replaced on it (escalate.go's retier).
+	retierTo plan.Tier
+	retierAt time.Time
 }
 
 // guarded runs fn, a part of a session's tick, so that a panic in it is logged, in l's log and at most

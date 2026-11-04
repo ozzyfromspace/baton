@@ -23,10 +23,7 @@ import (
 // of them last), the loop that holds it running on served (for a part its tier leaves to the session): the
 // raise, or false with why not (its steps are used, or no step is above it).
 func (t tiering) raise(st state.State, pl plan.Plan, phase string, served plan.Tier, reds int, last *state.Job, now time.Time) (state.TierRaise, string, bool) {
-	n := 0
-	if ps := st.Phases[phase]; ps != nil {
-		n = len(ps.Raises)
-	}
+	n := len(state.Raises(st, pl, phase)) // a tier the plan was given since its raises starts the steps again
 	from := state.TierFor(st, pl, phase, t.Models)
 	if n >= t.Steps {
 		return state.TierRaise{}, "its steps are used", false
@@ -45,7 +42,7 @@ func (t tiering) raise(st state.State, pl plan.Plan, phase string, served plan.T
 	if last != nil {
 		command = last.Command
 	}
-	return state.TierRaise{From: from, To: to, Why: decide.RaiseWhy(reds, command), Reds: reds, At: now}, "", true
+	return state.TierRaise{From: from, To: to, Plan: pl.TierOf(phase), Why: decide.RaiseWhy(reds, command), Reds: reds, At: now}, "", true
 }
 
 // tiering is the loop's tier settings, with how it raises a phase.
@@ -142,40 +139,64 @@ func (l *Loop) ceiling(phase string, since time.Time, why string, reds int, log 
 }
 
 // escalate raises the phase of phase agent w (its roster entry e) from its sub-run's jobs, and replaces
-// an agent at work on a tier its phase was raised from: at its next idle moment, or Timing.TierWait after
-// the raise whatever it is doing, so that the raise comes.
+// an agent at work on a tier its phase no longer runs on (retier): one it was raised from, or one the plan
+// file named before the human changed it, whether escalate is on or not.
 func (c *Coordinator) escalate(now time.Time, s *state.Store, st state.State, pl plan.Plan, w *worker, e *state.Worker) {
-	t := c.Lead.tiering()
-	if e == nil || w.ending != "" || w.agent.in == nil || t.Steps == 0 || t.After == 0 {
+	if e == nil || w.ending != "" || w.agent.in == nil {
 		return
 	}
 	sub, err := w.store.Load()
-	if err != nil || sub.Mode != state.ModeRunning || pl.TierOf(w.phase).Zero() {
-		return // a phase its plan names no tier for runs as phases always have: never raised
+	if err != nil || sub.Mode != state.ModeRunning {
+		return
 	}
-	since := st.LastRaise(w.phase)
-	if reds, last := state.RedRuns(sub, w.phase, since); reds >= t.After {
-		if r, why, ok := t.raise(st, pl, w.phase, sub.Run.Served(), reds, last, now); ok {
-			if escalateTo(s, w.store, w.phase, since, r, false) {
-				return // its agent is replaced on a later step, with the raise on record
+	// A phase its plan names no tier for runs as phases always have: never raised.
+	if t := c.Lead.tiering(); t.Steps > 0 && t.After > 0 && !pl.TierOf(w.phase).Zero() {
+		since := st.LastRaise(w.phase)
+		if reds, last := state.RedRuns(sub, w.phase, since); reds >= t.After {
+			if r, why, ok := t.raise(st, pl, w.phase, sub.Run.Served(), reds, last, now); ok {
+				if escalateTo(s, w.store, w.phase, since, r, false) {
+					return // its agent is replaced on a later step, with the raise on record
+				}
+			} else {
+				c.Lead.ceiling(w.phase, since, why, reds, w.store)
 			}
-		} else {
-			c.Lead.ceiling(w.phase, since, why, reds, w.store)
 		}
 	}
-	raised := st.Raised(w.phase)
-	if raised == nil || *raised == e.Tier || e.Status != state.WorkerWorking {
+	c.retier(now, s, st, pl, w, e, sub)
+}
+
+// retier replaces the agent of w (its roster entry e, its sub-run sub) at work on a tier its phase no
+// longer runs on (state.TierFor): at its next idle moment, or Timing.TierWait after baton first saw the
+// change whatever the agent is doing, so that the change comes. A phase's tier changes when baton raises it
+// or when the human changes it in the plan file, up or down: the plan sets each phase's tier. The fresh
+// agent starts on the new tier in the same worktree (respawn). An agent spawned on no tier (before v0.8.18)
+// keeps on, and so does one whose phase's plan names no tier now: nothing would say what to replace it
+// with.
+func (c *Coordinator) retier(now time.Time, s *state.Store, st state.State, pl plan.Plan, w *worker, e *state.Worker, sub state.State) {
+	want := state.TierFor(st, pl, w.phase, c.Lead.Tiers.Models)
+	if e.Status != state.WorkerWorking || e.Tier.Zero() || want.Zero() || state.Fits(want, e.Tier) {
+		w.retierTo = plan.Tier{}
 		return
+	}
+	if w.retierTo != want {
+		w.retierTo, w.retierAt = want, now
+	}
+	since, by, why := w.retierAt, "plan", decide.AgentTierChanged(want)
+	if r := state.LastRaised(st, pl, w.phase); r != nil && r.To == want {
+		by, why = "raise", decide.AgentTierRaised(want)
+		if r.At.Before(since) {
+			since = r.At // its wait counts from the raise
+		}
 	}
 	idle := w.sending == 0 && !sub.Run.TurnOpen
-	if !idle && now.Sub(st.LastRaise(w.phase)) < c.Lead.Timing.TierWait {
+	if !idle && now.Sub(since) < c.Lead.Timing.TierWait {
 		return
 	}
-	to := *raised
 	c.setEntry(s, w.entry, func(x *state.Worker) {
 		if x.Status == state.WorkerWorking {
-			x.Status, x.Since, x.Why, x.Resume = state.WorkerSuspended, now, decide.AgentTierRaised(to), ""
+			x.Status, x.Since, x.Why, x.Resume = state.WorkerSuspended, now, why, ""
 		}
 	})
-	w.store.Event("agent_retiered", map[string]any{"agent": w.entry.AgentID, "from": e.Tier.String(), "to": to.String(), "idle": idle})
+	w.retierTo = plan.Tier{}
+	w.store.Event("agent_retiered", map[string]any{"agent": w.entry.AgentID, "from": e.Tier.String(), "to": want.String(), "idle": idle, "by": by})
 }

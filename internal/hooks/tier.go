@@ -37,11 +37,7 @@ func workerTier(s *state.Store, phase string) (*plan.Tier, *state.TierRaise) {
 		return nil, nil
 	}
 	t := state.TierFor(st, pl, phase, st.Run.Models)
-	if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
-		r := ps.Raises[len(ps.Raises)-1]
-		return &t, &r
-	}
-	return &t, nil
+	return &t, state.LastRaised(st, pl, phase)
 }
 
 // tierCheck is the tiers' part of baton's one turn-back at a plan's first ExitPlanMode (decide.TierCheck),

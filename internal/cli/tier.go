@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/plan"
@@ -94,8 +95,20 @@ func tierLabel(st state.State, pl plan.Plan, phase string) string {
 		return ""
 	}
 	label := "  · " + t.String()
-	if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
-		label += ", raised from " + ps.Raises[0].From.String()
+	if rs := state.Raises(st, pl, phase); len(rs) > 0 {
+		label += ", raised from " + rs[0].From.String()
 	}
 	return label
+}
+
+// tierChanged says and logs, in run st of store s, the tiers the run's following plan now in place of was
+// changed (state.TierChanges, decide.TierChanged): the human is told at the next hook (Run.Announce).
+func tierChanged(s *state.Store, st *state.State, was, now plan.Plan) {
+	changes := state.TierChanges(*st, was, now)
+	for _, c := range changes {
+		s.Event("tier_changed", c.Fields())
+	}
+	if line := decide.TierChanged(changes); line != "" {
+		st.Run.Announce = append(st.Run.Announce, line)
+	}
 }
