@@ -112,7 +112,7 @@ func RedRuns(st State, phase string, since time.Time) (int, *Job) {
 	var last *Job
 	for i := range st.Jobs {
 		j := &st.Jobs[i]
-		if j.Phase != phase || j.Kind == JobAwait || j.Status != JobFailed || !j.Ended.After(since) || len(j.EnvLost) > 0 ||
+		if j.Phase != phase || j.kind() != JobVerify || j.Status != JobFailed || !j.Ended.After(since) || len(j.EnvLost) > 0 ||
 			WholeRun(*j) && j.EnvRead.IsZero() {
 			continue
 		}

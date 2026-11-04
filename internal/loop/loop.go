@@ -61,6 +61,7 @@ type Timing struct {
 	SpawnGrace     time.Duration // a runner gone this long after it was started, without taking up its job, never will
 	SwitchAfter    time.Duration // the phase in hand waiting this long on its job is set aside for another (switch_after)
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
+	TierWait       time.Duration // a phase agent its phase was raised from is replaced at its next idle moment, or this long after the raise (escalate.go)
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
 	SlowAfter      time.Duration // a gate running past 1.5× its command's slowest earlier pass, and this much more, is a look-in for its owner (lookin.go; 0: never)
@@ -92,7 +93,7 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	RecoverAfter: 5 * time.Minute, RecoverEvery: 15 * time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
-	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
+	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, TierWait: 10 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
 	SlowAfter: 15 * time.Minute, HeldAfter: 20 * time.Minute, JobTimeout: config.DefaultVerifyTimeout,
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	ReplanMax:         replan.Max,
@@ -228,6 +229,7 @@ type Loop struct {
 	tierPl     plan.Plan
 	tierOK     bool
 	tierWaited string
+	ceiled     map[string]bool // the phases, by step, a red run again did not raise: logged once (escalate.go)
 
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
 	// and releases the run's look-ins, so it comes before anything is delivered, and reports whether it
@@ -290,6 +292,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 		return
 	}
+	l.escalateLead(v, st) // the lead's phase gone badly is raised a step (escalate.go)
 	l.why = l.gate(v, st)
 	l.wished = false
 	l.resolve(v, st)

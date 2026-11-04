@@ -129,3 +129,38 @@ func TestTheLeadPassesOverAPhaseOnAnotherTier(t *testing.T) {
 		t.Errorf("a lead served opus/max takes %q", Next(st, p))
 	}
 }
+
+// RedRuns counts a phase's own gate failing since a time: never an await, a run that timed out, a whole run
+// its environment took a stage of, or one whose environment has not been read yet.
+func TestRedRuns(t *testing.T) {
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	red := func(id string, min int) Job {
+		return Job{ID: id, Phase: "P1", Kind: JobVerify, Command: "go test ./...", Status: JobFailed, Ended: at.Add(time.Duration(min) * time.Minute), EnvRead: at.Add(time.Duration(min) * time.Minute)}
+	}
+	st := New()
+	st.Jobs = []Job{
+		red("j1", 1), red("j2", 2),
+		{ID: "j3", Phase: "P1", Kind: JobVerify, Status: JobTimeout, Ended: at.Add(3 * time.Minute)},
+		{ID: "j4", Phase: "P1", Kind: JobAwait, Status: JobFailed, Ended: at.Add(4 * time.Minute)},
+		{ID: "j5", Phase: "P1", Kind: JobVerify, Status: JobFailed, Ended: at.Add(5 * time.Minute)}, // its environment not read yet
+		func() Job { j := red("j6", 6); j.EnvLost = []EnvLoss{{Stage: "build", Kind: "oom"}}; return j }(),
+		{ID: "j7", Phase: "P1", Kind: JobVerify, Status: JobFailed, Reruns: "j2", Ended: at.Add(7 * time.Minute)}, // a rerun: no environment to read
+		red("j8", 8),
+		{ID: "j9", Phase: "P2", Kind: JobVerify, Status: JobFailed, Ended: at.Add(9 * time.Minute), EnvRead: at},
+		{ID: "j10", Phase: "P1", Kind: JobVerify, Status: JobPassed, Ended: at.Add(10 * time.Minute)},
+	}
+	n, last := RedRuns(st, "P1", time.Time{})
+	if n != 4 || last == nil || last.ID != "j8" {
+		t.Fatalf("since ever: %d, last %+v", n, last)
+	}
+	if n, last := RedRuns(st, "P1", at.Add(2*time.Minute)); n != 2 || last.ID != "j8" {
+		t.Errorf("since the second: %d, last %+v", n, last)
+	}
+	RaiseTier(&st, "P1", TierRaise{From: plan.Tier{Model: "opus", Effort: "high"}, To: plan.Tier{Model: "opus", Effort: "xhigh"}, At: at.Add(8 * time.Minute)})
+	if got := st.LastRaise("P1"); !got.Equal(at.Add(8 * time.Minute)) {
+		t.Errorf("last raise %v", got)
+	}
+	if n, _ := RedRuns(st, "P1", st.LastRaise("P1")); n != 0 {
+		t.Errorf("after the raise: %d", n)
+	}
+}

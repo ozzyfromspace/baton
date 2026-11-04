@@ -27,6 +27,7 @@ func (h *handlers) workerBrief(c Context, s *state.Store, pl plan.Plan, st state
 	if result != nil {
 		in.Result = jobResult(s, pl, *result, nil, in.Words.AggregateQA)
 	}
+	in.Tier, in.Raise = workerTier(s, st.Current)
 	text := brief.Write(in)
 	if result != nil {
 		delivery{jobs: []state.Job{*result}}.event(s, "brief")

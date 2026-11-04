@@ -60,6 +60,24 @@ type Input struct {
 	// Wrap is the human wrapping the run up (the lead's run's state.Wrap): the brief says the phase finishes on
 	// the evidence it has (decide.WrapBrief). nil while the run is not wrapping up.
 	Wrap *state.Wrap
+	// Tier is the tier the phase runs on, and Raise the step baton last raised it, if any: a worker's, from
+	// the run it works for (its sub-run keeps neither). nil reads them from State, as the lead's run has them.
+	Tier  *plan.Tier
+	Raise *state.TierRaise
+}
+
+// tier is the tier the brief's phase runs on, and the step it was last raised, if any.
+func (in Input) tier() (plan.Tier, *state.TierRaise) {
+	if in.Tier != nil {
+		return *in.Tier, in.Raise
+	}
+	st := in.State
+	t := state.TierFor(st, in.Plan, st.Current, st.Run.Models)
+	if ps := st.Phases[st.Current]; ps != nil && len(ps.Raises) > 0 {
+		r := ps.Raises[len(ps.Raises)-1]
+		return t, &r
+	}
+	return t, nil
 }
 
 // MergeLeft is a merge in progress in a worker's worktree (gitx.Merging): baton merged the run's branch
@@ -181,6 +199,12 @@ func Write(in Input) string {
 		fmt.Fprintf(&b, "Now: continue %s from where you left off (see your notes below and the repository's state).\n\n", title)
 	}
 
+	switch tier, raise := in.tier(); {
+	case raise != nil && in.Kind == Worker && in.Again:
+		b.WriteString(decide.TierRaisedBrief(st.Current, raise.From, raise.To, raise.Why) + "\n\n")
+	case !tier.Zero():
+		b.WriteString(decide.TierBrief(st.Current, tier, raise != nil) + "\n\n")
+	}
 	if rules := pl.Rules(in.Doc); rules != "" {
 		fmt.Fprintf(&b, "Standing rules (from the plan):\n\n%s\n\n", clip(rules, maxRules))
 	}

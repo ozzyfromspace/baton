@@ -578,7 +578,8 @@ func (c *Coordinator) turned(s *state.Store, r bridge.Report) {
 // stopped.
 func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st state.State, pl plan.Plan, w *worker) {
 	e := st.Entry(w.entry)
-	c.servedTier(s, w, e) // what its agent was served, against its tier (tier.go)
+	c.servedTier(s, w, e)            // what its agent was served, against its tier (tier.go)
+	c.escalate(now, s, st, pl, w, e) // a phase gone badly is raised a step, and its agent replaced (escalate.go)
 	switch why := unwanted(st, pl, e); {
 	case w.ending != "":
 		if w.stop == 0 || now.Sub(w.endAt) > stopWait {

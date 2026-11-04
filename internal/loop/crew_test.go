@@ -27,17 +27,18 @@ import (
 // place. The lead's claude is a fake, with baton's mod in it (runMod), which runs the host's commands as
 // the real one does: for a spawn, Claude Code's hooks fire, through baton's real handlers.
 type crew struct {
-	t        *testing.T
-	nowMu    sync.Mutex // the clock is read off the lead's tick too
-	now      time.Time
-	repo     string
-	home     string
-	proj     *state.Project
-	pl       plan.Plan
-	lead     *state.Store
-	c        *Coordinator
-	leadIdle bool            // the lead's hooks do not run
-	machine  machine.Reading // what the machine reads (roomy, unless the test says otherwise)
+	spawnCmds []bridge.Command // every spawn the mod ran, in order
+	t         *testing.T
+	nowMu     sync.Mutex // the clock is read off the lead's tick too
+	now       time.Time
+	repo      string
+	home      string
+	proj      *state.Project
+	pl        plan.Plan
+	lead      *state.Store
+	c         *Coordinator
+	leadIdle  bool            // the lead's hooks do not run
+	machine   machine.Reading // what the machine reads (roomy, unless the test says otherwise)
 
 	// The mod: what it ran, the agents it started, the ones it stopped, the messages it sent and what an
 	// idle agent that a message started again was given (its SubagentStart's output), and how it fails,
@@ -193,13 +194,14 @@ func (x *crew) runMod() {
 // call's PreToolUse, the worktree hook (the agent's working directory is what it prints), the agent's
 // SubagentStart, and the call's result. It returns the agent, or why the call failed.
 func (x *crew) spawn(c bridge.Command) (agent, why string) {
+	x.spawnCmds = append(x.spawnCmds, c)
 	if x.spawnErr != "" {
 		return "", x.spawnErr
 	}
 	agent = fmt.Sprintf("a%s%d", strings.ToLower(c.Phase), len(x.agents)+1)
 	prompt := fmt.Sprintf("p-mod-%d", c.ID)
 	call := map[string]any{"tool_name": "Agent", "tool_use_id": fmt.Sprintf("toolu_plugin_%d", c.ID), "prompt_id": prompt,
-		"tool_input": map[string]any{"subagent_type": state.PhaseAgent, "name": c.Name, "description": c.Description, "prompt": c.Prompt}}
+		"tool_input": map[string]any{"subagent_type": state.PhaseAgentAt(c.Effort), "name": c.Name, "description": c.Description, "prompt": c.Prompt}}
 	x.hook("PreToolUse", call)
 	if x.unplaced {
 		x.hook("PreToolUse", map[string]any{"tool_name": "Agent", "tool_use_id": fmt.Sprintf("toolu_model_%d", c.ID), "prompt_id": "p-turn",
@@ -217,7 +219,7 @@ func (x *crew) spawn(c bridge.Command) (agent, why string) {
 		x.hook("PostToolUse", call)
 		return agent, ""
 	}
-	_, out := x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgent, "cwd": tree, "transcript_path": x.leadTranscript()})
+	_, out := x.hook("SubagentStart", map[string]any{"agent_id": agent, "agent_type": state.PhaseAgentAt(c.Effort), "cwd": tree, "transcript_path": x.leadTranscript()})
 	var start struct {
 		HookSpecificOutput struct{ AdditionalContext string } `json:"hookSpecificOutput"`
 	}

@@ -210,7 +210,11 @@ func (l *Loop) retierOn(v host.View, st state.State, in host.Injector, t plan.Ti
 		tier := shown
 		st.Run.Restart = &state.Restart{From: l.Version, To: l.Version, At: v.Now, Tier: &tier, Phase: phase}
 		if mid {
-			state.Tell(st, state.Message{Kind: state.MessageTier, Phase: phase, Text: decide.TierRestartedMail(phase, shown)}, v.Now)
+			why := ""
+			if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
+				why = ps.Raises[len(ps.Raises)-1].Why
+			}
+			state.Tell(st, state.Message{Kind: state.MessageTier, Phase: phase, Text: decide.TierRestartedMail(phase, shown, why)}, v.Now)
 		}
 		st.Run.Announce = append(st.Run.Announce, decide.TierRestarting(phase, shown))
 	})
