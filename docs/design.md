@@ -156,8 +156,17 @@ with neither runs as phases always did, on the lead's tier. The evidence is in
   of that claude, so it waits for none to be at work, and holds new agents meanwhile, for 10 minutes at most (then the
   phase goes on on the lead's tier, agents start again, and the human is told, since an agent at a permission
   prompt would otherwise hold the run); while agents can take them,
-  the lead passes over the phases whose tier it does not run on. Once no plan runs, the lead goes back on the
-  human's own tier, recorded as it ran before baton changed it.
+  the lead passes over the phases whose tier it does not run on. A phase that waits for every phase before it and is
+  not a QA phase (an integration, a docs pass, a release) stays the lead's whatever its tier, since it may do what no
+  phase agent may, such as merge another branch in; by its boundary no agent is at work, and the lead restarts on
+  its tier. Once no plan runs, the lead goes back on the human's own tier, recorded as it ran before baton changed
+  it.
+- **Changed in the plan file, followed at once.** The plan sets each phase's tier, so a tier the human writes into
+  the plan file reaches every phase not done, a phase under way too, up or down, wherever baton follows the file (the
+  lead's stop, `baton done`, `/baton run`). baton says which phases changed and what follows for each (`tier_changed`):
+  the lead restarts on its phase's new tier once idle, and a phase agent at work is replaced by a fresh one on it at
+  its next idle moment, or 10 minutes after baton saw the change. A tier written after baton raised a phase is the
+  phase's, and its raises start again from it.
 - **Checked from facts.** Every reply's entry in a transcript says the model that answered and the effort it was
   sent with, and every hook but `SessionStart` and `SubagentStart` says the effort of the loop it belongs to. baton
   records what each loop runs on (never from a subagent the model started) and checks each agent against its tier
@@ -168,7 +177,8 @@ with neither runs as phases always did, on the lead's tier. The evidence is in
   far as xhigh, then the next allowed model, then max, at most two steps above its plan's (`escalate`,
   `escalate_after`). A phase agent's agent is replaced at its next idle moment, or 10 minutes after the raise, by a
   fresh one on the new tier in its worktree, whose brief says why; the lead restarts on it once idle and is told
-  why. The next phase starts on its own tier. Nothing switches because of a refusal: that stays the human's.
+  why. The next phase starts on its own tier. baton never lowers a tier; only the plan does. Nothing switches
+  because of a refusal: that stays the human's.
 
 ### Replans
 

@@ -4,6 +4,30 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.19] - 2026-11-04
+
+Two fixes to tiers, both found in the first long run on them. A tier edited in the plan file while the run went on was
+followed silently, minutes later, at the next point baton read the file, and a phase agent at work on a phase whose
+tier changed kept its old tier. And a release on `max` would have gone to a phase agent while the lead ran `xhigh`,
+though a release merges another branch in, which no phase agent may do.
+
+A session on v0.8.x moves to v0.8.19 by itself at its next restart point.
+
+### Fixed
+
+- **A tier edited in the plan file is said, and reaches the phases under way.** Wherever baton follows the plan file
+  (your session's stop, `baton done`, `/baton run`), it says which phases' tiers changed and what follows for each,
+  and logs each (`tier_changed`). Your session restarts on its phase's new tier once idle, as before; a phase agent at
+  work is now replaced by a fresh one on its phase's new tier at its next idle moment, or 10 minutes after baton saw
+  the change (`agent_retiered` with `by: plan`). An agent spawned before tiers is never replaced.
+- **A tier written after a raise wins.** A raise records the tier the plan named when baton made it, and stands only
+  while the plan names that tier: one you write into the plan afterwards is the phase's, up or down, and its raises
+  count again from it. A raise recorded before v0.8.19 stands as before.
+- **A phase that waits for every phase before it stays with your session.** One that is not a QA phase (`After: all`,
+  or a line naming every phase before it: a docs pass, an integration, a release) is never given to a phase agent,
+  whatever its tier: your session restarts on its tier at its boundary, by when no agent is at work. A QA phase still
+  goes to a phase agent.
+
 ## [0.8.18] - 2026-11-04
 
 Every phase now runs on a tier of its own: the model and effort its plan names. Until now every phase of a run ran
@@ -1851,7 +1875,9 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.17...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.19...HEAD
+[0.8.19]: https://github.com/ozzyfromspace/baton/compare/v0.8.18...v0.8.19
+[0.8.18]: https://github.com/ozzyfromspace/baton/compare/v0.8.17...v0.8.18
 [0.8.17]: https://github.com/ozzyfromspace/baton/compare/v0.8.16...v0.8.17
 [0.8.16]: https://github.com/ozzyfromspace/baton/compare/v0.8.15...v0.8.16
 [0.8.15]: https://github.com/ozzyfromspace/baton/compare/v0.8.14...v0.8.15

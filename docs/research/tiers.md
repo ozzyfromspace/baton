@@ -119,3 +119,24 @@ Two things the first runs taught, both fixed before the release:
   read, and that happens in the same tick, after the lead's state was read. The result woke the lead first, and it
   finished the phase on its old tier in one turn. The lead's tick now reads its state again when a red run may count,
   and raises before it delivers anything.
+
+## What v0.8.19 fixed
+
+The first long run on tiers (a 74-phase plan, every phase on opus at `xhigh` or `max`) found two gaps in its first
+hour:
+
+- **A tier edited in the plan file was followed silently.** The human edited P0's tier from `high` to `xhigh` a
+  minute after the plan was attached, while the lead, restarted onto `high` for P0, was at work. baton followed the
+  file at P0's `baton done`, five minutes later, and the lead restarted on `xhigh` at the next boundary, but nothing
+  said so, and the human and the lead's model had both taken the edit as applied at once. A phase agent at work on a
+  phase whose tier changed would have kept its old tier for its life, since only a raise replaced one. Now every
+  following of the file says each phase whose tier changed and what follows for it (`tier_changed`), and an agent at
+  work is replaced on the new tier as after a raise. A tier written after a raise is the phase's: a raise records
+  the plan's tier it was made from, and stands only while the plan names it.
+- **A release would have gone to a phase agent.** Its release phase, `After: all` on `max`, while the lead ran
+  `xhigh`: v0.8.18 left a phase on another tier to an agent, but the release merges `origin/main` in, which no phase
+  agent may do. Now a phase that waits for every phase before it, and is not a QA phase, is the lead's whatever its
+  tier; by its boundary no agent is at work, so the lead restarts on its tier there.
+
+Still open: the plan file is followed only at the points baton reads it, so an edit made while the lead is idle,
+holding no phase and waiting on agents, waits for the lead's next turn.
