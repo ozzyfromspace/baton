@@ -96,12 +96,23 @@ type Config struct {
 	// once the rest is used, the run finishes what it started and starts nothing new until the weekly
 	// reset (WeeklyReserve): 2 by default, up to 50, or 0 for no wind-down (BATON_WEEKLY_RESERVE_PCT).
 	WeeklyReservePct *float64 `json:"weekly_reserve_pct,omitempty"`
+	// Models are the model families a plan's phases may run on (tiers.go): any of haiku, sonnet, opus and
+	// fable; haiku, sonnet and opus by default, since Fable can bill beyond a subscription's plan
+	// (BATON_MODELS, comma-separated).
+	Models []string `json:"models,omitempty"`
+	// Escalate is how many steps above its plan's tier baton may raise a phase that goes badly, a step at a
+	// time: 2 by default, up to 4, or 0 to raise none (BATON_ESCALATE).
+	Escalate *int `json:"escalate,omitempty"`
+	// EscalateAfter is how many red runs of a phase's own gate raise its tier one step: 3 by default, from 2
+	// to 10 (BATON_ESCALATE_AFTER, which may go down to 1).
+	EscalateAfter *int `json:"escalate_after,omitempty"`
 
 	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after,
 	// foreground_max, workers, worker_usage_max and weekly_reserve_pct, which are checked against bounds of
 	// their own.
 	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter, envForegroundMax string
 	envWorkers, envUsageMax, envWeeklyReserve                                  string
+	envModels, envEscalate, envEscalateAfter                                   string
 }
 
 // Defaults.
@@ -191,6 +202,7 @@ func Load(root string, env func(string) string) Config {
 	c.envForegroundMax = env("BATON_FOREGROUND_MAX")
 	c.envWorkers, c.envUsageMax = env("BATON_WORKERS"), env("BATON_WORKER_USAGE_MAX")
 	c.envWeeklyReserve = env("BATON_WEEKLY_RESERVE_PCT")
+	c.envModels, c.envEscalate, c.envEscalateAfter = env("BATON_MODELS"), env("BATON_ESCALATE"), env("BATON_ESCALATE_AFTER")
 	if c.NtfyServer == "" {
 		c.NtfyServer = DefaultNtfyServer
 	}
