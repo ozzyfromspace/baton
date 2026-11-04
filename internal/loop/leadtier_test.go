@@ -215,3 +215,37 @@ func TestTierEnv(t *testing.T) {
 		}
 	}
 }
+
+// A restart that cannot come for TierWait (a phase agent at work all that time, one at a permission prompt
+// nobody answers, say) holds nothing longer: the boundary's compaction is typed, the phase starts on the
+// lead's tier, new agents start again, and the human is told once. Nothing baton decides holds a run.
+func TestTheLeadsTierWaitHasADeadline(t *testing.T) {
+	r := tierRig(t, plan.Tier{Model: "opus", Effort: "max"}, plan.Tier{Model: "opus", Effort: "high"})
+	r.set(func(st *state.State) {
+		st.Run.Background = []state.Task{{ID: "a1", Type: "subagent", AgentType: state.PhaseAgentAt("high"), Status: "running"}}
+	})
+	r.run(r.loop.Timing.TierWait - time.Minute)
+	if len(r.in.text) != 0 {
+		t.Fatalf("typed before the deadline: %q", r.in.text)
+	}
+	if _, due := r.loop.retierHolds(r.view, r.state()); !due {
+		t.Fatal("new agents not held before the deadline")
+	}
+	r.run(2 * time.Minute)
+	if len(r.in.text) != 1 || !strings.Contains(r.in.text[0], "/compact") {
+		t.Fatalf("after the deadline the compaction must go ahead: typed %q", r.in.text)
+	}
+	if _, due := r.loop.retierHolds(r.view, r.state()); due {
+		t.Error("new agents still held after the deadline")
+	}
+	if ev := r.events(); strings.Count(ev, `"kind":"tier_given_up"`) != 1 {
+		t.Errorf("tier_given_up %d times: %s", strings.Count(ev, `"kind":"tier_given_up"`), ev)
+	}
+	a := r.state().Run.Announce
+	if len(a) == 0 || !strings.Contains(strings.Join(a, "\n"), "P1 goes on on opus/high, not its tier opus/max") {
+		t.Errorf("announced %q", a)
+	}
+	if _, ok := r.loop.Retier(); ok {
+		t.Error("restarted with an agent at work")
+	}
+}

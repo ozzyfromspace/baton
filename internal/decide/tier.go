@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
 )
@@ -187,4 +188,11 @@ func PlanTiers(pl plan.Plan) string {
 		parts = append(parts, fmt.Sprintf("%d %s", count[k], k))
 	}
 	return "tiers " + strings.Join(parts, ", ")
+}
+
+// TierGivenUp tells the human that phase goes on on the tier the lead runs on, not its own (want), since no
+// restart could come for wait: a phase agent at work all that time, most likely one waiting on them.
+func TierGivenUp(phase string, want, runs plan.Tier, wait time.Duration) string {
+	return fmt.Sprintf("baton: %s goes on on %s, not its tier %s: for %s the lead could not restart on it, since a phase agent was at work "+
+		"(one may be waiting on you). baton restarts the lead on %s as soon as nothing is at work.", phase, runs, want, Spell(wait), want)
 }

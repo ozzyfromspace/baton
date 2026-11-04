@@ -61,7 +61,7 @@ type Timing struct {
 	SpawnGrace     time.Duration // a runner gone this long after it was started, without taking up its job, never will
 	SwitchAfter    time.Duration // the phase in hand waiting this long on its job is set aside for another (switch_after)
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
-	TierWait       time.Duration // a phase agent its phase was raised from is replaced at its next idle moment, or this long after the raise (escalate.go)
+	TierWait       time.Duration // a phase agent its phase was raised from is replaced at its next idle moment, or this long after the raise (escalate.go); and the lead waits this long for a restart on its phase's tier (leadtier.go)
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
 	SlowAfter      time.Duration // a gate running past 1.5× its command's slowest earlier pass, and this much more, is a look-in for its owner (lookin.go; 0: never)
@@ -229,6 +229,11 @@ type Loop struct {
 	tierPl     plan.Plan
 	tierOK     bool
 	tierWaited string
+	// The restart on a phase's tier the lead waits for (by phase and tier), since when, and whether that
+	// wait ran past Timing.TierWait (tierGivenUp).
+	tierDueKey string
+	tierDueAt  time.Time
+	tierGaveUp bool
 	ceiled     map[string]bool // the phases, by step, a red run again did not raise: logged once (escalate.go)
 
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds

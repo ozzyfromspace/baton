@@ -119,7 +119,39 @@ func (l *Loop) retierAtBoundary(v host.View, st state.State, in host.Injector) b
 		l.retierOn(v, st, in, want, st.Current, "its boundary", false)
 		return true
 	}
+	if l.tierGivenUp(v, st, want) {
+		return false // the phase starts on the lead's tier: the compaction goes ahead
+	}
 	l.tierWaits(v, st, want)
+	return true
+}
+
+// tierGivenUp reports that the lead has waited Timing.TierWait for a restart on want, the tier of the phase
+// it holds or is about to start, and none could come (a phase agent at work all that time, say, one at a
+// permission prompt nobody answers): the phase goes on on the tier the lead runs on, new agents are no
+// longer held for it, and the human is told once, since nothing baton decides may hold a run longer
+// (tier_given_up). A restart still comes once one can.
+func (l *Loop) tierGivenUp(v host.View, st state.State, want plan.Tier) bool {
+	key := st.Current + " " + want.String()
+	if l.tierDueKey != key {
+		l.tierDueKey, l.tierDueAt, l.tierGaveUp = key, v.Now, false
+	}
+	if l.tierGaveUp {
+		return true
+	}
+	if v.Now.Sub(l.tierDueAt) < l.Timing.TierWait {
+		return false
+	}
+	l.tierGaveUp = true
+	runs := st.LeadRuns()
+	fields := map[string]any{"phase": st.Current, "tier": want.String(), "runs": runs.String(), "waited": l.Timing.TierWait.String()}
+	if l.why != "" {
+		fields["why"] = l.why
+	}
+	l.Store.Event("tier_given_up", fields)
+	l.update(func(st *state.State) {
+		st.Run.Announce = append(st.Run.Announce, decide.TierGivenUp(st.Current, want, runs, l.Timing.TierWait))
+	})
 	return true
 }
 
@@ -140,6 +172,9 @@ func (l *Loop) retierIdle(v host.View, st state.State, in host.Injector) bool {
 	}
 	want, due := l.retierDue(v, st)
 	if !due || !l.restartable(v, st, l.why) {
+		if due {
+			l.tierGivenUp(v, st, want) // counts the wait, so that new agents are not held for it for good
+		}
 		return false
 	}
 	l.retierOn(v, st, in, want, st.Current, "mid-phase", true)
@@ -175,7 +210,11 @@ func (l *Loop) retierHolds(v host.View, st state.State) (plan.Tier, bool) {
 	if l.quit {
 		return plan.Tier{}, false
 	}
-	return l.retierDue(v, st)
+	want, due := l.retierDue(v, st)
+	if due && l.tierGaveUp && l.tierDueKey == st.Current+" "+want.String() {
+		return want, false // waited TierWait already: agents start again (tierGivenUp)
+	}
+	return want, due
 }
 
 // tierWaits logs, once per phase and tier, that the lead's boundary waits for a restart on the phase's
