@@ -433,7 +433,7 @@ func cmdStatus(args []string, io IO) int {
 				extra = "  (resumes next, after compaction)"
 			}
 		}
-		fmt.Fprintf(io.Out, "  %s %-8s %s%s%s\n", mark, ph.ID, ph.Title, deps, extra)
+		fmt.Fprintf(io.Out, "  %s %-8s %s%s%s%s\n", mark, ph.ID, ph.Title, deps, tierLabel(st, pl, ph.ID), extra)
 		if ps != nil && ps.Status == state.PhaseParked && ps.Park != nil && ps.Park.Notes != "" {
 			fmt.Fprintf(io.Out, "%13snotes: %s\n", "", clipLine(ps.Park.Notes, 100))
 		}

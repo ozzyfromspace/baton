@@ -16,7 +16,7 @@ import (
 // and the check is told once (tier_served). A tier Claude Code capped is told to the human, and the phase
 // goes on as served, since nothing baton does changes a cap.
 func (c *Coordinator) servedTier(s *state.Store, w *worker, e *state.Worker) {
-	if e == nil || !e.Served.Zero() || w.agent.in == nil {
+	if e == nil || !e.Served.Zero() {
 		return
 	}
 	sub, err := w.store.Load()

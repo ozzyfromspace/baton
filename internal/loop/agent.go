@@ -109,6 +109,9 @@ const contextEvery = 10 * time.Second
 // recorded against the lead's window (an agent compacts where the lead does, spike 32), for its context
 // valve, which its hooks run at its tool calls, and so is what its last reply was served (served).
 func (a *Agent) read(now time.Time, st state.State) state.State {
+	if st.Run.Transcript != "" && st.Run.Model == "" {
+		st = a.served(st) // until its first reply says what it was served, at every tick, its phase done or not: an agent can be done in seconds
+	}
 	if st.Mode != state.ModeRunning || st.Run.Transcript == "" {
 		return st
 	}

@@ -77,29 +77,54 @@ func escalateTo(s, log *state.Store, phase string, since time.Time, r state.Tier
 	return raised
 }
 
-// escalateLead raises the phase the lead holds, from its own run's jobs (escalate.go's rule). The restart
-// on the raised tier comes once the lead is idle (retierIdle).
-func (l *Loop) escalateLead(v host.View, st state.State) {
+// escalateLead raises the phase the lead holds, from its own run's jobs (escalate.go's rule), and returns
+// the run's state as it then stands. It runs before the tick delivers anything, so that a red result that
+// raises the phase finds the lead idle, and the lead restarts on its raised tier (retierIdle) before it is
+// woken for the result. A red whole run counts once its environment is read, which this tick's settle may
+// have done after st was read: then the state is read again.
+func (l *Loop) escalateLead(v host.View, st state.State) state.State {
 	t := l.tiering()
 	if t.Steps == 0 || t.After == 0 || st.Mode != state.ModeRunning || !st.InHand() || l.Store.Worker() != "" {
-		return
+		return st
 	}
 	phase := st.Current
 	since := st.LastRaise(phase)
 	reds, last := state.RedRuns(st, phase, since)
+	if reds < t.After && unread(st, phase, since) {
+		if fresh, err := l.Store.Load(); err == nil {
+			st = fresh
+			reds, last = state.RedRuns(st, phase, since)
+		}
+	}
 	if reds < t.After {
-		return
+		return st
 	}
 	pl, ok := l.tierPlan(v.Now)
 	if !ok {
-		return
+		return st
 	}
 	r, why, ok := t.raise(st, pl, phase, st.LeadRuns(), reds, last, v.Now)
 	if !ok {
 		l.ceiling(phase, since, why, reds, l.Store)
-		return
+		return st
 	}
-	escalateTo(l.Store, l.Store, phase, since, r, true)
+	if escalateTo(l.Store, l.Store, phase, since, r, true) {
+		if fresh, err := l.Store.Load(); err == nil {
+			return fresh
+		}
+	}
+	return st
+}
+
+// unread reports a red whole run of phase's gate in st, ended after since, whose environment the host had
+// not read when st was read (state.RedRuns waits for it).
+func unread(st state.State, phase string, since time.Time) bool {
+	for _, j := range st.Jobs {
+		if j.Phase == phase && j.Status == state.JobFailed && j.Ended.After(since) && j.EnvRead.IsZero() && state.WholeRun(j) {
+			return true
+		}
+	}
+	return false
 }
 
 // ceiling logs, once per phase and step, that a phase gone red again was not raised, and why.

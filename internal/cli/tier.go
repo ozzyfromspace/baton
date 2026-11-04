@@ -8,6 +8,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/elevate"
 	"github.com/ozzyfromspace/baton/internal/loop"
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/upgrade"
 )
 
@@ -83,4 +84,18 @@ func restartTier(io IO, session, tier string, args []string, logf func(string, .
 	}
 	logf("host: could not restart in place on %s: %v", tier, err)
 	return fail(io, "could not restart the session on %s (%v); resume it with: baton --resume %s", tier, err, session)
+}
+
+// tierLabel is what `baton status` says of phase's tier: "  · opus/high", raised by baton
+// ("  · opus/xhigh, raised from opus/high"), or "" for a phase that leaves its tier to the session.
+func tierLabel(st state.State, pl plan.Plan, phase string) string {
+	t := state.TierFor(st, pl, phase, st.Run.Models)
+	if t.Zero() {
+		return ""
+	}
+	label := "  · " + t.String()
+	if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
+		label += ", raised from " + ps.Raises[0].From.String()
+	}
+	return label
 }

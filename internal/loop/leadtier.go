@@ -133,8 +133,9 @@ func (l *Loop) retierIdle(v host.View, st state.State, in host.Injector) bool {
 	default:
 		return false // a compaction under way, or one that failed, which its own retry has
 	}
-	if st.BoundaryOwed || !st.InHand() ||
-		st.Run.TurnOpen || v.Draft || v.Now.Sub(v.LastOutput) < l.Timing.Quiet {
+	// No wait for a quiet screen: while a gate runs, baton's own status line redraws its time every
+	// second. The turn's end, the gate (restartable) and the draft say all a restart needs.
+	if st.BoundaryOwed || !st.InHand() || st.Run.TurnOpen || v.Draft {
 		return false
 	}
 	want, due := l.retierDue(v, st)

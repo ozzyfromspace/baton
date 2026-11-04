@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ozzyfromspace/baton/internal/plan"
+	"github.com/ozzyfromspace/baton/internal/state"
 )
 
 // A tier restart's tier takes the place of the human's own --model and --effort on claude's command line,
@@ -43,5 +44,21 @@ func TestLaunchTier(t *testing.T) {
 		if got := launchTier(c.args); got != c.want {
 			t.Errorf("launchTier(%q) = %+v, want %+v", c.args, got, c.want)
 		}
+	}
+}
+
+// `baton status` says each phase's tier, and the tier a raise started from.
+func TestTierLabel(t *testing.T) {
+	pl := plan.Plan{Phases: []plan.Phase{{ID: "P0", Model: "opus", Effort: "high"}, {ID: "P1"}}}
+	st := state.New()
+	if got := tierLabel(st, pl, "P0"); got != "  · opus/high" {
+		t.Errorf("P0: %q", got)
+	}
+	if got := tierLabel(st, pl, "P1"); got != "" {
+		t.Errorf("a phase with no tier: %q", got)
+	}
+	state.RaiseTier(&st, "P0", state.TierRaise{From: plan.Tier{Model: "opus", Effort: "high"}, To: plan.Tier{Model: "opus", Effort: "xhigh"}})
+	if got := tierLabel(st, pl, "P0"); got != "  · opus/xhigh, raised from opus/high" {
+		t.Errorf("raised: %q", got)
 	}
 }

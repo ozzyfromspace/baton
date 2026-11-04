@@ -292,7 +292,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		}
 		return
 	}
-	l.escalateLead(v, st) // the lead's phase gone badly is raised a step (escalate.go)
+	st = l.escalateLead(v, st) // the lead's phase gone badly is raised a step, before anything is delivered (escalate.go)
 	l.why = l.gate(v, st)
 	l.wished = false
 	l.resolve(v, st)
