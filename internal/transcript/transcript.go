@@ -46,6 +46,9 @@ type Entry struct {
 	// Limit is set on the entry Claude Code writes when a turn ends on one of the account's usage limits
 	// (LastLimit).
 	Limit *Limit
+	// Served is what an assistant entry's request was served: its model and effort (tier.go). nil on every
+	// other entry, and on Claude Code's own synthetic replies.
+	Served *Served
 }
 
 // Tool is a tool call the model made.
@@ -220,6 +223,8 @@ type line struct {
 	Message           json.RawMessage `json:"message"`
 	Error             json.RawMessage `json:"error"`
 	QuotaLimits       json.RawMessage `json:"quotaLimits"`
+	RequestedModel    string          `json:"requestedModel"`
+	Effort            string          `json:"effort"`
 }
 
 // compactMetadata is the part of a compact boundary's compactMetadata baton reads.
@@ -236,6 +241,7 @@ type attachment struct {
 
 // message is the part of an assistant entry's message baton reads.
 type message struct {
+	Model       string `json:"model"`
 	StopReason  string `json:"stop_reason"`
 	StopDetails struct {
 		Category    string `json:"category"`
@@ -297,6 +303,7 @@ func parse(raw []byte) (Entry, bool) {
 		return e, true
 	}
 	e.Context = m.Usage.Input + m.Usage.CacheRead + m.Usage.CacheCreation
+	e.Served = served(l, m.Model, e.Time)
 	if l.IsAPIErrorMessage && m.StopReason == "refusal" {
 		e.Refusal = &Refusal{Category: m.StopDetails.Category, Explanation: m.StopDetails.Explanation}
 	}
