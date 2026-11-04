@@ -36,19 +36,22 @@ func parseAfter(section string) (after, error) {
 }
 
 // headLines is how many non-empty lines right under a phase's heading may say what kind of phase it is:
-// its After:, Type: and Replan: lines.
-const headLines = 3
+// its After:, Type:, Replan:, Model: and Effort: lines.
+const headLines = 5
 
 // head is what the lines right under a phase's heading say of it.
 type head struct {
 	after  after
 	typ    string // TypeQA, or ""
 	replan string // ReplanAfter, or ""
+	model  string // one of Models, or ""
+	effort string // one of Efforts, or ""
 }
 
 // parseHead reads the lines that open a phase's section, right under its heading, in any order: its
-// After: line, its Type: line (`Type: qa` for a QA phase) and its Replan: line (`Replan: after` for a
-// phase whose findings should reshape the phases after it).
+// After: line, its Type: line (`Type: qa` for a QA phase), its Replan: line (`Replan: after` for a
+// phase whose findings should reshape the phases after it), and its Model: and Effort: lines (its
+// tier, tier.go).
 func parseHead(section string) (h head, err error) {
 	lines := strings.Split(section, "\n")
 	seen := 0
@@ -71,6 +74,20 @@ func parseHead(section string) (h head, err error) {
 				return h, rerr
 			}
 			h.replan = r
+			continue
+		}
+		if m, ok, merr := parseModelLine(l); ok {
+			if merr != nil {
+				return h, merr
+			}
+			h.model = m
+			continue
+		}
+		if e, ok, eerr := parseEffortLine(l); ok {
+			if eerr != nil {
+				return h, eerr
+			}
+			h.effort = e
 			continue
 		}
 		if h.after.found {
@@ -152,7 +169,7 @@ func (p *Plan) derive(text string, redo func(i int) bool) []error {
 			continue
 		}
 		ph := &p.Phases[i]
-		ph.After, ph.Type, ph.Replan = nil, "", ""
+		ph.After, ph.Type, ph.Replan, ph.Model, ph.Effort = nil, "", "", "", ""
 		where := fmt.Sprintf("phase %d (%q)", i+1, ph.ID)
 		sec, err := p.section(text, i)
 		if err != nil {
@@ -164,7 +181,7 @@ func (p *Plan) derive(text string, redo func(i int) bool) []error {
 			errs = append(errs, fmt.Errorf("%s: %w", where, err))
 			continue
 		}
-		ph.Type, ph.Replan = h.typ, h.replan
+		ph.Type, ph.Replan, ph.Model, ph.Effort = h.typ, h.replan, h.model, h.effort
 		a := h.after
 		var at []int
 		switch {

@@ -277,8 +277,8 @@ func movedPhases(old, p Plan) map[string]bool {
 
 // Body is a phase's section without its After: line, which a change of structure edits, and with each
 // run of blank lines read as one, so that adding or removing the line changes nothing else. The After:
-// line is the one parseHead reads: among the lines that open the section, beside its Type: and Replan:
-// lines.
+// line is the one parseHead reads: among the lines that open the section, beside its Type:, Replan:,
+// Model: and Effort: lines, which stay: a change of structure leaves a phase's tier as it was.
 func Body(section string) string {
 	lines := strings.Split(section, "\n")
 	seen := 0
@@ -296,7 +296,9 @@ func Body(section string) string {
 		}
 		_, typ, _ := parseTypeLine(l)
 		_, replan, _ := parseReplanLine(l)
-		if !typ && !replan {
+		_, model, _ := parseModelLine(l)
+		_, effort, _ := parseEffortLine(l)
+		if !typ && !replan && !model && !effort {
 			break // the section's text starts: an After: line below it is text
 		}
 	}

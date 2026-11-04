@@ -33,6 +33,10 @@ type Phase struct {
 	Type string `json:"type,omitempty"`
 	// Replan is its section's Replan: line: ReplanAfter, or "" for none.
 	Replan string `json:"replan,omitempty"`
+	// Model and Effort are its tier, its section's Model: and Effort: lines (tier.go): one of Models and
+	// one of Efforts, or "" for the session's.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // TypeQA marks a QA phase: where the plan runs its full test suites, lints and end-to-end checks, and fixes
@@ -157,6 +161,10 @@ func build(file string, doc []byte, spec Spec, kept map[string]bool) (Plan, erro
 		if got := p.Phases[i].Type; ph.Type != "" && ph.Type != got {
 			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"type\" (%s) differs from the plan's (%q). A phase's type comes from the plan text, "+
 				"a `Type: qa` line under its heading: edit the plan to change it, and leave \"type\" out of the spec", i+1, ph.ID, ph.Type, got))
+		}
+		if got := p.Phases[i].Tier(); !ph.Tier().Zero() && ph.Tier() != got {
+			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's tier (%s) differs from the plan's (%s). A phase's tier comes from the plan text, "+
+				"its Model: and Effort: lines: edit the plan to change it, and leave \"model\" and \"effort\" out of the spec", i+1, ph.ID, ph.Tier(), got))
 		}
 		if got := p.Phases[i].After; ph.After != nil && got != nil && !sameIDs(ph.After, got) {
 			errs = append(errs, fmt.Errorf("phase %d (%q): the spec's \"after\" (%s) differs from the plan's (%s). Dependencies come from the plan text, "+
