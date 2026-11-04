@@ -125,6 +125,9 @@ type Coordinator struct {
 	// starts. stopping says the lead's claude was asked to end (a restart, or the human leaving baton): the
 	// host ends, and so do the phase agents in it, which Ended suspends.
 	pending, stopping atomic.Bool
+	// retierFor is the tier the lead restarts on before any new phase agent starts, as the lead's tick last
+	// found it due ("" for none; leadtier.go).
+	retierFor atomic.Value
 }
 
 // Tick is the lead's tick: its Loop, then the run's duties.
@@ -153,6 +156,11 @@ func (c *Coordinator) duties(v host.View) {
 		return
 	}
 	c.pending.Store(c.Fleet != nil && c.Lead.upgradeHolds(v, st))
+	held := ""
+	if t, due := c.Lead.retierHolds(v, st); due && c.Fleet != nil {
+		held = t.String() // the lead restarts on its phase's tier first (leadtier.go)
+	}
+	c.retierFor.Store(held)
 	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleetOn(s, st) // the run's QA phases go to its agents (review.go)
@@ -239,4 +247,10 @@ func (c *Coordinator) lanesDown(s *state.Store) {
 		c.Lead.logf("loop: the plan is complete: brought lanes %v down", lanes)
 		s.Event("lanes_down", map[string]any{"lanes": lanes, "why": "plan complete"})
 	}
+}
+
+// retiering is the tier the lead restarts on before a new phase agent may start, or "" (retierFor).
+func (c *Coordinator) retiering() string {
+	t, _ := c.retierFor.Load().(string)
+	return t
 }

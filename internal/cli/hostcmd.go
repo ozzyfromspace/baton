@@ -204,7 +204,12 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		batonEnv = append(batonEnv, "BATON_TTY="+tty)
 	}
 	runners := newHostRunners(io, exe, proj, instance)
+	// The lead's tier: a restart on a phase's tier hands it over in TierEnv, and claude is launched on it in
+	// place of the human's own flags (tier.go).
+	tierModel, tierEffort := loop.DecodeTier(io.Env(loop.TierEnv))
+	launchArgs := withTier(args, tierModel, tierEffort)
 	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto, Tiers: tiers,
+		Launch: launchTier(launchArgs), Overridden: io.Env(loop.TierEnv) != "", Retiers: upgrade.CanRestart,
 		Runners: runners, Lapse: lapser(escalation.Env()), StartsAfresh: upgrade.CanRestart}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
@@ -229,12 +234,20 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	started := io.Now()
 	exit, err := host.Run(host.Config{
-		Claude: claude, Args: args, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
+		Claude: claude, Args: launchArgs, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
 		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator,
 	})
 	code := exit.Code
 	to, resumed, restarting := controller.Restart()
+	if tier, ok := controller.Retier(); ok && restarting && err == nil {
+		// The lead restarts in place on its phase's tier (loop/leadtier.go): the phase agents ended with
+		// claude, as they do for an upgrade, and the restarted host starts them again.
+		coordinator.Ended("baton restarted the lead on another tier", nil)
+		host.Release(proj, instance)
+		controller.Flush()
+		return restartTier(io, resumed, tier, args, logf)
+	}
 	if restarting && err == nil {
 		// The phase agents ended with claude; their jobs go on, as the lead's do: the restarted host watches
 		// them, and starts the agents again.

@@ -509,7 +509,7 @@ func Next(st State, p plan.Plan) string {
 		return "" // the weekly wind-down: a phase under way goes on, and none starts (winddown.go)
 	}
 	for _, ph := range p.Phases {
-		if ps := st.Phases[ph.ID]; (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.forAgent(ph) {
+		if ps := st.Phases[ph.ID]; (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.forAgent(p, ph) {
 			return ph.ID
 		}
 	}

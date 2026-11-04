@@ -23,6 +23,7 @@ import (
 	"github.com/ozzyfromspace/baton/internal/gitx"
 	"github.com/ozzyfromspace/baton/internal/host"
 	"github.com/ozzyfromspace/baton/internal/notify"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/replan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
@@ -148,6 +149,13 @@ type Loop struct {
 	// families a phase may run on, and how far and how soon a phase that goes badly is raised (tier.go,
 	// escalate.go). The zero Tiers allows every family and raises none.
 	Tiers config.Tiers
+	// Launch is the tier the host launched claude on (its --model's family and its --effort, each "" when
+	// left to the human's settings), Overridden says it came from a tier restart (TierEnv) rather than the
+	// human's own flags, and Retiers says the host can restart claude in place on another tier
+	// (leadtier.go).
+	Launch     plan.Tier
+	Overridden bool
+	Retiers    bool
 	// MaxAuto is max_auto_decisions: the decisions a phase may make without the human before they review
 	// them (0: no cap, the default).
 	MaxAuto int
@@ -213,6 +221,14 @@ type Loop struct {
 	errNudged      time.Time
 	errRetries     int
 
+	// The lead's tier (leadtier.go): the plan as it reads it, when, and for which run, and the boundary it
+	// last logged as waiting for a restart on a phase's tier.
+	tierAt     time.Time
+	tierRun    string
+	tierPl     plan.Plan
+	tierOK     bool
+	tierWaited string
+
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
 	// and releases the run's look-ins, so it comes before anything is delivered, and reports whether it
 	// changed the run's state.
@@ -237,6 +253,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if st.Owner != nil && !st.IsOwner(l.Store.Instance, v.Now) {
 		return // another terminal drives this run now
 	}
+	st = l.recordTier(st) // what the host launched the lead on, for the phases it takes (leadtier.go)
 	l.mode = l.modMode(v)
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
@@ -265,6 +282,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		return
 	}
 	if st.Mode != state.ModeRunning {
+		if l.restoreIdle(v, st, in) {
+			return // no plan runs: the lead goes back on the human's own tier (leadtier.go)
+		}
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
 			l.restartOn(v, st, in, "")
 		}
@@ -279,13 +299,25 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if l.idleRestart(v, st, in) {
 		return // the lead holds no phase, so no compaction comes to restart at (upgradeidle.go)
 	}
+	if l.retierIdle(v, st, in) {
+		return // the lead holds a phase whose tier it does not run on, mid-phase (leadtier.go)
+	}
 
 	comp := st.Run.Compaction
 	switch comp.Status {
 	case state.CompactQueued:
+		// The lead's boundary restarts it on the next phase's tier, if it does not run on it, before the
+		// compaction is typed: the restarted session types it, and until a restart can come it waits, so
+		// that the phase starts on its tier (leadtier.go).
+		if l.retierAtBoundary(v, st, in) {
+			if l.quit {
+				return
+			}
+			break
+		}
 		// The point a running plan restarts on a newer baton while its lead has a phase: a compaction is
 		// due, and the restarted session types it instead. Nothing else in a running plan waits for a
-		// restart.
+		// restart, but the phase's tier.
 		if l.upgradeDue(v, st) && l.restartable(v, st, l.why) {
 			l.restartOn(v, st, in, "")
 			return
@@ -368,8 +400,9 @@ func (l *Loop) leave(v host.View, st state.State, in host.Injector) {
 	}
 }
 
-// restart is the newer baton the loop ended claude for, and the conversation to resume on it.
-type restart struct{ to, session string }
+// restart is the newer baton the loop ended claude for, and the conversation to resume on it; or, with tier
+// set (as TierEnv carries it), the same baton, on another tier (leadtier.go).
+type restart struct{ to, session, tier string }
 
 // Restart reports that the loop ended claude to restart the session on baton `to`, resuming `session`.
 func (l *Loop) Restart() (to, session string, ok bool) {

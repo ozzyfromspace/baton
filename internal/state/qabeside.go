@@ -29,11 +29,12 @@ func (st State) HasAgents() bool {
 	return st.Run.Fleet != "" && st.SerialWhy() == "" && st.RunBranch != ""
 }
 
-// forAgent reports phase ph as one the lead passes over as it takes its next phase up (Next), for a phase
-// agent to take (NextWorker): a QA phase, in a run with agents, that no agent of the plan attached now has
-// failed on.
-func (st State) forAgent(ph plan.Phase) bool {
-	return ph.QA() && st.HasAgents() && !st.failedOn(ph.ID)
+// forAgent reports phase ph of p as one the lead passes over as it takes its next phase up (Next), for a
+// phase agent to take (NextWorker): in a run with agents, one no agent of the plan attached now has failed
+// on, that is a QA phase, or whose tier the lead does not run on (LeadFits): a phase agent is spawned on
+// any tier, and the lead changes its own only by a restart, which ends every agent (loop/leadtier.go).
+func (st State) forAgent(p plan.Plan, ph plan.Phase) bool {
+	return st.HasAgents() && !st.failedOn(ph.ID) && (ph.QA() || !st.LeadFits(p, ph.ID))
 }
 
 // failedOn reports a worker of the plan attached now that failed on phase: its phase was taken back from

@@ -369,6 +369,8 @@ func (c *Coordinator) mayLaunch(now time.Time, s *state.Store, st state.State) s
 		return "the baton session is ending"
 	case c.pending.Load():
 		return "baton restarts on a newer version first"
+	case c.retiering() != "":
+		return "the lead restarts on " + c.retiering() + ", its phase's tier, first"
 	case st.Run.LastActivity.Before(c.since):
 		return "the lead's session has not started yet"
 	case c.off != "":

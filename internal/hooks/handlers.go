@@ -756,7 +756,7 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 				restarted = st.Run.Restart
 				// A restart at a phase boundary takes the place of a compaction, which summarizes any
 				// earlier /baton instructions away; an idle one leaves them in the conversation.
-				if restarted.To == c.Env("BATON_VERSION") && st.Run.Compaction.Status != state.CompactQueued {
+				if restarted.To == c.Env("BATON_VERSION") && restarted.From != restarted.To && st.Run.Compaction.Status != state.CompactQueued {
 					st.Run.StaleSkill = restarted.From
 				}
 			}
@@ -787,10 +787,17 @@ func (h *handlers) sessionStart(c Context) (Result, error) {
 	note := ""
 	if restarted != nil {
 		running := c.Env("BATON_VERSION")
-		s.Event("restarted", map[string]any{"from": restarted.From, "to": restarted.To, "version": running})
-		if running == restarted.To {
+		fields := map[string]any{"from": restarted.From, "to": restarted.To, "version": running}
+		if restarted.Tier != nil {
+			fields["tier"], fields["phase"] = restarted.Tier.String(), restarted.Phase
+		}
+		s.Event("restarted", fields)
+		switch {
+		case restarted.Tier != nil && running == restarted.To:
+			note = decide.TierRestarted(restarted.Phase, *restarted.Tier) // in place, on a phase's tier (loop/leadtier.go)
+		case running == restarted.To:
 			note = fmt.Sprintf("baton: restarted this session on baton %s (was %s) · ", running, restarted.From)
-		} else {
+		default:
 			note = fmt.Sprintf("baton: could not restart this session on baton %s; it stays on %s · ", restarted.To, running)
 		}
 	}

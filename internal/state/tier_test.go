@@ -88,3 +88,44 @@ func TestFits(t *testing.T) {
 		}
 	}
 }
+
+// In a run with phase agents, the lead passes over a phase whose tier it does not run on, for an agent to
+// take; a phase on its tier, one an agent failed on, and every phase of a run with no agents, are the
+// lead's.
+func TestTheLeadPassesOverAPhaseOnAnotherTier(t *testing.T) {
+	p := plan.Plan{Phases: []plan.Phase{
+		{ID: "P1", Model: "opus", Effort: "max", After: []string{}},
+		{ID: "P2", Model: "opus", Effort: "high", After: []string{}},
+	}}
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	agents := func() State {
+		st := New()
+		st.Mode, st.RunBranch = ModeRunning, "baton/run"
+		st.Run.Fleet = "inst"
+		st.Run.Launched = plan.Tier{Model: "opus", Effort: "high"}
+		return st
+	}
+	if st := agents(); Next(st, p) != "P2" || NextWorker(st, p) != "P1" {
+		t.Errorf("with agents: the lead takes %q, an agent %q", Next(st, p), NextWorker(st, p))
+	}
+	st := agents()
+	st.Workers = []Worker{{Phase: "P1", Status: WorkerFailed, Assigned: at}}
+	if Next(st, p) != "P1" {
+		t.Errorf("a phase an agent failed on went to %q", Next(st, p))
+	}
+	st = agents()
+	st.Run.Fleet = ""
+	if Next(st, p) != "P1" {
+		t.Errorf("with no agents the lead takes %q", Next(st, p))
+	}
+	st = agents()
+	st.Run.Launched = plan.Tier{}
+	if Next(st, p) != "P1" {
+		t.Errorf("a lead nothing has said of takes %q", Next(st, p))
+	}
+	st = agents()
+	st.Run.Launched, st.Run.Model, st.Run.Effort = plan.Tier{}, "claude-opus-5-5", "max"
+	if Next(st, p) != "P1" || !st.LeadFits(p, "P1") || st.LeadFits(p, "P2") {
+		t.Errorf("a lead served opus/max takes %q", Next(st, p))
+	}
+}

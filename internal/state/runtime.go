@@ -131,6 +131,18 @@ type Runtime struct {
 	// not), and its effort, which every hook but SessionStart and SubagentStart says. "" while nothing has.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// Launched is, for the lead, the tier its host launched claude on: its --model's family and its
+	// --effort, each "" when the launch left it to the human's settings (loop/leadtier.go). Models are
+	// the families the host allows a phase (config.Tiers). Both are the host's, recorded as it ticks, so
+	// that the lead passes over a phase it does not run on (LeadFits).
+	Launched plan.Tier `json:"launched,omitzero"`
+	Models   []string  `json:"models,omitempty"`
+	// HumanModel and HumanEffort are what the human runs the lead on, as it ran before baton changed its
+	// tier (a full model id and an effort): recorded while the host runs on the human's own flags, and
+	// restored once no plan runs (loop/leadtier.go), since a resume with no flags would keep the
+	// conversation's last model.
+	HumanModel  string `json:"human_model,omitempty"`
+	HumanEffort string `json:"human_effort,omitempty"`
 	// ContextNoticed is set once the model has been told where its context stands (the notice, which asks
 	// nothing), ContextNudged once it has been asked to checkpoint (ContextNudgedAt: at what size, so the
 	// request is repeated as the context keeps growing), and ContextWarned once the human has been asked;
@@ -266,6 +278,10 @@ type Restart struct {
 	From string    `json:"from"`
 	To   string    `json:"to"`
 	At   time.Time `json:"at"`
+	// Tier, for a restart in place on the same baton, is the tier the lead restarts on, for Phase: the
+	// phase's tier, which only the lead's launch flags set (loop/leadtier.go).
+	Tier  *plan.Tier `json:"tier,omitempty"`
+	Phase string     `json:"phase,omitempty"`
 }
 
 // Dialog is an open prompt the human must answer.
