@@ -249,6 +249,7 @@ func (l *Loop) retierOn(v host.View, st state.State, in host.Injector, t plan.Ti
 	l.update(func(st *state.State) {
 		tier := shown
 		st.Run.Restart = &state.Restart{From: l.Version, To: l.Version, At: v.Now, Tier: &tier, Phase: phase}
+		st.Run.Model, st.Run.Effort = "", "" // learned again from the restarted session, so its tier is judged on its own (leadServed)
 		if mid {
 			why := ""
 			if ps := st.Phases[phase]; ps != nil && len(ps.Raises) > 0 {
@@ -272,4 +273,33 @@ func (l *Loop) Retier() (string, bool) {
 		return "", false
 	}
 	return l.restart.tier, true
+}
+
+// leadServed checks the lead against the tier of the phase it holds, once a restart in place launched it
+// on that tier and its hooks or status line have said what it runs on: logged once per phase and tier
+// (tier_served by lead), and a tier Claude Code capped is told to the human, the phase going on as served.
+func (l *Loop) leadServed(v host.View, st state.State) {
+	if !l.Overridden || !st.InHand() {
+		return
+	}
+	want := l.leadWant(v, st)
+	if want.Zero() || want.Model != "" && want.Model != l.Launch.Model || want.Effort != "" && want.Effort != l.Launch.Effort {
+		return // not launched for this phase's tier: a restart on it is still to come
+	}
+	served := st.Run.Served()
+	if !known(want, served) {
+		return
+	}
+	key := st.Current + " " + want.String()
+	if l.servedKey == key {
+		return
+	}
+	l.servedKey = key
+	fits := state.Fits(want, served)
+	l.Store.Event("tier_served", map[string]any{"phase": st.Current, "asked": want.String(), "served": served.String(), "fits": fits, "by": "lead"})
+	if !fits {
+		l.update(func(st *state.State) {
+			st.Run.Announce = append(st.Run.Announce, decide.TierCapped(st.Current, want, served))
+		})
+	}
 }

@@ -249,3 +249,42 @@ func TestTheLeadsTierWaitHasADeadline(t *testing.T) {
 		t.Error("restarted with an agent at work")
 	}
 }
+
+// A lead restarted on its phase's tier is checked against what it is served, once: a tier Claude Code
+// capped is told to the human. One not launched for the phase's tier is not judged.
+func TestTheLeadIsCheckedAgainstWhatItIsServed(t *testing.T) {
+	r := tierRig(t, plan.Tier{Model: "opus", Effort: "max"}, plan.Tier{Model: "opus", Effort: "max"})
+	r.loop.Overridden = true
+	r.set(func(st *state.State) {
+		st.BoundaryOwed = false
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, Finished: r.now}
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive, StartedAt: r.now}
+		st.Run.TurnOpen = true
+	})
+	r.tick(time.Second)
+	if strings.Contains(r.events(), `"kind":"tier_served"`) {
+		t.Fatal("judged before anything said what the lead runs on")
+	}
+	r.set(func(st *state.State) { st.Run.Model, st.Run.Effort = "claude-opus-5-5", "high" })
+	r.tick(time.Second)
+	r.tick(time.Second)
+	if ev := r.events(); strings.Count(ev, `"kind":"tier_served"`) != 1 || !strings.Contains(ev, `"fits":false`) {
+		t.Fatalf("events: %s", ev)
+	}
+	if a := r.state().Run.Announce; len(a) == 0 || !strings.Contains(a[len(a)-1], "P1 asked for opus/max and was served opus/high") {
+		t.Errorf("announced %q", a)
+	}
+	r = tierRig(t, plan.Tier{Model: "opus", Effort: "max"}, plan.Tier{Model: "opus", Effort: "high"})
+	r.loop.Overridden = true
+	r.set(func(st *state.State) {
+		st.BoundaryOwed = false
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, Finished: r.now}
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive, StartedAt: r.now}
+		st.Run.TurnOpen = true
+		st.Run.Model, st.Run.Effort = "claude-opus-5-5", "high"
+	})
+	r.tick(time.Second)
+	if strings.Contains(r.events(), `"kind":"tier_served"`) {
+		t.Error("a lead launched on another tier was judged")
+	}
+}

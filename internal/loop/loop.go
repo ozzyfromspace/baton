@@ -234,6 +234,7 @@ type Loop struct {
 	tierDueKey string
 	tierDueAt  time.Time
 	tierGaveUp bool
+	servedKey  string          // the lead's phase and tier last checked against what it was served (leadServed)
 	ceiled     map[string]bool // the phases, by step, a red run again did not raise: logged once (escalate.go)
 
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
@@ -261,6 +262,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		return // another terminal drives this run now
 	}
 	st = l.recordTier(st) // what the host launched the lead on, for the phases it takes (leadtier.go)
+	l.leadServed(v, st)   // and what it was served, against its phase's tier
 	l.mode = l.modMode(v)
 	l.sendNotices(v, st)
 	l.saveWork(v, st)
