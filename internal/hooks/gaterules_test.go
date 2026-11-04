@@ -16,7 +16,7 @@ func gatesAsked(t *testing.T, doc string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return decide.CompetingDirectives() + "\n\n" + decide.GateCheck(pl)
+	return decide.CompetingDirectives() + "\n\n" + decide.GateCheck(pl) + "\n\n" + decide.TierCheck(pl.Untiered(), nil, false, 2, 3)
 }
 
 // qaDoc is a plan of eight phases with a QA phase after every three, each `After:` the three it checks:

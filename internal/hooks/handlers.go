@@ -545,8 +545,9 @@ func (h *handlers) directives(c Context) (res Result, asked bool, shown planShow
 	switch {
 	case asked:
 		gates := gateCheck(pl, built, fields)
+		tiers := tierCheck(c, pl, built, fields)
 		s.Event("directives_asked", fields)
-		why := decide.CompetingDirectives() + "\n\n" + gates
+		why := decide.CompetingDirectives() + "\n\n" + gates + "\n\n" + tiers
 		if flagged {
 			why += "\n\n" + decide.ShapeCheck(shape)
 		}
@@ -556,7 +557,12 @@ func (h *handlers) directives(c Context) (res Result, asked bool, shown planShow
 	case toHuman && built:
 		delete(fields, "shape_flagged")
 		fields["mostly_chain"] = flagged
-		shown = planShown{s: s, line: decide.PlanShape(shape), fields: fields}
+		line := decide.PlanShape(shape)
+		if t := decide.PlanTiers(pl); t != "" && line != "" {
+			line += " · " + t // the plan's tiers, the most common first
+			fields["tiers"] = t
+		}
+		shown = planShown{s: s, line: line, fields: fields}
 	}
 	return Result{}, false, shown
 }

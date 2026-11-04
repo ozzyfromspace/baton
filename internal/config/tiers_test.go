@@ -48,8 +48,17 @@ func TestTiering(t *testing.T) {
 		})
 	}
 	tiers := Tiers{Models: []string{"sonnet", "opus", "fable"}}
-	if env := tiers.Env(); len(env) != 1 || env[0] != "BATON_MODELS=sonnet,opus,fable" {
+	tiers.Steps, tiers.After = 1, 4
+	if env := tiers.Env(); !reflect.DeepEqual(env, []string{"BATON_MODELS=sonnet,opus,fable", "BATON_ESCALATE=1", "BATON_ESCALATE_AFTER=4"}) {
 		t.Errorf("env %v", env)
+	}
+	passed := map[string]string{}
+	for _, kv := range tiers.Env() {
+		k, v, _ := strings.Cut(kv, "=")
+		passed[k] = v
+	}
+	if got := TiersFromEnv(func(k string) string { return passed[k] }); !reflect.DeepEqual(got, tiers) {
+		t.Errorf("passed down and read back: %+v", got)
 	}
 	read := func(v string) func(string) string { return func(string) string { return v } }
 	if got := ModelsFromEnv(read("sonnet,opus,fable")); !reflect.DeepEqual(got, tiers.Models) || !tiers.Allows("fable") || (Tiers{Models: DefaultModels}).Allows("fable") {

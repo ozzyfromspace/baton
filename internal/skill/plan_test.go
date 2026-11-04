@@ -89,3 +89,14 @@ func TestPlanTeachesReplanAfter(t *testing.T) {
 		}
 	}
 }
+
+// The plan section asks for every phase's tier, erring on the side of caution, and says where its rules come.
+func TestPlanAsksForEveryPhasesTier(t *testing.T) {
+	sec := planSection(t)
+	for _, want := range []string{"Give every phase its tier under its heading: `Model:` haiku, sonnet or opus, and `Effort:` low, medium, high, xhigh or max.",
+		"Err on the side of caution", "tier rules at your first `ExitPlanMode`"} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("the plan section lacks %q", want)
+		}
+	}
+}

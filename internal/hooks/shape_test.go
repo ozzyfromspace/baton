@@ -105,7 +105,7 @@ func TestAPlansShapeWithoutTheShapeCheck(t *testing.T) {
 	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || !strings.Contains(why, "could not attach this plan as written") {
 		t.Errorf("a plan that does not build: %q\n%s", d, why)
 	}
-	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || why != decide.CompetingDirectives()+"\n\n"+decide.GateCheck(plan.Plan{}) {
+	if d, why, _ := f.exitPlan("/plans/broken.md", broken); d != "deny" || why != decide.CompetingDirectives()+"\n\n"+decide.GateCheck(plan.Plan{})+"\n\n"+decide.TierCheck(nil, nil, false, 2, 3) {
 		t.Errorf("a plan that does not build: %q\n%s", d, why)
 	}
 	if !f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "gates": true}) || f.logged("directives_asked", map[string]any{"plan": "/plans/broken.md", "shape_flagged": false}) ||

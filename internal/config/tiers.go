@@ -96,9 +96,21 @@ func bounded(file *int, env, name, envName string, def, min, max, envMin int) (i
 // Allows reports a family the human allows a phase to run on.
 func (t Tiers) Allows(family string) bool { return slices.Contains(t.Models, family) }
 
-// Env is the setting as the host gives it to the session's hooks: the families allowed, which the plan's
-// check at ExitPlanMode reads (ModelsFromEnv).
-func (t Tiers) Env() []string { return []string{"BATON_MODELS=" + strings.Join(t.Models, ",")} }
+// Env is the setting as the host gives it to the session's hooks, whose plan check at ExitPlanMode names
+// the families allowed and the escalation (TiersFromEnv).
+func (t Tiers) Env() []string {
+	return []string{"BATON_MODELS=" + strings.Join(t.Models, ","), "BATON_ESCALATE=" + strconv.Itoa(t.Steps), "BATON_ESCALATE_AFTER=" + strconv.Itoa(t.After)}
+}
+
+// TiersFromEnv reads the tier settings as the host passed them down (Env); missing or not valid, the
+// defaults.
+func TiersFromEnv(env func(string) string) Tiers {
+	t, err := Config{envModels: env("BATON_MODELS"), envEscalate: env("BATON_ESCALATE"), envEscalateAfter: env("BATON_ESCALATE_AFTER")}.Tiering()
+	if err != nil {
+		return Tiers{Models: slices.Clone(DefaultModels), Steps: DefaultEscalateSteps, After: DefaultEscalateAfter}
+	}
+	return t
+}
 
 // ModelsFromEnv reads the families allowed as the host passed them down (BATON_MODELS); missing or not
 // valid, the defaults.

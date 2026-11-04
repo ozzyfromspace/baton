@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"github.com/ozzyfromspace/baton/internal/config"
+	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 )
@@ -40,4 +42,25 @@ func workerTier(s *state.Store, phase string) (*plan.Tier, *state.TierRaise) {
 		return &t, &r
 	}
 	return &t, nil
+}
+
+// tierCheck is the tiers' part of baton's one turn-back at a plan's first ExitPlanMode (decide.TierCheck),
+// asked of every plan beside the gate rules, with the settings the host passed down (config.TiersFromEnv).
+// It adds to fields, which directives_asked logs, `tiers: true` and, for a plan that builds, how many of its
+// phases name no tier (`untiered`) and how many a model the human does not allow (`not_allowed`).
+func tierCheck(c Context, pl plan.Plan, built bool, fields map[string]any) string {
+	t := config.TiersFromEnv(c.Env)
+	fields["tiers"] = true
+	var untiered []string
+	disallowed := map[string]string{}
+	if built {
+		untiered = pl.Untiered()
+		for _, ph := range pl.Phases {
+			if ph.Model != "" && !t.Allows(ph.Model) {
+				disallowed[ph.ID] = state.AllowedModel(ph.Model, t.Models)
+			}
+		}
+		fields["untiered"], fields["not_allowed"] = len(untiered), len(disallowed)
+	}
+	return decide.TierCheck(untiered, disallowed, t.Allows("fable"), t.Steps, t.After)
 }
