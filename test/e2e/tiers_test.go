@@ -271,3 +271,57 @@ func TestARedPhaseIsRaisedAndTheLeadRestartsOnIt(t *testing.T) {
 		t.Errorf("after the restart: %v, want only medium", got)
 	}
 }
+
+// afterAllPlan is a lead phase and an agent's beside it, then a phase that waits for both on another tier,
+// which is not a QA phase: a release, say.
+const afterAllPlan = `# After all
+
+## P0 — Lead's
+After: none
+Model: haiku
+Effort: high
+
+Run echo zero, then report P0 done: baton done P0 --notes 'said zero'
+
+## P1 — Beside
+After: none
+Model: haiku
+Effort: low
+
+Run echo one, then report P1 done: baton done P1 --notes 'said one'
+
+## P2 — Release
+After: all
+Model: haiku
+Effort: medium
+
+Run echo two, then report P2 done: baton done P2 --notes 'said two'
+`
+
+// A phase that waits for every phase before it and is not a QA phase stays the lead's whatever its tier,
+// even with agents to take it: the lead restarts on its tier at its boundary, and its replies are served
+// that tier.
+func TestAPhaseAfterAllStaysTheLeadsOnItsTier(t *testing.T) {
+	dir := NewProject(t)
+	Attach(t, dir, afterAllPlan)
+	s := StartAgents(t, dir, []string{"BATON_WORKERS=2"}, "--effort", "high")
+	if !s.Until("the plan to complete", 12*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 }) {
+		logEvents(t, "the run", s.Events())
+		t.Fatal("the plan did not complete")
+	}
+	ev := s.Events()
+	if first(ev, is("worker_spawned", "phase", "P2")) >= 0 {
+		t.Errorf("the phase after all went to a phase agent")
+	}
+	if first(ev, is("worker_spawned", "phase", "P1", "tier", "haiku/low")) < 0 {
+		t.Errorf("P1 did not go to an agent on its tier")
+	}
+	if first(ev, is("tier_restart", "phase", "P2", "to", "haiku/medium", "why", "its boundary")) < 0 || first(ev, is("tier_given_up")) >= 0 {
+		logEvents(t, "the run", ev)
+		t.Fatal("the lead did not restart on P2's tier at its boundary")
+	}
+	replies := servedIn(t, sessionTranscript(t, dir), false)
+	if got := efforts(replies, at(ev, is("phase_started", "phase", "P2")), at(ev, is("phase_done", "phase", "P2"))); len(got) != 1 || got[0] != "medium" {
+		t.Errorf("P2's replies were served %v, want only medium", got)
+	}
+}
