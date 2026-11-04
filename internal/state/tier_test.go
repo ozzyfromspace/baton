@@ -245,3 +245,39 @@ func TestTierChanges(t *testing.T) {
 		t.Errorf("no change: %+v", c)
 	}
 }
+
+// A phase that waits for every phase before it and is not a QA phase, a release say, is the lead's whatever
+// its tier, never an agent's; a QA phase that waits for them all goes to an agent as before, and a phase of
+// a chain off the lead's tier too.
+func TestAPhaseAfterAllStaysTheLeads(t *testing.T) {
+	p := plan.Plan{Phases: []plan.Phase{
+		{ID: "P0", Model: "opus", Effort: "high", After: []string{}},
+		{ID: "P1", Model: "opus", Effort: "max", After: []string{"P0"}},
+		{ID: "P2", Model: "opus", Effort: "high", After: []string{}},
+		{ID: "P3", Model: "opus", Effort: "max", Type: plan.TypeQA, After: []string{"P0", "P1", "P2"}},
+		{ID: "P4", Model: "opus", Effort: "max", After: []string{"P0", "P1", "P2", "P3"}},
+	}}
+	if !p.AfterAll("P4") || !p.AfterAll("P3") || p.AfterAll("P1") || p.AfterAll("P2") || p.AfterAll("P0") {
+		t.Errorf("AfterAll: %v %v %v", p.AfterAll("P4"), p.AfterAll("P3"), p.AfterAll("P1"))
+	}
+	st := New()
+	st.Mode, st.RunBranch = ModeRunning, "baton/run"
+	st.Run.Fleet = "inst"
+	st.Run.Launched = plan.Tier{Model: "opus", Effort: "high"}
+	st.Phases["P0"] = &PhaseState{Status: PhaseDone}
+	if Next(st, p) != "P2" || NextWorker(st, p) != "P1" {
+		t.Errorf("a phase of a chain off the lead's tier: the lead takes %q, an agent %q", Next(st, p), NextWorker(st, p))
+	}
+	st.Phases["P1"], st.Phases["P2"] = &PhaseState{Status: PhaseDone}, &PhaseState{Status: PhaseDone}
+	if Next(st, p) != "" || NextWorker(st, p) != "P3" {
+		t.Errorf("the QA phase: the lead takes %q, an agent %q", Next(st, p), NextWorker(st, p))
+	}
+	st.Phases["P3"] = &PhaseState{Status: PhaseDone}
+	if Next(st, p) != "P4" || NextWorker(st, p) != "" {
+		t.Errorf("the release: the lead takes %q, an agent %q", Next(st, p), NextWorker(st, p))
+	}
+	st.Current, st.Phases["P9"] = "P9", &PhaseState{Status: PhaseActive}
+	if NextWorker(st, p) != "" {
+		t.Errorf("the release went to an agent while the lead held another phase")
+	}
+}

@@ -234,6 +234,14 @@ func inDocumentOrder(text string, phases []Phase) {
 	sort.SliceStable(phases, func(i, j int) bool { return pos[phases[i].ID] < pos[phases[j].ID] })
 }
 
+// AfterAll reports a phase that waits for every phase before it (`After: all`, or a line that names them
+// all), with two at least before it: an integration, a final QA or a release. With one before it, the
+// second phase of any chain would be one.
+func (p Plan) AfterAll(id string) bool {
+	i := p.Index(id)
+	return i >= 2 && p.Phases[i].After != nil && len(p.Phases[i].After) == i
+}
+
 // Deps returns the phases phase id waits for, in document order. A phase stored without After (a
 // plan.json from before dependencies) waits for the phase before it.
 func (p Plan) Deps(id string) []string {

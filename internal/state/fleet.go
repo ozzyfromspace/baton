@@ -261,14 +261,17 @@ func AttachWorker(prev State, phase string) State {
 // dependencies are all done, other than the lead's. The lead's is the phase in hand or, when it holds
 // none, the one it takes up next (Next). A parked phase is never a worker's: it was started in the
 // lead's checkout. Nor is one whose id a worker of a replaced plan still holds (retired). "" when there
-// is none. A QA phase the lead passes over (forAgent) is a worker's, even as the plan's last phase.
+// is none. A QA phase the lead passes over (forAgent) is a worker's, even as the plan's last phase; any
+// other phase that waits for every phase before it (plan.Plan.AfterAll) never is, even while the lead
+// holds another: a release or an integration is the lead's (forAgent).
 func NextWorker(st State, p plan.Plan) string {
 	lead := st.Current
 	if lead == "" {
 		lead = Next(st, p)
 	}
 	for _, ph := range p.Phases {
-		if ps := st.Phases[ph.ID]; ph.ID != lead && (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.retiring(ph.ID) {
+		if ps := st.Phases[ph.ID]; ph.ID != lead && (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.retiring(ph.ID) &&
+			(ph.QA() || !p.AfterAll(ph.ID)) {
 			return ph.ID
 		}
 	}

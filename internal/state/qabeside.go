@@ -32,9 +32,13 @@ func (st State) HasAgents() bool {
 // forAgent reports phase ph of p as one the lead passes over as it takes its next phase up (Next), for a
 // phase agent to take (NextWorker): in a run with agents, one no agent of the plan attached now has failed
 // on, that is a QA phase, or whose tier the lead does not run on (LeadFits): a phase agent is spawned on
-// any tier, and the lead changes its own only by a restart, which ends every agent (loop/leadtier.go).
+// any tier, and the lead changes its own only by a restart, which ends every agent (loop/leadtier.go). A
+// phase that waits for every phase before it (plan.Plan.AfterAll) and is not a QA phase stays the lead's
+// whatever its tier: an integration or a release, which may do what no phase agent may (merge another
+// branch in, say), and once every phase before it is done no agent is at work on them, so the lead
+// restarts on its tier at its boundary.
 func (st State) forAgent(p plan.Plan, ph plan.Phase) bool {
-	return st.HasAgents() && !st.failedOn(ph.ID) && (ph.QA() || !st.LeadFits(p, ph.ID))
+	return st.HasAgents() && !st.failedOn(ph.ID) && (ph.QA() || !st.LeadFits(p, ph.ID) && !p.AfterAll(ph.ID))
 }
 
 // failedOn reports a worker of the plan attached now that failed on phase: its phase was taken back from
