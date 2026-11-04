@@ -18,7 +18,7 @@ func TestANewPlanStartsFresh(t *testing.T) {
 		"Dialogs", "Gate",
 		"Subagents", "Background", "BackgroundTold", "BackgroundToldAt", "Monitors", "Crons", "Tools", "Spawning", "AgentCalls", "Plain",
 		"Compaction", "ModReports", "ModCounted", "Serial", "Fleet", "Proven", "Notices", "Announce",
-		"Context", "ContextNoticed", "ContextNudged", "ContextNudgedAt", "ContextWarned", "WarnQuestion", "WarnOwed",
+		"Context", "Model", "Effort", "ContextNoticed", "ContextNudged", "ContextNudgedAt", "ContextWarned", "WarnQuestion", "WarnOwed",
 		"LastError", "PendingDone", "PlanFile", "ClearedPlan", "ExitAt", "Restart", "NewerNoted", "StaleSkill", "Ended", "Mark", "Recoveries",
 	}
 	// The replaced plan's: its questions asked once, its counts, its escalation, briefs and alarms, its end

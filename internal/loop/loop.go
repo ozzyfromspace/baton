@@ -144,6 +144,10 @@ type Loop struct {
 	// Workers says the run has workers beside the lead (the coordinator's Fleet): while the lead is
 	// stopped, the phases that do not need its phase go on.
 	Workers bool
+	// Tiers is what the settings say of the phases' tiers (models, escalate, escalate_after): the model
+	// families a phase may run on, and how far and how soon a phase that goes badly is raised (tier.go,
+	// escalate.go). The zero Tiers allows every family and raises none.
+	Tiers config.Tiers
 	// MaxAuto is max_auto_decisions: the decisions a phase may make without the human before they review
 	// them (0: no cap, the default).
 	MaxAuto int
@@ -697,7 +701,7 @@ func agentsLive(st state.State) bool {
 	}
 	for _, t := range st.Run.Background {
 		switch {
-		case t.AgentType == state.PhaseAgent, t.Type == "subagent", t.Type == "workflow", t.Type == "teammate":
+		case state.IsPhaseAgent(t.AgentType), t.Type == "subagent", t.Type == "workflow", t.Type == "teammate":
 			return true
 		}
 	}

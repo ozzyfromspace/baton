@@ -136,6 +136,14 @@ func clip(s string, n int) string {
 // Input is the part of Claude Code's status line input baton reads.
 type Input struct {
 	SessionID string `json:"session_id"`
+	// Model and Effort are what the session runs on: its model's full id, and its effort's level (absent
+	// for a model that takes none). docs/research/tiers.md.
+	Model struct {
+		ID string `json:"id"`
+	} `json:"model"`
+	Effort *struct {
+		Level string `json:"level"`
+	} `json:"effort"`
 	Workspace struct {
 		ProjectDir string `json:"project_dir"`
 	} `json:"workspace"`
@@ -280,4 +288,13 @@ func Compose(segment, user string) string {
 	lines := strings.Split(user, "\n")
 	lines[0] = segment + "  " + lines[0]
 	return strings.Join(lines, "\n")
+}
+
+// Tier is what the session runs on, as the status line says: its model's full id and its effort, each ""
+// when not said.
+func (in Input) Tier() (model, effort string) {
+	if in.Effort != nil {
+		effort = in.Effort.Level
+	}
+	return in.Model.ID, effort
 }

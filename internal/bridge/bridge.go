@@ -96,11 +96,13 @@ type Command struct {
 	At       time.Time `json:"at"`
 	// Spawn: the agent's task, its line in Claude Code's agent panel, the name it goes by, and the line the
 	// human reads when the mod keeps one of its reports from the lead's model (Agent.Drop), until the
-	// host lists it among baton's agents.
+	// host lists it among baton's agents; and its tier: the effort of the type it is spawned as
+	// (state.PhaseAgentAt) and the model it is spawned on (in Model), each "" for the lead's.
 	Prompt      string `json:"prompt,omitempty"`
 	Description string `json:"description,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Drop        string `json:"drop,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 	// Send and Stop: the agent; for Send, the message and its label in the lead's transcript.
 	Agent   string `json:"agent,omitempty"`
 	Text    string `json:"text,omitempty"`
@@ -112,7 +114,8 @@ type Command struct {
 	// Compact: the compaction it is for (state.Compaction.Epoch). Submit: the line, in Text. Empty: the
 	// prompt, in Text.
 	Epoch int `json:"epoch,omitempty"`
-	// Complete: the model (an alias such as haiku, or a full id), the system prompt, and the prompt in
+	// Complete: the model (an alias such as haiku, or a full id; for Spawn, the agent's family), the
+	// system prompt, and the prompt in
 	// Prompt; the reply's token cap (0: Claude Code's default, 1024), and how long the call may take, in
 	// milliseconds (0: no bound of its own).
 	Model     string `json:"model,omitempty"`

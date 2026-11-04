@@ -15,7 +15,7 @@ import (
 // spawn command says so).
 func (h *handlers) spawning(c Context) {
 	ti, _ := c.Input["tool_input"].(map[string]any)
-	if str(c.Input, "tool_name") != "Agent" || str(ti, "subagent_type") != state.PhaseAgent || str(ti, "name") == "" {
+	if str(c.Input, "tool_name") != "Agent" || !state.IsPhaseAgent(str(ti, "subagent_type")) || str(ti, "name") == "" {
 		return
 	}
 	sp := state.Spawning{Phase: str(ti, "name"), ToolUse: str(c.Input, "tool_use_id"), At: c.Now}

@@ -14,6 +14,12 @@ import (
 // the models of the session see (baton refuses their calls to it: decide.PhaseTypeIsBatons).
 const PhaseAgentDescription = "A phase of a plan baton runs, in a git worktree of its own. Only baton starts these: never use this type yourself."
 
+// PhaseAgentAtDescription is the line of the phase agent type at effort (state.PhaseAgentAt): short,
+// since every model of the session reads the list of agent types in every request.
+func PhaseAgentAtDescription(effort string) string {
+	return "A phase of a plan baton runs, at " + effort + " effort. Only baton starts these: never use this type yourself."
+}
+
 // PhaseAgentPrompt is the baton:phase agent type's system prompt. Its brief, which says what to do, comes
 // from baton when it starts. Claude Code 2.1.302 tells a background agent in auto mode that handing its
 // report back (SubagentHandback) "ends your run"; for a phase agent it ends a turn, as a message resumes

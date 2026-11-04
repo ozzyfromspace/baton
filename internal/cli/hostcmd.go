@@ -153,6 +153,10 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	tiers, err := cfg.Tiering() // the families a phase may run on, and how a phase that goes badly is raised
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	timing := loop.DefaultTiming
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
@@ -179,6 +183,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	batonEnv = append(batonEnv, workerEnv(workers, auto, usageMax)...)
 	batonEnv = append(batonEnv, config.AggregateEnv(cfg.Aggregates(io.Env)))   // QA phases run the heavy checks (aggregate_qa)
 	batonEnv = append(batonEnv, config.AutoReplanEnv(cfg.AutoReplans(io.Env))) // baton opens its own replans at boundaries (auto_replan)
+	batonEnv = append(batonEnv, tiers.Env()...)                                // the plan's check at ExitPlanMode names the families allowed (models)
 	if mode := elevate.PermissionMode(args); mode != "" {
 		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
 	}
@@ -199,7 +204,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 		batonEnv = append(batonEnv, "BATON_TTY="+tty)
 	}
 	runners := newHostRunners(io, exe, proj, instance)
-	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto,
+	controller := &loop.Loop{Notify: notify.New(cfg), Project: filepath.Base(proj.Root), Timing: timing, Logf: logf, Version: version.Version, MaxAuto: escalation.MaxAuto, Tiers: tiers,
 		Runners: runners, Lapse: lapser(escalation.Env()), StartsAfresh: upgrade.CanRestart}
 	if cfg.Restarts() && upgrade.CanRestart && upgrade.Release(version.Version) {
 		w := &upgrade.Watch{Root: batonRoot(io), Running: version.Version, Skip: io.Env("BATON_RESTART_SKIP"), Every: 15 * time.Second, Now: io.Now}
@@ -495,8 +500,9 @@ func flagValue(args []string, name string) (string, bool) {
 	return "", false
 }
 
-// recordContext stores the context size Claude Code reports, for the context valves. The status line
-// refreshes often, so it only writes when the size changed or the reading is 30s old.
+// recordContext stores the context size Claude Code reports, for the context valves, and the model and
+// effort the lead runs on (state.SawTier). The status line refreshes often, so it only writes when either
+// changed or the reading is 30s old.
 func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, error) {
 	st, err := s.Load()
 	tokens, ok := in.Tokens()
@@ -509,11 +515,16 @@ func recordContext(s *state.Store, in statusline.Input, io IO) (state.State, err
 		pct = *p
 	}
 	limit := valve.FromEnv(io.Env).Limits(size).Window
-	if c := st.Run.Context; c != nil && c.Tokens == tokens && c.WindowSize == size && c.Limit == limit && now.Sub(c.At) < 30*time.Second {
+	model, effort := in.Tier()
+	ran := st.Run
+	state.SawTier(&ran, model, effort)
+	if c := st.Run.Context; c != nil && c.Tokens == tokens && c.WindowSize == size && c.Limit == limit && now.Sub(c.At) < 30*time.Second &&
+		ran.Model == st.Run.Model && ran.Effort == st.Run.Effort {
 		return st, nil
 	}
 	return s.Update(func(st *state.State) error {
 		state.SawContext(st, state.ContextUse{UsedPct: pct, Tokens: tokens, WindowSize: size, Limit: limit, At: now})
+		state.SawTier(&st.Run, model, effort) // what the lead runs on, which a restart with new flags changes
 		return nil
 	})
 }

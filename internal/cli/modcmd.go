@@ -6,12 +6,14 @@ import (
 	"fmt"
 	goio "io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/config"
 	"github.com/ozzyfromspace/baton/internal/decide"
 	"github.com/ozzyfromspace/baton/internal/hooks"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/valve"
 	"github.com/ozzyfromspace/baton/internal/version"
@@ -38,13 +40,14 @@ type modReply struct {
 	Why     string `json:"why,omitempty"`
 	Ignored string `json:"ignored,omitempty"`
 	// A hello's: the run, the bridge's directory the mod polls, the number of the mod's last report
-	// recorded (its next follows it), the agent type it registers for phases, and the words of baton's
-	// board (`baton board`), which it draws.
-	Run   string        `json:"run,omitempty"`
-	Dir   string        `json:"dir,omitempty"`
-	Seen  int           `json:"seen,omitempty"`
-	Agent *modAgentType `json:"agent,omitempty"`
-	Board *modBoard     `json:"board,omitempty"`
+	// recorded (its next follows it), the agent types it registers for phases (Agent on the lead's
+	// effort, Agents one per effort), and the words of baton's board (`baton board`), which it draws.
+	Run    string         `json:"run,omitempty"`
+	Dir    string         `json:"dir,omitempty"`
+	Seen   int            `json:"seen,omitempty"`
+	Agent  *modAgentType  `json:"agent,omitempty"`
+	Agents []modAgentType `json:"agents,omitempty"`
+	Board  *modBoard      `json:"board,omitempty"`
 	// An asking's: how long the question may wait before the mod asks again (WaitMs), or, with none, the
 	// answer it gives the question now (Answer, for one of baton's; Answers, one per question by its text,
 	// for a call of the lead model's own); with neither, baton never answers it, and the human does.
@@ -64,6 +67,17 @@ type modAgentType struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Prompt      string `json:"prompt"`
+	Effort      string `json:"effort,omitempty"` // its agents' effort, whatever the lead's; "" for the lead's
+}
+
+// phaseTypes are the phase agent types at an effort of their own, one per effort (state.PhaseAgentAt).
+func phaseTypes() []modAgentType {
+	var out []modAgentType
+	for _, e := range plan.Efforts {
+		name, _ := strings.CutPrefix(state.PhaseAgentAt(e), "baton:")
+		out = append(out, modAgentType{Name: name, Description: decide.PhaseAgentAtDescription(e), Prompt: decide.PhaseAgentPrompt, Effort: e})
+	}
+	return out
 }
 
 func cmdMod(args []string, io IO) int {
@@ -370,6 +384,6 @@ func modHello(io IO, s *state.Store, b *bridge.Bridge, rep bridge.Report) modRep
 		return modReply{Retry: true, Why: err.Error()}
 	}
 	return modReply{OK: true, Run: s.Ref, Dir: b.Dir, Seen: seen,
-		Agent: &modAgentType{Name: "phase", Description: decide.PhaseAgentDescription, Prompt: decide.PhaseAgentPrompt},
+		Agent: &modAgentType{Name: "phase", Description: decide.PhaseAgentDescription, Prompt: decide.PhaseAgentPrompt}, Agents: phaseTypes(),
 		Board: &modBoard{Description: decide.BoardCommand, Title: decide.BoardTitle}}
 }

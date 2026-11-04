@@ -3,9 +3,11 @@ package state
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ozzyfromspace/baton/internal/gitx"
+	"github.com/ozzyfromspace/baton/internal/plan"
 )
 
 // Runtime is what the hooks observe about the live session. The host's controller and the Stop
@@ -124,6 +126,11 @@ type Runtime struct {
 	// CompleteNotified is set once the human has been told the plan is complete.
 	CompleteNotified bool        `json:"complete_notified,omitempty"`
 	Context          *ContextUse `json:"context,omitempty"`
+	// Model and Effort are what the loop runs on, as its hooks and the lead's status line last said
+	// (SawTier): its model, a full id (SessionStart and the status line say it, a phase agent's hooks do
+	// not), and its effort, which every hook but SessionStart and SubagentStart says. "" while nothing has.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	// ContextNoticed is set once the model has been told where its context stands (the notice, which asks
 	// nothing), ContextNudged once it has been asked to checkpoint (ContextNudgedAt: at what size, so the
 	// request is repeated as the context keeps growing), and ContextWarned once the human has been asked;
@@ -378,7 +385,7 @@ type Task struct {
 	Type        string `json:"type"` // shell (a Monitor too), subagent, workflow, …
 	Status      string `json:"status"`
 	Description string `json:"description,omitempty"`
-	// AgentType is a subagent's type: PhaseAgent for one of baton's own phase agents.
+	// AgentType is a subagent's type: one IsPhaseAgent reports for one of baton's own phase agents.
 	AgentType string `json:"agent_type,omitempty"`
 	// Since is when a Stop first reported the task: Claude Code does not say when it started.
 	Since time.Time `json:"since,omitzero"`
@@ -567,15 +574,35 @@ var waitable = map[string]bool{"shell": true, "subagent": true, "workflow": true
 func (t Task) Waitable() bool { return waitable[t.Type] }
 
 // PhaseAgent is the agent type of baton's phase agents, which the mod in baton's plugin registers and
-// spawns (docs/research/visible-workers.md).
+// spawns (docs/research/visible-workers.md): this one runs on the lead's effort, and PhaseAgentAt's on an
+// effort of their own.
 const PhaseAgent = "baton:phase"
+
+// PhaseAgentAt is the phase agent type whose agents run on effort, one of plan.Efforts, whatever the
+// lead's: the mod registers one per effort, and never again with another, since an agent resumed by a
+// message reads its type again (docs/research/tiers.md). "" is PhaseAgent.
+func PhaseAgentAt(effort string) string {
+	if effort == "" {
+		return PhaseAgent
+	}
+	return PhaseAgent + "-" + effort
+}
+
+// IsPhaseAgent reports an agent type of baton's phase agents: PhaseAgent, or one at an effort of its own.
+func IsPhaseAgent(agentType string) bool {
+	if agentType == PhaseAgent {
+		return true
+	}
+	e, ok := strings.CutPrefix(agentType, PhaseAgent+"-")
+	return ok && slices.Contains(plan.Efforts, e)
+}
 
 // BusyBackground reports background work that can still wake the session. baton's own phase agents are
 // not the session's work: their reports never reach its model, and each phase has a loop of its own.
 func (r Runtime) BusyBackground() []Task {
 	var out []Task
 	for _, t := range r.Background {
-		if t.Waitable() && t.AgentType != PhaseAgent && !slices.Contains(r.Monitors, t.ID) {
+		if t.Waitable() && !IsPhaseAgent(t.AgentType) && !slices.Contains(r.Monitors, t.ID) {
 			out = append(out, t)
 		}
 	}

@@ -45,6 +45,8 @@ func freshRun(prev Runtime) Runtime {
 		Announce:   prev.Announce,                            // lines not shown yet: the human's to see
 
 		Context:         prev.Context,         // the conversation's size, which a new plan does not change
+		Model:           prev.Model,           // what the session runs on, which a new plan does not change by itself
+		Effort:          prev.Effort,          // (the same)
 		ContextNoticed:  prev.ContextNoticed,  // the context valves fired for that size, which re-arm as it falls
 		ContextNudged:   prev.ContextNudged,   // (the same)
 		ContextNudgedAt: prev.ContextNudgedAt, // (the same)

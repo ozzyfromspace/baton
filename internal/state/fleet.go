@@ -67,6 +67,12 @@ type Worker struct {
 	Tip string `json:"tip,omitempty"`
 	// Generation is the run's generation it was assigned under (State.Generation).
 	Generation int `json:"generation,omitempty"`
+	// Tier is the tier its agent was spawned on (state.TierFor, as the host asked the mod), and Served what
+	// that agent's replies were served, once its loop has read it (tier.go): what the board shows, and what
+	// the host checks the one against the other with (loop/tier.go). Zero for a phase that leaves its tier
+	// to the session, or before its agent's first reply.
+	Tier   plan.Tier `json:"tier,omitzero"`
+	Served plan.Tier `json:"served,omitzero"`
 	// Retiring is when Retirer (a host's instance, or a command) began to retire it (loop.RetireWorker).
 	// Nothing resumes a worker while it is retiring, and nobody else retires it, until the mark is
 	// RetireStale.
@@ -304,7 +310,7 @@ func (st State) LiveWorkers() []Worker {
 func (st State) PhaseAgents() []Task {
 	var out []Task
 	for _, t := range st.Run.Background {
-		if t.AgentType == PhaseAgent && !st.agentEnded(t.ID) {
+		if IsPhaseAgent(t.AgentType) && !st.agentEnded(t.ID) {
 			out = append(out, t)
 		}
 	}

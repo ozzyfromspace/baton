@@ -174,6 +174,10 @@ func (h *handlers) updateRead(c Context, read func(s *state.Store, peek state.St
 			return errNotOwner
 		}
 		st.Run.LastActivity = c.Now
+		if str(c.Input, "agent_id") == s.Agent { // the loop's own hook: the lead's, or its phase agent's, never a subagent the model started
+			model, effort := tierSaid(c)
+			state.SawTier(&st.Run, model, effort)
+		}
 		if main {
 			if sid := str(c.Input, "session_id"); sid != "" {
 				st.Run.SessionID = sid
@@ -251,7 +255,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		h.spawning(c)
 		return Result{}, nil
 	}
-	if ti, _ := c.Input["tool_input"].(map[string]any); str(c.Input, "tool_name") == "Agent" && str(ti, "subagent_type") == state.PhaseAgent {
+	if ti, _ := c.Input["tool_input"].(map[string]any); str(c.Input, "tool_name") == "Agent" && state.IsPhaseAgent(str(ti, "subagent_type")) {
 		// baton's agent type is offered in the session, since Claude Code resumes no agent by a message
 		// whose type it does not offer, but only baton's mod starts one.
 		if s, err := h.d.Open(c); err == nil && s != nil {
@@ -286,7 +290,7 @@ func (h *handlers) preToolUse(c Context) (Result, error) {
 		if baton, verdict := batonShell(str(ti, "command")); baton {
 			switch verdict {
 			case shellSimple:
-				if words, ok := asWords(str(ti, "command")); ok && str(c.Input, "agent_type") == state.PhaseAgent {
+				if words, ok := asWords(str(ti, "command")); ok && state.IsPhaseAgent(str(c.Input, "agent_type")) {
 					return h.gateAsWords(c, ti, words), nil
 				}
 				return permission("allow", "baton's own CLI"), nil
@@ -1663,7 +1667,7 @@ func (h *handlers) subagentStart(c Context) (Result, error) {
 		return h.agentStart(c, s)
 	}
 	_, _, err := h.update(c, func(st *state.State, _ *state.Store) error {
-		if c.Agent != "" && str(c.Input, "agent_type") != state.PhaseAgent {
+		if c.Agent != "" && !state.IsPhaseAgent(str(c.Input, "agent_type")) {
 			st.Run.Subagents++
 		}
 		return nil
@@ -1724,7 +1728,7 @@ func recordStop(st *state.State, c Context, others []string) (ended []state.Task
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
 	for _, t := range st.Run.Background {
-		if (t.Type == "subagent" || t.Type == "workflow") && t.AgentType != state.PhaseAgent {
+		if (t.Type == "subagent" || t.Type == "workflow") && !state.IsPhaseAgent(t.AgentType) {
 			st.Run.Subagents++
 		}
 	}

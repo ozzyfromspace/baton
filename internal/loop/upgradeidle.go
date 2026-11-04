@@ -36,7 +36,7 @@ func (l *Loop) idleRestart(v host.View, st state.State, in host.Injector) bool {
 // worker, suspended for a fresh agent, still carries its id, so State.PhaseAgents counts it at work. The
 // rest of the list (the model's own work, its monitors) still holds a restart.
 func rosterJudged(st state.State) state.State {
-	st.Run.Background = slices.DeleteFunc(slices.Clone(st.Run.Background), func(t state.Task) bool { return t.AgentType == state.PhaseAgent })
+	st.Run.Background = slices.DeleteFunc(slices.Clone(st.Run.Background), func(t state.Task) bool { return state.IsPhaseAgent(t.AgentType) })
 	return st
 }
 

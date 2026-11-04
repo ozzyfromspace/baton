@@ -8,10 +8,16 @@ import { test, expect, mock } from 'claude-code/testing'
 const DIR = '/proj/.baton/runs/sess/mod'
 const HOSTED = { BATON_HOST: '1', BATON_BIN: '/opt/baton', BATON_INSTANCE: 'inst' }
 const AGENT = { name: 'phase', description: 'A phase of a plan baton runs.', prompt: 'You work on one phase.' }
+// AGENTS are the types at an effort of their own, one per effort, as the host's hello gives them.
+const AGENTS = ['low', 'high'].map((effort) => ({ name: 'phase-' + effort, description: 'A phase at ' + effort + ' effort.', prompt: 'You work on one phase.', effort }))
 const BOARD = { description: "baton's board", title: 'baton' }
+// REGISTERED are the calls registering AGENT and AGENTS, in the hello's order.
+const REGISTERED = ['register phase worktree You work on one phase.', 'register phase-low worktree low You work on one phase.', 'register phase-high worktree high You work on one phase.']
 
 type Opts = {
   env?: Record<string, string>
+  // agents are the types at an effort of their own the host's hello gives (undefined: AGENTS)
+  agents?: any[]
   store?: Record<string, unknown>
   files?: Record<string, string>
   // reply answers a report in the host's place (undefined: as the host would)
@@ -97,7 +103,7 @@ function world(on: any, o: Opts = {}) {
     let reply = o.reply ? o.reply(rep) : undefined
     if (rep.kind === 'asking') w.asking.push(rep)
     if (reply === undefined) {
-      if (rep.kind === 'hello') reply = { ok: true, run: 'sess', dir: DIR, seen: w.seen, agent: AGENT, board: BOARD }
+      if (rep.kind === 'hello') reply = { ok: true, run: 'sess', dir: DIR, seen: w.seen, agent: AGENT, agents: o.agents ?? AGENTS, board: BOARD }
       else if (rep.kind === 'asking') reply = { ok: true }
       else if (rep.seq <= w.seen) reply = { ok: true, ignored: 'recorded already' }
       else {
@@ -117,13 +123,13 @@ function world(on: any, o: Opts = {}) {
     return { value: names.map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
   })
   on('agent.register', async ($: any, e: any) => {
-    w.calls.push(`register ${e.name} ${e.isolation} ${e.prompt}`)
+    w.calls.push(`register ${e.name} ${e.isolation}${e.effort ? ' ' + e.effort : ''} ${e.prompt}`)
     return { value: { agent: 'baton:' + e.name } }
   })
   on('agent.spawn', async ($: any, e: any) => {
     // The kit raises it with the Agent tool's input, and only Claude Code's core sets an agent's id, so here
     // no agent starts: what the mod does with one is for the end-to-end scenarios.
-    w.calls.push(`spawn ${e.subagentType ?? e.subagent_type} ${e.name} [${e.description}] ${e.prompt}`)
+    w.calls.push(`spawn ${e.subagentType ?? e.subagent_type}${e.model ? ' on ' + e.model : ''} ${e.name} [${e.description}] ${e.prompt}`)
     return { model: 'haiku' }
   })
   on('tool.call', async ($: any, e: any) => {
@@ -238,7 +244,7 @@ test('a hello baton asks to wait for is tried again until it holds', async ($, o
   const w = world(on, { reply: (rep) => (rep.kind === 'hello' && ++n < 3 ? { ok: false, retry: true, why: 'no run yet' } : undefined) })
   await start($, w, 5_000)
   expect(w.runs.filter((k) => k === 'hello').length).toBe(3)
-  expect(w.calls).toEqual(['register phase worktree You work on one phase.'])
+  expect(w.calls).toEqual(REGISTERED)
 })
 
 test("the host's commands run in order, once each, and only its own", async ($, on) => {
@@ -256,7 +262,7 @@ test("the host's commands run in order, once each, and only its own", async ($, 
   })
   await start($, w)
   expect(w.calls).toEqual([
-    'register phase worktree You work on one phase.',
+    ...REGISTERED,
     'spawn baton:phase P1 [P1 — one] Begin P1.',
     'SendMessage a1 The gate passed.',
     'TaskStop a1',
@@ -270,6 +276,29 @@ test("the host's commands run in order, once each, and only its own", async ($, 
   expect(w.reports[3]).toEqual(expect.objectContaining({ ok: false, result: 'was stopped by the user' }))
   expect(w.reports[4]).toEqual(expect.objectContaining({ ok: true, result: 'queued' }))
   expect(Object.keys(w.files)).toEqual([cmdPath(6), DIR + '/out/.000008.json.tmp-1'])
+})
+
+test("a phase's tier: its agent is spawned as the type of its effort, on its model", async ($, on) => {
+  const w = world(on, {
+    files: {
+      ...command({ id: 1, kind: 'spawn', phase: 'P1', prompt: 'Begin P1.', description: 'P1 — one', name: 'P1', effort: 'high', model: 'opus' }),
+      ...command({ id: 2, kind: 'spawn', phase: 'P2', prompt: 'Begin P2.', description: 'P2 — two', name: 'P2', effort: 'low' }),
+      ...command({ id: 3, kind: 'spawn', phase: 'P3', prompt: 'Begin P3.', description: 'P3 — three', name: 'P3', model: 'sonnet' }),
+    },
+  })
+  await start($, w)
+  expect(w.calls).toEqual([
+    ...REGISTERED,
+    'spawn baton:phase-high on opus P1 [P1 — one] Begin P1.',
+    'spawn baton:phase-low P2 [P2 — two] Begin P2.',
+    'spawn baton:phase on sonnet P3 [P3 — three] Begin P3.',
+  ])
+})
+
+test('a hello from a baton that names no types at an effort registers baton:phase alone', async ($, on) => {
+  const w = world(on, { agents: [] })
+  await start($, w, 5_000)
+  expect(w.calls).toEqual(['register phase worktree You work on one phase.'])
 })
 
 test('an ack the host has not recorded is reported again, never the command run again', async ($, on) => {

@@ -71,8 +71,8 @@ const M = {
   helloing: false,
   tries: 0,
   poll: null,
-  registered: false,
-  spec: null,
+  registered: {}, // the agent types registered, by name
+  specs: [], // the agent types to register, from the host's hello
   view: null,
   viewing: false,
   band: '', // the band as the host last worded it ('' for none)
@@ -200,7 +200,7 @@ async function hello($) {
     M.keep.run = run
     if (M.keep.seq < (r.seen || 0)) M.keep.seq = r.seen
     await save($)
-    await registerType($, r.agent)
+    await registerTypes($, [r.agent, ...(Array.isArray(r.agents) ? r.agents : [])].filter(Boolean))
     await registerBoard($, r.board)
     if (!M.poll) M.poll = $.clock.every(POLL_MS, () => poll($))
     if (!M.view) M.view = $.clock.every(VIEW_MS, () => view($))
@@ -219,14 +219,21 @@ async function hello($) {
   }
 }
 
-// register makes the agent type phases run as (baton:phase), from the host's spec, until it holds.
-async function registerType($, spec) {
-  if (M.registered || !spec) return
-  try {
-    await $.agent.register({ name: spec.name, description: spec.description, prompt: spec.prompt, isolation: 'worktree' })
-    M.registered = true
-  } catch (err) {
-    M.spec = spec // the session has not bound yet: the next poll tries again
+// registerTypes makes the agent types phases run as, from the host's specs, until each holds: baton:phase,
+// on the lead's effort, and one type per effort (baton:phase-high, …), each with its own. A type is never
+// registered again with another effort, since an agent resumed by a message reads its type again (spike 43).
+async function registerTypes($, specs) {
+  if (specs) M.specs = specs
+  for (const spec of M.specs) {
+    if (M.registered[spec.name]) continue
+    const def = { name: spec.name, description: spec.description, prompt: spec.prompt, isolation: 'worktree' }
+    if (spec.effort) def.effort = spec.effort
+    try {
+      await $.agent.register(def)
+      M.registered[spec.name] = true
+    } catch (err) {
+      // the session has not bound yet: the next poll tries again
+    }
   }
 }
 
@@ -343,7 +350,7 @@ async function poll($) {
   if (!M.ready || M.polling) return
   M.polling = true
   try {
-    if (M.spec && !M.registered) await registerType($, M.spec)
+    if (M.specs.some((spec) => !M.registered[spec.name])) await registerTypes($)
     if (M.boardSpec && !M.boardOn) await registerBoard($)
     await agentsNow($)
     await flush($)
@@ -388,7 +395,11 @@ async function run($, c) {
   try {
     switch (c.kind) {
       case 'spawn': {
-        const r = await $.agent.spawn({ subagentType: 'baton:phase', prompt: c.prompt, description: c.description, name: c.name })
+        // The phase's tier: its effort is its type's, its model the spawn's, which stays with the agent
+        // through every resume (spike 43).
+        const input = { subagentType: c.effort ? 'baton:phase-' + c.effort : 'baton:phase', prompt: c.prompt, description: c.description, name: c.name }
+        if (c.model) input.model = c.model
+        const r = await $.agent.spawn(input)
         return r && r.agentId ? { ok: true, agent: r.agentId } : { ok: false, error: String((r && r.deny) || 'no agent started') }
       }
       case 'send': {

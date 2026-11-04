@@ -429,12 +429,19 @@ func (c *Coordinator) issue(now time.Time, s *state.Store, b *bridge.Bridge, e s
 	if i := pl.Index(e.Phase); i >= 0 {
 		title = pl.Phases[i].Title
 	}
+	// The phase's tier (state.TierFor): its effort is the type's the mod spawns it as, its model the spawn's.
+	st, _ := s.Load()
+	tier := state.TierFor(st, pl, e.Phase, c.Lead.Tiers.Models)
 	cmd, err := b.Issue(bridge.Command{Kind: bridge.Spawn, Instance: s.Instance, Phase: e.Phase, Name: e.Phase,
-		Description: decide.AgentDescription(e.Phase, title), Prompt: decide.AgentBegin(e.Phase)})
+		Description: decide.AgentDescription(e.Phase, title), Prompt: decide.AgentBegin(e.Phase), Effort: tier.Effort, Model: tier.Model})
 	if err != nil {
 		c.retire(now, s, e, "baton could not ask its mod to start its agent: "+err.Error())
 		c.later(now, s, e.Phase, err.Error())
 		return
+	}
+	if e.Tier != tier || !e.Served.Zero() {
+		e.Tier, e.Served = tier, plan.Tier{}
+		c.setEntry(s, e, func(x *state.Worker) { x.Tier, x.Served = tier, plan.Tier{} })
 	}
 	w := &worker{phase: e.Phase, entry: e, store: sub, agent: c.newAgent(e.Phase, sub), launched: now, spawn: cmd.ID}
 	c.mu.Lock()
@@ -445,14 +452,17 @@ func (c *Coordinator) issue(now time.Time, s *state.Store, b *bridge.Bridge, e s
 	c.mu.Unlock()
 	c.Lead.logf("loop: %s: asked the mod to start its agent (command %d)", e.Phase, cmd.ID)
 	fields := map[string]any{"phase": e.Phase, "worktree": e.Worktree, "branch": e.Branch, "base": e.Base, "command": cmd.ID}
+	if !tier.Zero() {
+		fields["tier"] = tier.String()
+	}
 	if why == "" {
 		s.Event("worker_spawned", fields)
-		c.announce(s, fmt.Sprintf("baton: a phase agent takes up %s, in a worktree of its own on the branch %s", phaseName(pl, e.Phase), e.Branch))
+		c.announce(s, fmt.Sprintf("baton: a phase agent takes up %s%s, in a worktree of its own on the branch %s", phaseName(pl, e.Phase), decide.OnTier(tier), e.Branch))
 		return
 	}
 	fields["why"] = why
 	s.Event("worker_resumed", fields)
-	c.announce(s, fmt.Sprintf("baton: a phase agent takes %s up again, in its worktree: %s", e.Phase, why))
+	c.announce(s, fmt.Sprintf("baton: a phase agent takes %s up again%s, in its worktree: %s", e.Phase, decide.OnTier(tier), why))
 }
 
 // reports takes what the mod reported since the last step (bridge.Take): the acks of the commands this
@@ -566,6 +576,7 @@ func (c *Coordinator) turned(s *state.Store, r bridge.Report) {
 // stopped.
 func (c *Coordinator) watch(now time.Time, s *state.Store, b *bridge.Bridge, st state.State, pl plan.Plan, w *worker) {
 	e := st.Entry(w.entry)
+	c.servedTier(s, w, e) // what its agent was served, against its tier (tier.go)
 	switch why := unwanted(st, pl, e); {
 	case w.ending != "":
 		if w.stop == 0 || now.Sub(w.endAt) > stopWait {

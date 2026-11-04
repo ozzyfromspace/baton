@@ -107,7 +107,7 @@ const contextEvery = 10 * time.Second
 // (state.AgentBoundary: the compaction hooks it fires look like the lead's), and owes it its brief again,
 // given as it goes on (its next tool call, or rebrief). Every contextEvery, the size of its context is
 // recorded against the lead's window (an agent compacts where the lead does, spike 32), for its context
-// valve, which its hooks run at its tool calls.
+// valve, which its hooks run at its tool calls, and so is what its last reply was served (served).
 func (a *Agent) read(now time.Time, st state.State) state.State {
 	if st.Mode != state.ModeRunning || st.Run.Transcript == "" {
 		return st
@@ -135,6 +135,7 @@ func (a *Agent) read(now time.Time, st state.State) state.State {
 		return st
 	}
 	a.contextAt = now
+	st = a.served(st)
 	lead, err := a.lead.Load()
 	window := lead.Run.Context
 	if err != nil || window == nil || window.WindowSize <= 0 {
@@ -155,6 +156,26 @@ func (a *Agent) read(now time.Time, st state.State) state.State {
 	if up, err := a.Store.Update(func(st *state.State) error {
 		if st.Run.Transcript == path {
 			st.Run.Context = use
+		}
+		return nil
+	}); err == nil {
+		st = up
+	}
+	return st
+}
+
+// served records what the agent's last reply was served (transcript.LastServed): the model, which its
+// hooks never say, and the effort, which they do (state.SawTier). It returns the sub-run's state as it
+// then stands.
+func (a *Agent) served(st state.State) state.State {
+	path := st.Run.Transcript
+	got, err := transcript.LastServed(path, true)
+	if err != nil || got == nil || got.Model == st.Run.Model && got.Effort == st.Run.Effort {
+		return st
+	}
+	if up, err := a.Store.Update(func(st *state.State) error {
+		if st.Run.Transcript == path {
+			state.SawTier(&st.Run, got.Model, got.Effort)
 		}
 		return nil
 	}); err == nil {

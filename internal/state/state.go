@@ -70,6 +70,9 @@ type PhaseState struct {
 	// EnvPushed are the kinds of environment failure the human was pushed about, as two whole runs of the
 	// phase's gate lost a stage to each (envrepeat.go): once per phase and kind.
 	EnvPushed []string `json:"env_pushed,omitempty"`
+	// Raises are the steps baton raised the phase's tier, oldest first (tier.go, loop/escalate.go): it runs
+	// on the last one's. Kept in the lead's run, for every phase, a phase agent's too.
+	Raises []TierRaise `json:"raises,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.

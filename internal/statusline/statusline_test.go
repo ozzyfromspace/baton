@@ -1,6 +1,7 @@
 package statusline
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -338,5 +339,21 @@ func TestTokens(t *testing.T) {
 		if tokens, ok := Parse([]byte(c.raw)).Tokens(); tokens != c.tokens || ok != c.ok {
 			t.Errorf("%s: %d %v", c.name, tokens, ok)
 		}
+	}
+}
+
+// The status line says what the session runs on (spike 43): its model's id and its effort's level.
+func TestTheStatusLineSaysTheTier(t *testing.T) {
+	var in Input
+	if err := json.Unmarshal([]byte(`{"model":{"id":"claude-sonnet-5-5","display_name":"Sonnet 5.5"},"effort":{"level":"high"},"thinking":{"enabled":true}}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	if m, e := in.Tier(); m != "claude-sonnet-5-5" || e != "high" {
+		t.Errorf("tier %q %q", m, e)
+	}
+	in = Input{}
+	json.Unmarshal([]byte(`{"model":{"id":"claude-3-5-haiku"}}`), &in)
+	if m, e := in.Tier(); m != "claude-3-5-haiku" || e != "" {
+		t.Errorf("a model that takes no effort: %q %q", m, e)
 	}
 }

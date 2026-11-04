@@ -12,6 +12,7 @@ import (
 
 	"github.com/ozzyfromspace/baton/internal/bridge"
 	"github.com/ozzyfromspace/baton/internal/decide"
+	"github.com/ozzyfromspace/baton/internal/plan"
 	"github.com/ozzyfromspace/baton/internal/state"
 	"github.com/ozzyfromspace/baton/internal/version"
 )
@@ -66,6 +67,16 @@ func TestTheModReportsThroughTheCLI(t *testing.T) {
 		r.Agent.Name != "phase" || r.Agent.Prompt != decide.PhaseAgentPrompt || r.Agent.Description != decide.PhaseAgentDescription ||
 		r.Board == nil || r.Board.Description != decide.BoardCommand || r.Board.Title != decide.BoardTitle {
 		t.Fatalf("hello: %+v", r)
+	}
+	// One type per effort, each with its own and the phase agent's prompt, named as state.PhaseAgentAt.
+	if len(r.Agents) != len(plan.Efforts) {
+		t.Fatalf("agent types at an effort: %+v", r.Agents)
+	}
+	for i, a := range r.Agents {
+		if e := plan.Efforts[i]; a.Effort != e || "baton:"+a.Name != state.PhaseAgentAt(e) || a.Prompt != decide.PhaseAgentPrompt ||
+			a.Description != decide.PhaseAgentAtDescription(e) || !state.IsPhaseAgent("baton:"+a.Name) {
+			t.Errorf("the type at %s: %+v", e, a)
+		}
 	}
 	ask, err := m.bridge().Issue(bridge.Command{Kind: bridge.Ask, Instance: "i", Question: "May P3 commit unsigned?"})
 	if err != nil {
