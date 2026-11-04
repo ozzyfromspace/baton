@@ -85,3 +85,37 @@ Read from its binary, then measured in [spike 43](../../spikes/43-model-effort/)
   it, and ends every agent of that claude, so it waits for none to be at work, as an upgrade's does.
 - **Each phase's tier can be checked from facts:** the first reply of the phase in that loop's transcript, against
   the plan. A cap Claude Code applied is told once, never retried.
+
+## What v0.8.18 built
+
+- **A phase's tier in its plan:** `Model:` and `Effort:` lines under its heading. The planner is asked for every
+  phase's, with rules that err on the side of caution and quote the cost index above, once at its first
+  `ExitPlanMode`.
+- **Phase agents on their tier:** one agent type per effort, never registered again with another, and the model on
+  the spawn. Each agent is checked against its tier once its first reply says what it was served.
+- **The lead on its phase's tier:** a restart in place with both flags at the phase's boundary, or mid-phase once
+  idle, waiting for no agent to be at work; while agents can take them, the lead passes over phases on other tiers.
+  Once no plan runs, it goes back on the human's own tier.
+- **Raised when it goes badly:** three red runs of a phase's own gate raise it a step, at most two steps; never down
+  mid-phase, and never on a refusal.
+
+Measured end to end on Claude Code 2.1.318 with Haiku 5.5 (`test/e2e/tiers_test.go`):
+
+- **The lead, high to low to medium:** a three-phase plan in serial mode restarted the lead at each boundary whose
+  phase named another effort. Every reply of each phase in the lead's transcript was served that phase's effort,
+  about a minute in all.
+- **Phase agents, low and max:** beside a lead phase at high, the phases at low and max went to phase agents. Each
+  was spawned as the type of its effort and was served it, and the lead never restarted.
+- **A red phase raised:** a phase at low whose gate failed once was raised to medium (`escalate_after` 1 there), and
+  the lead, idle while the gate ran, restarted on medium before it was given the result. Its replies after the
+  restart were served medium.
+
+Two things the first runs taught, both fixed before the release:
+
+- **An agent can be done in seconds.** Its loop read its transcript every 10 seconds, so a three-second phase was
+  never checked. It now reads at every tick until the first reply says what it was served, whether its phase is
+  done or not.
+- **A raise has to come before the result is delivered.** A red whole run counts once its environment has been
+  read, and that happens in the same tick, after the lead's state was read. The result woke the lead first, and it
+  finished the phase on its old tier in one turn. The lead's tick now reads its state again when a red run may count,
+  and raises before it delivers anything.

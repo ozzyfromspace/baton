@@ -4,6 +4,50 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.18] - 2026-11-04
+
+Every phase now runs on a tier of its own: the model and effort its plan names. Until now every phase of a run ran
+on whatever the human's session was set to (in real runs, Opus 5.5 at `xhigh` or `max` for everything), so a docs
+phase cost what the hardest phase did, and the weekly allowance went with it, while a hard phase that kept failing
+had nothing more to give. So the planner sizes each phase, erring on the side of caution, baton puts each phase on
+its tier from its own code and checks it against what Claude Code actually served, and a phase whose gate keeps
+failing is raised a step. The rule, as agreed: the plan sets each phase's tier, baton only raises it, never down
+mid-phase, and nothing switches because of a refusal. The evidence is in
+[`docs/research/tiers.md`](docs/research/tiers.md) and [spike 43](spikes/43-model-effort/README.md).
+
+A session on v0.8.x moves to v0.8.18 by itself at its next restart point. A plan attached before you update has no
+tiers, and runs as before: re-plan it, or add `Model:` and `Effort:` lines to its phases not started.
+
+### Added
+
+- **A phase's tier.** `Model:` (`haiku`, `sonnet`, `opus`, or `fable` where you allow it) and `Effort:` (`low`,
+  `medium`, `high`, `xhigh`, `max`) lines under a phase's heading, beside `After:`, `Type:` and `Replan:`. A full model
+  id or a display name reads as its family. A phase with neither runs as before.
+- **The planner sizes every phase.** `/baton plan` asks for every phase's tier, and the first `ExitPlanMode` gives the
+  model baton's tier rules (what each tier is for, what effort costs per token from Claude Code's own index, the
+  higher of two when torn), naming the phases with none and those on a model you have not allowed. The approval
+  line shows the plan's tiers.
+- **Phase agents on their tier.** baton's mod registers a phase agent type per effort, and spawns each agent as the
+  type of its phase's effort, on its phase's model: it keeps that tier for its life. Every brief says the tier its
+  phase runs on.
+- **Your session on its phase's tier.** Your session's tier is its launch flags, so baton restarts it in place, in
+  the same conversation, with `--model` and `--effort`, at the boundary of a phase on another tier, or mid-phase once
+  idle. Nothing is saved to your Claude Code settings, where `/model` and `/effort` would save. A restart waits until
+  no phase agent is at work (new agents wait for it meanwhile), for 10 minutes at most: then the phase goes on on your
+  session's tier and you're told (`tier_given_up`), and while agents can take them, your session leaves
+  the phases on other tiers to them. Once no plan runs, it goes back on your own tier. Logged as `tier_restart`,
+  `tier_waits` and `restarted` with its tier.
+- **Each tier checked from facts.** What each session and agent runs on is read from its hooks, the status line and
+  its transcript's replies, never a model's say; each agent is checked against its tier once served
+  (`tier_served`), and a tier Claude Code capped is told to you once.
+- **A phase that goes badly is raised.** After 3 red runs of a phase's own gate (not counting a timeout, or a run its
+  environment took a stage of), its tier goes up a step: effort first, as far as `xhigh`, then the next model you
+  allow, then `max`, at most 2 steps. A phase agent's agent is replaced by a fresh one on the new tier in its
+  worktree, told why; your session restarts on it once idle, told why. The next phase starts on its own tier.
+  Logged as `tier_raised`, `agent_retiered` and `tier_ceiling`.
+- **Settings:** `models` (the families a phase may run on; `haiku`, `sonnet`, `opus` unless you add `fable`),
+  `escalate` (steps, `2`; `0` turns raising off) and `escalate_after` (red runs per step, `3`).
+
 ## [0.8.17] - 2026-10-24
 
 A real run on v0.8.16 left its human confused twice, and lost about two hours to full runs. A third plan in one

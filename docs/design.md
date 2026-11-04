@@ -133,6 +133,43 @@ running plan already has stand as they are.
   the old path, so an approval there is a revision of the run's plan, moved aside in its turn. A run attached
   before baton did this has its plan moved before the compaction that starts the lead's next phase.
 
+### Tiers
+
+Each phase runs on its tier, the model and effort it needs, which the plan names under its heading (`Model: opus`,
+`Effort: xhigh`) beside its other lines. The model is a family (haiku, sonnet, opus, and fable where the human allows
+it in `models`, since Fable can bill beyond a subscription's plan); the effort one of Claude Code's levels. A phase
+with neither runs as phases always did, on the lead's tier. The evidence is in
+[`docs/research/tiers.md`](research/tiers.md) and [spike 43](../spikes/43-model-effort/README.md).
+
+- **Planned with care.** `/baton plan` asks for every phase's tier, and the first `ExitPlanMode` turns the plan back
+  once with the tier rules: what each tier is for (opus/high the default, xhigh for design and hard code, max for the
+  hardest, sonnet or opus/medium for mechanical work), what effort costs per token (Claude Code's own index: Opus 5.5
+  at max spends 3.44 times its high), and to take the higher of two when torn. The phases with no tier and those on
+  a model the human does not allow are named. The approval line shows the plan's tiers.
+- **Set by baton's code.** A phase agent's effort is its agent type's (the mod registers one per effort,
+  `baton:phase-high` and so on, and never registers one again with another, since an agent resumed by a message
+  reads its type again) and its model is its spawn's, which stays with it for its life. The lead's tier is its
+  launch flags, `--model` and `--effort`, which save nothing to the human's settings, where `/model` and `/effort`
+  would: so the lead changes tier by a restart in place, in the same conversation, with the tier carried in
+  `BATON_TIER` and the human's own arguments untouched. It restarts at the boundary of a phase on another tier
+  (instead of the compaction, which the restarted session types), or mid-phase once idle. A restart ends every agent
+  of that claude, so it waits for none to be at work, and holds new agents meanwhile, for 10 minutes at most (then the
+  phase goes on on the lead's tier, agents start again, and the human is told, since an agent at a permission
+  prompt would otherwise hold the run); while agents can take them,
+  the lead passes over the phases whose tier it does not run on. Once no plan runs, the lead goes back on the
+  human's own tier, recorded as it ran before baton changed it.
+- **Checked from facts.** Every reply's entry in a transcript says the model that answered and the effort it was
+  sent with, and every hook but `SessionStart` and `SubagentStart` says the effort of the loop it belongs to. baton
+  records what each loop runs on (never from a subagent the model started) and checks each agent against its tier
+  once it has been served (`tier_served`). A tier Claude Code capped (a `maxEffortLevel`, an organization's cap,
+  the model's own maximum) is told to the human once, and the phase goes on as served.
+- **Raised when it goes badly, never lowered mid-phase.** Three red runs of a phase's own gate since its tier was
+  last set (never a run that timed out, nor one whose environment took a stage) raise it a step: effort first, as
+  far as xhigh, then the next allowed model, then max, at most two steps above its plan's (`escalate`,
+  `escalate_after`). A phase agent's agent is replaced at its next idle moment, or 10 minutes after the raise, by a
+  fresh one on the new tier in its worktree, whose brief says why; the lead restarts on it once idle and is told
+  why. The next phase starts on its own tier. Nothing switches because of a refusal: that stays the human's.
+
 ### Replans
 
 What a run learns (a phase that turned out to wait on CI, phases that turned out independent, a newer baton's
@@ -474,7 +511,7 @@ baton writes every word it reads, at most 12,000 characters with logs and notes 
 the command, the failure lines and the log's end, earlier runs, the phase's notes. It asks whether the failure is
 the change's or the environment's, whether the rest of the run is worth waiting for, and what the smallest next
 check is; the answer, at most 600 characters, is a suggestion, never an instruction. It routes none of the
-session's work, so baton still never switches models. The call goes through the mod ([The bridge](#phases-at-once)),
+session's work, so it moves no phase's tier ([Tiers](#tiers)). The call goes through the mod ([The bridge](#phases-at-once)),
 so it is never made in serial mode. The handoff cannot get stuck: the look-in is held while the host asks, and the
 host's own tick releases it when the answer comes or after 60 seconds, whatever the mod or the model does; an
 answer after that is dropped, and a hold no call in the host's memory stands for (a restart) is released at once.
@@ -880,7 +917,8 @@ pacing: no budget, a run as far as the account goes, and baton's waits no longer
 ## Recovery
 
 - **A refused turn is escalated, never retried.** baton reads the refusal from the transcript (read-only), types
-  nothing into that conversation, starts no fresh one, and never switches models. The human rewinds or clears.
+  nothing into that conversation, starts no fresh one, and never switches models for it: a phase's tier moves only by
+  its plan or a raise ([Tiers](#tiers)). The human rewinds or clears.
 - **A crash is recovered without asking, for as long as it takes.** The host resumes the conversation in place, then
   each phase agent by a message. Two crashes in 30 minutes are brought back at once; past them the host waits 5
   minutes, then 15 between tries, and never exits while the plan runs (a Ctrl-C in that wait stops it). A
