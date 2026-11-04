@@ -44,7 +44,7 @@ tiers, and runs as before: re-plan it, or add `Model:` and `Effort:` lines to it
   environment took a stage of), its tier goes up a step: effort first, as far as `xhigh`, then the next model you
   allow, then `max`, at most 2 steps. A phase agent's agent is replaced by a fresh one on the new tier in its
   worktree, told why; your session restarts on it once idle, told why. The next phase starts on its own tier.
-  Logged as `tier_raised`, `agent_retiered` and `tier_ceiling`.
+  A phase whose plan names no tier is never raised. Logged as `tier_raised`, `agent_retiered` and `tier_ceiling`.
 - **Settings:** `models` (the families a phase may run on; `haiku`, `sonnet`, `opus` unless you add `fable`),
   `escalate` (steps, `2`; `0` turns raising off) and `escalate_after` (red runs per step, `3`).
 

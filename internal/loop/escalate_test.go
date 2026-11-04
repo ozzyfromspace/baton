@@ -169,3 +169,33 @@ func TestARedPhaseAgentIsRaisedAndReplacedOnTheNewTier(t *testing.T) {
 		t.Errorf("the fresh agent's spawn: %+v", got)
 	}
 }
+
+// A phase whose plan names no tier, as every plan from before tiers, is never raised, however often its
+// gate goes red: it runs as phases always have.
+func TestAPhaseWithNoTierIsNeverRaised(t *testing.T) {
+	r := tierRig(t, plan.Tier{}, plan.Tier{Model: "opus", Effort: "xhigh"})
+	r.loop.Tiers = stdTiers
+	r.set(func(st *state.State) {
+		st.BoundaryOwed = false
+		st.Run.Compaction = state.Compaction{Epoch: 1, Status: state.CompactDone, Finished: r.now}
+		st.Phases["P1"] = &state.PhaseState{Status: state.PhaseActive, StartedAt: r.now}
+		redRuns(st, "P1", 9, r.now)
+	})
+	r.run(time.Minute)
+	if st := r.state(); st.Raised("P1") != nil {
+		t.Fatalf("raised: %+v", st.Phases["P1"].Raises)
+	}
+	if _, ok := r.loop.Retier(); ok || strings.Contains(r.events(), "tier_") {
+		t.Errorf("a phase with no tier moved a tier: %s", r.events())
+	}
+	x := newCrewOn(t, 1, plan.Plan{Version: 1, Title: "Demo", File: "/plans/demo.md", Phases: []plan.Phase{
+		{ID: "P0", Title: "zero", After: []string{}}, {ID: "P1", Title: "one", After: []string{}}}})
+	x.c.Lead.Tiers = stdTiers
+	x.atWork("P1")
+	x.sub("P1").Update(func(st *state.State) error { redRuns(st, "P1", 9, x.now); return nil })
+	x.tick(time.Second)
+	x.tick(time.Second)
+	if raised := x.state().Raised("P1"); raised != nil {
+		t.Errorf("a phase agent's phase with no tier was raised: %v", raised)
+	}
+}

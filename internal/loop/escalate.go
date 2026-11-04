@@ -13,7 +13,8 @@ import (
 // gate has gone red Tiers.After times since its tier was last set (state.RedRuns: never a run that timed
 // out or whose environment took a stage), its tier climbs one step (plan.Raise: effort to xhigh, then the
 // next allowed family, then max), at most Tiers.Steps steps above its plan's. Only up, and only for the
-// phase: the next phase starts on its own plan's tier. A phase agent's tier is fixed for its life, so its
+// phase: the next phase starts on its own plan's tier. A phase whose plan names no tier is never raised: a
+// plan from before tiers runs as it always did. A phase agent's tier is fixed for its life, so its
 // agent is replaced at its next idle moment by a fresh one on the new tier, in its worktree, whose brief
 // says why (decide.TierRaisedBrief); the lead restarts in place on it once idle (leadtier.go), with its
 // conversation. Facts alone decide it, never a model's say.
@@ -100,8 +101,8 @@ func (l *Loop) escalateLead(v host.View, st state.State) state.State {
 		return st
 	}
 	pl, ok := l.tierPlan(v.Now)
-	if !ok {
-		return st
+	if !ok || pl.TierOf(phase).Zero() {
+		return st // a phase its plan names no tier for runs as phases always have: never raised
 	}
 	r, why, ok := t.raise(st, pl, phase, st.LeadRuns(), reds, last, v.Now)
 	if !ok {
@@ -149,8 +150,8 @@ func (c *Coordinator) escalate(now time.Time, s *state.Store, st state.State, pl
 		return
 	}
 	sub, err := w.store.Load()
-	if err != nil || sub.Mode != state.ModeRunning {
-		return
+	if err != nil || sub.Mode != state.ModeRunning || pl.TierOf(w.phase).Zero() {
+		return // a phase its plan names no tier for runs as phases always have: never raised
 	}
 	since := st.LastRaise(w.phase)
 	if reds, last := state.RedRuns(sub, w.phase, since); reds >= t.After {
