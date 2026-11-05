@@ -30,9 +30,12 @@ type Config struct {
 	Session     string
 	Version     string
 	Autocompact string // passed as --autocompact when non-empty, e.g. "810k"
-	Stdin       *os.File
-	Stdout      *os.File
-	Env         []string // the child's base environment; any BATON_* in it is dropped
+	// StatusRefresh is the user's own status line refreshInterval, in seconds, passed on as it is; 0 when
+	// they set none, and the status line runs again every StatusRefresh seconds (settings.go).
+	StatusRefresh float64
+	Stdin         *os.File
+	Stdout        *os.File
+	Env           []string // the child's base environment; any BATON_* in it is dropped
 	// BatonEnv is baton's own environment for the session it drives: the context valves' settings, a
 	// pending command after elevation.
 	BatonEnv   []string

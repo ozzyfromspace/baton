@@ -275,7 +275,7 @@ func TestAnInheritedSessionIsDormant(t *testing.T) {
 	// environment, but it is no child of a baton host.
 	sid := newSessionID(t)
 	bg := StartProgram(t, dir, []string{"BATON_HOST=1", "BATON_INSTANCE=" + inst, "BATON_DIR=" + filepath.Join(dir, ".baton"), "BATON_BIN=" + batonBin, "BATON_WORKERS=auto"},
-		"claude", "--settings", host.SettingsJSON(batonBin), "--plugin-dir", pluginDir(t), "--session-id", sid, "--model", "haiku", "--permission-mode", "acceptEdits",
+		"claude", "--settings", host.SettingsJSON(batonBin, 0), "--plugin-dir", pluginDir(t), "--session-id", sid, "--model", "haiku", "--permission-mode", "acceptEdits",
 		"Write the single word ok into a new file named ok.txt with the Write tool, then end your turn.")
 	bg.Trust()
 	if !bg.Until("ok.txt", 3*time.Minute, func() bool { return strings.TrimSpace(readFile(dir, "ok.txt")) == "ok" }) {

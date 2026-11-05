@@ -239,6 +239,40 @@ func TestUserCommandPrecedenceSkipsBaton(t *testing.T) {
 	}
 }
 
+// The user's own refreshInterval is the first a settings file sets, in Claude Code's precedence order,
+// whichever file holds the command, as Claude Code merges statusLine key by key (spike 44).
+func TestUserRefreshPrecedence(t *testing.T) {
+	home, proj := t.TempDir(), t.TempDir()
+	write := func(path, body string) {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(body), 0o644)
+	}
+	user := filepath.Join(home, ".claude", "settings.json")
+	project := filepath.Join(proj, ".claude", "settings.json")
+	local := filepath.Join(proj, ".claude", "settings.local.json")
+	steps := []struct {
+		name, path, body string
+		want             float64
+	}{
+		{"none configured", "", "", 0},
+		{"a command with no interval", user, `{"statusLine":{"type":"command","command":"user-line"}}`, 0},
+		{"the user's", user, `{"statusLine":{"type":"command","command":"user-line","refreshInterval":30}}`, 30},
+		{"the project's command alone", project, `{"statusLine":{"type":"command","command":"project-line"}}`, 30},
+		{"the project's", project, `{"statusLine":{"type":"command","command":"project-line","refreshInterval":5}}`, 5},
+		{"below Claude Code's least", local, `{"statusLine":{"refreshInterval":0}}`, 5},
+		{"the local one", local, `{"statusLine":{"refreshInterval":2.5}}`, 2.5},
+		{"a broken local file", local, `{"statusLine":`, 5},
+	}
+	for _, s := range steps {
+		if s.path != "" {
+			write(s.path, s.body)
+		}
+		if got := UserRefresh(proj, home); got != s.want {
+			t.Errorf("%s: %v, want %v", s.name, got, s.want)
+		}
+	}
+}
+
 func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
 
 func TestRunUserAndCompose(t *testing.T) {
