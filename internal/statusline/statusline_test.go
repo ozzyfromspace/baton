@@ -42,7 +42,18 @@ func TestSegment(t *testing.T) {
 			s := run
 			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "the human has a draft in the input box"
 			return s
-		}, true, "◆ baton · compact held: the human has a draft in the in…"},
+		}, true, "◆ baton · compact held: the human has a draft in the input box"},
+		// A boundary held for a restart on its phase's tier says so (decide.TierHold), whole.
+		{"compaction held for a tier", func() state.State {
+			s := run
+			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "restart on opus/max waits for 6 agents"
+			return s
+		}, true, "◆ baton · compact held: restart on opus/max waits for 6 agents"},
+		{"compaction held, clipped", func() state.State {
+			s := run
+			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "restart on opus/max waits for 6 agents and 2 background tasks"
+			return s
+		}, true, "◆ baton · compact held: restart on opus/max waits for 6 agents…"},
 		{"escalated", func() state.State { s := run; s.Run.Escalation = &state.Escalation{}; return s }, true, "◆ baton · ⚠ waiting on you"},
 		{"refused", func() state.State {
 			s := run

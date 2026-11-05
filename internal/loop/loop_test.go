@@ -133,7 +133,6 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 	}{
 		{"turn open", func() { r.set(func(st *state.State) { st.Run.TurnOpen = true }) }, func() { r.set(func(st *state.State) { st.Run.TurnOpen = false }) }},
 		{"dialog", func() { r.set(func(st *state.State) { st.Run.Dialogs.Open(state.Dialog{Tool: "AskUserQuestion"}) }) }, func() { r.set(func(st *state.State) { st.Run.Dialogs.Clear() }) }},
-		{"background subagent", func() { r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent"}} }) }, func() { r.set(func(st *state.State) { st.Run.Background = nil }) }},
 		{"draft", func() { r.view.Draft = true }, func() { r.view.Draft = false }},
 		{"human typing", func() { r.view.LastHumanKey = r.now }, func() { r.view.LastHumanKey = r.now.Add(-time.Hour) }},
 		{"screen busy", func() { r.view.LastOutput = r.now }, func() { r.view.LastOutput = r.now.Add(-time.Hour) }},
@@ -146,10 +145,11 @@ func TestTypesCompactOnlyWhenEveryGatePasses(t *testing.T) {
 		}
 		b.off()
 	}
-	// Nor does a background shell (say, a dev server), nor one of baton's own phase agents: neither is the
-	// lead's work, and each goes on across its compaction.
+	// Nor does a background shell (say, a dev server), one of baton's own phase agents, or a subagent of the
+	// model's own (v0.8.20): each goes on across the compaction, and reports when it ends.
 	r.set(func(st *state.State) {
-		st.Run.Background = []state.Task{{Type: "shell", Status: "running"}, {Type: "subagent", Status: "running", AgentType: state.PhaseAgent}}
+		st.Run.Background = []state.Task{{Type: "shell", Status: "running"}, {Type: "subagent", Status: "running", AgentType: state.PhaseAgent},
+			{Type: "subagent", Status: "running", AgentType: "general-purpose"}}
 	})
 	r.tick(100 * time.Millisecond)
 	if len(r.in.text) != 1 || r.in.text[0] != "/compact" {
@@ -426,22 +426,6 @@ func TestAStaleTurnStopsBlocking(t *testing.T) {
 	r.run(2 * time.Minute)
 	if len(r.in.text) == 0 || r.in.text[0] != "/compact" {
 		t.Fatalf("a stale turn still blocks: %q", r.in.text)
-	}
-}
-
-// Background subagents may hold a compaction for a while — they finish and report on their own — but a
-// hung one must not park the plan. They used to hold it for good: the gate escalated once and then
-// waited on a human. After BackgroundMax baton carries on; a compaction does not cancel the work.
-func TestHungBackgroundSubagentsStopBlocking(t *testing.T) {
-	r := newRig(t)
-	r.set(func(st *state.State) { st.Run.Background = []state.Task{{Type: "subagent", Status: "running"}} })
-	r.run(DefaultTiming.BackgroundMax - time.Minute)
-	if len(r.in.text) != 0 {
-		t.Fatalf("typed while a subagent was running: %q", r.in.text)
-	}
-	r.run(2 * time.Minute)
-	if len(r.in.text) != 1 || r.in.text[0] != "/compact" {
-		t.Fatalf("a hung subagent still blocks: %q", r.in.text)
 	}
 }
 

@@ -295,33 +295,32 @@ func TestACompactionHeldForTheLeadsTurnEndIsWaitedFor(t *testing.T) {
 
 // Ctrl-C is how baton clears a draft where it types, and one Ctrl-C at the prompt stops every agent of the
 // session for good (spike 35): baton never sends it while a phase agent is on the roster or the model's own
-// background agent may be at work. The draft holds baton then; with a phase agent at work, baton tells the
-// human why (the model's own background agents hold baton before the draft does: gateAgents).
+// background agent may be at work (agentsLive). The draft holds baton then, and baton tells the human why:
+// since v0.8.20 the model's own agents hold nothing else, so the draft is what holds the compaction.
 func TestNoCtrlCWhileAnAgentMayBeLive(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		set   func(st *state.State)
-		holds bool // the draft is what holds baton, and the human is told so
+		name string
+		set  func(st *state.State)
 	}{
 		{"a phase agent", func(st *state.State) {
 			st.Workers = []state.Worker{{Phase: "P2", Ref: "run/P2", Status: state.WorkerWorking, AgentID: "a1"}}
-		}, true},
+		}},
 		{"the model's background agent", func(st *state.State) {
-			st.Run.Background = []state.Task{{ID: "t1", Type: "subagent", Since: st.Run.LastStop}}
-		}, false},
+			st.Run.Background = []state.Task{{ID: "t1", Type: "subagent", AgentType: "general-purpose", Since: st.Run.LastStop}}
+		}},
 		{"the model's workflow", func(st *state.State) {
 			st.Run.Background = []state.Task{{ID: "t1", Type: "workflow"}}
-		}, false},
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRig(t)
 			r.set(c.set)
 			r.view.Draft, r.view.DraftText = true, "half a thought"
-			r.run(DefaultTiming.BackgroundMax + 10*time.Minute)
+			r.run(30 * time.Minute)
 			if r.in.cleared != 0 || len(r.in.text) != 0 {
 				t.Fatalf("cleared %d, typed %q", r.in.cleared, r.in.text)
 			}
-			if e := r.state().Run.Escalation; c.holds && (e == nil || e.Reason != decide.DraftHolds("compact the context")) {
+			if e := r.state().Run.Escalation; e == nil || e.Reason != decide.DraftHolds("compact the context") {
 				t.Errorf("escalation %+v", e)
 			}
 		})

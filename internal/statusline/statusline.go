@@ -63,8 +63,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 		return mark + " · ⚠ blocked"
 	case st.Run.Compaction.InFlight() && st.Run.Gate != "":
 		// Never claim a compaction is happening while something holds it back. That read
-		// "compacting…" for 35 minutes once, which is indistinguishable from a hung session.
-		return mark + " · compact held: " + clip(st.Run.Gate, 32)
+		// "compacting…" for 35 minutes once, which is indistinguishable from a hung session. 40
+		// characters take "restart on opus/max waits for 6 agents" (decide.TierHold) whole.
+		return mark + " · compact held: " + clip(st.Run.Gate, 40)
 	case st.Run.Compaction.InFlight():
 		return mark + " · compacting…"
 	}
@@ -130,7 +131,7 @@ func clip(s string, n int) string {
 		return s
 	}
 	r := []rune(s)
-	return string(r[:n-1]) + "…"
+	return strings.TrimRight(string(r[:n-1]), " ") + "…"
 }
 
 // Input is the part of Claude Code's status line input baton reads.

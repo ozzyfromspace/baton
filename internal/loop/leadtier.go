@@ -105,8 +105,9 @@ func (l *Loop) retierDue(v host.View, st state.State) (plan.Tier, bool) {
 
 // retierAtBoundary restarts the lead on the tier of the phase it is about to start, at its boundary
 // compaction (CompactQueued), which the restarted session types. Until a restart nothing would lose can
-// come (restartable), the compaction is not typed, so the phase starts on its own tier; it reports that it
-// restarted or holds the compaction.
+// come (restartable), the compaction is not typed, so the phase starts on its own tier, and the hold says
+// why (tierHolds), for at most Timing.TierWait (tierGivenUp); it reports that it restarted or holds the
+// compaction.
 func (l *Loop) retierAtBoundary(v host.View, st state.State, in host.Injector) bool {
 	if !st.BoundaryOwed {
 		return false
@@ -123,7 +124,17 @@ func (l *Loop) retierAtBoundary(v host.View, st state.State, in host.Injector) b
 		return false // the phase starts on the lead's tier: the compaction goes ahead
 	}
 	l.tierWaits(v, st, want)
+	l.tierHolds(st, want, v.Draft)
 	return true
+}
+
+// tierHolds marks the boundary's compaction held for a restart on want, as held does for a gate, and says
+// what holds it (decide.TierHold), which publishGate records for the status line and the board: in a
+// 74-phase campaign they read "compacting…" through a ten-minute wait, since nothing recorded it.
+func (l *Loop) tierHolds(st state.State, want plan.Tier, draft bool) {
+	own := ownAgents(st)
+	l.wished = true
+	l.holdSay = decide.TierHold(want, l.why, len(st.PhaseAgents())+own, len(st.Run.BusyBackground())-own, st.Run.Crons+len(st.Run.Watching()), draft)
 }
 
 // tierGivenUp reports that the lead has waited Timing.TierWait for a restart on want, the tier of the phase
