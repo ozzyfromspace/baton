@@ -109,8 +109,22 @@ func RetireWorker(r Retirement) Retired {
 		hook(x.between, s.name)
 	}
 	x.unbind()
+	x.tasksLeft()
 	x.event()
 	return x.out
+}
+
+// tasksLeft owes the run a look at the background shells the worker's agent left running (tasks.go), which
+// its phase no longer needs: the run's host has each reviewed, and stopped only on the reviewer's verdict.
+func (x *retirement) tasksLeft() {
+	sub := x.sub()
+	if sub == nil {
+		return
+	}
+	if sst, err := sub.Load(); err != nil || !startedShells(sst) {
+		return
+	}
+	x.Run.Update(func(st *state.State) error { st.Run.OweAudit(state.AuditRetire, x.Now); return nil })
 }
 
 // forget makes the worker's agent none of baton's agents: it has ended. It is recorded as let go of for

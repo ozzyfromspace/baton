@@ -44,6 +44,10 @@ type Coordinator struct {
 	leftAt    time.Time
 	// Advisor is the advisor's settings (advisor.go): a small model's note on each look-in at a gate.
 	Advisor Advisor
+	// Reviewer is the settings of baton's reviewer of the model's own background shells, and Tasks how the
+	// host finds, reads and ends their processes (tasks.go; zero: reads nothing).
+	Reviewer Reviewer
+	Tasks    TaskProcs
 	// WeeklyReserve is weekly_reserve_pct: the percent of the account's weekly allowance the run leaves,
 	// at which it winds down until the weekly reset (winddown.go; 0: no wind-down).
 	WeeklyReserve float64
@@ -115,6 +119,7 @@ type Coordinator struct {
 	reviewAt time.Time
 
 	rec recorder // the record step's (record.go)
+	tk  tasker   // the look at the model's own background work (tasks.go)
 	adv advising // the advisor's calls, in memory (advisor.go)
 
 	// run is the account's usage, its limit and its resume timer, and paused whether the run is paused, as the
@@ -162,6 +167,7 @@ func (c *Coordinator) duties(v host.View) {
 		held = t.String() // the lead restarts on its phase's tier first (leadtier.go)
 	}
 	c.retierFor.Store(held)
+	c.tasks(v, s, st, c.Lead.upgradeDue(v, st) || held != "") // the model's own background work, reviewed (tasks.go)
 	c.records(v, s, st)
 	c.lanes(s, st)
 	c.fleetOn(s, st) // the run's QA phases go to its agents (review.go)

@@ -223,7 +223,9 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	}
 	coordinator := &loop.Coordinator{Lead: controller, Lanes: runners, Project: proj, Home: batonRoot(io), AbandonAfter: abandonAfter(io),
 		Leftovers: io.Leftovers,
-		Advisor:   loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)}} // a small model's note on each look-in (advisor, advisor_model)
+		Advisor:   loop.Advisor{On: cfg.Advises(io.Env), Model: cfg.AdvisorModelFor(io.Env)},      // a small model's note on each look-in (advisor, advisor_model)
+		Reviewer:  loop.Reviewer{On: cfg.ReviewsTasks(io.Env), Model: cfg.ReviewModelFor(io.Env)}, // a model judges each suspect background shell (task_review, review_model)
+		Tasks:     taskProcs()}                                                                    // and baton finds, reads and ends a shell's processes
 	// The run winds down near the end of the account's weekly allowance (weekly_reserve_pct).
 	coordinator.WeeklyReserve = reserve
 	if coordinator.Risk, err = riskLines(io); err != nil { // the risk ledger's lines (risk, risk_review, risk_full)

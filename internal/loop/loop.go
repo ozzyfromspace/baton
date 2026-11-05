@@ -75,6 +75,7 @@ type Timing struct {
 	ReplanMax      time.Duration // a replan of the phases not started open this long lapses: its draft is dropped, and the plan goes on as it was (replanmax.go; 0: never)
 	AdvisorWait    time.Duration // a look-in held for the advisor's note goes without it this long after it was held, whatever the advisor does (advisor.go; 0: AdvisorWait)
 	TaskQuiet      time.Duration // a background shell of the model's own whose output has been still this long is a suspect for the reviewer (task_quiet; state.Suspects)
+	ReviewWait     time.Duration // the reviewer's verdict on a suspect background task is waited for this long at most; none by then counts as unsure (tasks.go; 0: ReviewWait)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -101,6 +102,7 @@ var DefaultTiming = Timing{
 	ReplanMax:         replan.Max,
 	AdvisorWait:       AdvisorWait,
 	TaskQuiet:         config.DefaultTaskQuiet,
+	ReviewWait:        ReviewWait,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 

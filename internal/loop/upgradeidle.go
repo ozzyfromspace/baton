@@ -292,20 +292,27 @@ func (l *Loop) upgradeWaits(v host.View, st state.State, why string) {
 	}
 }
 
-// upgradeHeld is b as the human is told it: each background task with what names it and how long it has
-// run, from when baton was first told of it or a Stop first listed it.
+// upgradeHeld is b as the human is told it: each background task with what names it, how long it has run
+// (from when baton saw it start, was first told of it, or a Stop first listed it), and the phase it started
+// in.
 func (l *Loop) upgradeHeld(v host.View, st state.State, b upgradeBlock) decide.UpgradeHeld {
 	h := decide.UpgradeHeld{Agents: b.agents, Wakeups: b.wakeups, Monitors: b.monitors, Gate: b.gate}
 	for _, t := range b.tasks {
-		from := t.Since
+		from, phase := t.Since, ""
 		if at := st.Run.BackgroundToldAt[t.ID]; !at.IsZero() && (from.IsZero() || at.Before(from)) {
 			from = at
+		}
+		if b, ok := st.Run.BackgroundStarts[t.ID]; ok { // as baton saw it start: when, and in which phase
+			phase = b.Phase
+			if !b.At.IsZero() && (from.IsZero() || b.At.Before(from)) {
+				from = b.At
+			}
 		}
 		var age time.Duration
 		if !from.IsZero() {
 			age = v.Now.Sub(from)
 		}
-		h.Tasks = append(h.Tasks, decide.UpgradeTask{Type: t.Type, Description: t.Description, ID: t.ID, Age: age})
+		h.Tasks = append(h.Tasks, decide.UpgradeTask{Type: t.Type, Description: t.Description, ID: t.ID, Age: age, Phase: phase})
 	}
 	return h
 }
