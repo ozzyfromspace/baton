@@ -11,7 +11,10 @@ import (
 
 // handPlan is raisePlan's phase, whose gate fails the first time it runs, on haiku/low, beside a phase a
 // phase agent works on for four minutes. The lead's first turn lasts long enough for that agent to be at
-// work when it ends, as its Stop reports, so that no restart of the lead can come once P0 is raised.
+// work when it ends, as its Stop reports, so that no restart of the lead can come once P0 is raised. Both
+// wait through pause.sh: Claude Code (2.1.318) refuses a foreground command that starts with a sleep of 25
+// seconds or more, and an agent that runs it in the background instead ends its turn, so no agent is at
+// work and the lead restarts.
 const handPlan = `# Hand-over
 
 ## P0 — Gate
@@ -19,7 +22,7 @@ After: none
 Model: haiku
 Effort: low
 
-First run this with the Bash tool, in the foreground, setting its timeout to 120000 milliseconds: sleep 45
+First run this with the Bash tool, in the foreground, setting its timeout to 120000 milliseconds: sh pause.sh 45
 Then commit nothing new, and run this gate with baton: baton verify "sh gate.sh" --notes 'checking'
 Then end your turn: baton wakes you with its result.
 When its result is red, run the same gate again the same way, with: --why 'the gate is flaky', and end your turn again.
@@ -30,8 +33,8 @@ After: none
 Model: haiku
 Effort: low
 
-Run this with the Bash tool, in the foreground, setting its timeout to 300000 milliseconds: sleep 240
-It takes four minutes. Then report P1 done: baton done P1 --notes 'slept'
+Run this with the Bash tool, in the foreground, setting its timeout to 300000 milliseconds: sh pause.sh 240
+It takes four minutes. Then report P1 done: baton done P1 --notes 'paused'
 `
 
 // A phase raised while a phase agent is at work goes to a phase agent on its raised tier: the lead cannot
@@ -43,10 +46,13 @@ func TestARaisedPhaseGoesToAnAgentWhileAnotherWorks(t *testing.T) {
 	count := filepath.Join(t.TempDir(), "runs")
 	writeFile(t, dir, "gate.sh", fmt.Sprintf("n=$(cat %q 2>/dev/null || echo 0); n=$((n+1)); echo $n >%q\n"+
 		"if [ \"$n\" -lt 2 ]; then sleep 20; echo 'FAIL: TestGate (run '$n')'; exit 1; fi\necho ok\n", count, count))
-	Git(t, dir, "add", "gate.sh")
+	writeFile(t, dir, "pause.sh", "sleep \"$1\"\necho \"paused $1 seconds\"\n")
+	Git(t, dir, "add", "gate.sh", "pause.sh")
 	Git(t, dir, "commit", "-q", "-m", "test: the gate")
 	Attach(t, dir, handPlan)
-	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_ESCALATE_AFTER=1"}, "--effort", "low")
+	// P1's four minutes stay in the foreground (BATON_FOREGROUND_MAX): moved to the background at baton's
+	// two minutes, they would end its agent's turn.
+	s := StartAgents(t, dir, []string{"BATON_WORKERS=2", "BATON_ESCALATE_AFTER=1", "BATON_FOREGROUND_MAX=10m"}, "--effort", "low")
 	s.ApprovePermissions()
 	if !s.Until("the plan to complete", 12*time.Minute, func() bool { return first(s.Events(), is("plan_complete")) >= 0 }) {
 		t.Fatal("the plan did not complete")
