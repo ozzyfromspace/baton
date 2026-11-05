@@ -1,6 +1,9 @@
 package procs
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 func treeUsage(pgid int) (Usage, error) {
 	rows, err := rowsFromProc(os.DirFS("/"))
@@ -13,3 +16,7 @@ func treeUsage(pgid int) (Usage, error) {
 	}
 	return u, nil
 }
+
+// cpuTime converts clock ticks, /proc's unit for a process's time: USER_HZ, 100 a second on every Linux
+// baton runs on.
+func cpuTime(n uint64) time.Duration { return time.Duration(n) * 10 * time.Millisecond }

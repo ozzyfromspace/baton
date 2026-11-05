@@ -1,5 +1,7 @@
 package procs
 
+import "time"
+
 // Usage is the CPU time each process of a tree has used so far, by pid, in the system's own units
 // (nanoseconds or Mach ticks on macOS, clock ticks on Linux): a reading compares only with another
 // reading of the same machine. A tree that ran at all between two readings reads differently in the
@@ -52,3 +54,24 @@ func tree(all []row, pgid int) []row {
 	}
 	return out
 }
+
+// Since is the CPU time the tree used between prev and u, two readings of it, in the system's units (CPUTime
+// gives it as time): how much each process's time grew, and all the time of one prev did not hold (it
+// started since). The time of a process that ended between them is lost, so it can read low for a tree of
+// short-lived processes, never high.
+func (u Usage) Since(prev Usage) uint64 {
+	var n uint64
+	for pid, t := range u {
+		switch was, ok := prev[pid]; {
+		case !ok:
+			n += t
+		case t > was:
+			n += t - was
+		}
+	}
+	return n
+}
+
+// CPUTime is n of Usage's units as time: Mach time units on macOS (125/3 nanoseconds on Apple silicon, one
+// on Intel), clock ticks on Linux (USER_HZ, 100 a second); 0 where baton reads no process table.
+func CPUTime(n uint64) time.Duration { return cpuTime(n) }

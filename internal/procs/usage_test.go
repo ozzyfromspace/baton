@@ -102,3 +102,16 @@ func TestTreeUsageUnsupported(t *testing.T) {
 		t.Fatalf("TreeUsage on %s = %v", runtime.GOOS, err)
 	}
 }
+
+// The CPU a tree used between two readings is each process's growth, and all of one that started since; a
+// process whose reading fell (its pid reused) adds nothing.
+func TestUsageSince(t *testing.T) {
+	prev := Usage{10: 100, 11: 50, 12: 30}
+	now := Usage{10: 160, 11: 50, 13: 25, 12: 10}
+	if got := now.Since(prev); got != 85 {
+		t.Errorf("Since: %d, want 85", got)
+	}
+	if got := now.Since(nil); got != 245 {
+		t.Errorf("Since nothing: %d, want 245", got)
+	}
+}

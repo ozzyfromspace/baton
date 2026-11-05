@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -55,4 +57,13 @@ func taskTime(pid int) (uint64, error) {
 		return 0, fmt.Errorf("proc_info: %d bytes, want %d", n, size)
 	}
 	return binary.LittleEndian.Uint64(buf[16:]) + binary.LittleEndian.Uint64(buf[24:]), nil
+}
+
+// cpuTime converts Mach time units, which proc_info gives task times in: the timebase is 125/3 on Apple
+// silicon and 1/1 on Intel (mach_timebase_info, which baton cannot call without cgo).
+func cpuTime(n uint64) time.Duration {
+	if runtime.GOARCH == "arm64" {
+		return time.Duration(n / 3 * 125)
+	}
+	return time.Duration(n)
 }
