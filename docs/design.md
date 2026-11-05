@@ -41,6 +41,11 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
 - **Hooks record facts:** who started a turn, the open dialogs (as a queue), the subagents, and the context size from
   the status line. `baton hook` recovers panics and exits 0 on any internal error. Only the rewake path exits 2,
   which is Claude Code's "block".
+- **The status line** baton passes with `--settings` runs every 10 seconds while the session is idle, or at the
+  user's own `refreshInterval`, passed on as it is, since the flag's value wins over every settings file's (v0.8.20,
+  [spike 44](../spikes/44-statusline-refresh/README.md)). Claude Code otherwise runs it only as the conversation
+  changes, so an idle lead's line kept what baton's state said at its last turn. Text that has not changed is not
+  drawn again, so the screen stays still for serial mode's quiet gate.
 - **A run per session.** `.baton/runs/<id>/` holds the plan's anchors, the state, the notes and `events.jsonl`. An
   anchor is a verbatim snippet checked to occur once in the plan file, so baton needs no heading parser. Every write
   is locked and atomic, and a lock is held for that write alone: commands, process and transcript reads and the
@@ -155,12 +160,26 @@ with neither runs as phases always did, on the lead's tier. The evidence is in
   (instead of the compaction, which the restarted session types), or mid-phase once idle. A restart ends every agent
   of that claude, so it waits for none to be at work, and holds new agents meanwhile, for 10 minutes at most (then the
   phase goes on on the lead's tier, agents start again, and the human is told, since an agent at a permission
-  prompt would otherwise hold the run); while agents can take them,
-  the lead passes over the phases whose tier it does not run on. A phase that waits for every phase before it and is
+  prompt would otherwise hold the run). While a boundary waits for that restart, the status line and the board say
+  what holds it ("compact held: restart on opus/max waits for 6 agents"), never "compacting…". While agents can take
+  them, the lead passes over the phases whose tier it does not run on. A phase that waits for every phase before it and is
   not a QA phase (an integration, a docs pass, a release) stays the lead's whatever its tier, since it may do what no
   phase agent may, such as merge another branch in; by its boundary no agent is at work, and the lead restarts on
   its tier. Once no plan runs, the lead goes back on the human's own tier, recorded as it ran before baton changed
   it.
+- **Handed to an agent when the lead cannot restart** (v0.8.20). In a run with agents always at work, the restart a
+  raised lead phase needs never comes: in a 74-phase campaign a phase raised to max waited 10 minutes, the wait gave
+  up, and the phase went on on its old tier. So a phase the lead cannot restart for goes to a phase agent on its
+  tier. Mid-phase, once the lead is idle with its work committed (no uncommitted change to a tracked file, the
+  phase's own untracked files committed too, its checkout on the run's branch) and nothing of the phase under way (a
+  gate, a checkpoint, a question to the human), baton parks the phase for an agent with its last gate's notes and
+  gives the lead its next phase after a compaction (`phase_handed`). Uncommitted work holds it, told to the human
+  once, and the wait above applies. A parked phase off the lead's tier goes to an agent too, the one parked longest
+  first, unless its work was left uncommitted (`baton done --keep-dirty`), a `--here` gate of it runs, an agent
+  already failed on it, or it waits for every phase before it. The agent works on from the run's branch, which holds
+  the lead's commits, and its brief opens with why it has the phase, the lead's commits since its start, the lead's
+  notes and the red gate's failures. The phase keeps its history (its raises, its start), and the lead's jobs of it
+  neither hold nor reopen it. If the agent fails, the phase is the lead's again.
 - **Changed in the plan file, followed at once.** The plan sets each phase's tier, so a tier the human writes into
   the plan file reaches every phase not done, a phase under way too, up or down, wherever baton follows the file (the
   lead's stop, `baton done`, `/baton run`). baton says which phases changed and what follows for each (`tier_changed`):
@@ -237,8 +256,12 @@ how; the host decides when, and whether the result stands.**
    whose start baton did not see.
    The boundary that the model's own `done` owes holds the rest of its turn, and its stop queues the compaction; so
    does the lead's `done` of a worker's phase (below).
-2. The host asks the mod to compact the lead once nothing is in the way: no turn, no dialog, none of the lead's own
-   subagents at work. The human's draft stays in the box. The host asks once the lead's Stop hook has run, a
+2. The host asks the mod to compact the lead once nothing is in the way: no turn, no dialog. The human's draft stays
+   in the box. The lead's own background subagents and workflows (ones the human asked its model to start, say) are
+   not in the way: a compaction leaves them running, so since v0.8.20 they hold it no more than a phase agent does,
+   nor a result, mail or a line of baton's. They hold only what would end them: a restart in place (for a tier or an
+   upgrade, at most 10 minutes), a fresh start after an API error (at most 20), and serial mode's Ctrl-C. In a real
+   campaign two research subagents held a boundary for 20 minutes, after a 10-minute wait for a tier restart. The host asks once the lead's Stop hook has run, a
    moment before Claude Code counts the turn over, and Claude Code compacts only between turns: so the mod holds a
    compaction it refuses while the lead's turn runs, and calls it from that turn's end (`turn.complete`), where it
    is taken ([spike 37](../spikes/37-compact-at-turn-end/)). One still refused 30 seconds later is asked again after
@@ -934,8 +957,9 @@ pacing: no budget, a run as far as the account goes, and baton's waits no longer
   minutes, then 15 between tries, and never exits while the plan runs (a Ctrl-C in that wait stops it). A
   conversation that cannot be resumed gets a fresh session from the phase's brief.
 - **An API error a fresh context avoids** (a prompt too long, a request too large, a broken tool history) starts the
-  lead, or the phase agent, afresh from its brief, with the same backoff. A refusal, an expired login, billing and
-  an unknown model stay the human's.
+  lead, or the phase agent, afresh from its brief, with the same backoff. The lead's fresh session ends its model's
+  own background agents, so it waits for them, for 20 minutes at most from when it was due. A refusal, an expired
+  login, billing and an unknown model stay the human's.
 - **A rewind leaves baton's record standing.** baton marks the transcript's last entry at each prompt, and checks that
   the next prompt descends from it. After a rewind, the model is told what still stands.
 - **`/clear`** gets the phase's brief. It ends every phase agent, so baton starts each unfinished phase again in its

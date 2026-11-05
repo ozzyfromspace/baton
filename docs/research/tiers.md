@@ -140,3 +140,40 @@ hour:
 
 Still open: the plan file is followed only at the points baton reads it, so an edit made while the lead is idle,
 holding no phase and waiting on agents, waits for the lead's next turn.
+
+## What v0.8.20 fixed
+
+The same 74-phase campaign, on v0.8.19, a day later. P33, the lead's phase, had been raised from opus/xhigh to
+opus/max after 3 red runs. Its boundary, from `events.jsonl` (UTC, 2026-11-05):
+
+| Time | What happened |
+|---|---|
+| 10:04:37 | P33's boundary compaction is queued; the lead waits to restart on opus/max (`tier_waits`, 6 agents at work, and two read-only research subagents the human had asked the lead's model to start, Study AU and Study AV). |
+| 10:14:37 | `tier_given_up` after `Timing.TierWait`: P33 is to go on on opus/xhigh. The compaction is then held by the gate's own case for the model's background subagents (`gateAgents`). |
+| 10:27:18 | Study AV ends. |
+| 10:36:00 | Study AU ends; the compaction is asked for at once, and P33 resumes at 10:37:27 on opus/xhigh, not the max it was raised to. |
+
+Thirty-one minutes of the lead doing nothing, two stacked clocks (10 minutes of tier wait, then up to
+`Timing.BackgroundMax`, 20), and the raise lost. All the while nothing recorded the hold (`Run.Gate` stayed empty)
+and the status line read "compacting…"; Claude Code runs a status line only as the conversation changes, so it still
+read that after the band had moved on. At 11:43 P50, raised to max too, waited its 10 minutes the same way and went
+on on xhigh.
+
+- **The model's own background agents hold only what would end them.** A compaction, a result, mail and baton's lines
+  leave a subagent running, as they leave a phase agent, so none waits for one now. A restart in place (tier, upgrade,
+  idle) still does, as before, and so does a fresh session after an API error, by a wait of its own of at most
+  `BackgroundMax`; serial mode's Ctrl-C never comes while one may be live.
+- **A tier wait says why.** The boundary's hold is published (`decide.TierHold`): "restart on opus/max waits for 6
+  agents", or the gate's reason, on the status line ("compact held: …") and the board.
+- **The status line runs while idle**, every 10 seconds ([spike 44](../../spikes/44-statusline-refresh/README.md)).
+- **A raised phase goes to a phase agent on its tier** when the lead cannot restart for it (the human's option (a)):
+  mid-phase, once the lead is idle with its work committed and its checkout on the run's branch, the phase is parked
+  for an agent and the lead takes its next phase; a parked phase off the lead's tier, as P33 was at its boundary, is
+  taken by an agent the same way. The agent starts from the run's branch, which holds the lead's commits, and its
+  brief gives why, those commits, the lead's notes and the red gate's failures. A phase that waits for every phase
+  before it stays the lead's (v0.8.19), and so does one whose work was left uncommitted (`baton done --keep-dirty`)
+  or whose `--here` gate runs. A boundary already owed to such a phase in a run carried from v0.8.19 goes to the
+  next phase instead (`boundary_redirected`).
+
+Still open: the record file and the risk ledger count only the agent's landing of a handed phase, not the lead's
+commits before it, and time saved counts its work from the agent's start.

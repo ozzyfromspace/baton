@@ -4,6 +4,46 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.20] - 2026-11-05
+
+Four problems around one boundary of a 74-phase campaign on v0.8.19. A phase raised to `max` waited 10 minutes for
+your session to restart on it, while six phase agents kept the restart from coming; then two research subagents you
+had asked Claude to start held its compaction for 20 minutes more; all that time the status line read
+"compacting…"; and in the end the phase went on on its old tier. Now your own background agents hold only what
+would end them, every hold says why, the status line catches up while your session is idle, and a phase your
+session can't restart for goes to a phase agent on its tier.
+
+A session on v0.8.x moves to v0.8.20 by itself at its next restart point.
+
+### Fixed
+
+- **Your own background agents hold nothing a phase agent wouldn't.** A background subagent or workflow your
+  session's model started no longer holds a phase boundary's compaction, a job's result, baton's messages or its
+  lines: none of those ends it. What would end it still waits for it: a restart in place for a tier or an update
+  (10 minutes at most, as before), a fresh session after an API error (20 minutes at most, `afresh_waits`), and
+  serial mode's Ctrl-C.
+- **A wait for a restart on a phase's tier says why.** While a boundary waits for your session to restart on its
+  phase's tier, the status line and the board say what holds it ("compact held: restart on opus/max waits for 6
+  agents", or the gate that holds the restart), never "compacting…". The status line shows 40 characters of a hold
+  (was 32).
+- **The status line catches up while your session is idle.** Claude Code runs a status line only as the
+  conversation changes, so an idle session's kept what baton said at its last turn. baton now sets
+  `refreshInterval` to 10 seconds, or passes on yours as you set it, since the value baton passes wins over your
+  settings files' ([spike 44](spikes/44-statusline-refresh/README.md)). Text that hasn't changed is not drawn again.
+
+### Added
+
+- **A phase your session can't restart for goes to a phase agent on its tier.** When baton raises your session's
+  phase while phase agents are at work, so no restart can come, it waits until your session is idle with its work
+  committed and nothing of the phase under way, sets the phase aside, and gives your session its next phase
+  (`phase_handed`). An agent takes it up on its new tier from the run's branch, which holds your session's commits,
+  and its brief says why, lists those commits, and gives the notes and the red gate's failures. Uncommitted work
+  holds the hand-over (you're told once), and the restart wait applies as before. A phase set aside earlier whose
+  tier your session doesn't run on goes to an agent the same way, unless its work was left uncommitted, a `--here`
+  gate of it runs, an agent already failed on it, or it waits for every phase before it. The phase keeps its raises
+  and its start, and if its agent fails, it is your session's again. A run carried over from v0.8.19 with such a
+  boundary already owed moves on to its next phase (`boundary_redirected`).
+
 ## [0.8.19] - 2026-11-04
 
 Two fixes to tiers, both found in the first long run on them. A tier edited in the plan file while the run went on was
@@ -1875,7 +1915,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.19...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.20...HEAD
+[0.8.20]: https://github.com/ozzyfromspace/baton/compare/v0.8.19...v0.8.20
 [0.8.19]: https://github.com/ozzyfromspace/baton/compare/v0.8.18...v0.8.19
 [0.8.18]: https://github.com/ozzyfromspace/baton/compare/v0.8.17...v0.8.18
 [0.8.17]: https://github.com/ozzyfromspace/baton/compare/v0.8.16...v0.8.17
