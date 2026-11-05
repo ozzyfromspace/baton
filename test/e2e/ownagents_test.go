@@ -9,12 +9,13 @@ import (
 )
 
 // studyPlan's P0 starts a background subagent of the lead's own model, a study that outlives the phase,
-// and reports P0 done at once.
+// and reports P0 done at once. The study waits through study.sh: Claude Code (2.1.318) refuses a
+// foreground command that starts with a sleep of 25 seconds or more.
 const studyPlan = `# Study plan
 
 ## P0 — Start a study
 Use the Agent tool with subagent_type general-purpose and run_in_background set to true, with exactly this
-prompt: "Run exactly sleep 150 with the Bash tool, with its timeout set to 200000, then reply with the single word done."
+prompt: "Run exactly sh study.sh with the Bash tool, in the foreground, with its timeout set to 200000, then reply with the single word done."
 Do not wait for it. As soon as it is launched, run ` + "`baton done P0 --notes \"the study runs\"`" + ` and end your turn.
 
 ## P1 — Say goodbye
@@ -27,9 +28,13 @@ Run echo goodbye, then report P1 done. If the study's result arrives, it needs n
 // minutes, which in a 74-phase campaign kept the lead idle through two studies the human had asked for.
 func TestTheLeadsOwnSubagentHoldsNoCompaction(t *testing.T) {
 	dir := NewProject(t)
+	writeFile(t, dir, "study.sh", "sleep 150\necho studied\n")
+	Git(t, dir, "add", "study.sh")
+	Git(t, dir, "commit", "-q", "-m", "test: the study")
 	Attach(t, dir, studyPlan)
-	s := StartEnv(t, dir, []string{"BATON_FOREGROUND_MAX=10m"}, "--model", "haiku",
-		"--allowedTools", "Bash(sleep 150)", "Bash(echo:*)", "Run the plan's phase P0 now, exactly as it says.")
+	// The prompt goes first: --allowedTools takes every argument after it.
+	s := StartEnv(t, dir, []string{"BATON_FOREGROUND_MAX=10m"}, "--model", "haiku", "Run the plan's phase P0 now, exactly as it says.",
+		"--allowedTools", "Bash(sh study.sh)", "Bash(echo:*)")
 	s.Trust()
 	s.ApprovePermissions()
 	waitSequence(t, s, 6*time.Minute,
