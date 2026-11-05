@@ -235,7 +235,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	started := io.Now()
 	exit, err := host.Run(host.Config{
 		Claude: claude, Args: launchArgs, BatonBin: exe, Project: proj, Instance: instance, Session: session, Version: version.Version,
-		Autocompact: autocompact, Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
+		Autocompact: autocompact, StatusRefresh: statusline.UserRefresh(cwd, homeDir(io)), Stdin: os.Stdin, Stdout: os.Stdout, Env: env, BatonEnv: leadEnv, Now: io.Now, Logf: logf,
 		Controller: coordinator,
 	})
 	code := exit.Code

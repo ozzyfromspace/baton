@@ -63,8 +63,9 @@ func Segment(st state.State, pl plan.Plan, havePlan bool, now time.Time) string 
 		return mark + " · ⚠ blocked"
 	case st.Run.Compaction.InFlight() && st.Run.Gate != "":
 		// Never claim a compaction is happening while something holds it back. That read
-		// "compacting…" for 35 minutes once, which is indistinguishable from a hung session.
-		return mark + " · compact held: " + clip(st.Run.Gate, 32)
+		// "compacting…" for 35 minutes once, which is indistinguishable from a hung session. 40
+		// characters take "restart on opus/max waits for 6 agents" (decide.TierHold) whole.
+		return mark + " · compact held: " + clip(st.Run.Gate, 40)
 	case st.Run.Compaction.InFlight():
 		return mark + " · compacting…"
 	}
@@ -130,7 +131,7 @@ func clip(s string, n int) string {
 		return s
 	}
 	r := []rune(s)
-	return string(r[:n-1]) + "…"
+	return strings.TrimRight(string(r[:n-1]), " ") + "…"
 }
 
 // Input is the part of Claude Code's status line input baton reads.
@@ -229,12 +230,7 @@ func Parse(raw []byte) Input {
 // UserCommand finds the status line command the user configured, in Claude Code's precedence order
 // (local project settings, project settings, user settings), ignoring baton's own.
 func UserCommand(projectDir, home string) string {
-	files := []string{
-		filepath.Join(projectDir, ".claude", "settings.local.json"),
-		filepath.Join(projectDir, ".claude", "settings.json"),
-		filepath.Join(home, ".claude", "settings.json"),
-	}
-	for _, f := range files {
+	for _, f := range settingsFiles(projectDir, home) {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			continue
@@ -254,6 +250,39 @@ func UserCommand(projectDir, home string) string {
 		return s.StatusLine.Command
 	}
 	return ""
+}
+
+// UserRefresh is the status line's refreshInterval, in seconds, that the user's settings give, in Claude
+// Code's precedence order: the first file that sets one, as Claude Code merges statusLine across files key by
+// key (spike 44). It is 0 when none sets one of 1 or more, the least Claude Code takes.
+func UserRefresh(projectDir, home string) float64 {
+	for _, f := range settingsFiles(projectDir, home) {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var s struct {
+			StatusLine *struct {
+				RefreshInterval *float64 `json:"refreshInterval"`
+			} `json:"statusLine"`
+		}
+		if json.Unmarshal(b, &s) != nil || s.StatusLine == nil || s.StatusLine.RefreshInterval == nil {
+			continue
+		}
+		if r := *s.StatusLine.RefreshInterval; r >= 1 {
+			return r
+		}
+	}
+	return 0
+}
+
+// settingsFiles are the user's settings files, in Claude Code's precedence order.
+func settingsFiles(projectDir, home string) []string {
+	return []string{
+		filepath.Join(projectDir, ".claude", "settings.local.json"),
+		filepath.Join(projectDir, ".claude", "settings.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	}
 }
 
 func isBaton(cmd string) bool {

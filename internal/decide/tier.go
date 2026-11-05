@@ -204,6 +204,37 @@ func TierGivenUp(phase string, want, runs plan.Tier, wait time.Duration) string 
 		"(one may be waiting on you). baton restarts the lead on %s as soon as nothing is at work.", phase, runs, want, Spell(wait), want)
 }
 
+// TierHold says what holds the lead's boundary compaction while it waits for a restart on t, its next
+// phase's tier, for the status line and the board (Run.Gate: "compact held: restart on opus/max waits for 6
+// agents"): the gate's own reason when that is what holds the restart, else what would end with the lead's
+// claude (agents: phase agents and the model's own subagents and workflows; tasks: its other background
+// work, such as shells; wakeups and monitors) or the human's draft.
+// Most of it fits the status line's 40 characters. In a 74-phase campaign the status line read
+// "compacting…" through such a wait, since nothing recorded it.
+func TierHold(t plan.Tier, gate string, agents, tasks, wakeups int, draft bool) string {
+	if gate != "" {
+		return gate
+	}
+	var what []string
+	if agents > 0 {
+		what = append(what, fmt.Sprintf("%d %s", agents, plural(agents, "agent", "agents")))
+	}
+	if tasks > 0 {
+		what = append(what, fmt.Sprintf("%d background %s", tasks, plural(tasks, "task", "tasks")))
+	}
+	if wakeups > 0 {
+		what = append(what, fmt.Sprintf("%d %s", wakeups, plural(wakeups, "wakeup", "wakeups")))
+	}
+	if draft {
+		what = append(what, "your draft")
+	}
+	s := "restart on " + t.String() + " waits"
+	if len(what) > 0 {
+		s += " for " + andList(what)
+	}
+	return s
+}
+
 // TierChanged tells the human the tiers a change of the plan file changed (state.TierChanges), so that
 // they never have to wonder whether an edit took: each phase under way by name, with what follows for it,
 // and how many not started, which start on theirs. "" for none.

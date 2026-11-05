@@ -72,3 +72,24 @@ func TestTierChanged(t *testing.T) {
 		t.Errorf("none: %q", got)
 	}
 }
+
+// A tier wait's hold says what holds the restart, short enough for the status line in the common case.
+func TestTierHold(t *testing.T) {
+	max := plan.Tier{Model: "opus", Effort: "max"}
+	for _, c := range []struct {
+		gate                   string
+		agents, tasks, wakeups int
+		draft                  bool
+		want                   string
+	}{
+		{"", 6, 0, 0, false, "restart on opus/max waits for 6 agents"},
+		{"", 1, 0, 0, false, "restart on opus/max waits for 1 agent"},
+		{"", 2, 1, 1, true, "restart on opus/max waits for 2 agents, 1 background task, 1 wakeup and your draft"},
+		{"", 0, 0, 0, false, "restart on opus/max waits"},
+		{"a turn is in progress", 6, 0, 0, false, "a turn is in progress"},
+	} {
+		if got := TierHold(max, c.gate, c.agents, c.tasks, c.wakeups, c.draft); got != c.want {
+			t.Errorf("TierHold(%q, %d, %d, %d, %v) = %q, want %q", c.gate, c.agents, c.tasks, c.wakeups, c.draft, got, c.want)
+		}
+	}
+}

@@ -46,7 +46,7 @@ type Timing struct {
 	DraftEscalate  time.Duration // a human draft blocking baton this long: tell them
 	StaleTurn      time.Duration // an open turn with no hook activity this long is not trusted to be open
 	IdleNudge      time.Duration // no hook activity this long mid-plan: type a reminder (then escalate)
-	BackgroundMax  time.Duration // background subagents may hold a compaction this long
+	BackgroundMax  time.Duration // a fresh session of the lead waits this long at most for the model's own background subagents (afresh)
 	BackgroundIdle time.Duration // the model's own background work may keep a quiet session from reminders this long
 	DialogNotify   time.Duration // a permission prompt or question open this long: notify the human
 	WarnTimeout    time.Duration // the context question unanswered this long: baton answers "Keep going"
@@ -173,30 +173,32 @@ type Loop struct {
 	noisyLog  bool      // the never-quiet screen was reported
 	staleLog  time.Time // the turn whose staleness was reported
 	dialogLog time.Time // the dialog whose staleness was reported
-	agentsLog bool      // background subagents have been overridden once
 	rescues   int       // drafts taken out of the input box this session
 	rescuedAt time.Time // when the last one was taken
 	heldWhy   string    // what has been holding back something baton needs to type
 	heldSince time.Time
-	wished    bool // something wanted to type this tick
+	wished    bool   // something wanted to type this tick
+	holdSay   string // what holds it this tick when the gate is open: a restart on its phase's tier (tierHolds)
 
 	alone   state.Dialog // baton's own question, alone on screen since aloneAt
 	aloneAt time.Time
 
-	owner      bool      // this session has owned the project
-	settled    time.Time // when the run's jobs were last settled
-	retaken    time.Time // when a phase's sub-run last looked for its phase to take up again (retake)
-	switchNext time.Time // when a switch may be tried next
-	switchHeld string    // the job whose switch uncommitted work holds, reported once
-	typedFor   string    // the jobs whose results baton last typed a line for, and when
-	typedAt    time.Time
-	quit       bool           // claude was asked to end: the human is leaving baton, or baton restarts
-	restart    *restart       // the restart claude was ended for
-	fresh      *fresh         // the fresh session claude was ended for (afresh.go)
-	freshSeen  time.Time      // the error a fresh session was last found owed for
-	halted     bool           // the run is halted, and this halt's snapshot was started
-	snapping   atomic.Bool    // a snapshot is running
-	saving     sync.WaitGroup // and Ended waits for it
+	owner       bool      // this session has owned the project
+	settled     time.Time // when the run's jobs were last settled
+	retaken     time.Time // when a phase's sub-run last looked for its phase to take up again (retake)
+	switchNext  time.Time // when a switch may be tried next
+	switchHeld  string    // the job whose switch uncommitted work holds, reported once
+	typedFor    string    // the jobs whose results baton last typed a line for, and when
+	typedAt     time.Time
+	quit        bool           // claude was asked to end: the human is leaving baton, or baton restarts
+	restart     *restart       // the restart claude was ended for
+	fresh       *fresh         // the fresh session claude was ended for (afresh.go)
+	freshSeen   time.Time      // the error a fresh session was last found owed for
+	freshWaited time.Time      // the error whose fresh session was logged waiting for the model's background agents
+	freshOver   time.Time      // and the one it went on for in spite of them, at BackgroundMax (agentsHold)
+	halted      bool           // the run is halted, and this halt's snapshot was started
+	snapping    atomic.Bool    // a snapshot is running
+	saving      sync.WaitGroup // and Ended waits for it
 
 	// When the running gates were last looked at for signs of life (hung), and what was seen of each, by job.
 	hungAt time.Time
@@ -285,7 +287,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	if st.Mode == state.ModeComplete && (len(st.Due()) > 0 || len(st.Mail()) > 0) {
 		// A verification, or a phase agent's landing (state.MessageDone), completed the plan while the
 		// session was idle: it is told, and sums the run up.
-		l.why, l.wished = l.gate(v, st), false
+		l.why, l.wished, l.holdSay = l.gate(v, st), false, ""
 		l.clearDraft(v, st, in)
 		l.deliver(v, st, in)
 		l.publishGate(st)
@@ -302,7 +304,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	}
 	st = l.escalateLead(v, st) // the lead's phase gone badly is raised a step, before anything is delivered (escalate.go)
 	l.why = l.gate(v, st)
-	l.wished = false
+	l.wished, l.holdSay = false, ""
 	l.resolve(v, st)
 	l.remind(v, st)
 	st = l.switching(v, st)
@@ -385,10 +387,14 @@ func (l *Loop) clearDraft(v host.View, st state.State, in host.Injector) {
 	}
 }
 
-// publishGate records the current gate so the status line can say what a run is waiting for. Written
-// only when it changes: a tick is 250ms and this is a file.
+// publishGate records the current gate so the status line can say what a run is waiting for, or, when
+// the gate is open, what else holds what baton wants to type (holdSay: the boundary's restart on its
+// phase's tier). Written only when it changes: a tick is 250ms and this is a file.
 func (l *Loop) publishGate(st state.State) {
 	shown := l.why
+	if l.holdSay != "" {
+		shown = l.holdSay
+	}
 	if !l.wished {
 		shown = "" // nothing wanted to type, so nothing is being held up
 	}
@@ -520,7 +526,6 @@ func (l *Loop) since(t time.Time) time.Time { return latest(t, l.wokeAt) }
 const (
 	gateTurn   = "a turn is in progress"
 	gateDialog = "a dialog is open"
-	gateAgents = "background subagents are running"
 	gateDraft  = "the human has a draft in the input box"
 	gateTyping = "the human is typing"
 	gateScreen = "the screen is still updating"
@@ -553,8 +558,6 @@ func (l *Loop) gate(v host.View, st state.State) string {
 		why = gateUsage // anything typed would fail on it; once it ends, each stopped session's own retry goes (watchError)
 	case l.mode == modWaiting:
 		why = gateMod
-	case busyAgents(st) && !l.agentsStale(v, st):
-		why = gateAgents
 	case v.Draft && l.mode != modOn:
 		why = gateDraft
 	case v.Now.Sub(v.LastHumanKey) < l.Timing.HandsOff:
@@ -631,32 +634,21 @@ func (l *Loop) turnStale(v host.View, st state.State) bool {
 // action; this one may not, because the thing on the other side of it is the human's consent. A plan
 // that waits for an answer is working as intended, and that wait is escalated and pushed. Where baton's
 // mod runs nothing is typed, and a phase agent's prompt holds only that agent (dialogHolds).
-//
-// agentsStale reports background subagents that have held baton for BackgroundMax. They used to hold it
-// for good: the gate escalated once and then waited on a human. A hung subagent must not be able to
-// park a plan, and a compaction is safe to take while one runs — the work reports when it finishes.
-func (l *Loop) agentsStale(v host.View, st state.State) bool {
-	if l.heldWhy != gateAgents || v.Now.Sub(l.since(l.heldSince)) < l.Timing.BackgroundMax {
-		return false
-	}
-	if !l.agentsLog {
-		l.agentsLog = true
-		l.logf("loop: background subagents have held baton for %s; carrying on anyway", l.Timing.BackgroundMax)
-		l.Store.Event("agents_overridden", map[string]any{"after": l.Timing.BackgroundMax.String()})
-	}
-	return true
-}
 
-// busyAgents reports background subagents or workflows. Background shells (a dev server, a long build)
-// do not hold a compaction: they keep running across it and report when they finish. (Foreground
-// subagents need no check of their own: they run inside the main turn, which the turn gate covers.)
-func busyAgents(st state.State) bool {
+// ownAgents counts background subagents and workflows of the model's own: they hold nothing baton types
+// (v0.8.20), as a phase agent does not, since a compaction, a result or a line leaves them running and
+// they report when they finish; only what would end them waits for them: a restart (restartable) and a
+// fresh session (afresh). In a 74-phase campaign two read-only studies the human had asked the lead's
+// model for held its boundary compaction for 20 minutes. (Foreground subagents run inside the main turn,
+// which the turn gate covers.)
+func ownAgents(st state.State) int {
+	n := 0
 	for _, t := range st.Run.BusyBackground() {
 		if t.Type == "subagent" || t.Type == "workflow" {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // owed reports work baton must type to make progress: a compaction at a boundary or a checkpoint, or the
@@ -771,9 +763,6 @@ func (l *Loop) held(v host.View, st state.State, task string) {
 		if agentsLive(st) {
 			reason = decide.DraftHolds(task)
 		}
-	case gateAgents:
-		limit, kind = l.Timing.BackgroundMax, "stuck"
-		reason = fmt.Sprintf("baton has needed to %s for %s, but background subagents are still running", task, l.Timing.BackgroundMax)
 	default:
 		return
 	}
@@ -942,7 +931,7 @@ func (l *Loop) resolve(v host.View, st state.State) {
 	case "draft":
 		gone = !v.Draft
 	case "stuck":
-		gone = l.why != gateAgents
+		gone = true // the model's own background subagents held baton once (held); since v0.8.20 they hold nothing
 	case "compaction_failed":
 		gone = st.Run.Compaction.Status == state.CompactDone || !(st.BoundaryOwed || st.CheckpointOwed)
 	case "api_error", "refused":

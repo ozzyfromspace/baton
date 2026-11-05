@@ -37,9 +37,9 @@ func (l *Loop) Afresh() (why string, waited time.Duration, ok bool) {
 // did. A phase agent's is the coordinator's (erred): its loop neither retries nor escalates it. The lead's,
 // where the host starts it afresh (StartsAfresh), waits out the backoff its recoveries owe, then ends its
 // claude for a fresh session as soon as nothing would be lost to it: no dialog open, nobody typing, no
-// background agent of the model's own at work (for at most BackgroundMax); a draft in the input box is
-// saved where `baton drafts` hands it back. The phase agents end with the lead's claude, and the next host
-// takes their phases up again in fresh agents. A turn that starts meanwhile (the human writing)
+// background agent of the model's own at work (agentsHold: for at most BackgroundMax from when it was
+// due); a draft in the input box is saved where `baton drafts` hands it back. The phase agents end with
+// the lead's claude, and the next host takes their phases up again in fresh agents. A turn that starts meanwhile (the human writing)
 // supersedes all of this (watch).
 func (l *Loop) afresh(v host.View, st state.State, in host.Injector, e state.StopError) bool {
 	if l.Store.Worker() != "" {
@@ -70,6 +70,8 @@ func (l *Loop) afresh(v host.View, st state.State, in host.Injector, e state.Sto
 	case l.why != "" && l.why != gateDraft:
 		l.held(v, st, "start the lead afresh")
 		return true
+	case l.agentsHold(v, st, e.At, due):
+		return true
 	}
 	if v.Draft {
 		path, err := l.Store.SaveDraft(v.DraftText, st.Current, v.Now)
@@ -90,6 +92,31 @@ func (l *Loop) afresh(v host.View, st state.State, in host.Injector, e state.Sto
 		l.logf("loop: quitting: %v", err)
 	}
 	return true
+}
+
+// agentsHold reports background subagents or workflows of the model's own at work (ownAgents), which a
+// fresh session would end with the lead's claude: the lead waits for them, as the gate no longer does
+// (v0.8.20), for at most Timing.BackgroundMax from when it was due, and then goes on, since a hung one must
+// not hold the run. Each is logged once for the error at: the wait (afresh_waits) and its end at the cap
+// (agents_overridden).
+func (l *Loop) agentsHold(v host.View, st state.State, at, due time.Time) bool {
+	n := ownAgents(st)
+	if n == 0 {
+		return false
+	}
+	if v.Now.Sub(due) < l.Timing.BackgroundMax {
+		if !l.freshWaited.Equal(at) {
+			l.freshWaited = at
+			l.Store.Event("afresh_waits", map[string]any{"phase": st.Current, "agents": n, "until": due.Add(l.Timing.BackgroundMax).UTC().Format(time.RFC3339)})
+		}
+		return true
+	}
+	if !l.freshOver.Equal(at) {
+		l.freshOver = at
+		l.logf("loop: the model's background agents ran %s past the fresh session that was due; starting it anyway", l.Timing.BackgroundMax)
+		l.Store.Event("agents_overridden", map[string]any{"after": l.Timing.BackgroundMax.String(), "agents": n, "for": "afresh"})
+	}
+	return false
 }
 
 // erred reports that the last turn of w's agent failed with an API error a fresh agent avoids

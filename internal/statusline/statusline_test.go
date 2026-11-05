@@ -42,7 +42,18 @@ func TestSegment(t *testing.T) {
 			s := run
 			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "the human has a draft in the input box"
 			return s
-		}, true, "◆ baton · compact held: the human has a draft in the in…"},
+		}, true, "◆ baton · compact held: the human has a draft in the input box"},
+		// A boundary held for a restart on its phase's tier says so (decide.TierHold), whole.
+		{"compaction held for a tier", func() state.State {
+			s := run
+			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "restart on opus/max waits for 6 agents"
+			return s
+		}, true, "◆ baton · compact held: restart on opus/max waits for 6 agents"},
+		{"compaction held, clipped", func() state.State {
+			s := run
+			s.Run.Compaction.Status, s.Run.Gate = state.CompactQueued, "restart on opus/max waits for 6 agents and 2 background tasks"
+			return s
+		}, true, "◆ baton · compact held: restart on opus/max waits for 6 agents…"},
 		{"escalated", func() state.State { s := run; s.Run.Escalation = &state.Escalation{}; return s }, true, "◆ baton · ⚠ waiting on you"},
 		{"refused", func() state.State {
 			s := run
@@ -236,6 +247,40 @@ func TestUserCommandPrecedenceSkipsBaton(t *testing.T) {
 	write(filepath.Join(proj, ".claude", "settings.local.json"), "'/opt/baton/bin/baton' statusline")
 	if got := UserCommand(proj, home); got != "project-line" {
 		t.Fatalf("baton's own command must be skipped: %q", got)
+	}
+}
+
+// The user's own refreshInterval is the first a settings file sets, in Claude Code's precedence order,
+// whichever file holds the command, as Claude Code merges statusLine key by key (spike 44).
+func TestUserRefreshPrecedence(t *testing.T) {
+	home, proj := t.TempDir(), t.TempDir()
+	write := func(path, body string) {
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(body), 0o644)
+	}
+	user := filepath.Join(home, ".claude", "settings.json")
+	project := filepath.Join(proj, ".claude", "settings.json")
+	local := filepath.Join(proj, ".claude", "settings.local.json")
+	steps := []struct {
+		name, path, body string
+		want             float64
+	}{
+		{"none configured", "", "", 0},
+		{"a command with no interval", user, `{"statusLine":{"type":"command","command":"user-line"}}`, 0},
+		{"the user's", user, `{"statusLine":{"type":"command","command":"user-line","refreshInterval":30}}`, 30},
+		{"the project's command alone", project, `{"statusLine":{"type":"command","command":"project-line"}}`, 30},
+		{"the project's", project, `{"statusLine":{"type":"command","command":"project-line","refreshInterval":5}}`, 5},
+		{"below Claude Code's least", local, `{"statusLine":{"refreshInterval":0}}`, 5},
+		{"the local one", local, `{"statusLine":{"refreshInterval":2.5}}`, 2.5},
+		{"a broken local file", local, `{"statusLine":`, 5},
+	}
+	for _, s := range steps {
+		if s.path != "" {
+			write(s.path, s.body)
+		}
+		if got := UserRefresh(proj, home); got != s.want {
+			t.Errorf("%s: %v, want %v", s.name, got, s.want)
+		}
 	}
 }
 

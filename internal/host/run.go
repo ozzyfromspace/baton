@@ -40,7 +40,7 @@ func Run(cfg Config) (Exit, error) {
 			cfg.Logf("host: recording its process: %v", err)
 		}
 	}
-	args := append([]string{"--settings", SettingsJSON(cfg.BatonBin)}, cfg.Args...)
+	args := append([]string{"--settings", SettingsJSON(cfg.BatonBin, cfg.StatusRefresh)}, cfg.Args...)
 	if cfg.Autocompact != "" {
 		args = append([]string{"--autocompact", cfg.Autocompact}, args...)
 	}
