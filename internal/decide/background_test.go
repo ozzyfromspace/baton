@@ -62,8 +62,11 @@ func TestBackgroundStarted(t *testing.T) {
 			strings.TrimSuffix(strings.TrimPrefix(start, "[baton] Your background work runs (npm test). "), ".") {
 		t.Errorf("the stop and the start differ:\n%s\n%s", stop, start)
 	}
-	if shell, agent := w.BackgroundStarted("npm test", state.TaskShell), w.BackgroundStarted("npm test", state.TaskSubagent); shell != agent+" "+stops {
-		t.Errorf("a shell's start is not an agent's with when baton stops it:\n%s\n%s", shell, agent)
+	if shell, agent := w.BackgroundStarted("npm test", state.TaskShell), w.BackgroundStarted("npm test", state.TaskSubagent); shell != agent+" "+stops+"\n"+BackgroundHabits(true) {
+		t.Errorf("a shell's start is not an agent's with when baton stops it and the background habits:\n%s\n%s", shell, agent)
+	}
+	if plain := (Words{Timeout: time.Minute}).BackgroundStarted("npm test", state.TaskShell); !strings.HasSuffix(plain, "\n"+BackgroundHabits(false)) {
+		t.Errorf("a shell's start without git lacks its habits:\n%s", plain)
 	}
 }
 

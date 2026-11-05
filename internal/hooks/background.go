@@ -3,6 +3,7 @@ package hooks
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -121,13 +122,27 @@ func startBackground(st *state.State, c Context) (b bgStart, rec state.Backgroun
 // its own while its plan runs: what a stop on that work would be refused with (decide.BackgroundStarted),
 // said before the stop, so the stop is allowed (decideStop's idle_on_background). The work is recorded as
 // told at c.Now (state.Runtime.Tell); text is "" for work told already, or while baton does not drive the
-// plan.
+// plan. A shell whose description declares no end (declaresEnd) is told so (decide.NoEndDeclared): its
+// reviewer, and the human reading the audit, judge it by what it declares.
 func tellBackground(st *state.State, c Context, w decide.Words, b bgStart) (text string) {
 	if st.Mode != state.ModeRunning || !st.Run.Tell(b.id, c.Now) {
 		return ""
 	}
-	return w.BackgroundStarted(b.what, b.kind)
+	text = w.BackgroundStarted(b.what, b.kind)
+	if b.kind == state.TaskShell && !declaresEnd(b.description) {
+		text += "\n" + decide.NoEndDeclared(clipWhat(b.description))
+	}
+	return text
 }
+
+// declaresEnd reports whether a background shell's description declares when it ends: a run time
+// (state.DeclaredEnd: `~15m`, `2 hours`) or a condition, an `until` (`until P12's browser checks pass`).
+func declaresEnd(description string) bool {
+	return state.DeclaredEnd(description) > 0 || untilWord.MatchString(description)
+}
+
+// untilWord is the word until, in any case, standing alone.
+var untilWord = regexp.MustCompile(`(?i)\buntil\b`)
 
 // tasksDir is where Claude Code writes the output of the session's background tasks, each to <id>.output
 // (spike 45): the tasks folder beside the session's scratchpad, which every hook of Claude Code 2.1.318

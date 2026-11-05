@@ -462,8 +462,9 @@ func TestNotesSince(t *testing.T) {
 // While the plan aggregates its heavy checks (aggregate_qa), a phase before a QA phase is told to run
 // scoped checks only and leave the full ones to it, and a QA phase is told it is the place for them; with
 // the setting off, or no QA phase ahead, the brief says nothing of QA. Every phase's brief then gives the
-// gate rules in short (decide.GateHabits): with git, stages and baton verify; without, baton await. A
-// phase agent's narrowed plan still names its QA phase.
+// gate rules in short (decide.GateHabits), and beside them the background habits (decide.BackgroundHabits):
+// with git, stages, baton verify and baton await; without, baton await alone. A phase agent's narrowed plan
+// still names its QA phase.
 func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 	doc := []byte("# Demo\n\n## P0 — Parser\n\nAfter: none\n\nParse.\n\n## P1 — Printer\n\nPrint.\n\n## P2 — Check it all\n\nAfter: all\nType: qa\n\nRun everything.\n\n## P3 — Ship\n\nShip.\n\n## Verification\n")
 	pl, err := plan.Build("/work/plan.md", doc, plan.Suggest(doc))
@@ -477,7 +478,7 @@ func TestTheBriefSaysWhereTheHeavyChecksRun(t *testing.T) {
 		return st
 	}
 	focus := "In this phase, run checks that finish in seconds or minutes: the tests of what you changed, by name."
-	habits, bare := decide.GateHabits(true), decide.GateHabits(false)
+	habits, bare := decide.GateHabits(true)+"\n\n"+decide.BackgroundHabits(true), decide.GateHabits(false)+"\n\n"+decide.BackgroundHabits(false) // the background habits beside the gate habits
 	for _, c := range []struct {
 		name, phase string
 		on, git     bool

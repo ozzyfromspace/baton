@@ -302,3 +302,61 @@ func TestTellingBackgroundWorkFailsOpen(t *testing.T) {
 		{"a phase agent's background start", "PostToolUse", func(tree string) map[string]any { return phaseAgent(bgBash("npm test", "b1", true), tree) }, nil},
 	})
 }
+
+// A background shell's start reminder ends with the background habits, and asks for the declaration
+// outright: a shell with no description, or one that names neither a run time nor an until, is told that
+// it declared no end; one that declares a duration or a condition is not. A Monitor and an agent are told
+// neither.
+func TestABackgroundShellIsAskedToDeclareItsEnd(t *testing.T) {
+	const noEnd = "[baton] This shell declared no end"
+	habits := "Describe each background shell by what it is for, its phase and when it ends"
+	described := func(in map[string]any, d string) map[string]any {
+		ti := in["tool_input"].(map[string]any)
+		if d == "" {
+			delete(ti, "description")
+		} else {
+			ti["description"] = d
+		}
+		return in
+	}
+	for _, c := range []struct {
+		name   string
+		in     map[string]any
+		habits bool
+		noEnd  string // what the line says of the description, "" when it is not told
+	}{
+		{name: "no description", in: described(bgBash("pnpm dev", "b1", false), ""), habits: true, noEnd: "it has no description."},
+		{name: "a description with no end", in: described(bgBash("pnpm dev", "b1", false), "dev server for P3"), habits: true,
+			noEnd: "its description (dev server for P3) names neither a run time (`~15m`) nor a condition (`until <a condition>`)."},
+		{name: "a duration", in: described(bgBash("pnpm dev", "b1", false), "dev server for P3, ~15m"), habits: true},
+		{name: "a duration in words", in: described(bgBash("pnpm build", "b1", false), "P3's build, about 2 minutes"), habits: true},
+		{name: "a condition", in: described(bgBash("pnpm dev", "b1", false), "dev server for P3 until P12's browser checks pass"), habits: true},
+		{name: "a condition, capitalised", in: described(bgBash("pnpm dev", "b1", false), "Until the browser checks pass: dev server"), habits: true},
+		{name: "moved to the background at its timeout", in: described(bgBash("make build", "b2", true), "build"), habits: true,
+			noEnd: "its description (build) names neither"},
+		{name: "a Monitor", in: map[string]any{"tool_name": "Monitor", "tool_input": map[string]any{"command": "tail -F app.log", "description": "watch the log"},
+			"tool_response": map[string]any{"taskId": "m1"}}},
+		{name: "an agent", in: map[string]any{"tool_name": "Agent", "tool_input": map[string]any{"description": "explore the parser", "run_in_background": true},
+			"tool_response": map[string]any{"status": "async_launched", "agentId": "a1"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			got := addedContext(f.fire("PostToolUse", c.in))
+			if got == "" {
+				t.Fatal("told nothing")
+			}
+			if strings.Contains(got, habits) != c.habits {
+				t.Errorf("the habits told: %v, want %v:\n%s", !c.habits, c.habits, got)
+			}
+			if c.noEnd == "" {
+				if strings.Contains(got, noEnd) {
+					t.Errorf("told it declared no end:\n%s", got)
+				}
+				return
+			}
+			if i := strings.Index(got, noEnd); i < 0 || !strings.Contains(got[i:], c.noEnd) || i < strings.Index(got, habits) {
+				t.Errorf("the reminder lacks %q, after the habits:\n%s", noEnd+" … "+c.noEnd, got)
+			}
+		})
+	}
+}

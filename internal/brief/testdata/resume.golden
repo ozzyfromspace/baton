@@ -27,6 +27,8 @@ You do not feel time pass. A gate that runs 12 minutes is one tool call to you, 
 
 Gates: a gate stops at its first failure. When one fails, stop it (`baton stop <job>`) unless every failure is worth the wait, then rerun only what failed (`baton verify --failed [-- <narrower command>]`), never the whole gate again without `--why "…"`, which baton tells the human. A long gate is a committed script of `baton stage <name> -- <command>` steps, run through `baton verify`, never a background shell. When a gate fails on its environment, `baton env "<what it needs>"` tells every phase. Evidence goes in notes and commits, not the permanent suite; tests fail fast.
 
+Background shells: run a check with `baton verify` and a wait on something outside the project with `baton await`, never in a background shell. Describe each background shell by what it is for, its phase and when it ends: `~15m`, or `until P12's browser checks pass`. Have it print a line every few minutes at least (a verbose runner, an `echo` per step), so silence means stuck. Stop it once its job is done, and before `baton done`.
+
 This phase's park notes (where P2 stood when it was set aside):
 
 Index and query done in 4f2a9c1; the ranking test is the slow one.

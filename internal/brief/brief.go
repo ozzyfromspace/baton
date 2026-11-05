@@ -353,7 +353,8 @@ func tail(s string, n int) string {
 // checks in QA phases (w.AggregateQA), a QA phase is told it runs them (decide.QAPhase), and a phase
 // before one that it runs scoped checks only (decide.QAFocus). Every phase then gets the gate rules in
 // short (decide.GateHabits): one with no QA phase after it, or with the setting off, checks itself as it
-// ends, by the same rules.
+// ends, by the same rules. Beside them, every phase gets how to keep its background work easy to judge
+// (decide.BackgroundHabits).
 func qaGuide(pl plan.Plan, id string, w decide.Words) string {
 	if pl.Index(id) < 0 {
 		return ""
@@ -361,10 +362,11 @@ func qaGuide(pl plan.Plan, id string, w decide.Words) string {
 	return decide.TimeFelt + "\n\n" + checksOf(pl, id, w)
 }
 
-// checksOf is qaGuide's part after decide.TimeFelt: the QA line, if any, and the gate habits.
+// checksOf is qaGuide's part after decide.TimeFelt: the QA line, if any, the gate habits and the background
+// habits.
 func checksOf(pl plan.Plan, id string, w decide.Words) string {
 	i := pl.Index(id)
-	habits := decide.GateHabits(w.Git)
+	habits := decide.GateHabits(w.Git) + "\n\n" + decide.BackgroundHabits(w.Git)
 	if !w.AggregateQA {
 		return habits
 	}

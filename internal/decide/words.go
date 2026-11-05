@@ -202,13 +202,15 @@ func (w Words) BackgroundStop(what string) string {
 // BackgroundStarted is what baton tells the model with the result of a tool call that started background
 // work of its own (what names it; kind is its state.Task kind: a Monitor wakes it with what it reports):
 // what BackgroundStop would tell it at its stop, told as the work starts, so that stop is allowed. A shell
-// is also told when baton may stop it (ShellsStopped).
+// is also told when baton may stop it (ShellsStopped), and, on a line of its own, how to keep its background
+// work easy to judge (BackgroundHabits).
 func (w Words) BackgroundStarted(what, kind string) string {
 	switch kind {
 	case state.TaskMonitor:
 		return "[baton] Your monitor runs (" + what + "). " + w.meanwhile("Claude Code wakes you with what it reports", "it reports", "end your turn")
 	case state.TaskShell:
-		return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn") + " " + w.ShellsStopped()
+		return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn") + " " + w.ShellsStopped() +
+			"\n" + BackgroundHabits(w.Git)
 	}
 	return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn")
 }
