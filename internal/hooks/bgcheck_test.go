@@ -38,7 +38,6 @@ func TestABackgroundCheckIsQuestioned(t *testing.T) {
 		{name: "a PowerShell check", in: shellCall("PowerShell", "go test ./...", true), asked: true},
 		{name: "a dev server", in: shellCall("Bash", "pnpm dev", true)},
 		{name: "a build", in: shellCall("Bash", "go build ./...", true)},
-		{name: "a log followed", in: shellCall("Bash", "tail -f server.log", true)},
 		{name: "a wait", in: shellCall("Bash", "sleep 60", true)},
 		{name: "a script of the project's", in: shellCall("Bash", "bash scripts/qa.sh", true)},
 		{name: "a check in the foreground", in: shellCall("Bash", "go test -run TestA ./internal/state", false)},
@@ -72,7 +71,7 @@ func TestABackgroundCheckIsQuestioned(t *testing.T) {
 			if s := say(out); !strings.HasPrefix(s, "baton: pointed a check started in the background ("+cmd+") to baton ") {
 				t.Errorf("announced %q", s)
 			}
-			if !f.logged("background_questioned", map[string]any{"phase": "P0", "tool": c.in["tool_name"], "command": ti["command"]}) { // whole, on its lines
+			if !f.logged("background_questioned", map[string]any{"phase": "P0", "tool": c.in["tool_name"], "command": ti["command"], "type": "check"}) { // whole, on its lines
 				t.Errorf("events: %s", f.eventLog())
 			}
 		})
@@ -142,5 +141,114 @@ func TestQuestioningABackgroundCheckFailsOpen(t *testing.T) {
 	failsOpen(t, []failCase{
 		{"the lead's background check", "PreToolUse", func(string) map[string]any { return shellCall("Bash", "go test ./...", true) }, nil},
 		{"a phase agent's background check", "PreToolUse", func(tree string) map[string]any { return phaseAgent(shellCall("Bash", "go test ./...", true), tree) }, nil},
+		{"the lead's wait loop", "PreToolUse", func(string) map[string]any { return shellCall("Bash", campaignLoop, true) }, nil},
 	})
+}
+
+// timed is a foreground shell call with the timeout the model gave it, in milliseconds.
+func timed(in map[string]any, ms int) map[string]any {
+	in["tool_input"].(map[string]any)["timeout"] = ms
+	return in
+}
+
+// The 74-phase campaign's loop (lane's TestIsWaitLoop has it whole), which polled another task's output for
+// 22 hours.
+const campaignLoop = `until [ -s /private/tmp/claude-501/-Users-me-Projects-app/77ee516d/tasks/bj514tpgn.output ] && tail -2 /private/tmp/claude-501/-Users-me-Projects-app/77ee516d/tasks/bj514tpgn.output | grep -qE "passed|failed|error|Error"; do sleep 5; done; tail -40 /private/tmp/claude-501/-Users-me-Projects-app/77ee516d/tasks/bj514tpgn.output`
+
+// A loop that only waits by polling (lane.IsWaitLoop), started in the background or in the foreground with a
+// timeout over Claude Code's 2 minutes, is refused once, pointed to the wake Claude Code gives as a task ends
+// and to baton await. A plain background build or server, a short foreground wait, a foreground loop with
+// no timeout of its own, a subagent's loop and baton's own await are left alone.
+func TestAWaitLoopIsQuestioned(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		in      map[string]any
+		asked   bool
+		timeout float64 // seconds, for a foreground loop
+	}{
+		{name: "the campaign's loop, in the background", in: shellCall("Bash", campaignLoop, true), asked: true},
+		{name: "a server waited for, in the background", in: shellCall("Bash", "until curl -sf localhost:3000; do sleep 2; done", true), asked: true},
+		{name: "a log followed, in the background", in: shellCall("Bash", "tail -f server.log", true), asked: true},
+		{name: "a PowerShell wait", in: shellCall("PowerShell", "while (-not (Test-Path out.txt)) { Start-Sleep -Seconds 5 }", true), asked: true},
+		{name: "a wait loop in the foreground, 10 minutes", in: timed(shellCall("Bash", "until grep -q done out.log; do sleep 3; done", false), 600000), asked: true, timeout: 600},
+		{name: "a wait loop that is also a check", in: shellCall("Bash", "until go test ./...; do sleep 5; done", true), asked: true},
+
+		{name: "a plain background build", in: shellCall("Bash", "go build ./... && ./dist/baton version", true)},
+		{name: "a dev server", in: shellCall("Bash", "pnpm dev", true)},
+		{name: "a background for loop", in: shellCall("Bash", "for f in a b c; do make $f; sleep 1; done", true)},
+		{name: "a wait loop in the foreground, no timeout", in: shellCall("Bash", "until grep -q done out.log; do sleep 3; done", false)},
+		{name: "a wait loop in the foreground, 2 minutes", in: timed(shellCall("Bash", "until grep -q done out.log; do sleep 3; done", false), 120000)},
+		{name: "a check in the foreground, 10 minutes", in: timed(shellCall("Bash", "go test ./...", false), 600000)},
+		{name: "a subagent's loop", in: byAgent(shellCall("Bash", campaignLoop, true), "sub-1")},
+		{name: "baton's own await", in: shellCall("Bash", "baton await --notes x -- gh run watch --exit-status", true)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, true)
+			out := f.fire("PreToolUse", c.in)
+			why := deniedIn(out)
+			if !c.asked {
+				if why != "" || len(f.eventsOf("background_questioned")) != 0 {
+					t.Fatalf("questioned: %q, events %s", why, f.eventLog())
+				}
+				return
+			}
+			ti := c.in["tool_input"].(map[string]any)
+			cmd := clipWhat(ti["command"].(string))
+			opening := "[baton] Not run yet: this starts a loop that only waits (" + cmd + ") as a background task of your own."
+			said := "baton: questioned a loop that only waits, started in the background (" + cmd + "), once"
+			if c.timeout > 0 {
+				opening = "[baton] Not run yet: this waits in a loop (" + cmd + ") with a timeout of 10 minutes, holding your turn while it polls."
+				said = "baton: questioned a loop that only waits, in the foreground with a timeout of 10 minutes (" + cmd + "), once"
+			}
+			for _, w := range []string{opening,
+				"Claude Code wakes you when a background task ends, and its result names the task's output file, so wait for that wake",
+				"Never poll another task's output.", "`baton await \"<a command that ends when it is ready>\" --notes \"<where the phase stands>\"`",
+				"make the same call again: it goes through."} {
+				if !strings.Contains(why, w) {
+					t.Errorf("the refusal lacks %q:\n%s", w, why)
+				}
+			}
+			if s := say(out); !strings.HasPrefix(s, said) {
+				t.Errorf("announced %q", s)
+			}
+			want := map[string]any{"phase": "P0", "tool": c.in["tool_name"], "command": ti["command"], "type": "wait_loop"}
+			if c.timeout > 0 {
+				want["timeout_seconds"] = c.timeout
+			}
+			if !f.logged("background_questioned", want) {
+				t.Errorf("events: %s", f.eventLog())
+			}
+		})
+	}
+}
+
+// The campaign's loop is refused once, then let through: the same call again, however it is spaced, runs.
+func TestAWaitLoopIsQuestionedOnceThenRuns(t *testing.T) {
+	f := newFixture(t, true)
+	if why := denied(f, shellCall("Bash", campaignLoop, true)); !strings.Contains(why, "a loop that only waits") {
+		t.Fatalf("not questioned: %q", why)
+	}
+	if why := denied(f, shellCall("Bash", "  "+strings.ReplaceAll(campaignLoop, "; ", ";\t"), true)); why != "" {
+		t.Fatalf("questioned twice: %q", why)
+	}
+	if n := len(f.eventsOf("background_questioned")); n != 1 {
+		t.Fatalf("logged %d times: %s", n, f.eventLog())
+	}
+}
+
+// A phase agent's wait loop is questioned in its sub-run, its await as words after --; the lead's run hears
+// nothing of it.
+func TestAPhaseAgentsWaitLoopIsQuestioned(t *testing.T) {
+	w, lead, _ := newWorker(t)
+	out := w.fire("PreToolUse", shellCall("Bash", campaignLoop, true))
+	if why := deniedIn(out); !strings.Contains(why, "a loop that only waits") ||
+		!strings.Contains(why, "`baton await --notes \"<where the phase stands>\" -- <a command that ends when it is ready>`") {
+		t.Fatalf("the agent's refusal: %q", why)
+	}
+	if !w.logged("background_questioned", map[string]any{"phase": "P2", "type": "wait_loop"}) || len(lead.eventsOf("background_questioned")) != 0 {
+		t.Fatalf("events: agent %s, lead %s", w.eventLog(), lead.eventLog())
+	}
+	if why := deniedIn(w.fire("PreToolUse", shellCall("Bash", campaignLoop, true))); why != "" {
+		t.Fatalf("questioned twice: %q", why)
+	}
 }

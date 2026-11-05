@@ -35,6 +35,13 @@ func TestIsWaitLoop(t *testing.T) {
 		{"tail --follow=name app.log", true},
 		{"tail --follow app.log | grep -m1 ready", true},
 		{"tail -20f app.log", true},
+		// waits the hooks question (internal/hooks' TestAWaitLoopIsQuestioned)
+		{"while pgrep -f pytest >/dev/null; do sleep 10; done; echo finished", true}, // a process waited out
+		{"until go test ./...; do sleep 5; done", true},                              // a check retried until it passes
+		{"cd web && while ! curl -sf localhost:3000 >/dev/null; do sleep 1; done && pnpm e2e", true},
+		{"until [ \"$(gh run view 123 --json status -q .status)\" = completed ]; do sleep 30; done", true}, // CI, polled
+		{"for f in a b c; do make $f; sleep 1; done", false},
+		{"go build ./... && ./dist/baton version", false},
 
 		{"tail -2 out.log", false},
 		{"tail -n 50 out.log", false},
