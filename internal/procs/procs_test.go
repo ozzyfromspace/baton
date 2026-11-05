@@ -48,7 +48,9 @@ func helper(t *testing.T, kind, dir string, extra ...string) *exec.Cmd {
 	return cmd
 }
 
-func procargs(argc int, path string, strs ...string) []byte {
+// procargsOf is kern.procargs2 as macOS gives it for a process of argc arguments started from path, strs its
+// arguments and then its environment.
+func procargsOf(argc int, path string, strs ...string) []byte {
 	b := binary.LittleEndian.AppendUint32(nil, uint32(argc))
 	b = append(b, path...)
 	b = append(b, 0, 0, 0, 0) // the path's NUL, then padding
@@ -58,28 +60,48 @@ func procargs(argc int, path string, strs ...string) []byte {
 	return b
 }
 
-func TestProcargsEnv(t *testing.T) {
+func TestProcargs(t *testing.T) {
+	// the background shell Claude Code 2.1.318 starts for a command of its model's (spike 45), cut short
+	const script = "source /Users/me/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval 'until [ -f x ]; do sleep 5; done' < /dev/null && pwd -P >| /tmp/claude-8214-cwd"
 	for _, c := range []struct {
-		name string
-		b    []byte
-		want []string
+		name      string
+		b         []byte
+		args, env []string
 	}{
-		{"arguments then the environment", procargs(2, "/usr/bin/node", "node", "server.js", "PATH=/bin", "BATON_DIR=/p/.baton", "", "ptr_munge="),
-			[]string{"PATH=/bin", "BATON_DIR=/p/.baton"}},
-		{"an empty argument", procargs(3, "/x", "x", "", "y", "HOME=/h", ""), []string{"HOME=/h"}},
-		{"hidden: a platform binary's", procargs(2, "/bin/sleep", "sleep", "3600", ""), nil},
-		{"no closing string", procargs(1, "/x", "x", "A=1"), []string{"A=1"}},
+		{"arguments then the environment", procargsOf(2, "/usr/bin/node", "node", "server.js", "PATH=/bin", "BATON_DIR=/p/.baton", "", "ptr_munge="),
+			[]string{"node", "server.js"}, []string{"PATH=/bin", "BATON_DIR=/p/.baton"}},
+		{"an empty argument", procargsOf(3, "/x", "x", "", "y", "HOME=/h", ""), []string{"x", "", "y"}, []string{"HOME=/h"}},
+		{"hidden: a platform binary's environment, not its arguments", procargsOf(2, "/bin/sleep", "sleep", "3600", ""), []string{"sleep", "3600"}, nil},
+		{"a background shell's script", procargsOf(3, "/bin/zsh", "/bin/zsh", "-c", script, ""), []string{"/bin/zsh", "-c", script}, nil},
+		{"no closing string", procargsOf(1, "/x", "x", "A=1"), []string{"x"}, []string{"A=1"}},
+		{"no arguments", procargsOf(0, "/x", "A=1", ""), nil, []string{"A=1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := procargsEnv(c.b)
-			if err != nil || !reflect.DeepEqual(got, c.want) {
-				t.Errorf("procargsEnv = %q, %v; want %q", got, err, c.want)
+			args, env, err := procargs(c.b)
+			if err != nil || !reflect.DeepEqual(args, c.args) || !reflect.DeepEqual(env, c.env) {
+				t.Errorf("procargs = %q, %q, %v; want %q, %q", args, env, err, c.args, c.env)
 			}
 		})
 	}
 	for _, b := range [][]byte{nil, {1, 0}, {1, 0, 0, 0, 'x'}} {
-		if _, err := procargsEnv(b); err == nil {
-			t.Errorf("procargsEnv(%q) took it", b)
+		if _, _, err := procargs(b); err == nil {
+			t.Errorf("procargs(%q) took it", b)
+		}
+	}
+}
+
+func TestCmdline(t *testing.T) {
+	for _, c := range []struct {
+		b    string
+		want []string
+	}{
+		{"/bin/zsh\x00-c\x00until [ -f x ]; do sleep 5; done\x00", []string{"/bin/zsh", "-c", "until [ -f x ]; do sleep 5; done"}},
+		{"node\x00\x00server.js\x00", []string{"node", "", "server.js"}},   // an empty argument
+		{"postgres: writer process", []string{"postgres: writer process"}}, // rewritten by the process
+		{"", nil}, // a kernel thread's
+	} {
+		if got := cmdline([]byte(c.b)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("cmdline(%q) = %q, want %q", c.b, got, c.want)
 		}
 	}
 }
@@ -101,6 +123,8 @@ func TestFromProc(t *testing.T) {
 	}
 	add("100", proc("100 (node) S 1 90 90 0", "501", "PATH=/bin\x00BATON_DIR=/p/.baton\x00BATON_INSTANCE=abc-P1\x00", "/h/.baton/worktrees/k/r/P1 (deleted)"))
 	add("101", proc("101 (my (odd) name) S 100 90 90 0", "501", "", "/p"))
+	fsys["proc/100/cmdline"] = &fstest.MapFile{Data: []byte("node\x00server.js\x00")}
+	fsys["proc/101/cmdline"] = &fstest.MapFile{Data: []byte("/bin/zsh\x00-c\x00until [ -f x ]; do sleep 5; done\x00")}
 	add("102", proc("102 (sleep) Z 100 90 90 0", "501", "", "/"))
 	add("103", proc("103 (sshd) S 1 103 103 0", "0", "BATON_DIR=/p/.baton\x00", "/"))
 	add("104", proc("104 (go) S 1 104 104 0", "501", "BATON_DIR=/p/.baton\x00", "/me")) // this process
@@ -112,8 +136,8 @@ func TestFromProc(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Proc{
-		{PID: 100, PPID: 1, PGID: 90, Comm: "node", Cwd: "/h/.baton/worktrees/k/r/P1", Env: map[string]string{"BATON_DIR": "/p/.baton", "BATON_INSTANCE": "abc-P1"}},
-		{PID: 101, PPID: 100, PGID: 90, Comm: "my (odd) name", Cwd: "/p"},
+		{PID: 100, PPID: 1, PGID: 90, Comm: "node", Cwd: "/h/.baton/worktrees/k/r/P1", Env: map[string]string{"BATON_DIR": "/p/.baton", "BATON_INSTANCE": "abc-P1"}, Args: []string{"node", "server.js"}},
+		{PID: 101, PPID: 100, PGID: 90, Comm: "my (odd) name", Cwd: "/p", Args: []string{"/bin/zsh", "-c", "until [ -f x ]; do sleep 5; done"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("fromProc =\n%+v\nwant\n%+v", got, want)

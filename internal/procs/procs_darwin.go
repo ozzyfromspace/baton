@@ -26,8 +26,11 @@ func list() ([]Proc, error) {
 		}
 		p := Proc{PID: pid, PPID: int(k.Eproc.Ppid), PGID: int(k.Eproc.Pgid), Comm: cstr(k.Proc.P_comm[:])}
 		if b, err := unix.SysctlRaw("kern.procargs2", pid); err == nil {
-			if env, err := procargsEnv(b); err == nil && len(env) > 0 { // empty: a platform binary's, hidden
-				p.Env = batonEnv(env)
+			if args, env, err := procargs(b); err == nil {
+				p.Args = args
+				if len(env) > 0 { // empty: a platform binary's, hidden
+					p.Env = batonEnv(env)
+				}
 			}
 		}
 		p.Cwd, _ = cwd(pid)

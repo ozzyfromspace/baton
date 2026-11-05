@@ -31,6 +31,10 @@ type Proc struct {
 	// Env holds its BATON_* variables. It is nil when its environment could not be read or is hidden
 	// (Hidden); an environment that can be read holds at least one variable on macOS.
 	Env map[string]string
+	// Args is the command line it was started with (argv), nil when it could not be read. Its arguments
+	// can be read where its environment is hidden: the background shell Claude Code starts for a command
+	// of its model's is a /bin/zsh -c whose script holds that command (spike 45), and is found by it.
+	Args []string
 }
 
 // Hidden reports a process whose environment could not be read: whose it is cannot be told.

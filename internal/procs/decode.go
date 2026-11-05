@@ -13,24 +13,25 @@ import (
 // What the kernels give, decoded here rather than in the files for each system, so that recorded bytes
 // and /proc fixtures are tested on every platform.
 
-// procargsEnv reads macOS's kern.procargs2: argc as an int32, the executable's path, NUL padding, argc
-// arguments, then the environment, each NUL-terminated, up to an empty string. macOS runs only on
-// little-endian CPUs.
-func procargsEnv(b []byte) ([]string, error) {
+// procargs reads macOS's kern.procargs2: argc as an int32, the executable's path, NUL padding, argc
+// arguments, then the environment, each NUL-terminated, up to an empty string. It gives the arguments
+// (argv: the command line the process was started with) and the environment. macOS hides the environment
+// of its own platform binaries, not their arguments, so a /bin/zsh -c's script can be read. macOS runs only
+// on little-endian CPUs.
+func procargs(b []byte) (args, env []string, err error) {
 	if len(b) < 4 {
-		return nil, fmt.Errorf("kern.procargs2: %d bytes", len(b))
+		return nil, nil, fmt.Errorf("kern.procargs2: %d bytes", len(b))
 	}
 	argc := int(binary.LittleEndian.Uint32(b))
 	b = b[4:]
 	i := bytes.IndexByte(b, 0) // the end of the executable's path
 	if i < 0 {
-		return nil, errors.New("kern.procargs2: no executable path")
+		return nil, nil, errors.New("kern.procargs2: no executable path")
 	}
 	b = b[i:]
 	for len(b) > 0 && b[0] == 0 {
 		b = b[1:]
 	}
-	var env []string
 	for n := 0; len(b) > 0; n++ {
 		i := bytes.IndexByte(b, 0)
 		if i == 0 && n >= argc {
@@ -39,12 +40,23 @@ func procargsEnv(b []byte) ([]string, error) {
 		if i < 0 {
 			i = len(b)
 		}
-		if n >= argc {
+		if n < argc {
+			args = append(args, string(b[:i]))
+		} else {
 			env = append(env, string(b[:i]))
 		}
 		b = b[min(i+1, len(b)):]
 	}
-	return env, nil
+	return args, env, nil
+}
+
+// cmdline reads Linux's /proc/<pid>/cmdline: the arguments, each NUL-terminated. A process that rewrote
+// its own (setproctitle) may leave one string with spaces in it, which is kept as it is.
+func cmdline(b []byte) []string {
+	if len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 }
 
 // fromProc reads the processes of user uid from fsys, rooted at / (Linux's /proc), other than self and
@@ -73,6 +85,9 @@ func fromProc(fsys fs.FS, uid, self int) ([]Proc, error) {
 			continue
 		}
 		p.PID = pid
+		if b, err := fs.ReadFile(fsys, dir+"/cmdline"); err == nil {
+			p.Args = cmdline(b)
+		}
 		if b, err := fs.ReadFile(fsys, dir+"/environ"); err == nil {
 			p.Env = batonEnv(strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"))
 		}

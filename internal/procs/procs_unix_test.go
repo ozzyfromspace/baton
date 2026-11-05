@@ -39,6 +39,9 @@ func TestList(t *testing.T) {
 	if _, ok := p.Env["PATH"]; ok {
 		t.Error("only BATON_* variables are kept")
 	}
+	if want := []string{os.Args[0], "-test.run=^$"}; !reflect.DeepEqual(p.Args, want) {
+		t.Errorf("its arguments read %q, want %q", p.Args, want)
+	}
 	if slices.ContainsFunc(got, func(p Proc) bool { return p.PID == os.Getpid() }) {
 		t.Error("List lists the process that reads it")
 	}
