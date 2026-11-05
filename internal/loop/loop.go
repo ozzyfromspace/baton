@@ -73,6 +73,7 @@ type Timing struct {
 	HungAfter      time.Duration // a running gate whose log has not grown, and whose processes used no CPU, for this long is stopped as hung (jobs.go; 0: never)
 	ReplanMax      time.Duration // a replan of the phases not started open this long lapses: its draft is dropped, and the plan goes on as it was (replanmax.go; 0: never)
 	AdvisorWait    time.Duration // a look-in held for the advisor's note goes without it this long after it was held, whatever the advisor does (advisor.go; 0: AdvisorWait)
+	TaskQuiet      time.Duration // a background shell of the model's own whose output has been still this long is a suspect for the reviewer (task_quiet; state.Suspects)
 
 	// EscalationTimeout is how long a proposal waits for the human before baton goes ahead with it
 	// (escalation_timeout); a key the human presses starts it over.
@@ -98,6 +99,7 @@ var DefaultTiming = Timing{
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	ReplanMax:         replan.Max,
 	AdvisorWait:       AdvisorWait,
+	TaskQuiet:         config.DefaultTaskQuiet,
 	EscalationTimeout: config.DefaultEscalationTimeout,
 }
 

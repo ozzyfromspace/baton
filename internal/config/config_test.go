@@ -182,6 +182,44 @@ func TestForegroundMax(t *testing.T) {
 	}
 }
 
+// task_quiet: how long a background shell may write nothing before baton stops it. The host passes it to the
+// hooks, which tell the model of it.
+func TestTaskQuiet(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		name string
+		file string
+		env  map[string]string
+		want time.Duration
+		err  string
+	}{
+		{"default", `{}`, nil, 30 * time.Minute, ""},
+		{"file", `{"task_quiet":"2h"}`, nil, 2 * time.Hour, ""},
+		{"env wins, down to a minute for tests", `{"task_quiet":"2h"}`, map[string]string{"BATON_TASK_QUIET": "1m"}, time.Minute, ""},
+		{"too short in the file", `{"task_quiet":"1m"}`, nil, 0, `task_quiet "1m" is not valid: use a duration from 5m to 24h, such as "30m"`},
+		{"too long", `{"task_quiet":"48h"}`, nil, 0, "from 5m to 24h"},
+		{"not a duration", `{"task_quiet":"never"}`, nil, 0, `task_quiet "never"`},
+	} {
+		os.WriteFile(Path(root), []byte(c.file), 0o644)
+		got, err := Load(root, func(k string) string { return c.env[k] }).QuietTasks()
+		switch {
+		case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err) || got != DefaultTaskQuiet):
+			t.Errorf("%s: %s %v, want the default and an error mentioning %q", c.name, got, err, c.err)
+		case c.err == "" && (err != nil || got != c.want):
+			t.Errorf("%s: %s %v, want %s", c.name, got, err, c.want)
+		}
+	}
+	for _, d := range []time.Duration{time.Minute, 45 * time.Minute} {
+		k, v, _ := strings.Cut(TaskQuietEnv(d), "=")
+		if got := TaskQuietFromEnv(func(n string) string { return map[string]string{k: v}[n] }); got != d {
+			t.Errorf("round trip of %s: %s", d, got)
+		}
+	}
+	if got := TaskQuietFromEnv(func(string) string { return "" }); got != DefaultTaskQuiet {
+		t.Errorf("missing: %s", got)
+	}
+}
+
 func TestEscalationEnvRoundTrip(t *testing.T) {
 	e := Escalation{Timeout: 20 * time.Second, MaxAuto: 0}
 	m := map[string]string{}

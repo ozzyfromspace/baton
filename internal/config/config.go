@@ -83,6 +83,11 @@ type Config struct {
 	// "2m" by default, or "off" to leave it to Claude Code (BATON_FOREGROUND_MAX, which may go down to 1s).
 	// baton passes it to claude as CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS, unless that is set already.
 	ForegroundMax string `json:"foreground_max,omitempty"`
+	// TaskQuiet is how long a background shell of the model's own may write nothing, whatever its command,
+	// before baton's reviewer looks at it (a poll loop, a hung command and an idle server write nothing; so
+	// may a silent build): a duration from 5m to 24h, "30m" by default (BATON_TASK_QUIET, which may go down to
+	// 1s). The reviewer looks at one that outlives its phase too, and baton stops one only on its verdict.
+	TaskQuiet string `json:"task_quiet,omitempty"`
 	// Workers is how many phase agents may work on other phases of a plan beside the lead session, each in a
 	// git worktree of its own: "auto" (the default) leaves it to the plan and the machine
 	// (AutoWorkers), and a number from 0 to 8 caps it; 0 runs one phase at a time (BATON_WORKERS). It is
@@ -108,9 +113,10 @@ type Config struct {
 	EscalateAfter *int `json:"escalate_after,omitempty"`
 
 	// The environment's values for escalation_timeout, max_auto_decisions, verify_timeout, switch_after,
-	// foreground_max, workers, worker_usage_max and weekly_reserve_pct, which are checked against bounds of
-	// their own.
+	// foreground_max, task_quiet, workers, worker_usage_max and weekly_reserve_pct, which are checked against
+	// bounds of their own.
 	envTimeout, envMaxAuto, envVerifyTimeout, envSwitchAfter, envForegroundMax string
+	envTaskQuiet                                                               string
 	envWorkers, envUsageMax, envWeeklyReserve                                  string
 	envModels, envEscalate, envEscalateAfter                                   string
 }
@@ -128,6 +134,7 @@ const (
 	DefaultVerifyTimeout     = 3 * time.Hour
 	DefaultSwitchAfter       = 5 * time.Minute
 	DefaultForegroundMax     = 2 * time.Minute
+	DefaultTaskQuiet         = 30 * time.Minute
 
 	MaxWorkers            = 8
 	DefaultWorkerUsageMax = 0.0
@@ -199,7 +206,7 @@ func Load(root string, env func(string) string) Config {
 	}
 	c.envTimeout, c.envMaxAuto = env("BATON_ESCALATION_TIMEOUT"), env("BATON_MAX_AUTO_DECISIONS")
 	c.envVerifyTimeout, c.envSwitchAfter = env("BATON_VERIFY_TIMEOUT"), env("BATON_SWITCH_AFTER")
-	c.envForegroundMax = env("BATON_FOREGROUND_MAX")
+	c.envForegroundMax, c.envTaskQuiet = env("BATON_FOREGROUND_MAX"), env("BATON_TASK_QUIET")
 	c.envWorkers, c.envUsageMax = env("BATON_WORKERS"), env("BATON_WORKER_USAGE_MAX")
 	c.envWeeklyReserve = env("BATON_WEEKLY_RESERVE_PCT")
 	c.envModels, c.envEscalate, c.envEscalateAfter = env("BATON_MODELS"), env("BATON_ESCALATE"), env("BATON_ESCALATE_AFTER")
@@ -302,8 +309,8 @@ func (c Config) Escalation() (Escalation, error) {
 	return e, nil
 }
 
-// Bounds for verify_timeout, switch_after and foreground_max. Only the environment, for tests, may go lower.
-// Claude Code runs a command in the foreground for at most 10 minutes whatever it is asked.
+// Bounds for verify_timeout, switch_after, foreground_max and task_quiet. Only the environment, for tests, may
+// go lower. Claude Code runs a command in the foreground for at most 10 minutes whatever it is asked.
 const (
 	MinVerifyTimeout = time.Minute
 	MaxVerifyTimeout = 24 * time.Hour
@@ -311,6 +318,8 @@ const (
 	MaxSwitchAfter   = 2 * time.Hour
 	MinForegroundMax = 10 * time.Second
 	MaxForegroundMax = 10 * time.Minute
+	MinTaskQuiet     = 5 * time.Minute
+	MaxTaskQuiet     = 24 * time.Hour
 	MinEnvDuration   = time.Second
 )
 
@@ -337,6 +346,25 @@ func (c Config) ForegroundWait() (time.Duration, error) {
 		file = "" // the environment's duration wins
 	}
 	return within(DefaultForegroundMax, MinForegroundMax, MaxForegroundMax, "2m", "foreground_max", file, env)
+}
+
+// QuietTasks checks task_quiet (the environment's value wins) and fills in the default. A value out of bounds
+// is an error.
+func (c Config) QuietTasks() (time.Duration, error) {
+	return within(DefaultTaskQuiet, MinTaskQuiet, MaxTaskQuiet, "30m", "task_quiet", c.TaskQuiet, c.envTaskQuiet)
+}
+
+// TaskQuietEnv is task_quiet as the host gives it to the session's hooks, which tell the model of it as its
+// background shells start.
+func TaskQuietEnv(d time.Duration) string { return "BATON_TASK_QUIET=" + d.String() }
+
+// TaskQuietFromEnv reads task_quiet as the host passed it down (BATON_TASK_QUIET); missing or not a duration,
+// it is the default.
+func TaskQuietFromEnv(env func(string) string) time.Duration {
+	if d, err := time.ParseDuration(env("BATON_TASK_QUIET")); err == nil && d > 0 {
+		return d
+	}
+	return DefaultTaskQuiet
 }
 
 // within reads a duration setting: the file's value (at least min) or the environment's (at least

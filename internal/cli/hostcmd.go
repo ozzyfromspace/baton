@@ -137,6 +137,10 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
 	}
+	taskQuiet, err := cfg.QuietTasks() // a background shell that writes nothing this long does nothing for the run
+	if err != nil {
+		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
+	}
 	foreground, err := cfg.ForegroundWait()
 	if err != nil {
 		return fail(io, "%v (set it in %s)", err, config.Path(batonRoot(io)))
@@ -161,6 +165,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	timing.EscalationTimeout, timing.SwitchAfter = escalation.Timeout, switchAfter
 	timing.WarnTimeout = escalation.Timeout // every question of baton's waits as long
 	timing.JobTimeout = jobTimeout          // a gate near it is a look-in (loop/lookin.go)
+	timing.TaskQuiet = taskQuiet            // a background shell quiet this long is a suspect (state.Suspects)
 	// Shorter watchdog timings, for tests and impatient humans.
 	for name, field := range map[string]*time.Duration{"BATON_IDLE_NUDGE": &timing.IdleNudge, "BATON_WARN_TIMEOUT": &timing.WarnTimeout, "BATON_RESTART_IDLE": &timing.RestartIdle, "BATON_BACKGROUND_IDLE": &timing.BackgroundIdle,
 		"BATON_STALL_AFTER": &timing.StallAfter, "BATON_HOLD_LAPSE": &timing.HoldLapse, "BATON_RECOVER_AFTER": &timing.RecoverAfter, "BATON_RECOVER_EVERY": &timing.RecoverEvery,
@@ -184,6 +189,7 @@ func runHostWith(args []string, io IO, extraEnv []string) int {
 	batonEnv = append(batonEnv, config.AggregateEnv(cfg.Aggregates(io.Env)))   // QA phases run the heavy checks (aggregate_qa)
 	batonEnv = append(batonEnv, config.AutoReplanEnv(cfg.AutoReplans(io.Env))) // baton opens its own replans at boundaries (auto_replan)
 	batonEnv = append(batonEnv, tiers.Env()...)                                // the plan's check at ExitPlanMode names the families allowed (models)
+	batonEnv = append(batonEnv, config.TaskQuietEnv(taskQuiet))                // a background shell's start says when baton's reviewer looks at it (task_quiet)
 	if mode := elevate.PermissionMode(args); mode != "" {
 		batonEnv = append(batonEnv, "BATON_WORKER_MODE="+mode) // the mode workers start in, which attach warns about
 	}
