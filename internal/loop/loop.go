@@ -62,6 +62,7 @@ type Timing struct {
 	SwitchAfter    time.Duration // the phase in hand waiting this long on its job is set aside for another (switch_after)
 	AgentStart     time.Duration // baton's mod must have started a phase agent this soon after it was asked
 	TierWait       time.Duration // a phase agent its phase was raised from is replaced at its next idle moment, or this long after the raise (escalate.go); and the lead waits this long for a restart on its phase's tier (leadtier.go)
+	UpgradeWait    time.Duration // a newer baton holds new phase agents for the lead's restart this long at most, and what keeps a restart away this long is said (upgradeidle.go; 0: 10 minutes)
 	ModHello       time.Duration // baton's mod must say hello this soon after a plan runs in the lead's session, or the run is serial
 	StallAfter     time.Duration // nothing in a running plan moved for this long, and nothing busy: tell the human (stall.go; 0: never)
 	SlowAfter      time.Duration // a gate running past 1.5× its command's slowest earlier pass, and this much more, is a look-in for its owner (lookin.go; 0: never)
@@ -93,7 +94,7 @@ var DefaultTiming = Timing{
 	DialogNotify: 3 * time.Minute, WarnTimeout: valve.DefaultWarnTimeout, RateLimitRetry: 15 * time.Minute, OverloadRetry: time.Minute,
 	RecoverAfter: 5 * time.Minute, RecoverEvery: 15 * time.Minute,
 	ClockJump: 2 * time.Minute, NoticeRetry: time.Minute, RestartIdle: 2 * time.Minute, JobStale: 2 * time.Minute, SpawnGrace: 30 * time.Second,
-	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, TierWait: 10 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
+	SwitchAfter: config.DefaultSwitchAfter, AgentStart: 5 * time.Minute, TierWait: 10 * time.Minute, UpgradeWait: 10 * time.Minute, ModHello: 15 * time.Second, StallAfter: 20 * time.Minute,
 	SlowAfter: 15 * time.Minute, HeldAfter: 20 * time.Minute, JobTimeout: config.DefaultVerifyTimeout,
 	HoldLapse: decide.HoldLapse, BlockLook: decide.BlockLook, LandNudge: 10 * time.Minute, HungAfter: 20 * time.Minute,
 	ReplanMax:         replan.Max,
@@ -239,6 +240,7 @@ type Loop struct {
 	servedKey  string          // the lead's phase and tier last checked against what it was served (leadServed)
 	ceiled     map[string]bool // the phases, by step, a red run again did not raise: logged once (escalate.go)
 	hand       handWait        // the lead's phase set aside for a phase agent on its tier (handover.go)
+	up         upgradeWait     // the lead's wait for a restart on a newer baton (upgradeidle.go)
 
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
 	// and releases the run's look-ins, so it comes before anything is delivered, and reports whether it
@@ -297,7 +299,9 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 		if l.restoreIdle(v, st, in) {
 			return // no plan runs: the lead goes back on the human's own tier (leadtier.go)
 		}
-		if l.upgradeDue(v, st) && l.restartable(v, st, l.gate(v, st)) {
+		why := l.gate(v, st)
+		l.upgradeWaits(v, st, why) // what keeps a restart away is said (upgradeidle.go)
+		if l.upgradeDue(v, st) && l.restartable(v, st, why) {
 			l.restartOn(v, st, in, "")
 		}
 		return
@@ -309,6 +313,7 @@ func (l *Loop) Tick(v host.View, in host.Injector) {
 	l.remind(v, st)
 	st = l.switching(v, st)
 	l.clearDraft(v, st, in)
+	l.upgradeWaits(v, st, l.why) // what keeps a restart on a newer baton away is said (upgradeidle.go)
 	if l.idleRestart(v, st, in) {
 		return // the lead holds no phase, so no compaction comes to restart at (upgradeidle.go)
 	}
@@ -441,9 +446,9 @@ func (l *Loop) upgradeDue(v host.View, st state.State) bool {
 // restart, and the restarted host watches them. With a plan running, the safe point is a compaction baton is
 // about to type, or a lead idle with no phase and no phase agent live (idleRestart), decided by the caller;
 // otherwise the session must have been idle for RestartIdle, so a human reading its last answer is not
-// interrupted. While a newer baton waits and the lead can reach its safe point by itself, no phase agent
-// starts (Coordinator.pending, upgradeHolds); one that is idle when the restart comes is taken up again
-// after it.
+// interrupted. While a newer baton waits and the lead can reach its safe point by itself, with phase agents
+// all that would keep the restart away, no phase agent starts, for Timing.UpgradeWait at most
+// (Coordinator.pending, upgradeHolds); one that is idle when the restart comes is taken up again after it.
 func (l *Loop) restartable(v host.View, st state.State, why string) bool {
 	if why != "" || st.Run.Crons > 0 || len(st.Run.BusyBackground()) > 0 || len(st.PhaseAgents()) > 0 || len(st.Run.Watching()) > 0 {
 		return false
