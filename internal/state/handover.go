@@ -41,9 +41,11 @@ type Handed struct {
 // agentMay reports phase ph of p, which the lead started, as one a phase agent may take from it, as forAgent
 // says of a phase not started: the run has agents, none of the plan attached now failed on it, the lead does
 // not run on its tier (LeadFits), it waits for every phase before it only as a QA phase (an integration or
-// a release stays the lead's: plan.Plan.AfterAll), and every phase it waits for is done.
+// a release stays the lead's: plan.Plan.AfterAll), and every phase it waits for is done. Never while the run
+// winds down near the end of the weekly allowance (WoundDown): no new agent starts until the weekly reset,
+// and work under way, the lead's started phases among it, goes on.
 func (st State) agentMay(p plan.Plan, ph plan.Phase) bool {
-	return st.HasAgents() && !st.failedOn(ph.ID) && !st.LeadFits(p, ph.ID) && (ph.QA() || !p.AfterAll(ph.ID)) && ready(st, p, ph.ID)
+	return st.HasAgents() && !st.WoundDown() && !st.failedOn(ph.ID) && !st.LeadFits(p, ph.ID) && (ph.QA() || !p.AfterAll(ph.ID)) && ready(st, p, ph.ID)
 }
 
 // AgentTakes reports parked phase id of p as one a phase agent takes up again, which the lead passes over
@@ -128,6 +130,8 @@ func Handable(st State, p plan.Plan) string {
 		return "no phase is in hand"
 	case !st.HasAgents():
 		return "the run has no phase agents"
+	case st.WoundDown():
+		return "the run winds down until the weekly reset, and starts no agent"
 	case st.failedOn(st.Current):
 		return "a phase agent failed on it"
 	case !p.Phases[i].QA() && p.AfterAll(st.Current):

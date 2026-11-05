@@ -119,6 +119,7 @@ func TestAParkedPhaseStaysTheLeads(t *testing.T) {
 	}{
 		{"its tier is the lead's", func(st *State) { st.Phases["P1"].Raises = nil }, "P1", "P2"},
 		{"no agents", func(st *State) { st.Run.Fleet = "" }, "P1", "P2"},
+		{"the run winds down", func(st *State) { st.Usage = &Usage{WoundDown: t0, WindFor: t0.Add(48 * time.Hour)} }, "P1", "P2"},
 		{"an agent failed on it", func(st *State) {
 			st.Workers = append(st.Workers, Worker{Phase: "P1", Ref: "r1/P1", Status: WorkerFailed, Generation: st.Generation})
 		}, "P1", "P2"},
