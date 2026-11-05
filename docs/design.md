@@ -61,7 +61,13 @@ terminal ──bytes──▶ baton host (PTY owner) ──bytes──▶ claude
   (v0.8.16). New agents wait for the restart only while the lead can reach one by itself (it holds a phase, or a
   compaction is owed); otherwise they start, and the restart waits for them. In a real run on v0.8.14 the newer
   baton held every new agent while the idle lead waited on a phase whose fresh agent was held, and nothing moved
-  until the human came back.
+  until the human came back. Since v0.8.21 they also wait only while phase agents are all that keeps the restart
+  away, and for 10 minutes at most: holding agents cannot clear the model's own background work, a wakeup or a
+  monitor, so with one of those in the way they start. In a 74-phase campaign on v0.8.19, a background poll loop
+  that had run for 22 hours kept the restart away, and the hold, which had no deadline, kept every new agent back
+  for two and a half hours. At the deadline agents start, the human is told, and the restart comes at the next
+  point nothing is in the way; a restart held 10 minutes by anything tells the human what holds it, each background
+  task with its description, age and phase.
 - **The skill** is a stub that loads its instructions from the binary (`baton skill`), so they always match the baton
   that carries them out.
 - **`baton watch`** is a live view for a second terminal: every live run of the project, its phases as the board
@@ -317,6 +323,44 @@ nothing for an hour while they worked raised a false alarm. Where the CPU can't 
 holds nothing, and the run moving arms it again. A usage limit, an open dialog and a machine just woken are never a
 stall, nor is the weekly wind-down's wait once nothing is under way; while work is under way, it is watched as
 ever, so a stuck agent is named whatever the wind-down.
+
+## The model's own background tasks
+
+A background shell the model starts is its own, and baton never ran it; but one that can do nothing more for the
+run costs the human time, and one that is honest work costs them more if it is lost. In a 74-phase campaign the
+lead's model started a background `until` loop that waited for a line in another task's output; that task ended
+without the line, and the loop polled every 5 seconds for 22 hours, writing nothing, holding every restart away
+(about 8 agent-hours lost). The human's rule: baton finds and drops such tasks, but no signal stops one by itself.
+
+- **What baton knows.** Every background start is recorded with its command, description, the phase it started in
+  and its output file, which Claude Code writes beside each hook's scratchpad folder, a phase agent's and a
+  subagent's in the lead session's folder too ([spike 45](../spikes/45-stop-background/README.md)).
+- **Suspects.** A pure rule gives each background shell of the model's own its signals: its phase is over, its
+  output has been still for 30 minutes (`task_quiet`), it runs past three times the time its description declared,
+  its command waits on a task that has ended, it is an hour old. Low CPU only adds evidence: a server waiting for
+  requests is idle and may be needed. Subagents, workflows and monitors are never suspects, only named at an hour.
+- **When.** The coordinator looks every minute while the plan runs, and at once at an attach, a resume, a carried
+  run, each of the lead's boundaries, an agent let go of, and a restart held by background work, logging each such
+  audit. It reads the output files and the shell's processes (a direct child of claude, found by the command in its
+  arguments) before the lock.
+- **The reviewer decides.** Each suspect goes, with its evidence (the command, its description, its phase and where
+  that stands, its output's last lines and when it last grew, its CPU, the tasks it waits on, the signals), to a
+  model call: `sonnet` by default, not haiku, so that it is rarely unsure. It answers STOP, KEEP and when to look
+  again, or UNSURE, told that losing honest work costs the human more than another half hour of a stuck task.
+- **Only a STOP stops.** The mod calls `TaskStop`, which ends the shell's process group without waking the model;
+  where it cannot, baton ends the shell's processes itself, never one outside that claude's tree. The model that
+  started it is told why, that its output file stays, and that it may start it again; the human is told with the
+  reviewer's reason. Unsure, or no answer (the reviewer off, no mod, a timeout), stops nothing: the owner is asked
+  once to look with its own tools, and the human is told once.
+- **No loop of uncertainty.** One review at a time per task, a new one only on a new kind of signal or at the time
+  a KEEP named, three at most; then the task is named once and left alone.
+- **Before it starts.** A loop that only waits (`until` or `while` with a `sleep`, `tail -f`), in the background or
+  in the foreground with a long timeout, is refused once, since Claude Code wakes the model when a background task
+  ends; and every brief asks for background work that can be judged: a description with its purpose, phase and end,
+  output as it goes, and a stop once done.
+
+The campaign's loop would have been reviewed within about half an hour of its start, once its target had ended
+without the line it waited for, and stopped then, the day before it was found.
 
 ## Gates
 

@@ -6,7 +6,9 @@ draft), escalations clear themselves or are pushed again, a failed compaction is
 and the 90% context question goes ahead with "Keep going" when nobody answers it (after 20 minutes then; since v0.8.3
 at `escalation_timeout`, 10 minutes by default). Its "only `SessionStart(compact)` proves a compaction" became v0.8's
 proof ([`visible-workers.md`](visible-workers.md)), and its declared waits became v0.4's jobs
-([`parallel.md`](parallel.md)).
+([`parallel.md`](parallel.md)). Since v0.8.21 a background shell that may do nothing more for the run is reviewed
+and stopped only on the reviewer's verdict, and a newer baton holds new agents for 10 minutes at most
+([What v0.8.21 fixed](#what-v0821-fixed)).
 
 Measured and read on 2026-10-04 against Claude Code 2.1.289 (macOS, arm64), with [`spikes/15-gates-and-signals`](../../spikes/15-gates-and-signals) and the 2.1.289 binary. This is the evidence behind the "nothing waits forever" rework of the host loop and hooks.
 
@@ -45,6 +47,50 @@ The question was which non-deterministic behaviors could stall an unattended run
   - Mouse reports, arrows and mode keys don't create one.
 - **baton's own CLI is allowed deterministically** in `PreToolUse`. A command with shell substitution in its notes (backticks inside double quotes) is refused, with the fix.
 - **A hook that fails open is recorded** in `events.jsonl` (`hook_failed`).
+
+## What v0.8.21 fixed
+
+A 74-phase campaign on v0.8.19 lost about 8 agent-hours, and probably 1.5 to 2 hours of its finish, to one background
+shell. Its events, in UTC:
+
+- **2026-11-04 ~18:09.** In P23, a background subagent of the lead's model started a background zsh poll loop,
+  `until [ -s …/tasks/<id>.output ] && tail -2 … | grep -qE "passed…"; do sleep 5; done`. Its target, a pytest task,
+  ended at 18:25 without the pattern, so the loop never ended: it polled every 5 seconds for 22 hours, writing
+  nothing. baton's hooks did not record a subagent's starts then.
+- **2026-11-05 13:34.** v0.8.20 was installed; the host logged `newer_baton` at 13:52. `restartable` counted the loop
+  as background work (`BusyBackground`), so no restart could come, and `upgradeHolds` held every new phase agent
+  while the lead held a phase, with no deadline.
+- **13:46 → 16:10.** No agent spawned (the last, P60's, at 13:18). P40 was suspended at 13:46 for a fresh agent and
+  P60 at 14:28; P78 was ready from 13:58 and P56 from 14:16. From 14:40, when P52 landed, the lead worked alone.
+- **16:10.** The loop was killed by hand. The host restarted on v0.8.20 at 16:24, at P55's boundary; P40 and P60
+  resumed, and P56 and P78 spawned.
+
+What changed:
+
+- **A newer baton never holds a run.** New agents wait for an upgrade restart only while phase agents alone keep it
+  away (the model's own background work, a wakeup or a monitor drops the hold, since holding agents cannot clear
+  them), and for `Timing.UpgradeWait` (10 minutes) at most (`upgrade_given_up`). A restart held 10 minutes tells the
+  human what holds it, each background task with its description, age and phase (`upgrade_waits`). This alone would
+  have shown the 22-hour loop at 14:02.
+- **Bad background tasks are found, and dropped only on a reviewer's verdict.** Signals (`phase_over`, `quiet` for
+  30 minutes, `idle` as evidence only, `past_end`, `waits_on_ended`, `long`) make a background shell a suspect; a
+  model call (`sonnet` by default) reads the evidence and answers STOP, KEEP or UNSURE; only STOP stops, through
+  `TaskStop`, or the shell's processes where that cannot. Unsure asks the model that started it, and tells the human.
+  Each task is reviewed at most three times. The campaign's loop had `phase_over`, `quiet`, `waits_on_ended` and
+  `long`, and would have been reviewed and stopped on 2026-11-04.
+- **A loop that only waits is questioned once** before it starts, and every brief asks for background work that
+  declares its end and prints as it goes.
+
+The facts behind the stop ([spike 45](../../spikes/45-stop-background/README.md), Claude Code 2.1.318, Haiku, macOS
+arm64, 2026-11-05):
+
+| Behavior | Evidence | Consequence for baton |
+|---|---|---|
+| No hook names a background task's output file. Every hook carries `scratchpad_dir`, and tasks write to `tasks/<id>.output` beside it, under `/tmp/claude-<uid>/<project>/<session>/`, or under `$CLAUDE_CODE_TMPDIR` when set. | `PostToolUse(Bash).tool_response` of a background command is `{stdout, stderr, interrupted, isImage, noOutputExpected, backgroundTaskId}`; the task notification names `<output-file>`, but only as the task ends. | baton takes the folder from `scratchpad_dir` and stats `<id>.output`. |
+| A phase agent's and a subagent's background tasks write to the lead session's folder. | A phase agent's command, in its worktree, wrote to `…/<the lead's session>/tasks/<id>.output`; a subagent's job ran on after it stopped, and its notification reached neither the lead's hooks nor the mod. | One folder holds every loop's tasks; a subagent's start is recorded with its `agent_id`. |
+| A task's output file ends `[exited with code N]`, or `[killed]` after `TaskStop`. `Stop.background_tasks` lists a shell's `command`. | The spike's files and Stop inputs. | An output's last line says a task ended, whatever a Stop says. |
+| `TaskStop` (the mod's `stop`) ends a background shell's whole process group within 3 seconds, without telling or waking the model. | `loop.sh`, its `sleep 600 &` child and its `sleep 2` all ended; no notification in the next 45 seconds; the next Stop did not list it. | The quiet way to stop one; the model is told by baton instead. |
+| A background shell is a direct child of claude, a `zsh -c` that evals the model's command quoted in `eval '…'`, leading a process group of its own. Ending it by hand wakes the model with a failure, exit code 144. | `kill -TERM -<pgid>` ended every process within 3 seconds; the notification said "failed with exit code 144". | The fallback finds the shell by its arguments (`procs.Proc.Args`) and signals its processes one by one, never claude; the owner is told what exit 144 means. |
 
 ## Decided with the user (2026-10-05)
 

@@ -4,7 +4,7 @@
 
 You plan in plan mode, approve, and walk away. From the approval on, baton keeps the session moving: at each phase boundary it compacts the context, gives the model a brief for the next phase, and wakes it. A long test run goes to baton, which runs it on a commit of its own while the model works on. A phase that doesn't need the one in hand starts as a background agent of your session, in a git worktree of its own, and baton lands its work on your branch when it's done. When something needs you, baton asks in the session and pushes a notification.
 
-> Status: **v0.8.20**. macOS and Linux. Windows is planned.
+> Status: **v0.8.21**. macOS and Linux. Windows is planned.
 
 ## Why
 
@@ -30,6 +30,7 @@ So baton takes those decisions away from the model. The model does the work; det
 - **`/baton board`**: every step and phase with how it stands, its agent, job and landing, and what your session is doing. `/baton-board` opens it while Claude works.
 - **The status line** starts with your session's segment: `◆ baton · P6 6/23 <title> · ctx 412k/810k`. It also shows a job your session waits on, `? proposal · goes ahead 15:33`, `compact held: <why>`, or `⚠ waiting on you`. It catches up every 10 seconds while your session is idle, or at your own `refreshInterval` if you set one.
 - **Your own background agents** (a research subagent you asked Claude to start, a workflow) hold nothing a phase agent wouldn't: baton compacts your session at a phase boundary and gives it its results while they run, since neither ends them. Only a restart in place (for a tier or an update) or a fresh session after an API error would end them, so those wait for them, for 10 and 20 minutes at most.
+- **Your session's background shells** are watched. One that may do nothing more for the run (its phase is over, its output has been still for 30 minutes, it runs well past the time it declared, it waits on a task that has ended, or it's an hour old) goes to baton's reviewer, a model call (`sonnet` by default) that reads the evidence and answers stop, keep, or unsure. baton stops a shell only when the reviewer says stop, and tells you and the model that started it why; the shell's output stays, and the model may start it again. Unsure stops nothing: the model is asked to look, and you're told once. A loop that only waits for something (`until … sleep`, `tail -f`) is questioned once before it starts, since Claude Code wakes the model when a background task ends. Subagents, workflows and monitors are never stopped; you're told of one still running after an hour.
 - **`baton watch`**, in a second terminal: a live view of the project's runs. Each phase as the board shows it; each running gate's stage, its time against earlier runs of its command, how long its log has been still, its first failure and its wait for a lane; the landings waiting and what holds them; and the latest events, in words. It only reads, and `--once` prints it once.
 - **Every action** baton takes is announced in the session and logged to `.baton/runs/<session>/events.jsonl`.
 
@@ -87,7 +88,7 @@ eval "$(~/.baton/bin/baton init zsh)"
 
 That line puts `baton` on your PATH, and lets a plain `claude` session hand itself to baton.
 
-`baton update` updates the plugin and the binary. Sessions baton hosts move to the new version by themselves, in the same conversation: once idle, or at the next phase boundary. After a major update (before 1.0, a minor one), a session stays on its version until you exit and run `baton --continue`.
+`baton update` updates the plugin and the binary. Sessions baton hosts move to the new version by themselves, in the same conversation: once idle, or at the next phase boundary. New phase agents wait for that restart for 10 minutes at most, and only while they are all that keeps it away; if something else holds it for 10 minutes (a background task, a dialog), you're told what. After a major update (before 1.0, a minor one), a session stays on its version until you exit and run `baton --continue`.
 
 ## Use
 
@@ -226,6 +227,9 @@ Settings go in `~/.baton/config.json`. Most have an environment variable too (`B
 | `escalate` | `2` | How many steps above its plan's tier baton may raise a phase whose gate keeps failing. `0` turns raising off. |
 | `escalate_after` | `3` | How many red runs of a phase's own gate raise it one step: `2` to `10`. |
 | `weekly_reserve_pct` | `2` | At this share of the account's weekly usage left, the run winds down: nothing new starts, what is under way finishes, and the run goes on after the weekly reset. Up to `50`; `0` turns it off. |
+| `task_quiet` | `30m` | How long a background shell of your session may write nothing before baton's reviewer looks at it: `5m` to `24h`. Quiet alone stops nothing. |
+| `task_review` | `true` | baton's reviewer judges background shells that may do nothing more for the run, and baton stops one only on its verdict. `false` turns it off: then the model that started a suspect shell is asked to look, and nothing is stopped. |
+| `review_model` | `sonnet` | The reviewer's model: an alias Claude Code knows (`haiku`, `sonnet`, `opus`) or a full model id. |
 | `details` | `false` | Put the reason in pushes, which otherwise say only that you're needed. |
 
 The rest are described in [`internal/config/config.go`](internal/config/config.go): `ntfy_server`, `desktop`, `warn_pct` (90), `auto_restart`, `switch_after` (5m), `verify_timeout` (3h), `foreground_max` (2m) and `worker_usage_max`. `BATON_HOME` moves `~/.baton` elsewhere.

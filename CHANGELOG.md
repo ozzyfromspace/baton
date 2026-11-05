@@ -4,6 +4,56 @@ All notable changes to baton are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.8.21] - 2026-11-05
+
+A 74-phase campaign lost about 8 agent-hours to one background shell. In a phase on 2026-11-04, the session's model
+started a background `until` loop that waited for a line in another task's output; that task ended without the line,
+so the loop polled every 5 seconds for 22 hours, writing nothing. When v0.8.20 came the next day, the loop kept the
+session from restarting on it, and baton held every new phase agent for that restart, with no deadline: for two and a
+half hours no agent started, and from the last landing the lead worked alone, until the loop was killed by hand. Now
+baton finds background shells that may do nothing more for the run and has a reviewer judge each, stopping one only
+on the reviewer's verdict; a loop that only waits is questioned before it starts; and a newer baton holds new agents
+only while that helps, for 10 minutes at most.
+
+A session on v0.8.x moves to v0.8.21 by itself at its next restart point.
+
+### Added
+
+- **Background shells that may do nothing more are reviewed, and stopped only on the reviewer's verdict.** Every
+  minute while a plan runs, and at once at an attach, a resume, a carried run, each phase boundary, an agent let go
+  of, and a restart held by background work, baton looks at each background shell of your session's model and of its
+  phase agents. A shell is a suspect when its phase is over, its output has been still for 30 minutes (`task_quiet`),
+  it runs past three times the time its description declared, it waits on a task that has ended, or it is an hour old;
+  little CPU only adds to the evidence. No signal stops anything by itself: baton's reviewer, a model call (`sonnet`
+  by default, `review_model`), gets the evidence (the command, its description, its phase and where it stands, its
+  output's last lines and when it last grew, its CPU, the tasks it waits on) and answers stop, keep (and when to look
+  again), or unsure. On stop, baton stops the shell through Claude Code's own `TaskStop`, or ends its processes where
+  that can't, tells the model that started it why (it may start it again; its output file stays), and tells you with
+  the reviewer's reason (`background_stopped`). Unsure, or no answer, stops nothing: that model is asked once to look
+  with its own tools, and you're told once (`background_suspect`). A shell is reviewed at most 3 times, then named
+  once and left alone (`background_long`), as are subagents, workflows and monitors an hour old, which are never
+  reviewed or stopped. `task_review: false` turns the reviewer off.
+- **A loop that only waits is questioned once.** A background command that polls in an `until` or `while` loop with a
+  `sleep`, or follows a file with `tail -f`, and a foreground one with a timeout over 2 minutes, is refused once:
+  Claude Code wakes the model when a background task ends, so it waits for that wake, and `baton await` waits on
+  something outside the project. The same command again goes through (`background_questioned` with `type: wait_loop`).
+- **Background work declared so it can be judged.** Every brief, and the reminder that comes with a background shell's
+  start, ask the model to give each background shell a description naming what it is for, its phase and when it ends
+  (`~15m`, or `until …`), to make its command print as it goes, and to stop it once done. A shell started with no end
+  declared is told so.
+
+### Fixed
+
+- **A newer baton never holds a run.** New phase agents wait for a restart onto a newer baton only while phase agents
+  are all that keeps it away, and for 10 minutes at most (`upgrade_given_up`): then they start, and the restart comes
+  at the next point nothing is in the way. Holding agents can't clear the model's own background work, a wakeup or a
+  monitor, so with one of those in the way no agent is held. When a restart has waited 10 minutes, you're told what
+  holds it: each background task with its description, its age and the phase it started in, agents, wakeups, monitors,
+  an open dialog, a usage limit, or a mod not up (`upgrade_waits`).
+- **A refused message to a phase agent says what to do instead.** A model's message to a phase agent is still refused
+  (no model steers one), and now says how phases share work: leave the shared part to that phase and say so in your
+  notes, or build on it once it has landed (`baton sync`).
+
 ## [0.8.20] - 2026-11-05
 
 Four problems around one boundary of a 74-phase campaign on v0.8.19. A phase raised to `max` waited 10 minutes for
@@ -1915,7 +1965,8 @@ The first release candidate: everything in the v0.1 plan except Windows.
 - **Distribution.** The repo is its own plugin marketplace. A launcher downloads the release binary on first use and verifies its sha256. Releases are reproducible: CI rebuilds every binary and refuses to publish on any mismatch.
 - **Research.** Spikes and verification runs against Claude Code 2.1.289 (`docs/research/`). An end-to-end suite runs real `claude` sessions (`make e2e`).
 
-[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.20...HEAD
+[Unreleased]: https://github.com/ozzyfromspace/baton/compare/v0.8.21...HEAD
+[0.8.21]: https://github.com/ozzyfromspace/baton/compare/v0.8.20...v0.8.21
 [0.8.20]: https://github.com/ozzyfromspace/baton/compare/v0.8.19...v0.8.20
 [0.8.19]: https://github.com/ozzyfromspace/baton/compare/v0.8.18...v0.8.19
 [0.8.18]: https://github.com/ozzyfromspace/baton/compare/v0.8.17...v0.8.18
