@@ -198,6 +198,17 @@ func TestOnlyBatonsAgentsAreSentTo(t *testing.T) {
 	if data, _ := os.ReadFile(r.b.AgentsPath()); !strings.Contains(string(data), `"agents": []`) {
 		t.Errorf("agents.json %s", data)
 	}
+	// A background task of the model's own, which baton's reviewer found does nothing more for the run, is
+	// stopped by its id (TaskStop), though it is none of baton's agents; a message to one is refused.
+	if c := r.issue(Command{Kind: Stop, Agent: "b8196fcr0", Task: true}); c.Agent != "b8196fcr0" || !c.Task {
+		t.Errorf("a task's stop %+v", c)
+	}
+	if _, err := r.b.Issue(Command{Kind: Send, Agent: "b8196fcr0", Task: true, Text: "x", Instance: "inst"}); !errors.Is(err, ErrUnknownAgent) {
+		t.Errorf("sent to a task: %v", err)
+	}
+	if _, err := r.b.Issue(Command{Kind: Stop, Task: true, Instance: "inst"}); err == nil {
+		t.Error("a task's stop with no task")
+	}
 }
 
 // A report is recorded once: the mod that said hello last numbers them, a number recorded already is

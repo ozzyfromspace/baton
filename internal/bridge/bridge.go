@@ -103,8 +103,11 @@ type Command struct {
 	Name        string `json:"name,omitempty"`
 	Drop        string `json:"drop,omitempty"`
 	Effort      string `json:"effort,omitempty"`
-	// Send and Stop: the agent; for Send, the message and its label in the lead's transcript.
+	// Send and Stop: the agent; for Send, the message and its label in the lead's transcript. A Stop with
+	// Task stops a background task of the model's own by its id (in Agent), which baton's reviewer found does
+	// nothing more for the run (loop/tasks.go): the mod's stop calls TaskStop with the id either way.
 	Agent   string `json:"agent,omitempty"`
+	Task    bool   `json:"task,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	// Ask: the question, its options and its header.
@@ -448,7 +451,7 @@ func (b *Bridge) Forget(agent string) error {
 // Issue writes c for the mod, from host instance c.Instance, and returns it with its id. A spawn waits
 // for the one before it to be acked (ErrSpawnOpen), unless it is for the same phase, which it then is (a
 // spawn is idempotent); a spawn for a phase that has an agent is refused (ErrHasAgent); and a command for
-// an agent baton does not have is refused (ErrUnknownAgent). The file is written whole: the mod never
+// an agent baton does not have is refused (ErrUnknownAgent), but a stop of a background task (Task). The file is written whole: the mod never
 // reads a part of one.
 func (b *Bridge) Issue(c Command) (Command, error) {
 	err := b.locked(func() error {
@@ -479,6 +482,12 @@ func (b *Bridge) Issue(c Command) (Command, error) {
 				c.Drop = b.Drop(c.Phase)
 			}
 		case Send, Stop:
+			if c.Kind == Stop && c.Task {
+				if c.Agent == "" {
+					return fmt.Errorf("a task's stop names no task")
+				}
+				break // a background task of the model's own, which is none of baton's agents
+			}
 			if !slices.ContainsFunc(agents, func(a Agent) bool { return a.ID == c.Agent }) {
 				return ErrUnknownAgent
 			}
