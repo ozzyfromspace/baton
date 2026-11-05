@@ -93,10 +93,19 @@ const AgentCleared = "the lead's conversation was cleared, which ends its agents
 const AgentCheckpointed = "its agent checkpointed, and a fresh one goes on from its notes"
 
 // AgentIsBatons is why a model may not message or stop the phase agent on phase (tool, the call it made):
-// baton starts, messages and ends its phase agents itself, and nothing a model does keeps one working.
+// baton starts, messages and ends its phase agents itself, and nothing a model does keeps one working. A
+// message is most often a try at coordinating work the two phases share (in a 74-phase campaign, an agent
+// wrote to the agent building the model its pages needed), so the refusal of one says what to do instead:
+// leave the shared part to that phase and say so in the notes, or build on it once it has landed.
 func AgentIsBatons(tool, phase string) string {
-	return fmt.Sprintf("[baton] Not run: %s is for baton alone with the agent on %s, one of baton's phase agents. baton starts it, gives it what it needs and ends it itself, "+
-		"and lands its work once %s is done. Leave the agent and %s to baton, and go on with your own work.", tool, phase, phase, phase)
+	s := fmt.Sprintf("[baton] Not run: %s is for baton alone with the agent on %s, one of baton's phase agents. baton starts it, gives it what it needs and ends it itself, "+
+		"and lands its work once %s is done. ", tool, phase, phase)
+	if tool != "SendMessage" {
+		return s + fmt.Sprintf("Leave the agent and %s to baton, and go on with your own work.", phase)
+	}
+	return s + fmt.Sprintf("Phases do not coordinate by message. Where your work overlaps %s's, leave the shared part to %s and say so in your phase's notes, "+
+		"or build on it once %s has landed: baton tells you when it has, and a phase agent brings it into its branch with `baton sync`. "+
+		"Go on with the rest of your own work meanwhile.", phase, phase, phase)
 }
 
 // PhaseTypeIsBatons is why a model may not start an agent of baton's type (baton:phase): Claude Code
