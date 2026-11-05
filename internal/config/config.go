@@ -64,6 +64,14 @@ type Config struct {
 	// AdvisorModel is the advisor's model: an alias Claude Code knows (haiku, sonnet, opus) or a full model
 	// id; "haiku" by default (BATON_ADVISOR_MODEL).
 	AdvisorModel string `json:"advisor_model,omitempty"`
+	// TaskReview has baton's reviewer judge each background shell of the model's own with signals that it may
+	// do nothing more for the run (writing nothing for task_quiet, outliving its phase or its declared run
+	// time, waiting on a task that ended), through baton's mod; baton stops one only on its verdict. On unless
+	// set to false (BATON_TASK_REVIEW=0): then the task's owner is asked to look, and nothing is stopped.
+	TaskReview *bool `json:"task_review,omitempty"`
+	// ReviewModel is the reviewer's model: an alias Claude Code knows (haiku, sonnet, opus) or a full model
+	// id; "sonnet" by default (BATON_REVIEW_MODEL).
+	ReviewModel string `json:"review_model,omitempty"`
 	// AutoRestart moves the sessions baton hosts onto a newer compatible baton by themselves once it is
 	// installed (each restarts at a safe point, resuming the same conversation). On unless set to false
 	// (BATON_AUTO_RESTART=0).
