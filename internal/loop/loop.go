@@ -236,6 +236,7 @@ type Loop struct {
 	tierGaveUp bool
 	servedKey  string          // the lead's phase and tier last checked against what it was served (leadServed)
 	ceiled     map[string]bool // the phases, by step, a red run again did not raise: logged once (escalate.go)
+	hand       handWait        // the lead's phase set aside for a phase agent on its tier (handover.go)
 
 	// advise is the advisor's part of the lead's tick, the coordinator's (advisor.go; nil: none): it holds
 	// and releases the run's look-ins, so it comes before anything is delivered, and reports whether it

@@ -126,6 +126,15 @@ func Write(in Input) string {
 	if m := in.Merge; m != nil && in.Kind == Worker {
 		fmt.Fprintf(&b, "%s\n\n", decide.MergeInProgressBrief(st.Current, m.Branch, m.Unmerged))
 	}
+	// A phase the lead started that baton gave this agent (state/handover.go): where the lead left it, for
+	// the first agent on it.
+	handed := ""
+	if ps := st.Phases[st.Current]; in.Kind == Worker && !in.Again && ps != nil {
+		handed = strings.TrimSpace(ps.HandedNote)
+	}
+	if handed != "" {
+		fmt.Fprintf(&b, "%s\n\n", handed)
+	}
 
 	b.WriteString("Progress:\n")
 	var working []string
@@ -180,6 +189,8 @@ func Write(in Input) string {
 		b.WriteString(decide.CheckpointNow(title) + "\n\n")
 	case in.Kind == Worker && in.Again:
 		b.WriteString(in.Words.FreshNow(title) + "\n\n")
+	case handed != "":
+		b.WriteString(decide.HandedNow(title) + "\n\n")
 	case in.Kind == Boundary || in.Kind == Switch || in.Kind == Worker:
 		fmt.Fprintf(&b, "Now: %s. Begin it now.\n\n", title)
 	case in.Kind == Resume && park != nil && park.Reason == state.ParkRed:

@@ -20,6 +20,9 @@ import (
 // would take it for work it found. A switch whose phase waits on its jobs no more before its compaction
 // is typed is called off (state.Unswitch), and the results are given in place. It returns the state as it left it.
 func (l *Loop) switching(v host.View, st state.State) state.State {
+	if nst, turned := l.redirect(v, st); turned {
+		return nst // a parked phase a phase agent takes up is not taken up again here (handover.go)
+	}
 	if sw := st.Run.Compaction.Switch; sw != nil && st.Run.Compaction.Status == state.CompactQueued {
 		if !st.HeldOn(sw.From) {
 			return l.unswitch(st)

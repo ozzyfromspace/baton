@@ -172,6 +172,9 @@ func (l *Loop) retierIdle(v host.View, st state.State, in host.Injector) bool {
 	}
 	want, due := l.retierDue(v, st)
 	if !due || !l.restartable(v, st, l.why) {
+		if due && l.handOver(v, st) {
+			return true // set aside for a phase agent on its tier: the agents at work keep the restart from coming (handover.go)
+		}
 		if due {
 			l.tierGivenUp(v, st, want) // counts the wait, so that new agents are not held for it for good
 		}

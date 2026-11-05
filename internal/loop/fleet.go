@@ -410,6 +410,18 @@ func (c *Coordinator) spawn(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		return
 	}
 	e := state.Worker{Phase: phase, Ref: state.WorkerRef(s.Ref, phase), Worktree: dir, Branch: "baton/" + s.Ref + "/" + phase, Base: base, Assigned: now}
+	// A parked phase the lead started goes on from where the lead left it, which its agent's brief says
+	// (handover.go): read before Assign keeps its park as its Handed.
+	var hand *decide.Handover
+	var park *state.Park
+	if ps := st.Phases[phase]; ps != nil && ps.Status == state.PhaseParked {
+		h, why := c.handNote(s, st, pl, phase, base)
+		if why != "" {
+			c.later(now, s, phase, why)
+			return
+		}
+		hand, park = &h, ps.Park
+	}
 	if _, err := s.Update(func(st *state.State) error { return state.Assign(st, pl, e, now) }); err != nil {
 		c.Lead.logf("loop: %s: no worker: %v", phase, err) // the lead took it up meanwhile
 		return
@@ -420,6 +432,9 @@ func (c *Coordinator) spawn(now time.Time, s *state.Store, b *bridge.Bridge, st 
 		c.retire(now, s, e, "baton could not make its run: "+err.Error())
 		c.later(now, s, phase, err.Error())
 		return
+	}
+	if hand != nil {
+		c.handed(s, sub, *hand, park)
 	}
 	c.issue(now, s, b, e, sub, pl, "")
 }
@@ -458,8 +473,13 @@ func (c *Coordinator) issue(now time.Time, s *state.Store, b *bridge.Bridge, e s
 		fields["tier"] = tier.String()
 	}
 	if why == "" {
+		line := fmt.Sprintf("baton: a phase agent takes up %s%s, in a worktree of its own on the branch %s", phaseName(pl, e.Phase), decide.OnTier(tier), e.Branch)
+		if ps := st.Phases[e.Phase]; ps != nil && ps.Handed != nil {
+			fields["handed"] = true // the lead started it (handover.go)
+			line = decide.HandedTakenUp(phaseName(pl, e.Phase), tier, e.Branch)
+		}
 		s.Event("worker_spawned", fields)
-		c.announce(s, fmt.Sprintf("baton: a phase agent takes up %s%s, in a worktree of its own on the branch %s", phaseName(pl, e.Phase), decide.OnTier(tier), e.Branch))
+		c.announce(s, line)
 		return
 	}
 	fields["why"] = why
