@@ -73,11 +73,20 @@ type PhaseState struct {
 	// Raises are the steps baton raised the phase's tier, oldest first (tier.go, loop/escalate.go): it runs
 	// on the last one's. Kept in the lead's run, for every phase, a phase agent's too.
 	Raises []TierRaise `json:"raises,omitempty"`
+	// Handed is the lead's part of a phase it started that baton gave to a phase agent on a tier the lead
+	// does not run on (handover.go), in the lead's run: when, and the park it was given from.
+	Handed *Handed `json:"handed,omitempty"`
+	// HandedNote is, in the sub-run of a phase agent given a phase the lead started, where the lead left it
+	// (loop/handover.go): what its first agent's brief opens with.
+	HandedNote string `json:"handed_note,omitempty"`
+	// KeptDirty counts the files of its own the phase's last `baton done` left uncommitted (--keep-dirty):
+	// set aside after it, it stays the lead's, whose checkout alone holds them (handover.go).
+	KeptDirty int `json:"kept_dirty,omitempty"`
 }
 
 // Park is why a phase was set aside unfinished, and what it resumes from.
 type Park struct {
-	Reason  string    `json:"reason"` // ParkJob, ParkRed, ParkUnverified or ParkCheckpoint
+	Reason  string    `json:"reason"` // ParkJob, ParkRed, ParkUnverified, ParkCheckpoint or ParkHanded
 	Since   time.Time `json:"since"`
 	Notes   string    `json:"notes,omitempty"` // where the phase stood, in the model's words
 	Job     string    `json:"job,omitempty"`   // the job it waits for
@@ -90,6 +99,7 @@ const (
 	ParkRed        = "red"        // its verification failed after done was claimed
 	ParkUnverified = "unverified" // its verification ended without a verdict after done was claimed
 	ParkCheckpoint = "checkpoint" // set aside at a checkpoint, so a phase whose job had ended could go on
+	ParkHanded     = "handed"     // set aside mid-phase for a phase agent on its tier, which the lead could not restart on (handover.go)
 )
 
 // MaxEdited bounds the files a phase records as edited; past it, it stops recording.

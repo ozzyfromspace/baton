@@ -273,13 +273,14 @@ func (st State) LatestOf(phase, kind string) *Job {
 
 // Standing is what phase's verification stands on: its gate (gate) and its latest wait on something
 // outside, in that order; none, one or two. A local gate and a wait on something outside check different
-// things, so the phase is done once both passed, and red while either is.
+// things, so the phase is done once both passed, and red while either is. The lead's jobs of a phase baton
+// has since given a phase agent stand for it no more (handedFrom, handover.go).
 func (st State) Standing(phase string) []Job {
 	var out []Job
 	if j := st.gate(phase, false); j != nil {
 		out = append(out, *j)
 	}
-	if j := st.LatestOf(phase, JobAwait); j != nil {
+	if j := st.LatestOf(phase, JobAwait); j != nil && !st.handedFrom(*j) {
 		out = append(out, *j)
 	}
 	return out
@@ -289,12 +290,13 @@ func (st State) Standing(phase string) []Job {
 // red and it runs another check. A red gate stands until a gate that takes over from it (takesOver) is
 // queued: one of the same command, or one the model made the phase's gate in its place (--replace). A
 // narrower check that passes does not clear it. With ended, only the gates that have ended count: the gate
-// the phase stood on before those queued or running now.
+// the phase stood on before those queued or running now. The lead's gates of a phase baton has since given
+// a phase agent are none of its own (handedFrom).
 func (st State) gate(phase string, ended bool) *Job {
 	var g *Job
 	for i := range st.Jobs {
 		j := &st.Jobs[i]
-		if j.Phase != phase || j.kind() != JobVerify || ended && !j.Finished() {
+		if j.Phase != phase || j.kind() != JobVerify || ended && !j.Finished() || st.handedFrom(*j) {
 			continue
 		}
 		if g == nil || !g.Red() || takesOver(*j, *g) {
@@ -497,7 +499,8 @@ func (st State) Job(id string) *Job {
 // not done, as phases have always run. While a gate runs in the session's working tree (HereGate), it is
 // "" too: the next phase would change the files the gate reads. So it is, but for a parked phase, while
 // the run winds down near the end of the weekly allowance (WoundDown). In a run with phase agents, a QA
-// phase is an agent's, and passed over (forAgent).
+// phase is an agent's, and passed over (forAgent), as is a phase whose tier the lead does not run on, and
+// a parked one an agent takes up again (AgentTakes, handover.go).
 func Next(st State, p plan.Plan) string {
 	if st.HereGate() != nil {
 		return ""

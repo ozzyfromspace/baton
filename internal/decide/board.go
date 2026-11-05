@@ -309,6 +309,8 @@ func ParkedWhy(reason string) string {
 		return "after its verification had no verdict"
 	case state.ParkCheckpoint:
 		return "at a checkpoint"
+	case state.ParkHanded:
+		return "for a phase agent on its tier"
 	}
 	return ""
 }

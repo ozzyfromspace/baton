@@ -559,6 +559,7 @@ var parkWhy = map[string]string{
 	state.ParkRed:        ": its verification failed",
 	state.ParkUnverified: ": its verification had no verdict",
 	state.ParkCheckpoint: " at a checkpoint",
+	state.ParkHanded:     " for a phase agent on its tier",
 }
 
 // clipLine is s on one line, cut to n characters.
@@ -943,6 +944,14 @@ func cmdDone(args []string, io IO) int {
 		}
 		recordLandCheck(st, id, landCheck)
 		recordDone(st, id, deviation, red) // the risk ledger's (risk.go)
+		if ps := st.Phases[id]; ps != nil {
+			// Set aside after this, the phase stays the lead's while files of its own are left uncommitted
+			// in its checkout (state.AgentTakes).
+			ps.KeptDirty = 0
+			if keep != "" {
+				ps.KeptDirty = len(work.fresh)
+			}
+		}
 		if ps := st.Phases[id]; ps.Status == state.PhaseVerifying {
 			if on := st.WaitsOn(id); len(on) > 0 {
 				st.Run.Announce = append(st.Run.Announce, decide.VerifyingOn(id, on))

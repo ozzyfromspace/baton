@@ -134,8 +134,14 @@ func Returning(st State, p plan.Plan) string {
 	})
 }
 
-// oldestParked is the phase parked longest whose park ok accepts, or "" for none.
+// oldestParked is the phase parked longest whose park ok accepts, or "" for none: one for the lead to take
+// up again, never one a phase agent takes up (AgentTakes, handover.go).
 func oldestParked(st State, p plan.Plan, ok func(string, *Park) bool) string {
+	return parkedLongest(st, p, func(id string, pk *Park) bool { return !st.AgentTakes(p, id) && ok(id, pk) })
+}
+
+// parkedLongest is the phase parked longest whose park ok accepts, or "" for none.
+func parkedLongest(st State, p plan.Plan, ok func(string, *Park) bool) string {
 	id, since := "", time.Time{}
 	for _, ph := range p.Phases {
 		ps := st.Phases[ph.ID]

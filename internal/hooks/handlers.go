@@ -987,6 +987,8 @@ func parkedWhy(st state.State, pk *state.Park) string {
 		return "its verification had no verdict"
 	case state.ParkCheckpoint:
 		return "set aside at a checkpoint"
+	case state.ParkHanded:
+		return "set aside for a phase agent on its tier"
 	}
 	if j := st.Job(pk.Job); j != nil && j.Finished() {
 		return "its job " + j.ID + " has ended"

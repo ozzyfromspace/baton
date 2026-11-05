@@ -257,17 +257,24 @@ func AttachWorker(prev State, phase string) State {
 	return st
 }
 
-// NextWorker is the phase a new worker would take up: the first pending phase, in document order, whose
-// dependencies are all done, other than the lead's. The lead's is the phase in hand or, when it holds
-// none, the one it takes up next (Next). A parked phase is never a worker's: it was started in the
-// lead's checkout. Nor is one whose id a worker of a replaced plan still holds (retired). "" when there
-// is none. A QA phase the lead passes over (forAgent) is a worker's, even as the plan's last phase; any
-// other phase that waits for every phase before it (plan.Plan.AfterAll) never is, even while the lead
-// holds another: a release or an integration is the lead's (forAgent).
+// NextWorker is the phase a new worker would take up: a parked phase an agent takes up again (AgentTakes,
+// handover.go) once none of its jobs runs, the one parked longest first; else the first pending phase, in
+// document order, whose dependencies are all done, other than the lead's. The lead's is the phase in hand
+// or, when it holds none, the one it takes up next (Next). Any other parked phase is the lead's: it was
+// started in the lead's checkout, on a tier the lead runs on. Nor is one whose id a worker of a replaced
+// plan still holds (retired) a worker's. "" when there is none. A QA phase the lead passes over (forAgent)
+// is a worker's, even as the plan's last phase; any other phase that waits for every phase before it
+// (plan.Plan.AfterAll) never is, even while the lead holds another: a release or an integration is the
+// lead's (forAgent).
 func NextWorker(st State, p plan.Plan) string {
 	lead := st.Current
 	if lead == "" {
 		lead = Next(st, p)
+	}
+	if id := parkedLongest(st, p, func(id string, _ *Park) bool {
+		return id != lead && st.AgentTakes(p, id) && len(st.Running(id)) == 0 && !st.retiring(id)
+	}); id != "" {
+		return id
 	}
 	for _, ph := range p.Phases {
 		if ps := st.Phases[ph.ID]; ph.ID != lead && (ps == nil || ps.Status == PhasePending) && ready(st, p, ph.ID) && !st.retiring(ph.ID) &&
@@ -349,8 +356,10 @@ func (st State) Unretired() []Worker {
 
 // Assign gives w.Phase to worker w, which joins the roster, starting: the phase is working, and stays
 // so until its work lands (Landed) or it is taken back (Unassign). Only a pending phase that can start,
-// and is not the lead's, can be assigned (NextWorker), and only while the plan runs. Assigning a phase
-// to the worker that has it already changes nothing.
+// and is not the lead's, can be assigned (NextWorker), or a parked phase an agent takes up again
+// (AgentTakes) once none of its jobs runs, which keeps its history (handTo); and only while the plan runs.
+// The raises baton made a pending phase's tier stay. Assigning a phase to the worker that has it already
+// changes nothing.
 func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 	id := w.Phase
 	if w.Assigned.IsZero() {
@@ -360,6 +369,7 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 		return nil
 	}
 	ps := st.Phases[id]
+	parked := ps != nil && ps.Status == PhaseParked
 	switch {
 	case st.Mode != ModeRunning:
 		return fmt.Errorf("workers start only while a plan runs (mode: %s)", st.Mode)
@@ -373,21 +383,33 @@ func Assign(st *State, p plan.Plan, w Worker, now time.Time) error {
 		return fmt.Errorf("the worker of the replaced plan on %s is not retired yet", id)
 	case id == st.Current:
 		return fmt.Errorf("phase %s is the lead's", id)
-	case ps != nil && ps.Status != PhasePending:
+	case parked && !st.AgentTakes(p, id):
+		return fmt.Errorf("phase %s was set aside by the lead, which takes it up again", id)
+	case parked && len(st.Running(id)) > 0:
+		return fmt.Errorf("phase %s waits on its jobs", id)
+	case ps != nil && !parked && ps.Status != PhasePending:
 		return fmt.Errorf("phase %s is %s, not pending", id, ps.Status)
 	case !ready(*st, p, id):
 		return fmt.Errorf("phase %s waits for phases not done yet", id)
 	}
 	w.Status, w.Since, w.Why, w.Generation = WorkerStarting, now, "", st.Generation
-	st.Phases[id] = &PhaseState{Status: PhaseWorking, StartedAt: now, Worker: w.Ref}
+	switch {
+	case parked:
+		handTo(st, id, w.Ref, now)
+	case ps != nil:
+		st.Phases[id] = &PhaseState{Status: PhaseWorking, StartedAt: now, Worker: w.Ref, Raises: ps.Raises}
+	default:
+		st.Phases[id] = &PhaseState{Status: PhaseWorking, StartedAt: now, Worker: w.Ref}
+	}
 	st.Workers = append(st.Workers, w)
 	return nil
 }
 
 // Unassign takes phase back from its worker, which cannot go on (why): the worker has failed, and the
-// phase, if the plan still has it, is pending again for the lead or another worker. Whatever the worker
-// committed stays on its branch. With the lead holding no phase, the lead takes up the next one after a
-// boundary compaction this queues (as Settle does), and Unassign returns it ("" for none).
+// phase, if the plan still has it, is pending again for the lead or another worker, with the raises baton
+// made its tier; one the lead started is parked again as it was given (takenBack), for the lead. Whatever
+// the worker committed stays on its branch. With the lead holding no phase, the lead takes up the next one
+// after a boundary compaction this queues (as Settle does), and Unassign returns it ("" for none).
 func Unassign(st *State, p plan.Plan, phase, why string, now time.Time) (string, error) {
 	w := st.WorkerOn(phase)
 	ps := st.Phases[phase]
@@ -401,22 +423,22 @@ func Unassign(st *State, p plan.Plan, phase, why string, now time.Time) (string,
 	if !working {
 		return "", nil
 	}
-	st.Phases[phase] = &PhaseState{Status: PhasePending}
+	st.Phases[phase] = takenBack(ps)
 	return takeUp(st, p, now), nil
 }
 
 // ReleaseWorker takes the phase back from the roster's entry e, a worker that cannot go on (why), for a
 // process other than the run's own host: the worker has failed, and its phase, if it is still the
-// worker's, is pending again. Unlike Unassign, nothing else of the run changes (the phase in hand, a
-// compaction): the run's next host takes the phase up. It reports whether the worker was on the roster,
-// live.
+// worker's, is pending again (or parked, for the lead, as Unassign leaves it: takenBack). Unlike Unassign,
+// nothing else of the run changes (the phase in hand, a compaction): the run's next host takes the phase
+// up. It reports whether the worker was on the roster, live.
 func ReleaseWorker(st *State, e Worker, why string, now time.Time) bool {
 	w := st.Entry(e)
 	if w == nil || !w.Live() {
 		return false
 	}
 	if ps := st.Phases[w.Phase]; ps != nil && ps.Status == PhaseWorking && ps.Worker == w.Ref && w.Generation == st.Generation {
-		st.Phases[w.Phase] = &PhaseState{Status: PhasePending}
+		st.Phases[w.Phase] = takenBack(ps)
 	}
 	w.Status, w.Since, w.Why, w.Merge = WorkerFailed, now, why, nil
 	return true
