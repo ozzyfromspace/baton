@@ -1,6 +1,10 @@
 package hooks
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,18 +13,21 @@ import (
 )
 
 // bgStart is background work of the model's own that a tool call started: its task's id (the id a Stop's
-// background_tasks gives it), the tool, what names it to the model, and, for the record, the command and
-// the description the call gave.
+// background_tasks gives it), its kind (state.TaskShell, TaskMonitor, TaskSubagent or TaskWorkflow), the
+// tool, what names it to the model, and, for the record, the command and the description the call gave.
 type bgStart struct {
-	id, tool, what       string
+	id, kind, tool, what string
 	command, description string
-	monitor              bool // a Monitor, which wakes the model with what it reports
 }
 
 // recordClip is how much of a command its record keeps (background_told, background_questioned): the
 // command whole, its lines and a here-document's body too, up to this many characters, so that the record
 // shows what it ran. In a real run, 200 characters on one line could not show it.
 const recordClip = 4000
+
+// startClip is how much of a command the run keeps of each piece of background work while it runs
+// (state.BackgroundStart): enough to name it, and to find its shell among claude's processes by it.
+const startClip = 1000
 
 // describeClip is how much of a background task's description its record keeps, on one line.
 const describeClip = 200
@@ -35,12 +42,12 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 	b.tool = str(in, "tool_name")
 	switch {
 	case b.tool == "Monitor":
-		b.id, b.monitor = str(resp, "taskId"), true
+		b.id, b.kind = str(resp, "taskId"), state.TaskMonitor
 	case str(resp, "backgroundTaskId") != "":
-		b.id = str(resp, "backgroundTaskId")
+		b.id, b.kind = str(resp, "backgroundTaskId"), state.TaskShell
 	case str(resp, "status") == "async_launched":
-		if b.id = str(resp, "agentId"); b.id == "" {
-			b.id = str(resp, "taskId")
+		if b.id, b.kind = str(resp, "agentId"), state.TaskSubagent; b.id == "" {
+			b.id, b.kind = str(resp, "taskId"), state.TaskWorkflow
 		}
 	}
 	if b.id == "" {
@@ -60,8 +67,9 @@ func backgroundStarted(in map[string]any) (b bgStart, ok bool) {
 }
 
 // told is the record of background work told at its start (background_told): in phase, its task, the tool
-// that started it, and the command (whole, up to recordClip characters) and description the call gave.
-func (b bgStart) told(phase string) map[string]any {
+// that started it, the command (whole, up to recordClip characters) and description the call gave, and the
+// file its output goes to.
+func (b bgStart) told(phase, output string) map[string]any {
 	f := map[string]any{"phase": phase, "task": b.id, "tool": b.tool, "via": "start"}
 	if b.command != "" {
 		f["command"] = b.command
@@ -69,19 +77,77 @@ func (b bgStart) told(phase string) map[string]any {
 	if b.description != "" {
 		f["description"] = b.description
 	}
+	if output != "" {
+		f["output"] = output
+	}
 	return f
 }
 
-// tellBackground tells the model, with the result of the tool call that started it, of background work of
+// started is the record of background work seen to start that the model was not told of
+// (background_started): a subagent of its model's started it (agent), or baton was not driving the plan.
+func (b bgStart) started(s state.BackgroundStart) map[string]any {
+	f := b.told(s.Phase, s.Output)
+	delete(f, "via")
+	if s.Agent != "" {
+		f["agent"] = s.Agent
+	}
+	return f
+}
+
+// startBackground records, in st's loop, background work that the tool call c reports it started
+// (backgroundStarted), the loop's own agent's or a subagent's of its model (c.Agent), whatever the run's
+// mode: what it is, the phase it started in while baton drove the plan, the plan's generation, and the file
+// its output goes to (state.Runtime.Start). It also notes where the session's tasks write their output
+// (tasksDir). ok is false for a call that started none, or a start already recorded.
+func startBackground(st *state.State, c Context) (b bgStart, rec state.BackgroundStart, ok bool) {
+	if b, ok = backgroundStarted(c.Input); !ok {
+		return bgStart{}, state.BackgroundStart{}, false
+	}
+	if dir := tasksDir(c); dir != "" {
+		st.Run.TasksDir = dir
+	}
+	rec = state.BackgroundStart{Type: b.kind, Tool: b.tool, Command: clipStart(b.command), Description: b.description,
+		Generation: st.Generation, Agent: c.Agent, At: c.Now}
+	if st.Mode == state.ModeRunning {
+		rec.Phase = st.Current
+	}
+	if st.Run.TasksDir != "" {
+		rec.Output = filepath.Join(st.Run.TasksDir, b.id+".output")
+	}
+	return b, rec, st.Run.Start(b.id, rec)
+}
+
+// tellBackground tells the model, with the result of the tool call that started it, of background work b of
 // its own while its plan runs: what a stop on that work would be refused with (decide.BackgroundStarted),
 // said before the stop, so the stop is allowed (decideStop's idle_on_background). The work is recorded as
-// told at c.Now (state.Runtime.Tell); text is "" for a call that started none, or work told already.
-func tellBackground(st *state.State, c Context, w decide.Words) (text string, b bgStart) {
-	b, ok := backgroundStarted(c.Input)
-	if !ok || st.Mode != state.ModeRunning || !st.Run.Tell(b.id, c.Now) {
-		return "", bgStart{}
+// told at c.Now (state.Runtime.Tell); text is "" for work told already, or while baton does not drive the
+// plan.
+func tellBackground(st *state.State, c Context, w decide.Words, b bgStart) (text string) {
+	if st.Mode != state.ModeRunning || !st.Run.Tell(b.id, c.Now) {
+		return ""
 	}
-	return w.BackgroundStarted(b.what, b.monitor), b
+	return w.BackgroundStarted(b.what, b.kind)
+}
+
+// tasksDir is where Claude Code writes the output of the session's background tasks, each to <id>.output
+// (spike 45): the tasks folder beside the session's scratchpad, which every hook of Claude Code 2.1.318
+// names (scratchpad_dir), a phase agent's and a subagent's too, since their tasks are the session's. Where
+// a hook names none, it is the same folder under Claude Code's temporary root ($CLAUDE_CODE_TMPDIR, else
+// /tmp), in claude-<uid>, under the project folder the transcript is kept in and the session's id. "" where
+// neither is known.
+func tasksDir(c Context) string {
+	if sp := str(c.Input, "scratchpad_dir"); sp != "" {
+		return filepath.Join(filepath.Dir(sp), "tasks")
+	}
+	tp, session := str(c.Input, "transcript_path"), str(c.Input, "session_id")
+	if tp == "" || session == "" || runtime.GOOS == "windows" {
+		return ""
+	}
+	root := c.Env("CLAUDE_CODE_TMPDIR")
+	if root == "" {
+		root = "/tmp"
+	}
+	return filepath.Join(root, "claude-"+strconv.Itoa(os.Getuid()), filepath.Base(filepath.Dir(tp)), session, "tasks")
 }
 
 // backgroundEnded is the record of the told background work a stop found ended in phase (recordStop): no
@@ -105,12 +171,19 @@ func clipWhat(s string) string { return clip(s, 80) }
 
 // recorded is command as its record keeps it: as given, on as many lines, with the blanks around it
 // trimmed, and at most recordClip characters.
-func recorded(command string) string {
-	command = strings.TrimSpace(command)
-	if r := []rune(command); len(r) > recordClip {
-		command = string(r[:recordClip-1]) + "…"
+func recorded(command string) string { return clipLines(command, recordClip) }
+
+// clipStart is command as the run keeps it while its work runs (state.BackgroundStart): as given, on as
+// many lines, at most startClip characters.
+func clipStart(command string) string { return clipLines(command, startClip) }
+
+// clipLines is s with the blanks around it trimmed, its lines kept, at most n characters.
+func clipLines(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n-1]) + "…"
 	}
-	return command
+	return s
 }
 
 // clip is s on one line, at most n characters.

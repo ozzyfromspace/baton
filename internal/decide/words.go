@@ -19,6 +19,9 @@ type Words struct {
 	Worker bool
 	// AggregateQA: the plan's heavy checks wait for its QA phases (aggregate_qa, on by default).
 	AggregateQA bool
+	// TaskQuiet is how long a background shell of the model's own may write nothing before baton stops it
+	// (task_quiet; 0: state.TaskQuiet).
+	TaskQuiet time.Duration
 }
 
 // complete is what a finished phase is.
@@ -197,13 +200,30 @@ func (w Words) BackgroundStop(what string) string {
 }
 
 // BackgroundStarted is what baton tells the model with the result of a tool call that started background
-// work of its own (what names it; monitor: a Monitor, which wakes it with what it reports): what
-// BackgroundStop would tell it at its stop, told as the work starts, so that stop is allowed.
-func (w Words) BackgroundStarted(what string, monitor bool) string {
-	if monitor {
+// work of its own (what names it; kind is its state.Task kind: a Monitor wakes it with what it reports):
+// what BackgroundStop would tell it at its stop, told as the work starts, so that stop is allowed. A shell
+// is also told when baton may stop it (ShellsStopped).
+func (w Words) BackgroundStarted(what, kind string) string {
+	switch kind {
+	case state.TaskMonitor:
 		return "[baton] Your monitor runs (" + what + "). " + w.meanwhile("Claude Code wakes you with what it reports", "it reports", "end your turn")
+	case state.TaskShell:
+		return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn") + " " + w.ShellsStopped()
 	}
 	return "[baton] Your background work runs (" + what + "). " + w.meanwhile("Claude Code wakes you when it ends", "the work ends", "end your turn")
+}
+
+// ShellsStopped is when baton may stop a background shell of the model's own: its reviewer looks at one with
+// signals that it may do nothing more for the run (state.Suspects), and baton stops it only on the reviewer's
+// verdict, saying why.
+func (w Words) ShellsStopped() string {
+	quiet := w.TaskQuiet
+	if quiet <= 0 {
+		quiet = state.TaskQuiet
+	}
+	return "baton's reviewer looks at a background shell that writes nothing for " + Spell(quiet) +
+		", outlives its phase or the run time its description declares, or waits on a task that has ended, " +
+		"and baton stops it only when the reviewer finds it can do nothing more for the run, and tells you why."
 }
 
 // meanwhile is what the model does while its background work runs: wakes says how the work wakes it, and

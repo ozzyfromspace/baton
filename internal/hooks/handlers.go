@@ -999,7 +999,8 @@ func parkedWhy(st state.State, pk *state.Park) string {
 // words is what the model-facing text depends on in this project: whether git is usable there, and how
 // long a proposal waits for the human.
 func words(c Context, s *state.Store) decide.Words {
-	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout, Worker: s.Worker() != "", AggregateQA: config.AggregatesFromEnv(c.Env)}
+	return decide.Words{Git: gitx.Usable(s.Root), Timeout: config.EscalationFromEnv(c.Env).Timeout, Worker: s.Worker() != "", AggregateQA: config.AggregatesFromEnv(c.Env),
+		TaskQuiet: config.TaskQuietFromEnv(c.Env)}
 }
 
 func progressLine(pl plan.Plan, st state.State) string {
@@ -1327,7 +1328,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	var owed *state.Briefing
 	var bgTell string // background work the call started, told as it starts (background.go)
 	var bg bgStart
-	var g *ground // what an approval attaching a plan reads of git and the machine, before the lock
+	var bgRec state.BackgroundStart
+	var bgNew bool // a start recorded just now
+	var g *ground  // what an approval attaching a plan reads of git and the machine, before the lock
 	attaching := func(s *state.Store, peek state.State) {
 		if c.Event != "PostToolUse" || c.Agent != "" || s.Worker() != "" {
 			return
@@ -1349,6 +1352,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 				resp, _ := c.Input["tool_response"].(map[string]any)
 				st.Run.Watch(str(resp, "taskId"))
 			}
+			// Every start of background work is recorded, a subagent's of the model's too: what it is, its
+			// phase and where its output goes, so that one doing nothing for the run is found (state.BadTasks).
+			bg, bgRec, bgNew = startBackground(st, c)
 		}
 		if c.Agent != "" {
 			return nil
@@ -1356,7 +1362,9 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 		if c.Event == "PostToolUse" {
 			owed = takeBriefing(c, st) // a compaction's brief the conversation went on without
 			w := words(c, s)
-			bgTell, bg = tellBackground(st, c, w)
+			if bg.id != "" {
+				bgTell = tellBackground(st, c, w, bg)
+			}
 			switch {
 			case tool == "ExitPlanMode" && s.Worker() != "":
 				v = workerPlan(s.Worker(), approvedFile(c.Input))
@@ -1406,8 +1414,11 @@ func (h *handlers) toolDone(c Context) (Result, error) {
 	for _, e := range dropped {
 		s.Event(e.kind, e.fields)
 	}
-	if bgTell != "" {
-		s.Event("background_told", bg.told(st.Current))
+	switch {
+	case bgTell != "":
+		s.Event("background_told", bg.told(st.Current, bgRec.Output))
+	case bgNew:
+		s.Event("background_started", bg.started(bgRec)) // a subagent's, or while baton did not drive the plan
 	}
 	if v.event == "" && notes == "" && ann == "" && !dl.any() && !news.any() && owed == nil && waits == "" && bgTell == "" {
 		return Result{}, nil
@@ -1735,10 +1746,15 @@ func recordStop(st *state.State, c Context, others []string) (ended []state.Task
 	st.Run.TurnOpen, st.Run.LastStop, st.Run.History = false, c.Now, true
 	st.Run.Dialogs.CloseMain() // the main turn is over; background subagents may still be asking
 	st.Run.ToolsEnded("")
+	if dir := tasksDir(c); dir != "" {
+		st.Run.TasksDir = dir // where the session's tasks write their output, a /clear's new session's too
+	}
 	// Claude Code reports every background task of the session, whoever started it: the work another loop
-	// of the run was told of as it started (others, Store.OthersTold) is that loop's.
-	own := slices.DeleteFunc(tasks(c.Input["background_tasks"]), func(t state.Task) bool { return slices.Contains(others, t.ID) })
+	// of the run knows as its own (others, Store.OthersTold) is that loop's.
+	all := tasks(c.Input["background_tasks"])
+	own := slices.DeleteFunc(slices.Clone(all), func(t state.Task) bool { return slices.Contains(others, t.ID) })
 	ended = st.Run.SetBackground(own, c.Now)
+	st.Run.NoteGone(all, c.Now) // the tasks its own work waits on that have ended, whoever started them
 	// Foreground subagents cannot outlive the turn, and a subagent that ends in an API error never fires
 	// SubagentStop: recount from the list of what is really still running.
 	st.Run.Subagents = 0
@@ -1859,7 +1875,8 @@ func tasks(v any) []state.Task {
 		if m == nil {
 			continue
 		}
-		out = append(out, state.Task{ID: str(m, "id"), Type: str(m, "type"), Status: str(m, "status"), Description: str(m, "description"), AgentType: str(m, "agent_type")})
+		out = append(out, state.Task{ID: str(m, "id"), Type: str(m, "type"), Status: str(m, "status"), Description: str(m, "description"),
+			Command: clipStart(str(m, "command")), AgentType: str(m, "agent_type")})
 	}
 	return out
 }
