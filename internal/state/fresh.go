@@ -28,6 +28,9 @@ func freshRun(prev Runtime) Runtime {
 		Background:       prev.Background,       // the session's background work, still running
 		BackgroundTold:   prev.BackgroundTold,   // the model was told of that work as it started, and need not be again
 		BackgroundToldAt: prev.BackgroundToldAt, // when, which says how long each has run
+		BackgroundStarts: prev.BackgroundStarts, // what started that work, in which phase of which plan, and where its output goes
+		TasksDir:         prev.TasksDir,         // where the session's background tasks write their output
+		Gone:             prev.Gone,             // when the tasks that work waits on ended
 		Monitors:         prev.Monitors,         // the session's Monitor watchers, still running
 		Crons:            prev.Crons,            // the session's wakeups, still armed
 		Tools:            prev.Tools,            // tool calls whose results have not come back: each may be changing files

@@ -571,21 +571,22 @@ func (s *Store) WorkerJobs(st State) []Job {
 	return out
 }
 
-// OthersTold is the background work the other loops of s's run were told of as it started
-// (Runtime.BackgroundTold): the lead's and every phase agent's but s's own. Claude Code reports every
-// background task of the session at each Stop, whoever started it, so a loop counts none of those as its
-// own. The others' states are read without their locks, or the project's, so an Update of s may call it.
+// OthersTold is the background work the other loops of s's run know as their own (Runtime.Known): told of
+// as it started, or seen to start, a subagent's of their models' too; the lead's and every phase agent's but
+// s's own. Claude Code reports every background task of the session at each Stop, whoever started it, so a
+// loop counts none of those as its own. The others' states are read without their locks, or the project's,
+// so an Update of s may call it.
 func (s *Store) OthersTold() []string {
 	p := s.ProjectOf()
 	run := s.Ref
 	var out []string
 	if s.Parent != "" {
 		run = s.Parent
-		out = append(out, p.info(run, p.refDir(run, ""), nil).State.Run.BackgroundTold...)
+		out = append(out, p.info(run, p.refDir(run, ""), nil).State.Run.Known()...)
 	}
 	for _, w := range p.Workers(run) {
 		if w.ID != s.Ref {
-			out = append(out, w.State.Run.BackgroundTold...)
+			out = append(out, w.State.Run.Known()...)
 		}
 	}
 	return out

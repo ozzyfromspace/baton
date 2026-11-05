@@ -1,6 +1,7 @@
 package state
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -54,6 +55,18 @@ type Runtime struct {
 	// hook reports a task's end (spike 19), so the record of a Stop that no longer lists it says how long
 	// it ran from there (SetBackground).
 	BackgroundToldAt map[string]time.Time `json:"background_told_at,omitempty"`
+	// BackgroundStarts are what baton saw of each piece of background work of the model's own as it started,
+	// by its task id: the loop's own agent's, told (Tell) or not, and its model's subagents' (tasks.go). An
+	// entry goes once a Stop no longer lists its task (SetBackground). The session's: it outlives a plan.
+	BackgroundStarts map[string]BackgroundStart `json:"background_starts,omitempty"`
+	// TasksDir is where Claude Code writes the output of the session's background tasks, each to
+	// <id>.output (spike 45): beside the session's scratchpad, as the loop's last hook said. "" before one
+	// has.
+	TasksDir string `json:"tasks_dir,omitempty"`
+	// Gone holds, for each task that a task of the loop's own waits on (its command names the other's output
+	// file: WaitsOn), when a Stop first no longer listed it, whoever started it: it had ended by then
+	// (NoteGone). An entry goes once no task of the loop's names it.
+	Gone map[string]time.Time `json:"gone,omitempty"`
 	// BackgroundQuestioned lists the checks (a hash of each command) the model started as a background
 	// shell task that baton refused once, pointing it to baton verify: the same call again goes through.
 	BackgroundQuestioned []string `json:"background_questioned,omitempty"`
@@ -401,6 +414,8 @@ type Task struct {
 	Type        string `json:"type"` // shell (a Monitor too), subagent, workflow, …
 	Status      string `json:"status"`
 	Description string `json:"description,omitempty"`
+	// Command is a shell's command, as Claude Code 2.1.318 lists it (spike 45), clipped.
+	Command string `json:"command,omitempty"`
 	// AgentType is a subagent's type: one IsPhaseAgent reports for one of baton's own phase agents.
 	AgentType string `json:"agent_type,omitempty"`
 	// Since is when a Stop first reported the task: Claude Code does not say when it started.
@@ -686,9 +701,9 @@ func (r *Runtime) Watch(id string) {
 }
 
 // SetBackground records the background work a Stop reported at now, keeping when each task was first
-// reported, and forgets the Monitors and the work told about that have ended: the PostToolUse of the call
-// that started a task always comes before the Stop of its turn, so one missing from the list is gone. It
-// returns the told work that ended, in the order it was told.
+// reported, and forgets the Monitors, the work told about and the starts recorded (BackgroundStarts) that
+// have ended: the PostToolUse of the call that started a task always comes before the Stop of its turn, so
+// one missing from the list is gone. It returns the told work that ended, in the order it was told.
 func (r *Runtime) SetBackground(tasks []Task, now time.Time) (ended []TaskEnded) {
 	for i := range tasks {
 		tasks[i].Since = now
@@ -708,6 +723,10 @@ func (r *Runtime) SetBackground(tasks []Task, now time.Time) (ended []TaskEnded)
 	r.BackgroundTold = slices.DeleteFunc(r.BackgroundTold, gone)
 	if len(r.BackgroundToldAt) == 0 {
 		r.BackgroundToldAt = nil
+	}
+	maps.DeleteFunc(r.BackgroundStarts, func(id string, _ BackgroundStart) bool { return gone(id) })
+	if len(r.BackgroundStarts) == 0 {
+		r.BackgroundStarts = nil
 	}
 	return ended
 }

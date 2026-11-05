@@ -16,7 +16,7 @@ func TestANewPlanStartsFresh(t *testing.T) {
 	runKept := []string{
 		"SessionID", "PermissionMode", "TurnOpen", "TurnBy", "TurnStarted", "LastStop", "LastActivity", "History", "HumanAt",
 		"Dialogs", "Gate",
-		"Subagents", "Background", "BackgroundTold", "BackgroundToldAt", "Monitors", "Crons", "Tools", "Spawning", "AgentCalls", "Plain",
+		"Subagents", "Background", "BackgroundTold", "BackgroundToldAt", "BackgroundStarts", "TasksDir", "Gone", "Monitors", "Crons", "Tools", "Spawning", "AgentCalls", "Plain",
 		"Compaction", "ModReports", "ModCounted", "Serial", "Fleet", "Proven", "Notices", "Announce",
 		"Context", "Model", "Effort", "Launched", "Models", "HumanModel", "HumanEffort", "ContextNoticed", "ContextNudged", "ContextNudgedAt", "ContextWarned", "WarnQuestion", "WarnOwed",
 		"LastError", "PendingDone", "PlanFile", "ClearedPlan", "ExitAt", "Restart", "NewerNoted", "StaleSkill", "Ended", "Mark", "Recoveries",
