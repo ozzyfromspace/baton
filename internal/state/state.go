@@ -399,6 +399,8 @@ func attachKeeping(prev State, run *Runtime, p plan.Plan, now time.Time, o Origi
 	}
 	st.Current = Next(st, p)
 	st.Phases[st.Current] = &PhaseState{Status: PhaseActive, StartedAt: now, StartHead: o.Head, StartDirty: o.Dirty}
+	st.Run.Audit = nil
+	st.Run.OweAudit(AuditAttach, now) // the session's background work, looked at before the plan starts (review.go)
 	return st
 }
 
@@ -573,6 +575,7 @@ func (st *State) OweBoundary(now time.Time) {
 		st.OwedAt = now
 	}
 	st.BoundaryOwed = true
+	st.Run.OweAudit(AuditBoundary, now) // the background work of the phase before, looked at (review.go)
 }
 
 // OweCheckpoint owes a compaction mid-phase, from now (OwedAt).
@@ -636,6 +639,7 @@ func Resume(st *State) error {
 		Reviewed(st) // the human chose to let the run go on
 	}
 	st.Blocked, st.Run.Escalation = nil, nil
+	st.Run.OweAudit(AuditResume, time.Time{}) // what runs in the background, looked at as the run goes on (review.go)
 	st.Run.Progress()
 	return nil
 }

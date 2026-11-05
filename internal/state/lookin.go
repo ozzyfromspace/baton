@@ -23,6 +23,11 @@ const (
 	LookTimeout  = "near_timeout"     // a gate nears verify_timeout
 	LookHeld     = "landings_held"    // landings wait behind a gate in the lead's checkout
 	LookConflict = "conflicting_file" // a file conflicted in a second landing of the run
+	// A background shell of the model's own (loop/tasks.go): one its signals say may do nothing more for the
+	// run, which the reviewer could not judge, for its owner to look at; and one baton stopped on the
+	// reviewer's verdict.
+	LookTaskSuspect = "task_suspect"
+	LookTaskStopped = "task_stopped"
 )
 
 // LookIn is a look-in the host left for the session's model: what it is about, the text the model is

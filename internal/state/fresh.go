@@ -31,6 +31,7 @@ func freshRun(prev Runtime) Runtime {
 		BackgroundStarts: prev.BackgroundStarts, // what started that work, in which phase of which plan, and where its output goes
 		TasksDir:         prev.TasksDir,         // where the session's background tasks write their output
 		Gone:             prev.Gone,             // when the tasks that work waits on ended
+		Reviews:          prev.Reviews,          // what baton's reviewer made of that work: it is not reviewed again for a new plan
 		Monitors:         prev.Monitors,         // the session's Monitor watchers, still running
 		Crons:            prev.Crons,            // the session's wakeups, still armed
 		Tools:            prev.Tools,            // tool calls whose results have not come back: each may be changing files

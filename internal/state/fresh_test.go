@@ -16,7 +16,7 @@ func TestANewPlanStartsFresh(t *testing.T) {
 	runKept := []string{
 		"SessionID", "PermissionMode", "TurnOpen", "TurnBy", "TurnStarted", "LastStop", "LastActivity", "History", "HumanAt",
 		"Dialogs", "Gate",
-		"Subagents", "Background", "BackgroundTold", "BackgroundToldAt", "BackgroundStarts", "TasksDir", "Gone", "Monitors", "Crons", "Tools", "Spawning", "AgentCalls", "Plain",
+		"Subagents", "Background", "BackgroundTold", "BackgroundToldAt", "BackgroundStarts", "TasksDir", "Gone", "Reviews", "Monitors", "Crons", "Tools", "Spawning", "AgentCalls", "Plain",
 		"Compaction", "ModReports", "ModCounted", "Serial", "Fleet", "Proven", "Notices", "Announce",
 		"Context", "Model", "Effort", "Launched", "Models", "HumanModel", "HumanEffort", "ContextNoticed", "ContextNudged", "ContextNudgedAt", "ContextWarned", "WarnQuestion", "WarnOwed",
 		"LastError", "PendingDone", "PlanFile", "ClearedPlan", "ExitAt", "Restart", "NewerNoted", "StaleSkill", "Ended", "Mark", "Recoveries",
@@ -26,7 +26,7 @@ func TestANewPlanStartsFresh(t *testing.T) {
 	runFresh := []string{
 		"DirectivesAsked", "UnbuiltAsked", "DirectivesPending", "GatesQuestioned", "LeftoverAsked", "BackgroundQuestioned",
 		"StopBlocks", "IdleNudges", "Escalation", "Briefing", "Stalled", "Review", "CompleteNotified",
-		"Briefed", "Transcript",
+		"Briefed", "Transcript", "Audit",
 	}
 	// What a run keeps under a new plan (attachKeeping, Reattach): its owner, a pause and where the context
 	// stood at it, the workers still at work (the replaced plan's, which the host retires), the numbers its
@@ -85,6 +85,12 @@ func TestANewPlanStartsFresh(t *testing.T) {
 		}
 	}
 	for _, name := range runFresh {
+		if name == "Audit" { // a new plan owes a look at the session's background work, as a first plan does
+			if g, w := got.Run.Audit, blank.Run.Audit; !reflect.DeepEqual(g, w) {
+				t.Errorf("Runtime.Audit = %+v, want it as a first plan has it: %+v", g, w)
+			}
+			continue
+		}
 		if f := gv.FieldByName(name); !f.IsZero() {
 			t.Errorf("Runtime.%s = %+v, want it fresh", name, f.Interface())
 		}

@@ -67,6 +67,12 @@ type Runtime struct {
 	// file: WaitsOn), when a Stop first no longer listed it, whoever started it: it had ended by then
 	// (NoteGone). An entry goes once no task of the loop's names it.
 	Gone map[string]time.Time `json:"gone,omitempty"`
+	// Reviews holds what baton's reviewer made of each background shell of the loop's own that was a
+	// suspect, by task id (review.go): reviews given, the verdict, a stop. The session's: it outlives a plan.
+	Reviews map[string]*TaskReview `json:"reviews,omitempty"`
+	// Audit is a look at the loop's background work owed at once: a plan attached, the run resumed, a phase
+	// boundary (review.go). The host makes it.
+	Audit *TaskAudit `json:"audit,omitempty"`
 	// BackgroundQuestioned lists the checks (a hash of each command) the model started as a background
 	// shell task that baton refused once, pointing it to baton verify: the same call again goes through.
 	BackgroundQuestioned []string `json:"background_questioned,omitempty"`

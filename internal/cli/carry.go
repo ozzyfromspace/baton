@@ -41,7 +41,8 @@ func carry(io IO, file string) (*state.Store, bool) {
 		fmt.Fprintf(io.Err, "baton: carried on run %s, but cannot open it: %v\n", r.ID, err)
 		return nil, false
 	}
-	st, err := s.Load()
+	// The background work the other session left is looked at as this one carries the run on (review.go).
+	st, err := s.Update(func(st *state.State) error { st.Run.OweAudit(state.AuditCarry, s.Now()); return nil })
 	if err != nil {
 		return nil, false
 	}
